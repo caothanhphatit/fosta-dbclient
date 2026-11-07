@@ -23,7 +23,9 @@ mysql_async = { version = "0.37", default-features = false, features = ["minimal
 tiberius = { version = "0.12", default-features = false, features = ["tds73", "native-tls", "chrono"] }
 mongodb = "3"
 keyring = { version = "3", features = ["windows-native"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls-manual-roots-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+ring = "0.17"
 base64 = "0.22"
 redis = { version = "1.7", default-features = false, features = ["tokio-rustls-comp", "tls-rustls-insecure"] }
 
