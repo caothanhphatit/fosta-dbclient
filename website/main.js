@@ -268,6 +268,11 @@
     var start = /(?:^#|&)slide=(\d+)/.exec(window.location.hash || "");
     var first = start ? Math.min(Math.max(parseInt(start[1], 10) - 1, 0), slides.length - 1) : 0;
     held = !!start;
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (entries) {
+        root.classList.toggle("is-offscreen", !entries[0].isIntersecting);
+      }).observe(root);
+    }
     root.classList.add("is-enhanced");
     show(first, false);
     schedule();
@@ -310,7 +315,7 @@
       canvas.height = Math.round(height * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       link = width < 600 ? 110 : 150;
-      var want = Math.round(Math.min(width < 600 ? 34 : 78, (width * height) / 16000));
+      var want = Math.round(Math.min(width < 600 ? 22 : 54, (width * height) / 22000));
       while (nodes.length < want) nodes.push(makeNode());
       nodes.length = want;
       nodes.forEach(function (n) {
@@ -332,6 +337,12 @@
         table: table,
         pulse: Math.random() * Math.PI * 2,
       };
+    }
+
+    // Fade towards the bottom of the hero (replaces a CSS mask, which is costly on a canvas that changes every frame).
+    function vfade(y) {
+      var t = y / height;
+      return t < 0.55 ? 1 : Math.max(0, 1 - (t - 0.55) / 0.45);
     }
 
     function rgba(color, alpha) {
@@ -373,44 +384,60 @@
           n.pulse += 0.002 * dt;
         }
       }
+      // Edges are grouped into four opacity buckets and stroked once per bucket (one draw call each).
       ctx.lineWidth = 1;
+      var buckets = [[], [], [], []];
       for (i = 0; i < nodes.length; i++) {
         for (j = i + 1; j < nodes.length; j++) {
           var dx = nodes[i].x - nodes[j].x;
+          if (dx > link || dx < -link) continue;
           var dy = nodes[i].y - nodes[j].y;
+          if (dy > link || dy < -link) continue;
           var d2 = dx * dx + dy * dy;
           if (d2 < link * link) {
-            var strength = 1 - Math.sqrt(d2) / link;
-            ctx.strokeStyle = rgba(colors.line, strength * 0.22);
-            ctx.beginPath();
-            ctx.moveTo(nodes[i].x, nodes[i].y);
-            ctx.lineTo(nodes[j].x, nodes[j].y);
-            ctx.stroke();
+            var strength = (1 - Math.sqrt(d2) / link) * vfade(nodes[i].y);
+            if (strength > 0.05) buckets[Math.min(3, (strength * 4) | 0)].push(nodes[i], nodes[j]);
           }
         }
-        var px = nodes[i].x - pointer.x;
-        var py = nodes[i].y - pointer.y;
-        var p2 = px * px + py * py;
-        if (p2 < link * link * 1.4) {
-          ctx.strokeStyle = rgba(colors.node, (1 - Math.sqrt(p2) / (link * 1.18)) * 0.35);
-          ctx.beginPath();
-          ctx.moveTo(nodes[i].x, nodes[i].y);
-          ctx.lineTo(pointer.x, pointer.y);
-          ctx.stroke();
+      }
+      ctx.strokeStyle = colors.line;
+      for (var b = 0; b < 4; b++) {
+        var list = buckets[b];
+        if (!list.length) continue;
+        ctx.globalAlpha = ((b + 0.5) / 4) * 0.22;
+        ctx.beginPath();
+        for (var k = 0; k < list.length; k += 2) {
+          ctx.moveTo(list[k].x, list[k].y);
+          ctx.lineTo(list[k + 1].x, list[k + 1].y);
         }
+        ctx.stroke();
+      }
+      if (pointer.x > -9000) {
+        ctx.strokeStyle = colors.node;
+        ctx.globalAlpha = 0.22;
+        ctx.beginPath();
+        for (i = 0; i < nodes.length; i++) {
+          var px = nodes[i].x - pointer.x;
+          var py = nodes[i].y - pointer.y;
+          if (px * px + py * py < link * link * 1.4) {
+            ctx.moveTo(nodes[i].x, nodes[i].y);
+            ctx.lineTo(pointer.x, pointer.y);
+          }
+        }
+        ctx.stroke();
       }
       for (i = 0; i < nodes.length; i++) {
         var node = nodes[i];
         if (node.table) {
           var glow = 0.35 + 0.25 * Math.sin(node.pulse);
-          ctx.fillStyle = rgba(colors.node, glow * 0.25);
+          ctx.fillStyle = rgba(colors.node, glow * 0.25 * vfade(node.y));
           ctx.beginPath();
           ctx.arc(node.x, node.y, node.r * 3.2, 0, Math.PI * 2);
           ctx.fill();
-          ctx.fillStyle = rgba(colors.node, 0.75);
+          ctx.fillStyle = rgba(colors.node, 0.75 * vfade(node.y));
           ctx.fillRect(node.x - node.r, node.y - node.r, node.r * 2, node.r * 2);
         } else {
-          ctx.fillStyle = rgba(colors.line, 0.45);
+          ctx.fillStyle = rgba(colors.line, 0.45 * vfade(node.y));
           ctx.beginPath();
           ctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
           ctx.fill();
@@ -430,16 +457,14 @@
           var tx = p.a.x + (p.b.x - p.a.x) * Math.max(0, p.t - 0.12);
           var ty = p.a.y + (p.b.y - p.a.y) * Math.max(0, p.t - 0.12);
           var fade = Math.sin(p.t * Math.PI);
-          var grad = ctx.createLinearGradient(tx, ty, x, y);
-          grad.addColorStop(0, "rgba(0,0,0,0)");
-          grad.addColorStop(1, colors.packet);
-          ctx.globalAlpha = fade * 0.9;
-          ctx.strokeStyle = grad;
+          ctx.globalAlpha = fade * 0.55 * vfade(y);
+          ctx.strokeStyle = colors.packet;
           ctx.lineWidth = 1.6;
           ctx.beginPath();
           ctx.moveTo(tx, ty);
           ctx.lineTo(x, y);
           ctx.stroke();
+          ctx.globalAlpha = fade * 0.9 * vfade(y);
           ctx.fillStyle = colors.packet;
           ctx.beginPath();
           ctx.arc(x, y, 1.9, 0, Math.PI * 2);
@@ -450,12 +475,15 @@
       ctx.globalAlpha = 1;
     }
 
+    // 30 fps is plenty for a slow drift and halves the work.
     function loop(now) {
       frame = 0;
       if (!visible || document.hidden) return;
-      var dt = last ? Math.min(now - last, 50) : 16;
-      last = now;
-      draw(dt);
+      if (!last || now - last >= (width < 600 ? 47 : 31)) {
+        var dt = last ? Math.min(now - last, 66) : 33;
+        last = now;
+        draw(dt);
+      }
       frame = window.requestAnimationFrame(loop);
     }
 
@@ -497,10 +525,13 @@
     });
     document.addEventListener("visibilitychange", start);
     if ("IntersectionObserver" in window) {
-      new IntersectionObserver(function (entries) {
-        visible = entries[0].isIntersecting;
-        start();
-      }).observe(hero);
+      new IntersectionObserver(
+        function (entries) {
+          visible = entries[0].isIntersecting;
+          start();
+        },
+        { rootMargin: "0px 0px -45% 0px" },
+      ).observe(hero);
     }
     start();
   }
@@ -530,14 +561,23 @@
       ticking = false;
       var doc = document.documentElement;
       var max = Math.max(1, doc.scrollHeight - window.innerHeight);
-      bar.style.setProperty("--progress", String(Math.min(1, Math.max(0, window.scrollY / max))));
-      if (visual) {
+      bar.style.transform = "scaleX(" + Math.min(1, Math.max(0, window.scrollY / max)).toFixed(4) + ")";
+      if (visual && window.scrollY < window.innerHeight * 1.5) {
         var rect = visual.getBoundingClientRect();
         // 10deg while the window sits low in the viewport, flat once its top reaches the upper quarter.
         var t = Math.min(1, Math.max(0, (rect.top - window.innerHeight * 0.2) / (window.innerHeight * 0.6)));
-        visual.style.setProperty("--tilt", (t * 10).toFixed(2) + "deg");
-        visual.style.setProperty("--tilt-scale", (1 - t * 0.04).toFixed(3));
+        if (visual.classList.contains("is-tilting")) {
+          visual.style.transform = "perspective(1600px) rotateX(" + (t * 10).toFixed(2) + "deg) scale(" + (1 - t * 0.04).toFixed(3) + ")";
+        }
       }
+    }
+
+    // The entrance animation ends on the tilt the scroll position calls for, so nothing jumps when it hands over.
+    if (visual) {
+      var r0 = visual.getBoundingClientRect();
+      var t0 = Math.min(1, Math.max(0, (r0.top - window.innerHeight * 0.2) / (window.innerHeight * 0.6)));
+      visual.style.setProperty("--tilt-end", (t0 * 10).toFixed(2) + "deg");
+      visual.style.setProperty("--tilt-end-scale", (1 - t0 * 0.04).toFixed(3));
     }
 
     window.addEventListener(
