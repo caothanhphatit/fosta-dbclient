@@ -1,0 +1,1 @@
+//! Elasticsearch / OpenSearch engine core.
