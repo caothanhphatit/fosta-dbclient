@@ -423,7 +423,8 @@ function buildLayout(): void {
     // Fall through: closed by default.
   }
   area.classList.toggle("with-assistant", remembered === "open");
-  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), taskSummary);
+  const version = h("span", { class: "status-version", title: "Fosta Studio version" }, `v${__APP_VERSION__}`);
+  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), taskSummary, version);
   const main = h("div", { class: "app-main" }, toolbar, area, statusBar);
   (document.getElementById("app") ?? document.body).append(rail.element, main);
 }
