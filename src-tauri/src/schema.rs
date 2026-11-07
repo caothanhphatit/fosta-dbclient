@@ -10,10 +10,8 @@ use futures_util::{stream, StreamExt};
 use serde::Serialize;
 
 use crate::{
-    db::TableInfo,
-    drivers::Driver,
+    drivers::{relations::Relation, types::TableInfo, Driver},
     error::AppResult,
-    relations::Relation,
 };
 
 /// Large schemas are capped so the diagram stays usable; the UI says so.
@@ -69,7 +67,11 @@ pub async fn schema_graph(driver: &dyn Driver, database: &str) -> AppResult<Sche
 }
 
 fn from_bulk(bulk: BulkSchema, database: &str) -> SchemaGraph {
-    let BulkSchema { tables: listed, mut columns, relations } = bulk;
+    let BulkSchema {
+        tables: listed,
+        mut columns,
+        relations,
+    } = bulk;
     let total_tables = listed.len();
     let shown: Vec<TableInfo> = listed.into_iter().take(MAX_TABLES).collect();
     let mut outgoing: HashMap<String, Vec<Relation>> = HashMap::new();
@@ -99,7 +101,11 @@ fn from_bulk(bulk: BulkSchema, database: &str) -> SchemaGraph {
             columns: columns.remove(&info.name).unwrap_or_default(),
         })
         .collect();
-    SchemaGraph { tables, relations: links, total_tables }
+    SchemaGraph {
+        tables,
+        relations: links,
+        total_tables,
+    }
 }
 
 fn keep_relation(
@@ -126,7 +132,11 @@ pub(crate) async fn schema_graph_per_table(driver: &dyn Driver, database: &str) 
     let described: Vec<_> = stream::iter(work)
         .map(|(name, view)| async move {
             let design = driver.describe_table(database, &name).await;
-            let relations = if view { Ok(Default::default()) } else { driver.table_relations(database, &name).await };
+            let relations = if view {
+                Ok(Default::default())
+            } else {
+                driver.table_relations(database, &name).await
+            };
             (design, relations)
         })
         .buffered(CONCURRENCY)
@@ -164,5 +174,9 @@ pub(crate) async fn schema_graph_per_table(driver: &dyn Driver, database: &str) 
             keep_relation(relation, database, &names, &mut seen, &mut relations);
         }
     }
-    Ok(SchemaGraph { tables, relations, total_tables })
+    Ok(SchemaGraph {
+        tables,
+        relations,
+        total_tables,
+    })
 }

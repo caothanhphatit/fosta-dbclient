@@ -1,8 +1,9 @@
 [package]
 name = "db-studio"
 version = "0.1.0"
-description = "Lightweight MariaDB client with startup tasks"
+description = "Lightweight desktop database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces and startup tasks"
 edition = "2021"
+rust-version = "1.88"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -1,77 +1,82 @@
 # DB Studio
 
-Database client nhẹ (Tauri 2 + Rust, frontend TypeScript thuần) cho **MariaDB, MySQL, SQL Server và MongoDB**, với **workspace** và **startup tasks**: tự chạy `kubectl port-forward` khi mở workspace, tự reconnect khi rớt.
+**English** · [Tiếng Việt](README.vi.md)
 
-## Tính năng
+A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend) for **MariaDB, MySQL, SQL Server and MongoDB**, with
+**workspaces** and **startup tasks**: it can run `kubectl port-forward` when a workspace opens and reconnect when the tunnel drops.
 
-- **Nhiều loại DB**: MariaDB và MySQL (`mysql_async`), SQL Server (`tiberius`, TLS bật mặc định), MongoDB (`mongodb`, hỗ trợ connection URI cho Atlas). Mỗi loại là một driver trong `src-tauri/src/` sau trait chung ở `drivers.rs`.
-  - SQL Server: bảng hiển thị dạng `schema.table` (schema `dbo` được ẩn), phân trang bằng `OFFSET/FETCH`, DDL được dựng lại từ `INFORMATION_SCHEMA`.
-  - MongoDB: collection hiển thị như bảng, cột là hợp của các field trong trang hiện tại, giá trị lồng nhau hiện dạng JSON. Ô filter nhận JSON query; tab Query chạy database command dạng JSON (`{ "find": "products", "filter": {...} }`).
-- **Workspaces**: mỗi workspace (dự án, khách hàng, môi trường) có bộ connection, startup task và tab riêng. Chuyển bằng rail bên trái hoặc `Ctrl+1…9`; tab của workspace khác được giữ nguyên, không đóng.
-- **Startup tasks**: chạy lệnh nền (vd. `kubectl port-forward`), tự restart có backoff, xem log realtime, process con bị kill khi app tắt. Task auto-start chạy khi workspace của nó được mở.
-- **Connections**: lưu profile; mật khẩu lưu trong Windows Credential Manager, không ghi ra file.
-- Cây Connection → Database → Table/View, tìm kiếm bảng.
-- Mở bảng: phân trang, lọc bằng `WHERE` hoặc filter từng cột, sort theo cột, sửa trực tiếp trên ô, thêm/xoá dòng, Submit trong 1 transaction. Record panel hiện đầy đủ field và link theo foreign key.
-- Query editor: syntax highlight, autocomplete tên bảng, chạy nhiều câu lệnh, Stop (KILL QUERY), mỗi tab giữ session riêng (BEGIN/COMMIT qua nhiều lần chạy được).
-- Design view: danh sách cột + DDL.
-- Vector (chỉ MariaDB 11.7+): tìm kiếm theo embedding, kiểm tra sức khoẻ cột/index, đo recall ANN so với exact.
-- **Assistant** (panel bên phải, `Ctrl+Shift+A`): chat với model của bạn qua provider tuỳ chọn (Fosta mặc định với model `cx/gpt-6-astra`, OpenAI, Gemini, Claude, hoặc endpoint OpenAI-compatible tuỳ chỉnh như Ollama) bằng key của bạn, key lưu trong Credential Manager, request đi thẳng từ máy tới provider. Model chỉ thấy tên bảng/cột (tra bằng tool `describe_table`), nội dung editor, lỗi và log bạn hỏi; **không bao giờ chạy query**. Mỗi code block có nút Insert / New tab để bạn tự chạy trong editor. Quick action theo ngữ cảnh: giải thích, tối ưu, sửa lỗi, dịch giữa MySQL ↔ SQL Server ↔ Mongo, viết aggregation pipeline, sinh dữ liệu test, giải thích log startup task.
-- Theme sáng / tối / theo hệ thống (nút dưới rail).
+## Features
 
-Config (workspaces, connections, tasks) lưu ở `db-studio.json` cạnh file `.exe`, nên app là portable. File config cũ (chỉ có `connections` + `tasks`) được tự chuyển thành một workspace khi mở.
+- **Several engines**: MariaDB and MySQL (`mysql_async`), SQL Server (`tiberius`, TLS on by default) and MongoDB (`mongodb`, connection URIs
+  for Atlas). Each engine is a driver in `src-tauri/src/drivers/` behind the shared `Driver` trait.
+  - SQL Server: tables show as `schema.table` (`dbo` is hidden), paging uses `OFFSET/FETCH`, DDL is rebuilt from `INFORMATION_SCHEMA`.
+  - MongoDB: collections show as tables whose columns are the fields seen on the current page; nested values show as JSON. The filter box
+    takes a JSON query and the query tab runs database commands as JSON (`{ "find": "products", "filter": {...} }`).
+- **Workspaces**: each workspace (project, customer, environment) has its own connections, startup tasks and tabs. Switch from the rail on
+  the left or with `Ctrl+1…9`; tabs of other workspaces stay open.
+- **Startup tasks**: background commands (e.g. `kubectl port-forward`) with restart and backoff, live logs, and child processes killed when
+  the app exits. Auto-start tasks run when their workspace opens.
+- **Connections**: saved profiles, parameters or a connection string; passwords live in Windows Credential Manager, never in a file.
+- Tree of connections → databases → tables/views, with search.
+- **Table data**: paging, `WHERE` or per-column filters, sorting, inline cell editing, insert/delete rows, submit in one transaction, a
+  record panel that follows foreign keys, import (CSV/TSV/JSON) and export (CSV, CSV for Excel, JSON, SQL INSERT, Markdown).
+- **Query editor**: syntax highlighting, table-name completion, several statements per run, Stop (`KILL QUERY`), and one session per tab
+  (`BEGIN`/`COMMIT` can span runs).
+- **Design view** (columns + DDL) and an interactive **ER diagram** per database.
+- **Vector tools** (MariaDB 11.7+ only): embedding search, column/index health checks, ANN recall versus exact search.
+- **Assistant** (right panel, `Ctrl+Shift+A`): chat with a model of your choice (Fosta by default, OpenAI, Gemini, Claude, or any
+  OpenAI-compatible endpoint such as Ollama) using your own key, stored in Credential Manager; requests go straight from your machine to
+  the provider. The model only sees table/column metadata, the editor text, errors and logs you ask about. **It never runs queries**: every
+  code block has Insert / New tab buttons so you run it yourself.
+- Light, dark or system theme.
 
-## Cài toolchain
+Configuration (workspaces, connections, tasks, LLM providers) is stored in `db-studio.json` next to the `.exe`, so the app is portable.
 
-Cần Node 20+, Rust stable và một trong hai:
+## Getting started
 
-- **MSVC** (khuyến nghị cho bản release): VS Build Tools với C++ x64 + Windows SDK. Script dưới cài vào `D:\tools` (cần admin một lần):
-
-  ```powershell
-  powershell -ExecutionPolicy Bypass -File scripts\setup-toolchain.ps1
-  ```
-
-- **GNU**: toolchain `x86_64-pc-windows-gnu` cần `dlltool.exe` của MinGW trên PATH (vd. `C:\msys64\mingw64\bin`).
-
-## Chạy
+Requirements: Node 20+, Rust stable (1.88+) and either the MSVC or the GNU toolchain on Windows; see
+[CONTRIBUTING.md](CONTRIBUTING.md#toolchain) for details.
 
 ```powershell
 npm install
 npm run tauri dev
 ```
 
-Xem nhanh giao diện trong trình duyệt, không cần MariaDB (backend được giả lập bằng dữ liệu mẫu, chỉ ở chế độ dev):
+Preview the UI in a browser without any database (a mock backend with sample data, dev mode only):
 
 ```powershell
 npm run dev
 ```
 
-Database test bằng Docker (MariaDB 11.8 `shop` có cột vector, SQL Server `ERP`, MongoDB `events`, đều có dữ liệu giả; tài khoản ghi trong `dev/docker-compose.yml`):
-
-```powershell
-docker compose -f dev/docker-compose.yml up -d
-sh dev/seed-mssql.sh
-cd src-tauri; cargo test live_ -- --ignored --test-threads=1
-```
-
-Build file `.exe` (không cần installer):
+Build a portable `.exe` (no installer); the result is `src-tauri\target\release\db-studio.exe`:
 
 ```powershell
 npm run tauri build -- --no-bundle
 ```
 
-File chạy: `src-tauri\target\release\db-studio.exe`.
+Test databases (MariaDB, SQL Server and MongoDB with sample data) run in Docker; see
+[CONTRIBUTING.md](CONTRIBUTING.md#test-databases-and-live-tests).
 
-## Phím tắt
+## Keyboard shortcuts
 
-| Phím | Tác dụng |
-|---|---|
-| Ctrl+1 … 9 | Chuyển workspace |
-| Ctrl+N | Connection mới |
-| Ctrl+T | Query mới |
-| Ctrl+Shift+A | Bật/tắt panel Assistant |
-| Double-click connection | Kết nối |
-| Double-click table | Mở dữ liệu |
-| Ctrl+Enter / F9 | Chạy SQL (phần bôi đen, hoặc toàn bộ) |
-| Enter / F2 / double-click ô | Sửa ô |
-| Ctrl+S | Lưu thay đổi trên grid |
-| F5 | Tải lại bảng |
+| Keys                         | Action                                  |
+| ---------------------------- | --------------------------------------- |
+| Ctrl+1 … 9                   | Switch workspace                        |
+| Ctrl+N                       | New connection                          |
+| Ctrl+T                       | New query                               |
+| Ctrl+Shift+A                 | Toggle the assistant panel              |
+| Double-click a connection    | Connect                                 |
+| Double-click a table         | Open its data                           |
+| Ctrl+Enter / F9              | Run SQL (the selection, or everything)  |
+| Enter / F2 / double-click    | Edit the selected cell                  |
+| Ctrl+S                       | Save grid changes                       |
+| F5                           | Reload the table                        |
+
+## Documentation
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): setup, toolchain, tests, code style, adding a driver.
+- [ARCHITECTURE.md](ARCHITECTURE.md): layers, data flow, the assistant's safety model, config and secrets.
+
+## License
+
+No license has been chosen yet (TODO for the project owner). Until a `LICENSE` file is added, all rights are reserved.

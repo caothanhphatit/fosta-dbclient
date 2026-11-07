@@ -2,3 +2,6 @@ node_modules/
 dist/
 src-tauri/target/
 src-tauri/gen/
+
+# Machine-specific npm settings (e.g. a cache on another drive) belong in your user ~/.npmrc
+.npmrc

@@ -2736,7 +2736,7 @@ pre.field-value.text {
   display: flex;
   align-items: flex-end;
   gap: 6px;
-  margin: 8px 12px 12px;
+  margin: 8px 12px 4px;
   padding: 6px 6px 6px 10px;
   border: 1px solid var(--border-strong);
   border-radius: 10px;
@@ -2784,12 +2784,12 @@ pre.field-value.text {
   opacity: 0.5;
 }
 
-/* Model switcher: pill above the composer and its popover. */
+/* Model switcher: pill below the composer, left-aligned; its popover opens upward. */
 
 .model-switcher {
   position: relative;
   display: flex;
-  margin: 8px 12px -2px;
+  margin: 0 12px 8px;
 }
 
 .model-pill {

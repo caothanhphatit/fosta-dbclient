@@ -36,10 +36,20 @@ fn downloads_dir() -> AppResult<PathBuf> {
 fn sanitize(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|character| if matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || character.is_control() { '_' } else { character })
+        .map(|character| {
+            if matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || character.is_control() {
+                '_'
+            } else {
+                character
+            }
+        })
         .collect();
     let trimmed = cleaned.trim().trim_matches('.');
-    if trimmed.is_empty() { String::from("export") } else { trimmed.to_owned() }
+    if trimmed.is_empty() {
+        String::from("export")
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 fn unique_path(directory: &Path, name: &str) -> PathBuf {

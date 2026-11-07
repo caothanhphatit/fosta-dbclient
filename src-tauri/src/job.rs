@@ -14,9 +14,8 @@ mod kill_on_close {
 
     use tokio::process::Child;
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
     struct JobHandle(usize);
@@ -28,7 +27,7 @@ mod kill_on_close {
             return;
         };
         unsafe {
-            AssignProcessToJobObject(job.0 as *mut c_void, process as *mut c_void);
+            AssignProcessToJobObject(job.0 as *mut c_void, process);
         }
     }
 

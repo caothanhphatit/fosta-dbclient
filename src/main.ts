@@ -1,36 +1,29 @@
+/**
+ * App shell: builds the layout (rail, toolbar, sidebar, tabs, assistant,
+ * status bar), wires the feature modules together and holds the current
+ * config. Opening tabs lives in `app/navigation.ts`.
+ */
 import "./styles.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, errorText } from "./api";
-import { AssistantPanel, type AssistantContext } from "./assistant";
-import { showContextMenu, type MenuItem } from "./contextMenu";
-import { confirmDialog, toast } from "./dialogs";
-import { bigButton, clamp, h, icon, iconButton, separator, spacer, type IconName } from "./dom";
-import { DesignView } from "./designView";
-import { DiagramView } from "./diagramView";
-import { aiDialog, connectionDialog, embeddingDialog, workspaceDialog } from "./forms";
-import type { Navigator } from "./navigator";
-import type { QueryView } from "./queryView";
-import { makeSplitter } from "./splitter";
-import { TableView } from "./tableView";
-import { TabManager, type TabContent } from "./tabs";
-import { createLogView, TasksPanel, type LogTabContent } from "./tasksPanel";
-import { describeTheme, initTheme, onThemeChange, setTheme, themePreference, toggleTheme, type ThemePreference } from "./theme";
-import { ConnectionTree } from "./tree";
-import type { AiConnection, AppConfig, CellValue, ConnectionProfile, TableTarget, TaskDef, UiAction, Workspace, WorkspaceMeta } from "./types";
-import { VectorHealthView } from "./vectorHealth";
-import { VectorSearchView } from "./vectorSearch";
-import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./workspaces";
-
-const SHORTCUTS: [string, string][] = [
-  ["Ctrl+N", "New connection"],
-  ["Ctrl+T", "New query"],
-  ["Ctrl+Shift+A", "Assistant panel"],
-  ["Ctrl+1 … 9", "Switch workspace"],
-  ["Ctrl+Enter", "Run SQL (selection or all)"],
-  ["Enter / F2", "Edit the selected cell"],
-  ["Ctrl+S", "Save grid changes"],
-  ["F5", "Reload table"],
-];
+import { assistantContext as buildAssistantContext, isQueryView, taskLogContext } from "./app/assistantContext";
+import { AppNavigation } from "./app/navigation";
+import { welcomeScreen } from "./app/welcome";
+import { api, errorText } from "./core/api";
+import { showContextMenu, type MenuItem } from "./core/contextMenu";
+import { confirmDialog, toast } from "./core/dialogs";
+import { bigButton, clamp, h, icon, iconButton, separator, spacer, type IconName } from "./core/dom";
+import { makeSplitter } from "./core/splitter";
+import { TabManager } from "./core/tabs";
+import { describeTheme, initTheme, onThemeChange, setTheme, themePreference, toggleTheme, type ThemePreference } from "./core/theme";
+import type { AiConnection, AppConfig, ConnectionProfile, UiAction, Workspace, WorkspaceMeta } from "./core/types";
+import { aiDialog } from "./features/assistant/aiDialog";
+import { AssistantPanel, type AssistantContext } from "./features/assistant/assistantPanel";
+import { connectionDialog } from "./features/connections/connectionDialog";
+import { ConnectionTree } from "./features/connections/tree";
+import { TasksPanel } from "./features/tasks/tasksPanel";
+import { embeddingDialog } from "./features/vector/embeddingDialog";
+import { workspaceDialog } from "./features/workspaces/workspaceDialog";
+import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./features/workspaces/workspaceRail";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: "light", label: "Light" },
@@ -43,17 +36,31 @@ const SIDEBAR_MAX = 640;
 const ASSISTANT_MIN = 300;
 const ASSISTANT_MAX = 720;
 const ASSISTANT_STORAGE_KEY = "db-studio.assistant";
-const LOG_TAIL_LINES = 80;
 
 const statusText = h("span", { class: "status-text" }, "Ready");
 const taskSummary = h("span", { class: "status-tasks" });
 const welcomeName = h("span", { class: "welcome-workspace" });
 const workspaceHeader = h("div", { class: "ws-header" });
-const tabs = new TabManager(welcomeScreen());
-let queryCounter = 0;
+const tabs = new TabManager(
+  welcomeScreen(welcomeName, {
+    newConnection: () => void editConnection(null),
+    newQuery: newQueryFromSelection,
+    newTask: () => void tasksPanel.edit(null),
+  }),
+);
 let currentConfig: AppConfig | null = null;
 let workspace: Workspace | null = null;
 let workspaceArea: HTMLElement | null = null;
+
+const navigation = new AppNavigation(tabs, {
+  workspaceId,
+  driverOf: (connectionId) => currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.driver,
+  tasksPanel: () => tasksPanel,
+  configureEmbedding: () => void configureEmbedding(),
+  queryChanged: (view) => {
+    if (tabs.activeContent() === view) assistant.refreshContext();
+  },
+});
 
 const assistant = new AssistantPanel({
   context: assistantContext,
@@ -70,13 +77,6 @@ const assistant = new AssistantPanel({
   close: () => showAssistant(false),
 });
 
-const appNavigator: Navigator = {
-  openTable,
-  openVectorSearch,
-  openVectorHealth,
-  configureEmbedding: () => void configureEmbedding(),
-};
-
 const rail = new WorkspaceRail({
   switchTo: (id) => void switchWorkspace(id),
   create: () => void createWorkspace(),
@@ -91,13 +91,13 @@ const rail = new WorkspaceRail({
 });
 
 const tree = new ConnectionTree({
-  openTable: (target) => openTable(target),
-  openDesign,
-  openQuery,
-  openDiagram,
+  openTable: (target) => navigation.openTable(target),
+  openDesign: (target) => navigation.openDesign(target),
+  openQuery: (connectionId, database, initialSql) => navigation.openQuery(connectionId, database, initialSql),
+  openDiagram: (profile, database) => navigation.openDiagram(profile, database),
   editConnection: (profile) => void editConnection(profile),
   deleteConnection: (profile) => void deleteConnection(profile),
-  connectionClosed: closeConnectionTabs,
+  connectionClosed: (connectionId) => navigation.closeConnectionTabs(connectionId),
   configChanged: applyConfig,
   status: setStatus,
   stateChanged: () => {
@@ -107,7 +107,7 @@ const tree = new ConnectionTree({
 });
 
 const tasksPanel = new TasksPanel({
-  openLogs,
+  openLogs: (task) => navigation.openLogs(task),
   configChanged: applyConfig,
   workspaceName: () => workspace?.name ?? "",
   summaryChanged: (text) => {
@@ -115,61 +115,16 @@ const tasksPanel = new TasksPanel({
   },
   activityChanged: refreshActivity,
   askAssistant: (task, logLines) => {
-    openLogs(task);
+    navigation.openLogs(task);
     showAssistant(true);
-    assistant.ask(`Startup task "${task.name}" is not working. Read its log, explain what is wrong and how to fix it.`);
-    void logLines;
+    assistant.ask(`Startup task "${task.name}" is not working. Read its log, explain what is wrong and how to fix it.`, taskLogContext(task, logLines));
   },
 });
 
 tabs.onActiveChange = () => assistant.refreshContext();
 
-function isQueryView(content: TabContent | null): content is QueryView {
-  return content !== null && typeof (content as QueryView).currentText === "function";
-}
-
-function isLogTab(content: TabContent | null): content is LogTabContent {
-  return content !== null && typeof (content as LogTabContent).logLines === "function";
-}
-
-/** What the assistant should know about the active tab (or the tree selection). */
 function assistantContext(): AssistantContext {
-  const active = tabs.activeContent();
-  const withConnection = (connectionId: string, rest: Partial<AssistantContext>): AssistantContext => {
-    const profile = currentConfig?.workspaces.flatMap((item) => item.connections).find((item) => item.id === connectionId);
-    const connected = tree.connectedIds().has(connectionId);
-    return {
-      kind: "connection",
-      connectionId: connected ? connectionId : undefined,
-      connectionName: profile?.name,
-      driver: profile?.driver,
-      serverVersion: tree.serverVersion(connectionId) ?? undefined,
-      ...rest,
-    };
-  };
-  if (isQueryView(active)) {
-    return withConnection(active.connectionId, {
-      kind: "query",
-      database: active.currentDatabase() ?? undefined,
-      editorText: () => active.currentText(),
-      lastError: () => active.lastError,
-    });
-  }
-  if (active instanceof TableView) {
-    return withConnection(active.target.connectionId, { kind: "table", database: active.target.database, table: active.target.table });
-  }
-  if (isLogTab(active)) {
-    const task = active.task;
-    const selection = tree.activeContext();
-    const base: AssistantContext = selection ? withConnection(selection.connectionId, { database: selection.database ?? undefined }) : { kind: "none" };
-    return {
-      ...base,
-      kind: "task",
-      extra: () => `Startup task "${task.name}" runs: ${task.program} ${task.args.join(" ")}\nLast log lines:\n${active.logLines().slice(-LOG_TAIL_LINES).join("\n")}`,
-    };
-  }
-  const selection = tree.activeContext();
-  return selection ? withConnection(selection.connectionId, { database: selection.database ?? undefined }) : { kind: "none" };
+  return buildAssistantContext(tabs.activeContent(), currentConfig, tree);
 }
 
 /** Runs a view request from the assistant against the connection the chat is about. */
@@ -181,17 +136,14 @@ function performAssistantAction(action: UiAction): void {
     return;
   }
   switch (action.kind) {
-    case "openDiagram": {
-      openDiagram(profile, action.database);
-      const view = tabs.contentOf(tabKey(profile.id, "diagram", action.database));
-      if (action.focusTable && view instanceof DiagramView) view.focus(action.focusTable);
+    case "openDiagram":
+      navigation.openDiagram(profile, action.database, action.focusTable ?? undefined);
       break;
-    }
     case "openTable":
-      openTable({ connectionId: profile.id, driver: profile.driver, database: action.database, table: action.table, kind: "table" }, action.filter ?? "");
+      navigation.openTable({ connectionId: profile.id, driver: profile.driver, database: action.database, table: action.table, kind: "table" }, action.filter ?? "");
       break;
     case "openQuery":
-      openQuery(profile.id, action.database ?? context.database ?? null, action.sql);
+      navigation.openQuery(profile.id, action.database ?? context.database ?? null, action.sql);
       break;
   }
 }
@@ -203,7 +155,7 @@ function openQueryWithText(text: string): void {
     toast("Connect to a database first to open a query tab");
     return;
   }
-  openQuery(connectionId, context.database ?? null, text);
+  navigation.openQuery(connectionId, context.database ?? null, text);
 }
 
 function showAssistant(visible: boolean): void {
@@ -312,102 +264,9 @@ function workspaceId(): string {
   return workspace?.id ?? "";
 }
 
-function tabKey(connectionId: string, kind: string, ...parts: string[]): string {
-  return [workspaceId(), connectionId, kind, ...parts].join("|");
-}
-
-function closeConnectionTabs(connectionId: string): void {
-  tabs.closeWhere((key) => key.split("|")[1] === connectionId);
-}
-
-function openTable(target: TableTarget, filter = ""): void {
-  tabs.open({
-    key: tabKey(target.connectionId, "data", target.database, target.table, filter),
-    title: filter ? `${target.table} (filtered)` : target.table,
-    subtitle: filter ? `${target.database}.${target.table} WHERE ${filter}` : `${target.database}.${target.table}`,
-    icon: target.kind === "view" ? "view" : "table",
-    create: () => new TableView(target, appNavigator, filter),
-  });
-}
-
-function openVectorSearch(target: TableTarget, column: string, seed?: CellValue[]): void {
-  const key = tabKey(target.connectionId, "vector-search", target.database, target.table);
-  const existing = tabs.contentOf(key);
-  if (existing instanceof VectorSearchView && seed) existing.setSeed(column, seed);
-  tabs.open({
-    key,
-    title: `${target.table} · vector search`,
-    subtitle: `${target.database}.${target.table}`,
-    icon: "vector",
-    create: () => new VectorSearchView(target, column, appNavigator, seed ?? null),
-  });
-}
-
-function openVectorHealth(target: TableTarget, column: string): void {
-  tabs.open({
-    key: tabKey(target.connectionId, "vector-health", target.database, target.table),
-    title: `${target.table} · vector health`,
-    subtitle: `${target.database}.${target.table}`,
-    icon: "health",
-    create: () => new VectorHealthView(target, column),
-  });
-}
-
 async function configureEmbedding(): Promise<void> {
   const config = await embeddingDialog(currentConfig?.embedding ?? null);
   if (config) applyConfig(config);
-}
-
-function openDesign(target: TableTarget): void {
-  tabs.open({
-    key: tabKey(target.connectionId, "design", target.database, target.table),
-    title: `${target.table} · design`,
-    subtitle: `${target.database}.${target.table}`,
-    icon: "design",
-    create: () => new DesignView(target),
-  });
-}
-
-function openDiagram(profile: ConnectionProfile, database: string): void {
-  tabs.open({
-    key: tabKey(profile.id, "diagram", database),
-    title: `${database} · diagram`,
-    subtitle: `${profile.name} · ${database}`,
-    icon: "diagram",
-    create: () => new DiagramView(profile.id, profile.driver, database, appNavigator),
-  });
-}
-
-function openQuery(connectionId: string, database: string | null, initialSql = ""): void {
-  void openQueryTab(connectionId, database, initialSql);
-}
-
-async function openQueryTab(connectionId: string, database: string | null, initialSql: string): Promise<void> {
-  const { QueryView } = await import("./queryView");
-  const driver = currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.driver ?? "mariadb";
-  queryCounter += 1;
-  tabs.open({
-    key: tabKey(connectionId, "query", crypto.randomUUID()),
-    title: `Query ${queryCounter}`,
-    subtitle: database ?? undefined,
-    icon: "query",
-    create: () => {
-      const view = new QueryView(connectionId, driver, database, initialSql);
-      view.onChanged = () => {
-        if (tabs.activeContent() === view) assistant.refreshContext();
-      };
-      return view;
-    },
-  });
-}
-
-function openLogs(task: TaskDef): void {
-  tabs.open({
-    key: tabKey("task", "logs", task.id),
-    title: `${task.name} · logs`,
-    icon: "logs",
-    create: () => createLogView(task, tasksPanel),
-  });
 }
 
 function diagramFromSelection(): void {
@@ -421,12 +280,12 @@ function diagramFromSelection(): void {
     toast("Select a database in the tree, then open its diagram");
     return;
   }
-  openDiagram(profile, context.database);
+  navigation.openDiagram(profile, context.database);
 }
 
 function newQueryFromSelection(): void {
   const context = tree.activeContext();
-  if (context) openQuery(context.connectionId, context.database);
+  if (context) navigation.openQuery(context.connectionId, context.database);
   else toast("Connect to a database first (double-click a connection)");
 }
 
@@ -438,7 +297,7 @@ async function editConnection(profile: ConnectionProfile | null): Promise<void> 
 async function deleteConnection(profile: ConnectionProfile): Promise<void> {
   if (!(await confirmDialog(`Delete connection "${profile.name}"?`, "Delete"))) return;
   try {
-    closeConnectionTabs(profile.id);
+    navigation.closeConnectionTabs(profile.id);
     applyConfig(await api.deleteConnection(profile.id));
   } catch (error) {
     toast(errorText(error), "error");
@@ -475,38 +334,12 @@ async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
   const summary = `${target.connections.length} connection(s) and ${target.tasks.length} startup task(s) will be removed, and saved passwords forgotten.`;
   if (!(await confirmDialog(`Delete workspace "${target.name}"?\n${summary}`, "Delete"))) return;
   try {
-    tabs.closeWhere((key) => key.startsWith(`${target.id}|`));
+    navigation.closeWorkspaceTabs(target.id);
     applyConfig(await api.deleteWorkspace(target.id));
     setStatus(`Deleted workspace ${target.name}`);
   } catch (error) {
     toast(errorText(error), "error");
   }
-}
-
-function welcomeScreen(): HTMLElement {
-  const card = (iconName: IconName, title: string, detail: string, run: () => void) => {
-    const button = h("button", { class: "welcome-action", type: "button" }, icon(iconName), h("span", { class: "welcome-action-title" }, title), h("span", { class: "welcome-action-detail" }, detail));
-    button.addEventListener("click", run);
-    return button;
-  };
-  return h(
-    "div",
-    { class: "welcome" },
-    h(
-      "div",
-      { class: "welcome-inner" },
-      h("div", { class: "welcome-brand" }, icon("database", "welcome-icon"), h("h1", {}, "DB Studio")),
-      h("p", { class: "welcome-sub" }, "Workspace ", welcomeName, ". Connect on the left, then open a table or a query."),
-      h(
-        "div",
-        { class: "welcome-actions" },
-        card("plug", "New connection", "Save a MariaDB or MySQL server in this workspace", () => void editConnection(null)),
-        card("query", "New query", "Open a SQL editor on the selected connection", newQueryFromSelection),
-        card("task", "New startup task", "Keep a port-forward alive while this workspace is open", () => void tasksPanel.edit(null)),
-      ),
-      h("ul", { class: "shortcuts" }, ...SHORTCUTS.map(([keys, action]) => h("li", {}, h("kbd", {}, keys), h("span", {}, action)))),
-    ),
-  );
 }
 
 function buildLayout(): void {
@@ -594,7 +427,8 @@ function revealWindowAfterFirstPaint(): void {
 
 async function bootstrap(): Promise<void> {
   if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
-    const { installDevMock } = await import("./devMock");
+    // Browser-only preview (`npm run dev`): a mock backend with sample data.
+    const { installDevMock } = await import("./dev/devMock");
     installDevMock();
   }
   initTheme();

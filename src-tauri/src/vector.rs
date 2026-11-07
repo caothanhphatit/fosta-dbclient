@@ -7,9 +7,12 @@ use mysql_async::{prelude::*, Conn, Row, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::{
-        binary_columns, bind_values, create_statement, elapsed_millis, key_condition, primary_key, qualified,
-        quote_ident, read_result_sets, row_texts, text_rows, where_clause, CellValue, ResultSet, VectorHint,
+    drivers::{
+        mysql::{
+            binary_columns, bind_values, create_statement, key_condition, primary_key, qualified, quote_ident, read_result_sets, row_texts,
+            text_rows, where_clause, VectorHint,
+        },
+        types::{elapsed_millis, CellValue, ResultSet},
     },
     error::{AppError, AppResult},
 };
@@ -271,10 +274,7 @@ async fn vector_indexes(conn: &mut Conn, database: &str, table: &str) -> AppResu
         .iter()
         .map(|row| {
             let name = row.text(0);
-            let line = ddl
-                .lines()
-                .find(|line| line.contains(&format!("KEY {name} (")))
-                .unwrap_or_default();
+            let line = ddl.lines().find(|line| line.contains(&format!("KEY {name} ("))).unwrap_or_default();
             VectorIndex {
                 metric: option_value(line, "DISTANCE=").unwrap_or("euclidean").to_lowercase(),
                 m: option_value(line, " M=").and_then(|value| value.parse().ok()),
@@ -285,13 +285,7 @@ async fn vector_indexes(conn: &mut Conn, database: &str, table: &str) -> AppResu
         .collect())
 }
 
-pub(crate) async fn fetch_vector(
-    conn: &mut Conn,
-    database: &str,
-    table: &str,
-    column: &str,
-    key: &[CellValue],
-) -> AppResult<Vec<f32>> {
+pub(crate) async fn fetch_vector(conn: &mut Conn, database: &str, table: &str, column: &str, key: &[CellValue]) -> AppResult<Vec<f32>> {
     let binary = binary_columns(conn, database, table).await?;
     let sql = format!(
         "SELECT {} FROM {} WHERE {} LIMIT 1",
@@ -334,9 +328,23 @@ pub(crate) async fn search(conn: &mut Conn, request: &VectorSearchRequest, query
         k: request.k.clamp(1, MAX_K),
     };
     let runnable_sql = statement.render(&format!("VEC_FromText('{}')", vector_literal(query)));
-    let plan = first_set(read_result_sets(conn.query_iter(format!("EXPLAIN {runnable_sql}")).await?, usize::MAX, &VectorHint::Guess).await?);
+    let plan = first_set(
+        read_result_sets(
+            conn.query_iter(format!("EXPLAIN {runnable_sql}")).await?,
+            usize::MAX,
+            &VectorHint::Guess,
+        )
+        .await?,
+    );
     let started = Instant::now();
-    let result = first_set(read_result_sets(conn.query_iter(runnable_sql.clone()).await?, usize::MAX, &VectorHint::Known(&vectors)).await?);
+    let result = first_set(
+        read_result_sets(
+            conn.query_iter(runnable_sql.clone()).await?,
+            usize::MAX,
+            &VectorHint::Known(&vectors),
+        )
+        .await?,
+    );
     let elapsed_ms = elapsed_millis(started);
     let primary_key = primary_key(conn, &request.database, &request.table).await?;
     Ok(VectorSearchResult {
@@ -351,13 +359,7 @@ pub(crate) async fn search(conn: &mut Conn, request: &VectorSearchRequest, query
     })
 }
 
-pub(crate) async fn health(
-    conn: &mut Conn,
-    database: &str,
-    table: &str,
-    column: &str,
-    sample: u32,
-) -> AppResult<Vec<HealthCheck>> {
+pub(crate) async fn health(conn: &mut Conn, database: &str, table: &str, column: &str, sample: u32) -> AppResult<Vec<HealthCheck>> {
     let dims = vector_columns(conn, database, table)
         .await?
         .get(column)
@@ -414,11 +416,17 @@ pub(crate) async fn index_recall(
     let mut recalls = Vec::with_capacity(probes.len());
     let (mut ann_total, mut exact_total) = (0.0, 0.0);
     for probe in &probes {
-        let ordering = format!("ORDER BY {function}({vector_column}, VEC_FromText('{}')) LIMIT {k}", vector_literal(probe));
+        let ordering = format!(
+            "ORDER BY {function}({vector_column}, VEC_FromText('{}')) LIMIT {k}",
+            vector_literal(probe)
+        );
         let (approximate, ann_ms) = timed_keys(conn, format!("SELECT {key_list} FROM {target} {ordering}")).await?;
         let (exact, exact_ms) = timed_keys(
             conn,
-            format!("SELECT {key_list} FROM {target} IGNORE INDEX ({}) {ordering}", quote_ident(&index.name)),
+            format!(
+                "SELECT {key_list} FROM {target} IGNORE INDEX ({}) {ordering}",
+                quote_ident(&index.name)
+            ),
         )
         .await?;
         let hits = exact.iter().filter(|row_key| approximate.contains(*row_key)).count();
@@ -440,15 +448,10 @@ pub(crate) async fn index_recall(
 }
 
 pub fn decode_vector(bytes: &[u8]) -> Option<Vec<f32>> {
-    if bytes.is_empty() || bytes.len() % 4 != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
         return None;
     }
-    Some(
-        bytes
-            .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect(),
-    )
+    Some(bytes.as_chunks::<4>().0.iter().map(|chunk| f32::from_le_bytes(*chunk)).collect())
 }
 
 pub fn summarize(values: &[f32]) -> String {
@@ -514,9 +517,7 @@ fn first_set(sets: Vec<ResultSet>) -> ResultSet {
 
 fn index_in_plan(plan: &ResultSet) -> Option<String> {
     let key_column = plan.columns.iter().position(|column| column.name.eq_ignore_ascii_case("key"))?;
-    plan.rows
-        .iter()
-        .find_map(|row| row.get(key_column).cloned().flatten())
+    plan.rows.iter().find_map(|row| row.get(key_column).cloned().flatten())
 }
 
 fn first_vector(row: Row) -> Option<Vec<f32>> {
@@ -602,15 +603,30 @@ fn index_check(index: Option<&VectorIndex>) -> HealthCheck {
 }
 
 fn sample_checks(stats: &SampleStats, dims: u32, index: Option<&VectorIndex>) -> Vec<HealthCheck> {
-    let mut checks = vec![HealthCheck::new("Sample", CheckStatus::Info, format!("{} vectors read", stats.total), "")];
+    let mut checks = vec![HealthCheck::new(
+        "Sample",
+        CheckStatus::Info,
+        format!("{} vectors read", stats.total),
+        "",
+    )];
     checks.push(counted_check(
         "Wrong length",
         stats.invalid_length,
         CheckStatus::Error,
         &format!("Vectors whose size is not {dims} floats."),
     ));
-    checks.push(counted_check("NaN or Infinity", stats.non_finite, CheckStatus::Error, "Distances to these vectors are meaningless."));
-    checks.push(counted_check("Zero vectors", stats.zero, CheckStatus::Error, "Cosine distance is undefined for all-zero vectors."));
+    checks.push(counted_check(
+        "NaN or Infinity",
+        stats.non_finite,
+        CheckStatus::Error,
+        "Distances to these vectors are meaningless.",
+    ));
+    checks.push(counted_check(
+        "Zero vectors",
+        stats.zero,
+        CheckStatus::Error,
+        "Cosine distance is undefined for all-zero vectors.",
+    ));
     checks.push(counted_check(
         "Identical vectors",
         stats.duplicates,
@@ -636,7 +652,12 @@ fn norm_check(stats: &SampleStats, index: Option<&VectorIndex>) -> HealthCheck {
     let value = format!("min {:.3} · mean {mean:.3} · max {:.3}", stats.norm_min, stats.norm_max);
     let euclidean_index = index.is_some_and(|index| Metric::of_index(index) == Metric::Euclidean);
     if stats.normalized() {
-        HealthCheck::new("Vector length", CheckStatus::Ok, value, "Unit length: cosine and euclidean rank the same way.")
+        HealthCheck::new(
+            "Vector length",
+            CheckStatus::Ok,
+            value,
+            "Unit length: cosine and euclidean rank the same way.",
+        )
     } else if euclidean_index {
         HealthCheck::new(
             "Vector length",
@@ -645,7 +666,12 @@ fn norm_check(stats: &SampleStats, index: Option<&VectorIndex>) -> HealthCheck {
             "Vectors are not unit length and the index uses euclidean distance, so longer vectors are penalised. Normalize them or use DISTANCE=cosine.",
         )
     } else {
-        HealthCheck::new("Vector length", CheckStatus::Info, value, "Not unit length. Fine for cosine distance.")
+        HealthCheck::new(
+            "Vector length",
+            CheckStatus::Info,
+            value,
+            "Not unit length. Fine for cosine distance.",
+        )
     }
 }
 

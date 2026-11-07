@@ -56,8 +56,11 @@ pub async fn embed(settings: &EmbeddingSettings, api_key: Option<String>, text: 
         let preview: String = payload.chars().take(ERROR_PREVIEW).collect();
         return Err(AppError::new(format!("Embedding API returned {status}: {preview}")));
     }
-    let parsed: EmbeddingResponse = serde_json::from_str(&payload)
-        .map_err(|error| AppError::new(format!("Unexpected embedding response ({error}). Expected an OpenAI-compatible body with data[0].embedding.")))?;
+    let parsed: EmbeddingResponse = serde_json::from_str(&payload).map_err(|error| {
+        AppError::new(format!(
+            "Unexpected embedding response ({error}). Expected an OpenAI-compatible body with data[0].embedding."
+        ))
+    })?;
     parsed
         .data
         .into_iter()

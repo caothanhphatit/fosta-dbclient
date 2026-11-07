@@ -192,9 +192,7 @@ impl TaskManager {
     }
 
     fn is_active(&self, id: &str) -> bool {
-        lock(&self.runtimes)
-            .get(id)
-            .is_some_and(|runtime| runtime.stop.is_some())
+        lock(&self.runtimes).get(id).is_some_and(|runtime| runtime.stop.is_some())
     }
 
     async fn supervise(self: Arc<Self>, def: TaskDef, mut stop_rx: watch::Receiver<bool>) {
@@ -244,7 +242,11 @@ impl TaskManager {
         job::bind_to_app_lifetime(&child);
         let ready_pattern = def.ready_pattern.clone().filter(|pattern| !pattern.is_empty());
         let pid = child.id();
-        let initial_state = if ready_pattern.is_some() { TaskState::Starting } else { TaskState::Running };
+        let initial_state = if ready_pattern.is_some() {
+            TaskState::Starting
+        } else {
+            TaskState::Running
+        };
         self.update_runtime(&def.id, |runtime| {
             runtime.status.state = initial_state;
             runtime.status.pid = pid;

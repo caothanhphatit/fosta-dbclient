@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ai::{AiActive, AiConnection, AiSettings},
     embedding::EmbeddingSettings,
-    secrets::LEGACY_AI_CONNECTION,
     error::{AppError, AppResult},
     lock::lock,
+    secrets::LEGACY_AI_CONNECTION,
     tasks::TaskDef,
 };
 
@@ -21,10 +21,6 @@ const DEFAULT_WORKSPACE_ID: &str = "default";
 const DEFAULT_WORKSPACE_NAME: &str = "Local";
 const DEFAULT_WORKSPACE_COLOR: &str = "blue";
 const DEFAULT_WORKSPACE_ICON: &str = "laptop";
-
-/// Database engines a profile can point at. Only the MySQL-protocol ones have
-/// a driver today; the others can be saved and are refused at connect time.
-pub const SUPPORTED_DRIVERS: [&str; 2] = ["mariadb", "mysql"];
 const DEFAULT_DRIVER: &str = "mariadb";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,28 +40,6 @@ pub struct ConnectionProfile {
     /// Driver-specific settings (TLS flags, a MongoDB URI, …), kept opaque here.
     #[serde(default)]
     pub options: HashMap<String, String>,
-}
-
-impl ConnectionProfile {
-    pub fn driver_label(&self) -> &str {
-        match self.driver.as_str() {
-            "mysql" => "MySQL",
-            "mssql" => "SQL Server",
-            "mongodb" => "MongoDB",
-            "postgres" => "PostgreSQL",
-            _ => "MariaDB",
-        }
-    }
-
-    pub fn ensure_supported(&self) -> AppResult<()> {
-        if SUPPORTED_DRIVERS.contains(&self.driver.as_str()) {
-            return Ok(());
-        }
-        Err(AppError::new(format!(
-            "{} connections are not available yet. Only MariaDB and MySQL can connect in this build.",
-            self.driver_label()
-        )))
-    }
 }
 
 fn default_driver() -> String {
@@ -467,10 +441,14 @@ mod tests {
 
     #[test]
     fn migrates_legacy_ai_setting_into_an_active_connection() {
-        let config: AppConfig = serde_json::from_str(r#"{ "ai": { "provider": "anthropic", "baseUrl": "", "model": "claude-x" } }"#).unwrap();
+        let config: AppConfig =
+            serde_json::from_str(r#"{ "ai": { "provider": "anthropic", "baseUrl": "", "model": "claude-x" } }"#).unwrap();
         assert_eq!(config.ai_connections.len(), 1);
         let connection = &config.ai_connections[0];
-        assert_eq!((connection.id.as_str(), connection.name.as_str(), connection.default_model.as_str()), ("default", "Claude", "claude-x"));
+        assert_eq!(
+            (connection.id.as_str(), connection.name.as_str(), connection.default_model.as_str()),
+            ("default", "Claude", "claude-x")
+        );
         let active = config.ai_active.as_ref().unwrap();
         assert_eq!((active.connection_id.as_str(), active.model.as_str()), ("default", "claude-x"));
         let saved = serde_json::to_value(&config).unwrap();
@@ -483,7 +461,13 @@ mod tests {
         let mut config = AppConfig::default();
         assert!(config.ai_active.is_none());
         for id in ["a", "b"] {
-            config.put_ai_connection(AiConnection { id: id.into(), name: id.into(), provider: Default::default(), base_url: String::new(), default_model: format!("{id}-model") });
+            config.put_ai_connection(AiConnection {
+                id: id.into(),
+                name: id.into(),
+                provider: Default::default(),
+                base_url: String::new(),
+                default_model: format!("{id}-model"),
+            });
         }
         assert_eq!(config.ai_active.as_ref().unwrap().connection_id, "a");
         config.set_ai_active("a", "other").unwrap();
@@ -498,14 +482,31 @@ mod tests {
     #[test]
     fn editing_the_active_connection_follows_its_new_default() {
         let mut config = AppConfig::default();
-        let connection = AiConnection { id: "a".into(), name: "A".into(), provider: Default::default(), base_url: String::new(), default_model: "m1".into() };
+        let connection = AiConnection {
+            id: "a".into(),
+            name: "A".into(),
+            provider: Default::default(),
+            base_url: String::new(),
+            default_model: "m1".into(),
+        };
         config.put_ai_connection(connection.clone());
-        config.put_ai_connection(AiConnection { default_model: "m2".into(), ..connection.clone() });
+        config.put_ai_connection(AiConnection {
+            default_model: "m2".into(),
+            ..connection.clone()
+        });
         assert_eq!(config.ai_active.as_ref().unwrap().model, "m2");
         config.set_ai_active("a", "picked").unwrap();
-        config.put_ai_connection(AiConnection { name: "Renamed".into(), default_model: "m2".into(), ..connection.clone() });
+        config.put_ai_connection(AiConnection {
+            name: "Renamed".into(),
+            default_model: "m2".into(),
+            ..connection.clone()
+        });
         assert_eq!(config.ai_active.as_ref().unwrap().model, "picked");
-        config.put_ai_connection(AiConnection { provider: crate::ai::AiProvider::Openai, default_model: "gpt".into(), ..connection });
+        config.put_ai_connection(AiConnection {
+            provider: crate::ai::AiProvider::Openai,
+            default_model: "gpt".into(),
+            ..connection
+        });
         assert_eq!(config.ai_active.as_ref().unwrap().model, "gpt");
     }
 }
