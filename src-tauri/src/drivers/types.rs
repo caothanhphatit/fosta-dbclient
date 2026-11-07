@@ -34,6 +34,42 @@ pub struct ResultSet {
 pub struct QueryOutcome {
     pub sets: Vec<ResultSet>,
     pub elapsed_ms: u64,
+    /// The session's transaction state as reported by the engine after the run.
+    pub transaction: TransactionState,
+}
+
+/// Transaction state of a query-tab session, read from the engine (`@@in_transaction`,
+/// `@@TRANCOUNT`), never guessed by the UI.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionState {
+    /// False when the engine (or this driver) cannot report or control transactions.
+    pub supported: bool,
+    pub open: bool,
+    pub auto_commit: bool,
+}
+
+impl TransactionState {
+    pub fn unsupported() -> Self {
+        Self {
+            supported: false,
+            open: false,
+            auto_commit: true,
+        }
+    }
+}
+
+/// A transaction control from the query toolbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransactionOp {
+    Begin,
+    Commit,
+    Rollback,
+    AutoCommitOn,
+    AutoCommitOff,
+    /// Only reads the state.
+    Status,
 }
 
 #[derive(Debug, Serialize)]
@@ -87,14 +123,14 @@ pub struct BrowseRequest {
     pub filter: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CellValue {
     pub column: String,
     pub value: Cell,
 }
 
 /// One pending grid edit. `key` holds the primary-key cells that identify the row.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RowChange {
     Insert { values: Vec<CellValue> },

@@ -50,13 +50,15 @@ export class AppNavigation implements Navigator {
     this.tabs.closeWhere((key) => key.startsWith(`${workspaceId}|`));
   }
 
-  openTable(target: TableTarget, filter = ""): void {
+  /** `suggested`: the filter comes from the assistant and is only pre-filled; the user applies it. */
+  openTable(target: TableTarget, filter = "", suggested = false): void {
+    const kind = suggested ? "data-suggested" : "data";
     this.tabs.open({
-      key: this.tabKey(target.connectionId, "data", target.database, target.table, filter),
-      title: filter ? `${target.table} (filtered)` : target.table,
+      key: this.tabKey(target.connectionId, kind, target.database, target.table, filter, suggested ? crypto.randomUUID() : ""),
+      title: suggested ? `${target.table} (suggested filter)` : filter ? `${target.table} (filtered)` : target.table,
       subtitle: filter ? `${target.database}.${target.table} WHERE ${filter}` : `${target.database}.${target.table}`,
       icon: target.kind === "view" ? "view" : "table",
-      create: () => new TableView(target, this, filter),
+      create: () => new TableView(target, this, filter, suggested),
     });
   }
 

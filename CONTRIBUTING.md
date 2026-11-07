@@ -105,7 +105,7 @@ Notes on the live tests (`src-tauri/src/live_tests.rs`):
 - **TypeScript**: strict mode, no framework. Build DOM with `h()` from `core/dom.ts`; talk to the backend only through `core/api.ts`.
   Feature code goes under `src/features/<area>/`, dialogs next to the feature that opens them. Keep heavy dependencies out of the main
   chunk: the query view (CodeMirror) and the dev mock are loaded with dynamic `import()`.
-- **Rust**: errors are `AppError` strings shown to the user, so write them as sentences that say what to do. Serialised types use
+- **Rust**: errors are `AppError`s shown to the user, so write them as sentences that say what to do (structured ones, such as the gateway's `CONFIRMATION_REQUIRED`, carry a JSON payload with a `code` and a `message`). Serialised types use
   `#[serde(rename_all = "camelCase")]` and must match `src/core/types.ts`.
 - **Compatibility**: Tauri command names and argument names, the JSON shapes, the `fosta-studio.json` layout, the keyring service
   `fosta-studio` and its account names, and the `db-studio.*` localStorage keys are a contract with existing installs. Change them only with

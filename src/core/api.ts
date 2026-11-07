@@ -5,9 +5,11 @@ import type {
   AiSettings,
   AppConfig,
   BrowseRequest,
+  Caller,
   CellValue,
   ChatEvent,
   ChatRequest,
+  Confirmation,
   ConnectionProfile,
   EmbeddingSettings,
   HealthCheck,
@@ -24,6 +26,8 @@ import type {
   TaskDef,
   TaskLogEvent,
   TaskStatus,
+  TransactionOp,
+  TransactionState,
   VectorInfo,
   VectorSearchRequest,
   VectorSearchResult,
@@ -42,16 +46,27 @@ export const api = {
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   listDatabases: (connectionId: string) => invoke<string[]>("list_databases", { connectionId }),
   schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),
-  createDatabase: (connectionId: string, name: string, firstCollection: string | null) =>
-    invoke<void>("create_database", { connectionId, name, firstCollection }),
+  createDatabase: (connectionId: string, name: string, firstCollection: string | null, confirmation: Confirmation | null = null) =>
+    invoke<void>("create_database", { connectionId, name, firstCollection, confirmation }),
   listTables: (connectionId: string, database: string) => invoke<TableInfo[]>("list_tables", { connectionId, database }),
   describeTable: (connectionId: string, database: string, table: string) => invoke<TableDesign>("describe_table", { connectionId, database, table }),
   browseTable: (request: BrowseRequest) => invoke<TablePage>("browse_table", { request }),
-  applyChanges: (connectionId: string, database: string, table: string, changes: RowChange[]) =>
-    invoke<number>("apply_changes", { connectionId, database, table, changes }),
+  /** `caller` is "gridSave" or "import"; batches of one import share `importId` and are confirmed once. */
+  applyChanges: (
+    connectionId: string,
+    database: string,
+    table: string,
+    changes: RowChange[],
+    caller: Caller = "gridSave",
+    confirmation: Confirmation | null = null,
+    importId: string | null = null,
+  ) => invoke<number>("apply_changes", { connectionId, database, table, changes, caller, confirmation, importId }),
   openSession: (connectionId: string, sessionId: string) => invoke<void>("open_session", { connectionId, sessionId }),
   closeSession: (sessionId: string) => invoke<void>("close_session", { sessionId }),
-  runSql: (sessionId: string, database: string | null, sql: string) => invoke<QueryOutcome>("run_sql", { sessionId, database, sql }),
+  runSql: (sessionId: string, database: string | null, sql: string, confirmation: Confirmation | null = null) =>
+    invoke<QueryOutcome>("run_sql", { sessionId, database, sql, confirmation }),
+  /** Begin / Commit / Rollback / auto-commit for a query tab; resolves with the engine-reported state. */
+  sqlTransaction: (sessionId: string, op: TransactionOp) => invoke<TransactionState>("sql_transaction", { sessionId, op }),
   cancelSql: (sessionId: string) => invoke<void>("cancel_sql", { sessionId }),
   taskStatuses: () => invoke<TaskStatus[]>("task_statuses"),
   taskLogs: (id: string) => invoke<string[]>("task_logs", { id }),
@@ -60,7 +75,8 @@ export const api = {
   restartTask: (id: string) => invoke<void>("restart_task", { id }),
   saveTask: (task: TaskDef, workspaceId: string | null = null) => invoke<AppConfig>("save_task", { task, workspaceId }),
   deleteTask: (id: string) => invoke<AppConfig>("delete_task", { id }),
-  saveWorkspace: (workspace: WorkspaceMeta) => invoke<AppConfig>("save_workspace", { workspace }),
+  /** Relaxing a Production workspace needs its name in `relaxConfirmation`. */
+  saveWorkspace: (workspace: WorkspaceMeta, relaxConfirmation: string | null = null) => invoke<AppConfig>("save_workspace", { workspace, relaxConfirmation }),
   setActiveWorkspace: (id: string) => invoke<AppConfig>("set_active_workspace", { id }),
   deleteWorkspace: (id: string) => invoke<AppConfig>("delete_workspace", { id }),
   tableRelations: (connectionId: string, database: string, table: string) => invoke<TableRelations>("table_relations", { connectionId, database, table }),
@@ -110,8 +126,15 @@ export function onTaskLog(handler: (event: TaskLogEvent) => void): Promise<Unlis
   return listen<TaskLogEvent>("task-log", (event) => handler(event.payload));
 }
 
+/** Structured backend errors (e.g. from the statement gateway) are objects with a `code` and a `message`. */
+export function errorCode(error: unknown): string | null {
+  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return error.code;
+  return null;
+}
+
 export function errorText(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") return error.message;
   return JSON.stringify(error);
 }

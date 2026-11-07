@@ -1,12 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ai;
+mod audit;
 mod commands;
 mod config;
 mod drivers;
 mod embedding;
 mod error;
 mod files;
+mod gateway;
 mod history;
 mod job;
 #[cfg(test)]
@@ -67,6 +69,7 @@ fn main() {
             commands::data::close_session,
             commands::data::run_sql,
             commands::data::cancel_sql,
+            commands::data::sql_transaction,
             commands::tasks::task_statuses,
             commands::tasks::task_logs,
             commands::tasks::start_task,

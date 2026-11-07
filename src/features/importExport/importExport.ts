@@ -11,6 +11,7 @@ import { formatNumber, h } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
 import { detectDelimiter, parseCsv } from "./csv";
 import { exportDelimited, exportRows } from "./exporters";
+import { ConfirmationSession } from "../safety/confirmationDialog";
 import type { BrowseRequest, Cell, ColumnMeta, RowChange, TableTarget } from "../../core/types";
 
 const FETCH_PAGE = 1000;
@@ -277,10 +278,20 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
           }));
           let done = 0;
           status.className = "test-status";
+          // One import run is confirmed once (when the rules ask), for all of its batches.
+          const confirmations = new ConfirmationSession();
+          const importId = crypto.randomUUID();
           for (let start = 0; start < changes.length; start += IMPORT_BATCH) {
             const batch = changes.slice(start, start + IMPORT_BATCH);
             try {
-              await api.applyChanges(target.connectionId, target.database, target.table, batch);
+              const affected = await confirmations.run((confirmation) =>
+                api.applyChanges(target.connectionId, target.database, target.table, batch, "import", confirmation, importId),
+              );
+              if (affected === null) {
+                status.textContent = `Import cancelled. ${formatNumber(done)} rows were imported before that.`;
+                if (done > 0) onDone();
+                return false;
+              }
             } catch (error) {
               status.className = "test-status error";
               status.textContent = `Rows ${formatNumber(start + 1)}–${formatNumber(start + batch.length)} failed: ${errorText(error)}. ${formatNumber(done)} rows were imported before that.`;

@@ -19,9 +19,9 @@ use super::{
     relations::{self, TableRelations},
     types::{
         elapsed_millis, encode_hex, BrowseRequest, Cell, CellValue, ColumnDesign, ColumnMeta, QueryOutcome, ResultSet, RowChange,
-        TableDesign, TableInfo, TablePage, TextRow,
+        TableDesign, TableInfo, TablePage, TextRow, TransactionOp, TransactionState,
     },
-    Driver,
+    Driver, Engine, Limits,
 };
 use crate::{
     config::ConnectionProfile,
@@ -33,7 +33,6 @@ use crate::{
 type TdsClient = Client<Compat<TcpStream>>;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_QUERY_ROWS: usize = 1000;
 const MAX_PAGE_SIZE: u64 = 5000;
 const DEFAULT_SCHEMA: &str = "dbo";
 const READ_KEYWORDS: [&str; 6] = ["select", "with", "exec", "execute", "declare", "sp_"];
@@ -87,8 +86,31 @@ impl MssqlConnection {
     }
 }
 
+/// `@@TRANCOUNT` and the IMPLICIT_TRANSACTIONS bit of `@@OPTIONS` (2): auto-commit is off when it is set.
+const TRANSACTION_STATE_SQL: &str = "SELECT @@TRANCOUNT, CASE WHEN (@@OPTIONS & 2) = 2 THEN 0 ELSE 1 END";
+
+async fn transaction_state(client: &mut TdsClient) -> TransactionState {
+    match fetch(client, TRANSACTION_STATE_SQL, &[]).await {
+        Ok(rows) => {
+            let row = rows.first();
+            let open = row.map(|row| row.text(0)).unwrap_or_default();
+            let auto_commit = row.map(|row| row.text(1)).unwrap_or_default();
+            TransactionState {
+                supported: true,
+                open: open.parse::<i64>().unwrap_or(0) > 0,
+                auto_commit: auto_commit != "0",
+            }
+        }
+        Err(_) => TransactionState::unsupported(),
+    }
+}
+
 #[async_trait]
 impl Driver for MssqlConnection {
+    fn engine(&self) -> Engine {
+        Engine::SqlServer
+    }
+
     async fn list_databases(&self) -> AppResult<Vec<String>> {
         self.with_main(|client| {
             Box::pin(async move {
@@ -179,7 +201,9 @@ impl Driver for MssqlConnection {
         .await
     }
 
-    async fn browse_table(&self, request: &BrowseRequest) -> AppResult<TablePage> {
+    /// The filter was validated by the gateway as one condition. SQL Server has no per-statement
+    /// timeout the app can set cheaply, so `limits.timeout_secs` is not applied here yet.
+    async fn browse_table(&self, request: &BrowseRequest, _limits: &Limits) -> AppResult<TablePage> {
         let (schema, name) = split_object(&request.table);
         let source = format!("{}.{}.{}", bracket(&request.database), bracket(&schema), bracket(&name));
         let condition = where_clause(request.filter.as_deref());
@@ -261,7 +285,9 @@ impl Driver for MssqlConnection {
         lock(&self.sessions).remove(session_id);
     }
 
-    async fn run_query(&self, session_id: &str, database: Option<String>, sql: String) -> AppResult<QueryOutcome> {
+    /// SQL Server has no read-only session mode the app can switch on: Read-only workspaces are
+    /// enforced by the gateway, and a read-only login is recommended for production.
+    async fn run_query(&self, session_id: &str, database: Option<String>, sql: String, limits: &Limits) -> AppResult<QueryOutcome> {
         let session = self.session(session_id)?;
         let mut client = session.lock().await;
         if let Some(database) = database.filter(|name| !name.is_empty()) {
@@ -273,7 +299,7 @@ impl Driver for MssqlConnection {
         }
         let started = Instant::now();
         let sets = if is_read_statement(&sql) {
-            read_result_sets(&mut client, &sql, MAX_QUERY_ROWS).await?
+            read_result_sets(&mut client, &sql, limits.max_rows).await?
         } else {
             let result = client.execute(sql.as_str(), &[]).await?;
             vec![ResultSet {
@@ -281,14 +307,34 @@ impl Driver for MssqlConnection {
                 ..ResultSet::default()
             }]
         };
+        let elapsed_ms = elapsed_millis(started);
+        let transaction = transaction_state(&mut client).await;
         Ok(QueryOutcome {
             sets,
-            elapsed_ms: elapsed_millis(started),
+            elapsed_ms,
+            transaction,
         })
     }
 
     async fn cancel_query(&self, _session_id: &str) -> AppResult<()> {
         Err(AppError::new("Cancelling a running statement is not supported for SQL Server yet"))
+    }
+
+    async fn transaction(&self, session_id: &str, op: TransactionOp, _limits: &Limits) -> AppResult<TransactionState> {
+        let session = self.session(session_id)?;
+        let mut client = session.lock().await;
+        let sql = match op {
+            TransactionOp::Begin => Some("BEGIN TRANSACTION"),
+            TransactionOp::Commit => Some("IF @@TRANCOUNT > 0 COMMIT TRANSACTION"),
+            TransactionOp::Rollback => Some("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION"),
+            TransactionOp::AutoCommitOn => Some("SET IMPLICIT_TRANSACTIONS OFF"),
+            TransactionOp::AutoCommitOff => Some("SET IMPLICIT_TRANSACTIONS ON"),
+            TransactionOp::Status => None,
+        };
+        if let Some(sql) = sql {
+            client.simple_query(sql).await?.into_results().await?;
+        }
+        Ok(transaction_state(&mut client).await)
     }
 
     async fn table_relations(&self, database: &str, table: &str) -> AppResult<TableRelations> {
