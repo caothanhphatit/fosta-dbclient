@@ -7,6 +7,8 @@ import { clamp, copyText, formatNumber, h, icon, iconButton, separator, spacer, 
 import { EXPORT_LABELS, type ExportFormat } from "../importExport/exporters";
 import { exportDialog, importDialog } from "../importExport/importExport";
 import { DataGrid, type SortState } from "../grid/grid";
+import { openColumnsPopover } from "../grid/columnsPopover";
+import { columnStorageKey, loadHiddenColumns, saveHiddenColumns } from "../grid/columnVisibility";
 import type { Navigator } from "../../core/navigator";
 import { RecordPanel } from "./recordPanel";
 import { makeSplitter } from "../../core/splitter";
@@ -49,10 +51,14 @@ export class TableView implements TabContent {
   private relations: TableRelations | null = null;
   private vectorInfo: VectorInfo | null = null;
   private panelWidth = DEFAULT_PANEL_WIDTH;
+  private readonly columnsKey: string;
+  private hiddenColumns: string[];
 
   constructor(target: TableTarget, navigator: Navigator, initialFilter = "") {
     this.target = target;
     this.navigator = navigator;
+    this.columnsKey = columnStorageKey(target.connectionId, target.database, target.table);
+    this.hiddenColumns = loadHiddenColumns(this.columnsKey);
     this.driver = driverInfo(target.driver);
     this.grid = new DataGrid(() => this.refreshButtons());
     this.record = new RecordPanel(navigator);
@@ -73,6 +79,8 @@ export class TableView implements TabContent {
     importButton.hidden = !this.editable;
     exportButton.addEventListener("click", (event) => showContextMenu(event, this.exportMenu()));
     const recordButton = toolButton("design", "Record", () => this.toggleRecord(), "Show or hide the record panel");
+    const columnsButton = toolButton("columns", "Columns", () => openColumnsPopover(this.grid, columnsButton), "Show or hide columns");
+    const editorButton = toolButton("expand", "Cell editor", () => this.grid.openSelectedInEditor(), "Open the selected cell in a larger editor (Shift+Enter)");
 
     const editTools = this.editable
       ? [
@@ -92,6 +100,8 @@ export class TableView implements TabContent {
       h("div", { class: "filter-box" }, icon("filter"), this.filter),
       this.vectorTools,
       spacer(),
+      columnsButton,
+      editorButton,
       importButton,
       exportFileButton,
       exportButton,
@@ -215,6 +225,7 @@ export class TableView implements TabContent {
         row,
         primaryKey: this.primaryKey,
         relations: this.relations,
+        openEditor: (column) => this.grid.openEditorForColumn(column),
       },
     );
   }
@@ -309,6 +320,15 @@ export class TableView implements TabContent {
         columnFilters: this.columnFilters,
         onColumnFilter: (filters) => this.applyColumnFilters(filters),
         clientFilter: false,
+        hiddenColumns: this.hiddenColumns,
+        onHiddenColumns: (hidden) => {
+          this.hiddenColumns = hidden;
+          saveHiddenColumns(this.columnsKey, hidden);
+        },
+        loadVector: (row, column) => {
+          const { connectionId, database, table } = this.target;
+          return api.fetchVector(connectionId, database, table, column.name, rowKey(page.columns, row, page.primaryKey));
+        },
       });
       this.pageInfo.textContent = describePage(offset, page.rows.length, page.total, page.elapsedMs);
     } catch (error) {

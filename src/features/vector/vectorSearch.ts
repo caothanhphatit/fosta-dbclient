@@ -206,7 +206,17 @@ export class VectorSearchView implements TabContent {
       clientFilter: true,
       primaryKey: result.primaryKey,
       tableName: this.target.table,
-      onSelect: (row) => this.record.show(row && { target: this.target, columns, row, primaryKey: result.primaryKey, relations: null }),
+      onSelect: (row) =>
+        this.record.show(
+          row && {
+            target: this.target,
+            columns,
+            row,
+            primaryKey: result.primaryKey,
+            relations: null,
+            openEditor: (column) => this.grid.openEditorForColumn(column),
+          },
+        ),
     });
     const indexText = result.indexUsed ? `Used index ${result.indexUsed}` : "Full scan: the vector index was not used";
     this.setStatus(

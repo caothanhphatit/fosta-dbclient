@@ -1245,6 +1245,11 @@ kbd {
   cursor: default;
 }
 
+.tool-button.active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 .toolbar-group {
   display: flex;
   align-items: center;
@@ -1552,6 +1557,10 @@ kbd {
 
 .record-field:hover .field-head .icon-button {
   opacity: 1;
+}
+
+.field-head .icon-button + .icon-button {
+  margin-left: 0;
 }
 
 .field-name {
@@ -1932,6 +1941,24 @@ pre.field-value.text {
 .btn:disabled {
   opacity: 0.55;
   cursor: progress;
+}
+
+.btn.small {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.btn.small .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.btn.small[disabled] {
+  cursor: default;
 }
 
 .form-grid {

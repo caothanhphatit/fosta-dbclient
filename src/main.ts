@@ -60,6 +60,9 @@ const navigation = new AppNavigation(tabs, {
   queryChanged: (view) => {
     if (tabs.activeContent() === view) assistant.refreshContext();
   },
+  connectionName: (connectionId) =>
+    currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name ?? connectionId,
+  historyEnabled: () => currentConfig?.queryHistory !== false,
 });
 
 const assistant = new AssistantPanel({
@@ -243,7 +246,34 @@ function settingsMenu(): MenuItem[] {
   return [
     { label: "LLM providers…", icon: "sparkle", run: () => void configureAssistant() },
     { label: "Embedding API…", icon: "vector", run: () => void configureEmbedding() },
+    "separator",
+    {
+      label: "Record query history",
+      icon: currentConfig?.queryHistory !== false ? "check" : undefined,
+      run: () => void setQueryHistory(currentConfig?.queryHistory === false),
+    },
+    { label: "Clear query history…", icon: "trash", run: () => void clearQueryHistory() },
   ];
+}
+
+/** History stays on this machine (db-studio-history.jsonl next to the app); turning it off keeps old entries. */
+async function setQueryHistory(enabled: boolean): Promise<void> {
+  try {
+    applyConfig(await api.setQueryHistory(enabled));
+    setStatus(enabled ? "Query history is on" : "Query history is off; new runs are not recorded");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
+async function clearQueryHistory(): Promise<void> {
+  if (!(await confirmDialog("Delete the whole query history of every connection on this machine?", "Delete"))) return;
+  try {
+    await api.historyClear();
+    toast("Query history cleared", "success");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
 }
 
 /** Right-click menu of the theme button: the one place to pick "follow system". */

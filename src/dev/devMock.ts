@@ -7,7 +7,19 @@ import type { Channel } from "@tauri-apps/api/core";
 import { errorText } from "../core/api";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { baseUrlOf, connectionSettings, endpointProblem, providerPreset } from "../features/assistant/aiProviders";
-import type { AiConnection, AiSettings, AppConfig, ChatEvent, ChatRequest, ConnectionProfile, TablePage, Workspace } from "../core/types";
+import type {
+  AiConnection,
+  AiSettings,
+  AppConfig,
+  ChatEvent,
+  ChatRequest,
+  ConnectionProfile,
+  HistoryEntry,
+  HistoryQuery,
+  QueryOutcome,
+  TablePage,
+  Workspace,
+} from "../core/types";
 
 const DIMS = 4;
 
@@ -109,7 +121,11 @@ const workspaces: Workspace[] = [
   { id: "prod", name: "Production", color: "red", icon: "shield", connections: [], tasks: [] },
 ];
 
-let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null, aiConnections: [], aiActive: null };
+let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null, aiConnections: [], aiActive: null, queryHistory: true };
+
+/** Query history for this page load only (the desktop app keeps it in db-studio-history.jsonl). */
+let history: HistoryEntry[] = [];
+let historySequence = 0;
 
 const columns = [
   { name: "id", typeName: "int(11)", numeric: true, binary: false, primary: true, vectorDims: null },
@@ -119,8 +135,21 @@ const columns = [
   { name: "stock", typeName: "int(11)", numeric: true, binary: false, primary: false, vectorDims: null },
   { name: "category_id", typeName: "int(11)", numeric: true, binary: false, primary: false, vectorDims: null },
   { name: "updated_at", typeName: "datetime", numeric: false, binary: false, primary: false, vectorDims: null },
+  { name: "attributes", typeName: "longtext", numeric: false, binary: false, primary: false, vectorDims: null },
   { name: "embedding", typeName: "vector(4)", numeric: false, binary: true, primary: false, vectorDims: DIMS },
 ];
+
+const COLORS = ["walnut", "oak", "steel", "linen", "glass", "brass", "wool", "pine"];
+
+/** A JSON document per product, long enough to need the cell editor. */
+function attributes(id: number): string {
+  return JSON.stringify({
+    color: COLORS[id % COLORS.length],
+    dimensions: { width: 40 + (id % 9) * 10, depth: 30 + (id % 5) * 10, height: 45 + (id % 7) * 5, unit: "cm" },
+    tags: ["furniture", id % 2 ? "indoor" : "outdoor", id % 3 ? "in-stock" : "backorder"],
+    care: "Wipe with a dry cloth. Avoid direct sunlight and keep away from heat sources to prevent the finish from fading.",
+  });
+}
 
 const names = ["Walnut desk", "Oak chair", "Steel lamp", "Linen sofa", "Glass table", "Brass hook", "Wool rug", "Pine shelf"];
 
@@ -135,6 +164,7 @@ function rows(offset: number, limit: number): (string | null)[][] {
       id % 9 === 0 ? null : String((id * 7) % 120),
       String((id % 5) + 1),
       `2026-10-${String((id % 28) + 1).padStart(2, "0")} 09:${String(id % 60).padStart(2, "0")}:00`,
+      id % 11 === 0 ? null : attributes(id),
       `[${(id % 10) / 10},${((id * 3) % 10) / 10},${((id * 7) % 10) / 10},${((id * 9) % 10) / 10}]`,
     ];
   });
@@ -222,6 +252,7 @@ const SHOP_GRAPH = {
         col("price", "decimal(10,2)"),
         col("stock", "int(11)", false, true),
         col("updated_at", "datetime"),
+        col("attributes", "longtext", false, true),
         col("embedding", "vector(4)"),
       ],
     },
@@ -373,12 +404,26 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
           extra: column.primary ? "auto_increment" : "",
           comment: "",
         })),
-        ddl: "CREATE TABLE `products` (\n  `id` int(11) NOT NULL AUTO_INCREMENT,\n  `sku` varchar(32) NOT NULL,\n  `name` varchar(120) NOT NULL,\n  `price` decimal(10,2) NOT NULL,\n  `stock` int(11) DEFAULT NULL,\n  `category_id` int(11) NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `embedding` vector(4) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB",
+        ddl: "CREATE TABLE `products` (\n  `id` int(11) NOT NULL AUTO_INCREMENT,\n  `sku` varchar(32) NOT NULL,\n  `name` varchar(120) NOT NULL,\n  `price` decimal(10,2) NOT NULL,\n  `stock` int(11) DEFAULT NULL,\n  `category_id` int(11) NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `attributes` longtext DEFAULT NULL CHECK (json_valid(`attributes`)),\n  `embedding` vector(4) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB",
       };
-    case "run_sql": {
-      const result = page(0, 25);
-      return { sets: [{ columns: result.columns, rows: result.rows, affectedRows: 0, truncated: false }], elapsedMs: 8 };
+    case "run_sql":
+      return runSql(String(payload.sql ?? ""));
+    case "history_append":
+      return appendHistory(payload.entry as HistoryEntry);
+    case "history_list":
+      return listHistory(payload.query as HistoryQuery);
+    case "history_delete": {
+      const ids = new Set(payload.ids as string[]);
+      const before = history.length;
+      history = history.filter((entry) => !ids.has(entry.id));
+      return before - history.length;
     }
+    case "history_clear":
+      history = [];
+      return null;
+    case "set_query_history":
+      config = { ...config, queryHistory: Boolean(payload.enabled) };
+      return config;
     case "apply_changes":
       return 1;
     case "task_statuses":
@@ -470,6 +515,50 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     default:
       throw new Error(`devMock: no handler for ${command}`);
   }
+}
+
+// --- Query tab and history ---------------------------------------------------
+
+/** Statements the preview pretends to understand; anything else fails like a syntax error. */
+async function runSql(sql: string): Promise<QueryOutcome> {
+  const statements = sql
+    .split(";")
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const sets = statements.map((statement) => {
+    if (/^(update|delete|insert|replace|create|drop|alter|set|begin|commit|rollback|use)\b/i.test(statement)) {
+      return { columns: [], rows: [], affectedRows: /^(update|delete|insert|replace)/i.test(statement) ? 3 : 0, truncated: false };
+    }
+    if (/^(select|show|with|describe|desc|explain)\b/i.test(statement) || statement.startsWith("{")) {
+      const result = page(0, 25);
+      return { columns: result.columns, rows: result.rows, affectedRows: 0, truncated: false };
+    }
+    const near = statement.slice(0, 30);
+    throw new Error(
+      `You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near '${near}' at line 1`,
+    );
+  });
+  return { sets, elapsedMs: 8 };
+}
+
+function appendHistory(entry: HistoryEntry): HistoryEntry | null {
+  if (!config.queryHistory) return null;
+  historySequence += 1;
+  const stored = { ...entry, id: `mock-${Date.now().toString(16)}-${historySequence}` };
+  history = [...history, stored].slice(-5000);
+  return stored;
+}
+
+function listHistory(query: HistoryQuery): HistoryEntry[] {
+  const search = query.search?.trim().toLowerCase();
+  return history
+    .filter((entry) => !query.connectionId || entry.connectionId === query.connectionId)
+    .filter((entry) => query.before === undefined || entry.startedAt < query.before)
+    .filter((entry) => !search || [entry.sql, entry.connectionName, entry.database ?? ""].some((text) => text.toLowerCase().includes(search)))
+    .reverse()
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .slice(0, query.limit || 200);
 }
 
 // --- Assistant: real provider calls from the browser ------------------------

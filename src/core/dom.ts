@@ -62,6 +62,9 @@ const ICONS = {
     '<rect x="2" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="2" y="8.8" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="8.8" width="5.2" height="5.2" rx="0.8"/>',
   mongodb: '<path d="M8 1.5c3.3 2.6 4.8 5.4 4.3 8.4-.4 2.4-2.1 4-4.3 4.6-2.2-.6-3.9-2.2-4.3-4.6C3.2 6.9 4.7 4.1 8 1.5z"/><path d="M8 4.5v10"/>',
   send: '<path d="M2.5 8L13.5 2.5 10 13.5 7.5 9z"/><path d="M7.5 9l6-6.5"/>',
+  columns: '<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M6 2.5v11M10 2.5v11"/>',
+  expand: '<path d="M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9"/>',
+  history: '<path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9"/><path d="M2.5 2.5V5H5"/><path d="M8 5v3l2 1.5"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;

@@ -1,0 +1,276 @@
+/* Columns popover and the large cell editor of the data grid. */
+
+.columns-popover {
+  position: fixed;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  max-height: min(460px, calc(100vh - 16px));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  animation: pop 0.1s ease-out;
+}
+
+.columns-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-3);
+}
+
+.columns-filter-row .icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.columns-filter {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.columns-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
+.columns-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: default;
+}
+
+.columns-item:hover {
+  background: var(--hover);
+}
+
+.columns-item input {
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.columns-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.columns-item.is-hidden .columns-name {
+  color: var(--fg-3);
+}
+
+.columns-filtered {
+  flex: none;
+  color: var(--accent);
+}
+
+.columns-filtered .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.columns-type {
+  flex: none;
+  max-width: 45%;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.columns-empty {
+  padding: 10px;
+  color: var(--fg-3);
+  text-align: center;
+}
+
+.columns-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.columns-actions .link-button:disabled {
+  color: var(--fg-3);
+  cursor: default;
+  text-decoration: none;
+}
+
+.columns-count {
+  color: var(--fg-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.columns-hint {
+  padding: 0 12px 9px;
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+/* Cell editor ------------------------------------------------------------- */
+
+.cell-editor-modal {
+  width: min(880px, calc(100vw - 32px));
+  height: min(640px, calc(100vh - 32px));
+}
+
+.cell-editor-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cell-editor-type {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.cell-editor-context {
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-editor-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cell-editor-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.cell-editor-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 14px;
+}
+
+.cell-editor-tools .btn + .btn {
+  margin-left: -8px;
+}
+
+.cell-editor-text {
+  flex: 1;
+  min-height: 120px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--editor-bg);
+  color: var(--fg);
+  font: 12.5px/1.55 var(--font-mono);
+  tab-size: 2;
+  resize: none;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.cell-editor-text:focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.cell-editor-text.nowrap {
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.cell-editor-text:disabled {
+  background: var(--surface-2);
+  color: var(--fg-3);
+}
+
+.cell-editor-text:disabled::placeholder {
+  color: var(--null);
+  font-style: italic;
+}
+
+.cell-editor-status {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  min-height: 20px;
+  color: var(--fg-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-editor-json {
+  margin-left: auto;
+  overflow: hidden;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-editor-json.ok {
+  color: var(--success);
+}
+
+.cell-editor-json.error {
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.cell-editor-json.error:hover {
+  text-decoration: underline;
+}
+
+.cell-editor-hint {
+  margin-right: auto;
+  align-self: center;
+  color: var(--fg-3);
+  font-size: 11.5px;
+}

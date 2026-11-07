@@ -10,10 +10,12 @@ webview renders a plain TypeScript UI. They talk only through Tauri commands (re
  ───────────────────────       ─────────────────────────────────────────       ──────────────────────────────────
  features/* views & dialogs    connections.rs  data.rs  tasks.rs               trait Driver (mod.rs)
         │                      workspaces.rs   ai.rs    vector.rs  files.rs     ├─ mysql.rs   MariaDB / MySQL (mysql_async)
+        │                      history.rs                                       │
         ▼                               │                                       ├─ mssql.rs   SQL Server (tiberius)
  core/api.ts ── invoke() ─────────────► │ ── DbManager ──────────────────────►  └─ mongo.rs   MongoDB (mongodb)
              ◄─ events / Channel ────── │                                       types.rs     shared data shapes
                                         ├─ ConfigStore (config.rs) → db-studio.json
+                                        ├─ HistoryStore (history.rs) → db-studio-history.jsonl
                                         ├─ secrets.rs → Windows Credential Manager
                                         ├─ TaskManager (tasks.rs, job.rs) → child processes
                                         └─ ai/ → LLM provider HTTP APIs
@@ -29,7 +31,8 @@ webview renders a plain TypeScript UI. They talk only through Tauri commands (re
   `TablePage`, `TableDesign`, `RowChange`, …), so the UI never sees engine-specific types. Cells travel as text (`Option<String>`);
   binary values as `0x…` hex, MariaDB vectors as a short summary.
 
-`AppState` (in `main.rs`) holds the `ConfigStore`, the `DbManager`, the `TaskManager` and the in-flight assistant runs.
+`AppState` (in `main.rs`) holds the `ConfigStore`, the `DbManager`, the `TaskManager`, the in-flight assistant runs and the query
+`HistoryStore`.
 
 ## Data flow
 
@@ -41,11 +44,15 @@ webview renders a plain TypeScript UI. They talk only through Tauri commands (re
    `browse_table`. SQL drivers build `SELECT … WHERE <filter> ORDER BY … LIMIT/OFFSET` (or `OFFSET/FETCH`), plus a `COUNT(*)` and the
    primary key; MongoDB runs `find` with the JSON filter and `count_documents`.
 3. The page is rendered by the virtualised `DataGrid` (`features/grid/grid.ts`). Per-column filters are turned into a SQL condition
-   or a MongoDB query by `features/grid/columnFilter.ts`.
+   or a MongoDB query by `features/grid/columnFilter.ts`. Hidden columns (`features/grid/columnVisibility.ts`, the Columns popover in
+   `columnsPopover.ts`) are only left out of the drawing: the grid keeps their data, filters and pending edits, and copies/exports
+   still include them. Table views remember them in localStorage (`db-studio.columns.<connection>.<database>.<table>`).
 
 ### Edit
 
-1. Cell edits, inserts and deletes are kept client-side as pending changes (the pending bar shows how many).
+1. Cell edits, inserts and deletes are kept client-side as pending changes (the pending bar shows how many). The large cell editor
+   (`features/grid/cellEditor.ts`, Shift+Enter) writes into the grid the same way; it is a plain textarea, so CodeMirror stays out of
+   the main bundle.
 2. Saving sends them as one `apply_changes` call: a list of `RowChange` (`insert`, `update`, `delete`) where `key` holds the primary-key
    cells of the row (all non-vector columns when the table has no key).
 3. SQL drivers run all statements in one transaction with bound parameters (`UPDATE … WHERE key LIMIT 1`, `TOP (1)` on SQL Server);
@@ -58,6 +65,18 @@ webview renders a plain TypeScript UI. They talk only through Tauri commands (re
 2. `run_sql` sends the editor text (or the selection) to that session and returns every result set (up to 1000 rows each, flagged as
    truncated). MongoDB takes a database command as JSON.
 3. `cancel_sql` issues `KILL QUERY <thread id>` on MariaDB/MySQL; the other drivers report that cancelling is not supported.
+4. After each run the tab sends a `HistoryEntry` (text, connection id and name, driver, database, start time, duration, rows or
+   affected rows per set, or the error, and whether Stop was pressed) to `history_append` without waiting for it. The History panel
+   (`features/query/historyPanel.ts`) reads it back with `history_list` (newest first, filtered by connection and search text, paged
+   with `before`), and can `history_delete` entries or `history_clear` everything.
+
+## Query history
+
+`history.rs` keeps every run in `db-studio-history.jsonl` next to `db-studio.json`: one JSON object per line, appended under a mutex
+so runs from several tabs never interleave, on Tauri's blocking pool so the UI never waits for the disk. When the file grows past
+5,000 entries plus 10% it is rewritten (temporary file, then rename) with the newest 5,000. Statements longer than 64 KiB are cut.
+The history **never leaves this machine**; it holds only what the user ran (never passwords), and `queryHistory: false` in
+`db-studio.json` (Settings → Record query history) stops recording without deleting what is there.
 
 ## The assistant
 
@@ -79,11 +98,13 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
 ## Config and secrets
 
 - **`db-studio.json`** next to the executable (portable): workspaces with their connections and startup tasks, the active workspace, LLM
-  provider connections, the active model, and the embedding API settings. No secrets. Old layouts (flat `connections` + `tasks`, the
-  single `ai` setting) are migrated on load (`config.rs`).
+  provider connections, the active model, the embedding API settings and the `queryHistory` switch. No secrets. Old layouts (flat
+  `connections` + `tasks`, the single `ai` setting) are migrated on load (`config.rs`).
 - **Windows Credential Manager** (`secrets.rs`, service `db-studio`): connection passwords under the connection id, LLM keys under
   `ai-key-<id>`, the embedding key under `embedding-api-key`. A password in a pasted connection string is moved there, never into the file.
-- **localStorage** (`db-studio.*`): UI preferences only (theme, assistant panel open/closed, diagram node positions).
+- **`db-studio-history.jsonl`** next to the executable: the query history (see above). No secrets.
+- **localStorage** (`db-studio.*`): UI preferences only (theme, assistant panel open/closed, diagram node positions, hidden columns per
+  table, the history panel and cell-editor wrap toggles).
 
 ## Startup tasks
 

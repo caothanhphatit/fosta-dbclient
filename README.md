@@ -19,8 +19,15 @@ A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend
 - Tree of connections → databases → tables/views, with search.
 - **Table data**: paging, `WHERE` or per-column filters, sorting, inline cell editing, insert/delete rows, submit in one transaction, a
   record panel that follows foreign keys, import (CSV/TSV/JSON) and export (CSV, CSV for Excel, JSON, SQL INSERT, Markdown).
+  - **Columns**: show or hide columns (toolbar button or a column header's right-click menu); the choice is remembered per table, and
+    exports still include hidden columns.
+  - **Cell editor** (`Shift+Enter`): a large editor for long values with line/char counts, word wrap, NULL, and Format / Minify with
+    validation for JSON; binary and vector values open read-only. Saving adds a normal pending edit.
 - **Query editor**: syntax highlighting, table-name completion, several statements per run, Stop (`KILL QUERY`), and one session per tab
   (`BEGIN`/`COMMIT` can span runs).
+  - **Query history**: every run (text, connection, database, time, duration, rows or error) is listed in the tab's History panel, with
+    search; Insert or open an entry in a new tab. History stays on this machine, in `db-studio-history.jsonl` next to the `.exe` (newest
+    5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
 - **Vector tools** (MariaDB 11.7+ only): embedding search, column/index health checks, ANN recall versus exact search.
 - **Assistant** (right panel, `Ctrl+Shift+A`): chat with a model of your choice (Fosta by default, OpenAI, Gemini, Claude, or any
@@ -68,6 +75,7 @@ Test databases (MariaDB, SQL Server and MongoDB with sample data) run in Docker;
 | Double-click a table         | Open its data                           |
 | Ctrl+Enter / F9              | Run SQL (the selection, or everything)  |
 | Enter / F2 / double-click    | Edit the selected cell                  |
+| Shift+Enter                  | Open the selected cell in the editor    |
 | Ctrl+S                       | Save grid changes                       |
 | F5                           | Reload the table                        |
 

@@ -16,6 +16,8 @@ export interface RecordContext {
   row: Cell[];
   primaryKey: string[];
   relations: TableRelations | null;
+  /** Opens a column of this row in the large cell editor. */
+  openEditor: ((column: number) => void) | null;
 }
 
 export class RecordPanel {
@@ -35,13 +37,16 @@ export class RecordPanel {
       return;
     }
     const outgoing = context.relations?.outgoing ?? [];
-    const fields = context.columns.map((column, index) => this.field(context, column, context.row[index], outgoing));
+    const fields = context.columns.map((_, index) => this.field(context, index, context.row[index], outgoing));
     this.body.replaceChildren(...fields, ...this.relatedSection(context));
   }
 
-  private field(context: RecordContext, column: ColumnMeta, value: Cell, outgoing: Relation[]): HTMLElement {
+  private field(context: RecordContext, index: number, value: Cell, outgoing: Relation[]): HTMLElement {
+    const column = context.columns[index];
     const isKey = column.primary || context.primaryKey.includes(column.name);
     const reference = outgoing.find((relation) => relation.columns.includes(column.name));
+    const long = value !== null && column.vectorDims == null && (value.length > LONG_TEXT || value.includes("\n") || JSON_START.test(value));
+    const openEditor = context.openEditor;
     const header = h(
       "div",
       { class: "field-head" },
@@ -49,6 +54,7 @@ export class RecordPanel {
       h("span", { class: "field-name" }, column.name),
       h("span", { class: "field-type" }, column.vectorDims != null ? `vector(${column.vectorDims})` : column.typeName),
       reference && value !== null ? this.referenceLink(context, reference) : null,
+      long && openEditor ? iconButton("expand", "Open in editor (Shift+Enter in the grid)", () => openEditor(index)) : null,
       value !== null && column.vectorDims == null ? iconButton("copy", "Copy value", () => void copyText(value)) : null,
     );
     return h("div", { class: "record-field" }, header, this.valueView(context, column, value));

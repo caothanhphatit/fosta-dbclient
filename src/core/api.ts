@@ -11,6 +11,8 @@ import type {
   ConnectionProfile,
   EmbeddingSettings,
   HealthCheck,
+  HistoryEntry,
+  HistoryQuery,
   QueryOutcome,
   RecallReport,
   RowChange,
@@ -91,6 +93,13 @@ export const api = {
     return invoke<string>("ai_chat", { request, onEvent: channel });
   },
   aiCancel: (id: string) => invoke<void>("ai_cancel", { id }),
+  /** Records a query run; resolves with the stored entry, or null when history is turned off. */
+  historyAppend: (entry: HistoryEntry) => invoke<HistoryEntry | null>("history_append", { entry }),
+  /** Matching entries, newest first. */
+  historyList: (query: HistoryQuery) => invoke<HistoryEntry[]>("history_list", { query }),
+  historyDelete: (ids: string[]) => invoke<number>("history_delete", { ids }),
+  historyClear: () => invoke<void>("history_clear"),
+  setQueryHistory: (enabled: boolean) => invoke<AppConfig>("set_query_history", { enabled }),
 };
 
 export function onTaskStatus(handler: (status: TaskStatus) => void): Promise<UnlistenFn> {

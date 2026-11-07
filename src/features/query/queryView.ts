@@ -1,18 +1,35 @@
 import type { EditorView } from "@codemirror/view";
 import { api, errorText } from "../../core/api";
 import { toast } from "../../core/dialogs";
-import { clamp, formatNumber, h, icon, separator, toolButton } from "../../core/dom";
+import { clamp, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
+import { openColumnsPopover } from "../grid/columnsPopover";
 import { DataGrid, gridSetup } from "../grid/grid";
 import { makeSplitter } from "../../core/splitter";
 import { createSqlEditor, selectedOrAllText, setSchemaTables } from "./sqlEditor";
+import { HistoryPanel } from "./historyPanel";
+import { summarizeSets } from "./historyFormat";
 import type { TabContent } from "../../core/tabs";
-import type { QueryOutcome, ResultSet } from "../../core/types";
+import type { HistoryEntry, QueryOutcome, ResultSet } from "../../core/types";
 
 interface ResultPanel {
   title: string;
   element: HTMLElement;
+  /** The grid of a result set; the Columns and Cell editor buttons act on it. */
+  grid?: DataGrid;
 }
+
+/** What a query tab needs from the app shell. */
+export interface QueryHost {
+  connectionName(connectionId: string): string;
+  /** The `queryHistory` setting. */
+  historyEnabled(): boolean;
+  openQuery(connectionId: string, database: string | null, sql: string): void;
+}
+
+const HISTORY_PANEL_KEY = "db-studio.queryHistoryPanel";
+/** Reported once per session so a read-only disk does not flood the user with toasts. */
+let historyFailureReported = false;
 
 interface Message {
   text: string;
@@ -38,21 +55,49 @@ export class QueryView implements TabContent {
   private readonly resultBody = h("div", { class: "result-body" });
   private readonly runButton: HTMLButtonElement;
   private readonly stopButton: HTMLButtonElement;
+  private readonly columnsButton: HTMLButtonElement;
+  private readonly cellButton: HTMLButtonElement;
+  private readonly historyButton: HTMLButtonElement;
+  private readonly host: QueryHost;
+  private readonly history: HistoryPanel;
+  private activeGrid: DataGrid | null = null;
   private sessionOpened = false;
   private running = false;
+  private cancelRequested = false;
 
-  constructor(connectionId: string, driver: string, database: string | null, initialSql: string) {
+  constructor(connectionId: string, driver: string, database: string | null, initialSql: string, host: QueryHost) {
     this.connectionId = connectionId;
     this.driver = driver;
+    this.host = host;
     const info = driverInfo(driver);
     this.editor = createSqlEditor(this.editorHost, initialSql, () => void this.run());
     this.runButton = toolButton("play", "Run", () => void this.run(), "Run (Ctrl+Enter). Runs the selection if there is one.");
     this.stopButton = toolButton("stop", "Stop", () => void this.cancel(), "Cancel the running query");
     this.stopButton.disabled = true;
     this.stopButton.hidden = !info.supportsCancel;
+    this.columnsButton = toolButton(
+      "columns",
+      "Columns",
+      () => this.activeGrid && openColumnsPopover(this.activeGrid, this.columnsButton),
+      "Show or hide columns of this result",
+    );
+    this.cellButton = toolButton(
+      "expand",
+      "Cell editor",
+      () => this.activeGrid?.openSelectedInEditor(),
+      "Open the selected cell in a larger viewer (Shift+Enter)",
+    );
+    this.historyButton = toolButton("history", "History", () => this.toggleHistory(), "Show or hide the query history");
     this.databaseSelect.addEventListener("change", () => {
       void this.loadSchema();
       this.onChanged?.();
+    });
+    this.history = new HistoryPanel({
+      connectionId,
+      enabled: () => host.historyEnabled(),
+      insert: (sql) => this.insertText(sql),
+      openInNewTab: (entry) => host.openQuery(entry.connectionId, entry.database, entry.sql),
+      close: () => this.toggleHistory(false),
     });
 
     const splitter = h("div", { class: "splitter-y" });
@@ -60,12 +105,29 @@ export class QueryView implements TabContent {
     this.element = h(
       "div",
       { class: "view query-view" },
-      h("div", { class: "toolbar" }, this.runButton, this.stopButton, separator(), icon(info.icon, `driver-icon ${info.id}`), this.databaseSelect),
-      this.editorHost,
-      splitter,
-      h("div", { class: "results" }, this.resultTabs, this.resultBody),
+      h(
+        "div",
+        { class: "toolbar" },
+        this.runButton,
+        this.stopButton,
+        separator(),
+        icon(info.icon, `driver-icon ${info.id}`),
+        this.databaseSelect,
+        spacer(),
+        this.columnsButton,
+        this.cellButton,
+        separator(),
+        this.historyButton,
+      ),
+      h(
+        "div",
+        { class: "query-body" },
+        h("div", { class: "query-main" }, this.editorHost, splitter, h("div", { class: "results" }, this.resultTabs, this.resultBody)),
+        this.history.element,
+      ),
     );
     this.showPanels([{ title: "Messages", element: messageList([{ text: info.queryHint, kind: "muted" }]) }]);
+    this.toggleHistory(readHistoryPanelOpen(), false);
     void this.loadDatabases(database);
   }
 
@@ -95,6 +157,14 @@ export class QueryView implements TabContent {
       selection: { anchor: from + prefix.length, head: from + prefix.length + text.length },
     });
     this.editor.focus();
+  }
+
+  private toggleHistory(open = this.history.element.hidden, remember = true): void {
+    this.history.element.hidden = !open;
+    this.historyButton.classList.toggle("active", open);
+    this.historyButton.setAttribute("aria-pressed", String(open));
+    if (open) this.history.show();
+    if (remember) writeHistoryPanelOpen(open);
   }
 
   dispose(): void {
@@ -132,22 +202,51 @@ export class QueryView implements TabContent {
   private async run(): Promise<void> {
     const sql = selectedOrAllText(this.editor).trim();
     if (!sql || this.running) return;
+    const database = this.databaseSelect.value || null;
+    const startedAt = Date.now();
+    const started = performance.now();
+    this.cancelRequested = false;
     this.setRunning(true);
     try {
       await this.ensureSession();
-      const outcome = await api.runSql(this.sessionId, this.databaseSelect.value || null, sql);
+      const outcome = await api.runSql(this.sessionId, database, sql);
       this.lastError = null;
       this.showOutcome(outcome);
+      this.record({ sql, database, startedAt, durationMs: performance.now() - started, results: summarizeSets(outcome.sets), error: null });
     } catch (error) {
       this.lastError = errorText(error);
       this.showPanels([{ title: "Messages", element: messageList([{ text: this.lastError, kind: "error" }]) }]);
+      this.record({ sql, database, startedAt, durationMs: performance.now() - started, results: [], error: this.lastError });
     } finally {
       this.setRunning(false);
       this.onChanged?.();
     }
   }
 
+  /** Adds a run to the query history in the background; never blocks or fails the run. */
+  private record(run: Pick<HistoryEntry, "sql" | "database" | "startedAt" | "durationMs" | "results" | "error">): void {
+    if (!this.host.historyEnabled()) return;
+    const entry: HistoryEntry = {
+      ...run,
+      id: "",
+      durationMs: Math.max(0, Math.round(run.durationMs)),
+      connectionId: this.connectionId,
+      connectionName: this.host.connectionName(this.connectionId),
+      driver: this.driver,
+      cancelled: this.cancelRequested && run.error !== null,
+    };
+    api
+      .historyAppend(entry)
+      .then((stored) => stored && this.history.added(stored))
+      .catch((error: unknown) => {
+        if (historyFailureReported) return;
+        historyFailureReported = true;
+        toast(`The query ran, but it could not be added to the history: ${errorText(error)}`, "error");
+      });
+  }
+
   private async cancel(): Promise<void> {
+    this.cancelRequested = true;
     try {
       await api.cancelSql(this.sessionId);
       toast("Cancel requested");
@@ -171,10 +270,10 @@ export class QueryView implements TabContent {
 
   private showOutcome(outcome: QueryOutcome): void {
     const rowSets = outcome.sets.filter((set) => set.columns.length > 0);
-    const panels: ResultPanel[] = rowSets.map((set, index) => ({
-      title: rowSets.length > 1 ? `Result ${index + 1}` : "Result",
-      element: resultGrid(set),
-    }));
+    const panels: ResultPanel[] = rowSets.map((set, index) => {
+      const grid = resultGrid(set);
+      return { title: rowSets.length > 1 ? `Result ${index + 1}` : "Result", element: grid.element, grid };
+    });
     const messages: Message[] = outcome.sets.map((set, index) => ({ text: describeSet(set, index), kind: "info" }));
     messages.push({ text: `Finished in ${formatNumber(outcome.elapsedMs)} ms`, kind: "muted" });
     panels.push({ title: "Messages", element: messageList(messages) });
@@ -186,6 +285,9 @@ export class QueryView implements TabContent {
     const activate = (active: number) => {
       buttons.forEach((button, index) => button.classList.toggle("active", index === active));
       this.resultBody.replaceChildren(panels[active].element);
+      this.activeGrid = panels[active].grid ?? null;
+      this.columnsButton.disabled = this.activeGrid === null;
+      this.cellButton.disabled = this.activeGrid === null;
     };
     buttons.forEach((button, index) => button.addEventListener("click", () => activate(index)));
     this.resultTabs.replaceChildren(...buttons);
@@ -199,10 +301,26 @@ export class QueryView implements TabContent {
   }
 }
 
-function resultGrid(set: ResultSet): HTMLElement {
+function resultGrid(set: ResultSet): DataGrid {
   const grid = new DataGrid();
   grid.load({ ...gridSetup(set.columns, set.rows), clientFilter: true });
-  return grid.element;
+  return grid;
+}
+
+function readHistoryPanelOpen(): boolean {
+  try {
+    return localStorage.getItem(HISTORY_PANEL_KEY) === "open";
+  } catch {
+    return false;
+  }
+}
+
+function writeHistoryPanelOpen(open: boolean): void {
+  try {
+    localStorage.setItem(HISTORY_PANEL_KEY, open ? "open" : "closed");
+  } catch {
+    // Storage can be unavailable; the panel then starts closed in new tabs.
+  }
 }
 
 function describeSet(set: ResultSet, index: number): string {

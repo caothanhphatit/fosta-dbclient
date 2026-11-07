@@ -7,6 +7,7 @@ pub mod ai;
 pub mod connections;
 pub mod data;
 pub mod files;
+pub mod history;
 pub mod tasks;
 pub mod vector;
 pub mod workspaces;

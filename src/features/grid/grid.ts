@@ -1,4 +1,7 @@
+import { openCellEditor } from "./cellEditor";
 import { FILTER_HELP, matchesFilter, type ColumnFilters } from "./columnFilter";
+import { openColumnsPopover } from "./columnsPopover";
+import { nearestVisibleColumn, normalizeHidden, setColumnHidden, stepVisibleColumn, visibleColumnIndexes } from "./columnVisibility";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
 import { clamp, copyText, h, icon } from "../../core/dom";
@@ -6,6 +9,7 @@ import { EXPORT_LABELS, exportRows, type ExportFormat } from "../importExport/ex
 import { rowKey } from "../../core/sql";
 import type { Cell, CellValue, ColumnMeta, RowChange } from "../../core/types";
 import "./grid-virtual.css";
+import "./grid-tools.css";
 
 export interface SortState {
   column: string;
@@ -26,6 +30,12 @@ export interface GridSetup {
   columnFilters: ColumnFilters;
   onColumnFilter: ((filters: ColumnFilters) => void) | null;
   clientFilter: boolean;
+  /** Column names not drawn; their data, filters and edits are kept. */
+  hiddenColumns: string[];
+  /** Called when the user hides or shows columns (the table view saves the choice). */
+  onHiddenColumns: ((hidden: string[]) => void) | null;
+  /** Loads all components of a vector cell for the cell editor (table views only). */
+  loadVector: ((row: Cell[], column: ColumnMeta) => Promise<number[]>) | null;
 }
 
 interface GridRow {
@@ -76,6 +86,9 @@ export function gridSetup(columns: ColumnMeta[], rows: Cell[][]): GridSetup {
     columnFilters: {},
     onColumnFilter: null,
     clientFilter: false,
+    hiddenColumns: [],
+    onHiddenColumns: null,
+    loadVector: null,
   };
 }
 
@@ -109,6 +122,9 @@ export class DataGrid {
   private selection: Position | null = null;
   private editing = false;
   private filters: ColumnFilters = {};
+  private hidden: string[] = [];
+  /** Indexes of the columns that are drawn, in order (hidden columns left out). */
+  private displayed: number[] = [];
   private visible: number[] = [];
   /** Row index -> position in `visible`. */
   private visiblePosition = new Map<number, number>();
@@ -139,6 +155,7 @@ export class DataGrid {
   load(setup: GridSetup): void {
     this.setup = setup;
     this.filters = { ...setup.columnFilters };
+    this.applyHidden(setup.hiddenColumns);
     this.rows = setup.rows.map((row) => ({ original: row, current: [...row], deleted: false, element: null }));
     this.selection = null;
     this.render();
@@ -148,6 +165,62 @@ export class DataGrid {
 
   selectedRow(): Cell[] | null {
     return this.selection ? (this.rows[this.selection.row]?.current ?? null) : null;
+  }
+
+  columns(): ColumnMeta[] {
+    return this.setup.columns;
+  }
+
+  hiddenColumns(): string[] {
+    return [...this.hidden];
+  }
+
+  /** Column names with an active per-column filter. */
+  filteredColumns(): Set<string> {
+    return new Set(Object.keys(this.filters));
+  }
+
+  /** Hides exactly these columns (at least one column stays visible); data and pending edits are kept. */
+  setHiddenColumns(hidden: string[]): void {
+    const next = normalizeHidden(
+      this.setup.columns.map((column) => column.name),
+      hidden,
+    );
+    if (next.length === this.hidden.length && next.every((name, index) => name === this.hidden[index])) return;
+    this.commitEdit?.();
+    this.applyHidden(next);
+    if (this.selection) this.selection = { ...this.selection, column: nearestVisibleColumn(this.displayed, this.selection.column) };
+    const scrollTop = this.element.scrollTop;
+    this.render();
+    this.element.scrollTop = scrollTop;
+    this.updateWindow(false);
+    this.setup.onHiddenColumns?.(this.hiddenColumns());
+  }
+
+  /** Opens the selected cell in the large editor (Shift+Enter). */
+  openSelectedInEditor(): void {
+    if (!this.selection) {
+      toast("Select a cell first");
+      return;
+    }
+    this.openEditor(this.selection);
+  }
+
+  /** Opens a column of the selected row in the large editor (from the record panel). */
+  openEditorForColumn(column: number): void {
+    if (!this.selection) return;
+    this.openEditor({ row: this.selection.row, column });
+  }
+
+  private applyHidden(hidden: string[]): void {
+    const names = this.setup.columns.map((column) => column.name);
+    this.hidden = normalizeHidden(names, hidden);
+    this.displayed = visibleColumnIndexes(names, this.hidden);
+  }
+
+  private hideColumn(column: number): void {
+    const names = this.setup.columns.map((meta) => meta.name);
+    this.setHiddenColumns(setColumnHidden(names, this.hidden, names[column], true));
   }
 
   /** Rows currently shown (after client-side filters), as edited. */
@@ -166,7 +239,7 @@ export class DataGrid {
   private selectFirstVisible(): void {
     const first = this.visible[0];
     if (first === undefined) this.setup.onSelect?.(null);
-    else this.select({ row: first, column: this.selection?.column ?? 0 });
+    else this.select({ row: first, column: this.selection?.column ?? this.displayed[0] ?? 0 });
   }
 
   private get filtersEnabled(): boolean {
@@ -227,7 +300,7 @@ export class DataGrid {
     this.visiblePosition.set(index, this.visible.push(index) - 1);
     this.element.querySelector(".grid-empty")?.remove();
     this.updateWindow(true);
-    this.select({ row: index, column: 0 });
+    this.select({ row: index, column: this.displayed[0] ?? 0 });
     this.onChange();
   }
 
@@ -267,7 +340,7 @@ export class DataGrid {
   private render(): void {
     this.visible = this.computeVisible();
     this.visiblePosition = new Map(this.visible.map((index, position) => [index, position]));
-    this.headerCells = [h("th", { class: "row-number" }), ...this.setup.columns.map((column) => this.headerCell(column))];
+    this.headerCells = [h("th", { class: "row-number" }), ...this.displayed.map((column) => this.headerCell(this.setup.columns[column], column))];
     this.columnWidths = this.headerCells.map(() => 0);
     const header = h("tr", {}, ...this.headerCells);
     const filterRow = this.filtersEnabled ? this.filterRow() : null;
@@ -277,7 +350,7 @@ export class DataGrid {
     this.commitEdit = null;
     this.windowStart = 0;
     this.windowEnd = 0;
-    const span = this.setup.columns.length + 1;
+    const span = this.displayed.length + 1;
     this.topSpacer = h("td", { colspan: span });
     this.bottomSpacer = h("td", { colspan: span });
     const table = h(
@@ -405,7 +478,8 @@ export class DataGrid {
   }
 
   private filterRow(): HTMLTableRowElement {
-    const cells = this.setup.columns.map((column) => {
+    const cells = this.displayed.map((index) => {
+      const column = this.setup.columns[index];
       if (column.vectorDims != null) return h("th", { class: "filter-cell" });
       const input = h("input", {
         class: `column-filter${this.filters[column.name] ? " active" : ""}`,
@@ -446,14 +520,18 @@ export class DataGrid {
     input.setSelectionRange(input.value.length, input.value.length);
   }
 
-  private headerCell(column: ColumnMeta): HTMLElement {
+  private headerCell(column: ColumnMeta, index: number): HTMLElement {
     const sort = this.setup.sort?.column === column.name ? (this.setup.sort.descending ? "▼" : "▲") : "";
     const isKey = column.primary || this.setup.primaryKey.includes(column.name);
     const onSort = this.setup.onSort;
     const kind = typeKind(column);
     const cell = h(
       "th",
-      { class: onSort ? "sortable" : "", title: column.typeName ? `${column.name} · ${column.typeName}${isKey ? " · primary key" : ""}` : column.name },
+      {
+        class: onSort ? "sortable" : "",
+        title: column.typeName ? `${column.name} · ${column.typeName}${isKey ? " · primary key" : ""}` : column.name,
+        "data-column-index": index,
+      },
       h(
         "div",
         { class: "th-content" },
@@ -481,10 +559,11 @@ export class DataGrid {
       "tr",
       { class: `state-${rowState(row)}${current}`, "data-row": index },
       h("td", { class: "row-number" }, label),
-      ...row.current.map((value, column) => this.renderCell(row, value, column)),
+      ...this.displayed.map((column) => this.renderCell(row, row.current[column], column)),
     );
     row.element = element;
-    if (current) element.cells[this.selection!.column + 1]?.classList.add("selected");
+    const selected = current ? this.displayed.indexOf(this.selection!.column) : -1;
+    if (selected >= 0) element.cells[selected + 1]?.classList.add("selected");
     return element;
   }
 
@@ -514,7 +593,7 @@ export class DataGrid {
 
   private select(position: Position): void {
     const row = clamp(position.row, 0, this.rows.length - 1);
-    const column = clamp(position.column, 0, this.setup.columns.length - 1);
+    const column = nearestVisibleColumn(this.displayed, clamp(position.column, 0, this.setup.columns.length - 1));
     if (row < 0 || column < 0) return;
     const rowChanged = this.selection?.row !== row;
     this.ensureRendered(row);
@@ -532,14 +611,23 @@ export class DataGrid {
 
   private cellAt(position: Position | null): HTMLElement | null {
     if (!position) return null;
-    return this.rows[position.row]?.element?.cells[position.column + 1] ?? null;
+    const displayIndex = this.displayed.indexOf(position.column);
+    if (displayIndex < 0) return null;
+    return this.rows[position.row]?.element?.cells[displayIndex + 1] ?? null;
   }
 
   private positionOf(target: EventTarget | null): Position | null {
     const cell = target instanceof Element ? target.closest("td") : null;
     const row = cell?.parentElement;
     if (!cell || !(row instanceof HTMLTableRowElement) || row.dataset.row === undefined) return null;
-    return { row: Number(row.dataset.row), column: Math.max(0, cell.cellIndex - 1) };
+    const column = this.displayed[Math.max(0, cell.cellIndex - 1)] ?? 0;
+    return { row: Number(row.dataset.row), column };
+  }
+
+  /** Data column index of a header cell under `target`, if any. */
+  private headerColumnOf(target: EventTarget | null): number | null {
+    const cell = target instanceof Element ? target.closest<HTMLElement>("th[data-column-index]") : null;
+    return cell ? Number(cell.dataset.columnIndex) : null;
   }
 
   private handlePointer(event: MouseEvent): void {
@@ -554,16 +642,33 @@ export class DataGrid {
   }
 
   private handleContextMenu(event: MouseEvent): void {
+    const header = this.headerColumnOf(event.target);
+    if (header !== null) {
+      showContextMenu(event, this.headerMenuItems(header, event));
+      return;
+    }
     const position = this.positionOf(event.target);
     if (!position) return;
     this.select(position);
     showContextMenu(event, this.menuItems(position));
   }
 
+  private headerMenuItems(column: number, event: MouseEvent): MenuItem[] {
+    const name = this.setup.columns[column]?.name ?? "";
+    const anchor = { x: event.clientX, y: event.clientY };
+    return [
+      { label: `Hide column "${name}"`, icon: "minus", disabled: this.displayed.length <= 1, run: () => this.hideColumn(column) },
+      { label: "Show all columns", disabled: this.hidden.length === 0, run: () => this.setHiddenColumns([]) },
+      { label: "Columns…", icon: "columns", run: () => openColumnsPopover(this, anchor) },
+    ];
+  }
+
   private menuItems(position: Position): MenuItem[] {
     const row = this.rows[position.row];
     const value = row.current[position.column];
     const copyItems: MenuItem[] = [
+      { label: "Open in editor", icon: "expand", run: () => this.openEditor(position) },
+      "separator",
       { label: "Copy value", icon: "copy", run: () => void copyText(value ?? "") },
       { label: "Copy row", run: () => void copyText(row.current.map((cell) => cell ?? "NULL").join("\t")) },
       ...EXPORT_FORMATS.map((format): MenuItem => ({
@@ -599,7 +704,38 @@ export class DataGrid {
     if (!row || row.deleted || this.isReadOnlyColumn(position.column)) return;
     row.current[position.column] = value;
     this.refreshRow(position.row);
+    if (this.selection?.row === position.row) this.setup.onSelect?.(row.current);
     this.onChange();
+  }
+
+  /** Why a cell cannot be changed in the editor, or null when it can. */
+  private readOnlyReason(position: Position): string | null {
+    const row = this.rows[position.row];
+    const column = this.setup.columns[position.column];
+    if (!this.setup.editable) return "This grid is read-only";
+    if (row?.deleted) return "The row is marked for deletion";
+    if (column?.vectorDims != null) return "Vector values are read-only here";
+    if (column?.binary) return "Binary values are shown read-only";
+    return null;
+  }
+
+  private openEditor(position: Position): void {
+    const row = this.rows[position.row];
+    const column = this.setup.columns[position.column];
+    if (!row || !column) return;
+    if (this.editing) this.commitEdit?.();
+    const original = row.original;
+    const loadVector = this.setup.loadVector;
+    const label = row.original ? `row ${this.setup.rowOffset + position.row + 1}` : "new row";
+    openCellEditor({
+      column,
+      value: row.current[position.column],
+      context: [this.setup.tableName, label].filter(Boolean).join(" · "),
+      readOnlyReason: this.readOnlyReason(position),
+      loadVector: column.vectorDims != null && original && loadVector ? () => loadVector(original, column) : null,
+      save: (value) => this.setCell(position, value),
+      onClose: () => this.element.focus({ preventScroll: true }),
+    });
   }
 
   private handleKey(event: KeyboardEvent): void {
@@ -609,13 +745,17 @@ export class DataGrid {
       event.preventDefault();
       const position = this.visiblePosition.get(this.selection.row) ?? -1;
       const target = this.visible[clamp(position + move.row, 0, this.visible.length - 1)];
-      if (target !== undefined) this.select({ row: target, column: this.selection.column + move.column });
+      const column = stepVisibleColumn(this.displayed, this.selection.column, move.column);
+      if (target !== undefined) this.select({ row: target, column });
       return;
     }
     const command = event.ctrlKey || event.metaKey;
     if (command && event.key.toLowerCase() === "c") {
       event.preventDefault();
       void copyText(this.rows[this.selection.row].current[this.selection.column] ?? "");
+    } else if (event.key === "Enter" && event.shiftKey && !command) {
+      event.preventDefault();
+      this.openEditor(this.selection);
     } else if (event.key === "Enter" || event.key === "F2") {
       event.preventDefault();
       this.beginEdit(this.selection);
@@ -646,11 +786,16 @@ export class DataGrid {
     };
     input.addEventListener("keydown", (event) => {
       event.stopPropagation();
-      if (event.key === "Enter") finish(true, { row: position.row + 1, column: position.column }, true);
+      if (event.key === "Enter" && event.shiftKey) {
+        // Continue in the large editor with what was typed so far.
+        event.preventDefault();
+        finish(true, null, true);
+        this.openEditor(position);
+      } else if (event.key === "Enter") finish(true, { row: position.row + 1, column: position.column }, true);
       else if (event.key === "Escape") finish(false, null, true);
       else if (event.key === "Tab") {
         event.preventDefault();
-        finish(true, { row: position.row, column: position.column + (event.shiftKey ? -1 : 1) }, true);
+        finish(true, { row: position.row, column: stepVisibleColumn(this.displayed, position.column, event.shiftKey ? -1 : 1) }, true);
       }
     });
     input.addEventListener("blur", () => finish(true, null, false));

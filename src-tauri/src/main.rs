@@ -7,6 +7,7 @@ mod drivers;
 mod embedding;
 mod error;
 mod files;
+mod history;
 mod job;
 #[cfg(test)]
 mod live_tests;
@@ -27,6 +28,7 @@ pub struct AppState {
     pub db: drivers::DbManager,
     pub tasks: Arc<tasks::TaskManager>,
     pub ai: ai::AiRuns,
+    pub history: Arc<history::HistoryStore>,
 }
 
 fn main() {
@@ -40,6 +42,7 @@ fn main() {
                 db: drivers::DbManager::default(),
                 tasks,
                 ai: ai::AiRuns::default(),
+                history: Arc::new(history::HistoryStore::open_default()?),
             });
             show_window_if_frontend_stalls(app);
             Ok(())
@@ -89,6 +92,11 @@ fn main() {
             commands::ai::test_ai,
             commands::ai::ai_chat,
             commands::ai::ai_cancel,
+            commands::history::history_append,
+            commands::history::history_list,
+            commands::history::history_delete,
+            commands::history::history_clear,
+            commands::history::set_query_history,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start DB Studio")

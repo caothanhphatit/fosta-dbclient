@@ -101,6 +101,8 @@ pub struct AppConfig {
     pub ai_connections: Vec<AiConnection>,
     /// Always set while there is at least one connection.
     pub ai_active: Option<AiActive>,
+    /// Record query-tab runs in the local history file (on unless turned off).
+    pub query_history: bool,
 }
 
 /// On-disk shape. Accepts both the current layout (`workspaces`) and the
@@ -119,6 +121,8 @@ struct StoredConfig {
     ai_connections: Vec<AiConnection>,
     #[serde(default)]
     ai_active: Option<AiActive>,
+    #[serde(default)]
+    query_history: Option<bool>,
     /// Legacy single assistant setting, migrated into one connection.
     #[serde(default)]
     ai: Option<AiSettings>,
@@ -169,6 +173,7 @@ impl From<StoredConfig> for AppConfig {
             embedding: stored.embedding,
             ai_connections,
             ai_active,
+            query_history: stored.query_history.unwrap_or(true),
         };
         config.repair_ai_active();
         config
@@ -392,6 +397,10 @@ impl ConfigStore {
             .ok_or_else(|| AppError::new(format!("Connection '{id}' no longer exists")))
     }
 
+    pub fn query_history_enabled(&self) -> bool {
+        self.current().query_history
+    }
+
     pub fn task(&self, id: &str) -> AppResult<TaskDef> {
         self.current()
             .task(id)
@@ -423,11 +432,16 @@ pub fn upsert<T>(items: &mut Vec<T>, item: T, id_of: impl Fn(&T) -> &str) {
 }
 
 fn config_path() -> AppResult<PathBuf> {
+    data_path(CONFIG_FILE)
+}
+
+/// A file next to the executable, where `db-studio.json` lives (the app is portable).
+pub fn data_path(name: &str) -> AppResult<PathBuf> {
     let executable = std::env::current_exe()?;
     let directory = executable
         .parent()
         .ok_or_else(|| AppError::new("Cannot resolve the application directory"))?;
-    Ok(directory.join(CONFIG_FILE))
+    Ok(directory.join(name))
 }
 
 fn write_config(path: &Path, config: &AppConfig) -> AppResult<()> {
@@ -454,6 +468,14 @@ mod tests {
         let saved = serde_json::to_value(&config).unwrap();
         assert!(saved.get("ai").is_none());
         assert_eq!(saved["aiActive"]["connectionId"], "default");
+    }
+
+    #[test]
+    fn query_history_is_on_unless_turned_off() {
+        assert!(AppConfig::default().query_history);
+        let off: AppConfig = serde_json::from_str(r#"{ "queryHistory": false }"#).unwrap();
+        assert!(!off.query_history);
+        assert_eq!(serde_json::to_value(&off).unwrap()["queryHistory"], false);
     }
 
     #[test]

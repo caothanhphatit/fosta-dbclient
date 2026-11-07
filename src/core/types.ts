@@ -81,6 +81,8 @@ export interface AppConfig {
   aiConnections: AiConnection[];
   /** Set whenever there is at least one connection. */
   aiActive: AiActive | null;
+  /** Record query-tab runs in the local history (default on). */
+  queryHistory: boolean;
 }
 
 export interface ChatMessage {
@@ -306,3 +308,37 @@ export interface RecallReport {
 
 export type RowChange =
   { kind: "insert"; values: CellValue[] } | { kind: "update"; key: CellValue[]; values: CellValue[] } | { kind: "delete"; key: CellValue[] };
+
+/** One result set of a query run, as recorded in the history. */
+export interface HistoryResult {
+  /** True for a set with columns (rows), false for a statement that reports affected rows. */
+  rowSet: boolean;
+  rows: number;
+  affectedRows: number;
+  truncated: boolean;
+}
+
+/** A run in a query tab, stored by the backend in db-studio-history.jsonl on this machine. */
+export interface HistoryEntry {
+  /** Assigned by the backend; empty when appending. */
+  id: string;
+  sql: string;
+  connectionId: string;
+  connectionName: string;
+  driver: string;
+  database: string | null;
+  /** Milliseconds since the Unix epoch. */
+  startedAt: number;
+  durationMs: number;
+  results: HistoryResult[];
+  error: string | null;
+  cancelled: boolean;
+}
+
+export interface HistoryQuery {
+  connectionId?: string;
+  search?: string;
+  limit: number;
+  /** Only entries that started before this time (ms since the epoch), for paging. */
+  before?: number;
+}

@@ -19,6 +19,10 @@ export interface NavigationHost {
   configureEmbedding(): void;
   /** A query tab's text or result changed. */
   queryChanged(view: QueryView): void;
+  /** Display name of a saved connection, recorded in the query history. */
+  connectionName(connectionId: string): string;
+  /** Whether query runs are recorded (the `queryHistory` setting). */
+  historyEnabled(): boolean;
 }
 
 /**
@@ -131,7 +135,11 @@ export class AppNavigation implements Navigator {
       subtitle: database ?? undefined,
       icon: "query",
       create: () => {
-        const view = new QueryView(connectionId, driver, database, initialSql);
+        const view = new QueryView(connectionId, driver, database, initialSql, {
+          connectionName: (id) => this.host.connectionName(id),
+          historyEnabled: () => this.host.historyEnabled(),
+          openQuery: (id, db, sql) => this.openQuery(id, db, sql),
+        });
         view.onChanged = () => this.host.queryChanged(view);
         return view;
       },
