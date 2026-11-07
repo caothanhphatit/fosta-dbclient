@@ -1,17 +1,14 @@
 //! LLM provider connections and the assistant chat.
 
-use tauri::{ipc::Channel, State};
-
 use crate::{
-    ai::{self, AiConnection, AiSettings, ChatEvent, ChatRequest},
+    ai::{self, AiConnection, AiSettings, ChatRequest, ChatSink},
     config::AppConfig,
     error::{AppError, AppResult},
     secrets, AppState,
 };
 
 /// Adds or updates an LLM connection; an empty key keeps the saved one.
-#[tauri::command]
-pub fn save_ai_connection(state: State<'_, AppState>, connection: AiConnection, api_key: Option<String>) -> AppResult<AppConfig> {
+pub fn save_ai_connection(state: &AppState, connection: AiConnection, api_key: Option<String>) -> AppResult<AppConfig> {
     let connection = connection.normalized()?;
     if let Some(key) = api_key.as_deref().filter(|key| !key.is_empty()) {
         secrets::save_ai_key(&connection.id, key)?;
@@ -22,8 +19,7 @@ pub fn save_ai_connection(state: State<'_, AppState>, connection: AiConnection, 
     })
 }
 
-#[tauri::command]
-pub fn delete_ai_connection(state: State<'_, AppState>, id: String) -> AppResult<AppConfig> {
+pub fn delete_ai_connection(state: &AppState, id: String) -> AppResult<AppConfig> {
     secrets::forget_ai_key(&id)?;
     state.config.update(|config| {
         config.remove_ai_connection(&id);
@@ -32,35 +28,35 @@ pub fn delete_ai_connection(state: State<'_, AppState>, id: String) -> AppResult
 }
 
 /// Picks the connection and model the chat uses.
-#[tauri::command]
-pub fn set_ai_active(state: State<'_, AppState>, connection_id: String, model: String) -> AppResult<AppConfig> {
+pub fn set_ai_active(state: &AppState, connection_id: String, model: String) -> AppResult<AppConfig> {
     state.config.update(|config| config.set_ai_active(&connection_id, &model))
 }
 
 /// Lists the models of `settings` as typed in the dialog (not yet saved), or
 /// of a saved connection; an empty key falls back to `connection_id`'s saved one.
-#[tauri::command]
-pub async fn list_ai_models(settings: AiSettings, api_key: Option<String>, connection_id: Option<String>) -> AppResult<Vec<String>> {
+pub async fn list_ai_models(
+    _state: &AppState,
+    settings: AiSettings,
+    api_key: Option<String>,
+    connection_id: Option<String>,
+) -> AppResult<Vec<String>> {
     let api_key = draft_key(api_key, connection_id.as_deref())?;
     ai::list_models(&settings, api_key).await
 }
 
 /// "Test connection" in the dialog: tries the settings as typed, before saving.
-#[tauri::command]
-pub async fn test_ai(settings: AiSettings, api_key: Option<String>, connection_id: Option<String>) -> AppResult<String> {
+pub async fn test_ai(_state: &AppState, settings: AiSettings, api_key: Option<String>, connection_id: Option<String>) -> AppResult<String> {
     let api_key = draft_key(api_key, connection_id.as_deref())?;
     ai::probe(&settings, api_key).await
 }
 
 /// Streams one assistant reply over `on_event`; resolves with the full text.
-#[tauri::command]
-pub async fn ai_chat(state: State<'_, AppState>, request: ChatRequest, on_event: Channel<ChatEvent>) -> AppResult<String> {
+pub async fn ai_chat(state: &AppState, request: ChatRequest, on_event: &dyn ChatSink) -> AppResult<String> {
     let (settings, api_key) = chat_settings(&state.config.snapshot(), &request)?;
     ai::chat(&settings, api_key, &state.db, &state.ai, request, on_event).await
 }
 
-#[tauri::command]
-pub fn ai_cancel(state: State<'_, AppState>, id: String) {
+pub fn ai_cancel(state: &AppState, id: String) {
     state.ai.cancel(&id);
 }
 

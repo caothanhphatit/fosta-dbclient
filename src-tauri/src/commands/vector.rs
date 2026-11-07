@@ -1,21 +1,18 @@
 //! MariaDB vector tooling and the embedding API it can call.
 
-use tauri::State;
-
 use crate::{
     config::AppConfig,
     drivers::types::CellValue,
     embedding::{self, EmbeddingSettings},
     error::{AppError, AppResult},
-    secrets,
+    gateway, secrets,
     vector::{self, HealthCheck, QueryVector, RecallReport, VectorInfo, VectorSearchRequest, VectorSearchResult},
     AppState,
 };
 
 const EMBEDDING_PROBE: &str = "Fosta Studio embedding test";
 
-#[tauri::command]
-pub async fn vector_info(state: State<'_, AppState>, connection_id: String, database: String, table: String) -> AppResult<VectorInfo> {
+pub async fn vector_info(state: &AppState, connection_id: String, database: String, table: String) -> AppResult<VectorInfo> {
     if !state.db.is_mysql(&connection_id)? {
         return Ok(VectorInfo {
             supported: false,
@@ -27,9 +24,8 @@ pub async fn vector_info(state: State<'_, AppState>, connection_id: String, data
     vector::vector_info(&mut conn, &database, &table).await
 }
 
-#[tauri::command]
 pub async fn fetch_vector(
-    state: State<'_, AppState>,
+    state: &AppState,
     connection_id: String,
     database: String,
     table: String,
@@ -40,20 +36,22 @@ pub async fn fetch_vector(
     vector::fetch_vector(&mut conn, &database, &table, &column, &key).await
 }
 
-#[tauri::command]
-pub async fn vector_search(state: State<'_, AppState>, request: VectorSearchRequest) -> AppResult<VectorSearchResult> {
+pub async fn vector_search(state: &AppState, request: VectorSearchRequest) -> AppResult<VectorSearchResult> {
+    // The optional filter is spliced into the search query: it must be one condition, like a grid filter.
+    let context = super::data::gateway_context(state, &request.connection_id)?;
+    let engine = state.db.driver(&request.connection_id)?.engine();
+    gateway::check_filter(&state.db, &context, engine, request.filter.as_deref())?;
     let mut conn = state.db.mysql_conn(&request.connection_id).await?;
     let query = match &request.query {
         QueryVector::Row { key } => vector::fetch_vector(&mut conn, &request.database, &request.table, &request.column, key).await?,
         QueryVector::Literal { text } => vector::parse_literal(text)?,
-        QueryVector::Text { text } => embed_text(&state, text).await?,
+        QueryVector::Text { text } => embed_text(state, text).await?,
     };
     vector::search(&mut conn, &request, &query).await
 }
 
-#[tauri::command]
 pub async fn vector_health(
-    state: State<'_, AppState>,
+    state: &AppState,
     connection_id: String,
     database: String,
     table: String,
@@ -64,9 +62,8 @@ pub async fn vector_health(
     vector::health(&mut conn, &database, &table, &column, sample).await
 }
 
-#[tauri::command]
 pub async fn index_recall(
-    state: State<'_, AppState>,
+    state: &AppState,
     connection_id: String,
     database: String,
     table: String,
@@ -78,12 +75,7 @@ pub async fn index_recall(
     vector::index_recall(&mut conn, &database, &table, &column, k, queries).await
 }
 
-#[tauri::command]
-pub fn save_embedding_settings(
-    state: State<'_, AppState>,
-    settings: Option<EmbeddingSettings>,
-    api_key: Option<String>,
-) -> AppResult<AppConfig> {
+pub fn save_embedding_settings(state: &AppState, settings: Option<EmbeddingSettings>, api_key: Option<String>) -> AppResult<AppConfig> {
     match (&settings, api_key.as_deref()) {
         (None, _) => secrets::forget_password(secrets::EMBEDDING_ACCOUNT)?,
         (Some(_), Some(key)) if !key.is_empty() => secrets::save_password(secrets::EMBEDDING_ACCOUNT, key)?,
@@ -95,12 +87,11 @@ pub fn save_embedding_settings(
     })
 }
 
-#[tauri::command]
-pub async fn test_embedding(state: State<'_, AppState>) -> AppResult<usize> {
-    Ok(embed_text(&state, EMBEDDING_PROBE).await?.len())
+pub async fn test_embedding(state: &AppState) -> AppResult<usize> {
+    Ok(embed_text(state, EMBEDDING_PROBE).await?.len())
 }
 
-async fn embed_text(state: &State<'_, AppState>, text: &str) -> AppResult<Vec<f32>> {
+async fn embed_text(state: &AppState, text: &str) -> AppResult<Vec<f32>> {
     let settings = state
         .config
         .snapshot()

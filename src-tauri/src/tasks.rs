@@ -6,18 +6,24 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use serde_json::json;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, BufReader},
     process::{Child, Command},
     sync::watch,
 };
 
+use tokio::runtime::Handle;
+
 use crate::{
     error::{AppError, AppResult},
+    events::EventEmitter,
     job,
     lock::lock,
 };
+
+pub const TASKS_DISABLED: &str =
+    "Startup tasks are turned off in this web edition. Set FOSTA_STUDIO_TASKS=on to run programs inside the container.";
 
 const LOG_CAPACITY: usize = 2000;
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
@@ -108,20 +114,30 @@ enum RunOutcome {
 }
 
 pub struct TaskManager {
-    app: AppHandle,
+    /// Where the supervisors run (the front-end's tokio runtime, reachable from any thread).
+    executor: Handle,
+    /// Receives `task-status` and `task-log` events for the UI.
+    events: Arc<dyn EventEmitter>,
+    /// Off in the web edition unless the operator allows running programs inside the container.
+    enabled: bool,
     runtimes: Mutex<HashMap<String, TaskRuntime>>,
 }
 
 impl TaskManager {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(executor: Handle, events: Arc<dyn EventEmitter>, enabled: bool) -> Self {
         Self {
-            app,
+            executor,
+            events,
+            enabled,
             runtimes: Mutex::default(),
         }
     }
 
     /// Starts every auto-start task that is not already running.
     pub fn start_auto(self: &Arc<Self>, defs: &[TaskDef]) {
+        if !self.enabled {
+            return;
+        }
         for def in defs.iter().filter(|def| def.auto_start && !self.is_active(&def.id)) {
             if let Err(error) = self.start(def.clone()) {
                 self.push_log(&def.id, &format!("✖ {error}"));
@@ -148,6 +164,9 @@ impl TaskManager {
     }
 
     pub fn start(self: &Arc<Self>, def: TaskDef) -> AppResult<()> {
+        if !self.enabled {
+            return Err(AppError::new(TASKS_DISABLED));
+        }
         let stop_rx = self.with_runtime(&def.id, |runtime| {
             if runtime.stop.is_some() {
                 return Err(AppError::new(format!("'{}' is already running", def.name)));
@@ -158,7 +177,7 @@ impl TaskManager {
             Ok(stop_rx)
         })?;
         self.push_log(&def.id, &format!("▶ {} {}", def.program, def.args.join(" ")));
-        tauri::async_runtime::spawn(Arc::clone(self).supervise(def, stop_rx));
+        self.executor.spawn(Arc::clone(self).supervise(def, stop_rx));
         Ok(())
     }
 
@@ -281,7 +300,7 @@ impl TaskManager {
     {
         let manager = Arc::clone(self);
         let id = id.to_owned();
-        tauri::async_runtime::spawn(async move {
+        self.executor.spawn(async move {
             let mut reader = BufReader::new(reader);
             let mut buffer = Vec::new();
             while matches!(reader.read_until(b'\n', &mut buffer).await, Ok(read) if read > 0) {
@@ -310,7 +329,7 @@ impl TaskManager {
             }
             runtime.logs.push_back(line.to_owned());
         });
-        let _ = self.app.emit("task-log", TaskLogEvent { id, line });
+        self.events.emit("task-log", json!(TaskLogEvent { id, line }));
     }
 
     fn update_runtime(&self, id: &str, change: impl FnOnce(&mut TaskRuntime)) {
@@ -318,7 +337,7 @@ impl TaskManager {
             change(runtime);
             runtime.status.clone()
         });
-        let _ = self.app.emit("task-status", status);
+        self.events.emit("task-status", json!(status));
     }
 
     fn with_runtime<R>(&self, id: &str, action: impl FnOnce(&mut TaskRuntime) -> R) -> R {

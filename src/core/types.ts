@@ -13,7 +13,84 @@ export interface ConnectionProfile {
   savePassword: boolean;
   /** Driver-specific settings, see drivers.ts for the keys each driver reads. */
   options: Record<string, string>;
+  /** Safety rules for this connection only (replacing the workspace's); not edited by the dialog yet. */
+  safety?: SafetySettings | null;
 }
+
+/** Safety presets of a workspace (see the statement gateway in ARCHITECTURE.md). */
+export type SafetyPreset = "open" | "guarded" | "readOnly" | "custom";
+
+/** What happens to a statement of one category, from least to most strict. */
+export type SafetyAction = "allow" | "confirm" | "typed" | "block";
+
+/** Statement categories the gateway reports. "unknown" is SQL it could not parse (treated like a write). */
+export type StatementCategory = "read" | "transaction" | "write" | "unknown" | "ddl" | "destructive" | "admin";
+
+export interface CategoryRules {
+  read: SafetyAction;
+  write: SafetyAction;
+  ddl: SafetyAction;
+  destructive: SafetyAction;
+  admin: SafetyAction;
+}
+
+/** The `safety` object of a workspace in fosta-studio.json. */
+export interface SafetySettings {
+  preset: SafetyPreset;
+  /** The Custom matrix (kept while another preset is selected). */
+  rules: CategoryRules;
+  /** Custom only: several statements per query-tab run. */
+  allowMultiStatement: boolean;
+  /** Custom only: statement timeout in seconds, 0 = none. */
+  statementTimeoutSecs: number;
+  /** Custom only: rows kept per result set in query tabs. */
+  maxRows: number;
+  /** What the workspace started from; anything looser counts as relaxed. */
+  baseline: SafetyPreset | null;
+}
+
+export type Caller = "queryTab" | "gridFilter" | "gridSave" | "import" | "createDatabase" | "assistant" | "transaction" | "settings";
+
+/** One statement as the gateway classified it. */
+export interface StatementInfo {
+  category: StatementCategory;
+  kind: string;
+  tables: string[];
+  excerpt: string;
+  reason: string | null;
+}
+
+/** Payload of a `CONFIRMATION_REQUIRED` or `BLOCKED` error from the gateway. */
+export interface GatewayProblem {
+  code: "CONFIRMATION_REQUIRED" | "BLOCKED";
+  message: string;
+  caller: Caller;
+  workspace: string;
+  connection: string;
+  preset: SafetyPreset;
+  level: SafetyAction;
+  token: string | null;
+  /** What to type for a typed confirmation (a table or workspace name). */
+  expected: string | null;
+  categories: StatementCategory[];
+  tables: string[];
+  statements: StatementInfo[];
+}
+
+/** The user's answer to a confirmation request; sent back with the same call. */
+export interface Confirmation {
+  token: string;
+  typed: string | null;
+}
+
+/** Transaction state of a query tab, as reported by the engine. */
+export interface TransactionState {
+  supported: boolean;
+  open: boolean;
+  autoCommit: boolean;
+}
+
+export type TransactionOp = "begin" | "commit" | "rollback" | "autoCommitOn" | "autoCommitOff" | "status";
 
 export interface TaskDef {
   id: string;
@@ -41,6 +118,8 @@ export interface WorkspaceMeta {
   color: string;
   /** Environment kind shown on the rail: laptop, cloud, shield, … (see workspaces.ts). */
   icon: string;
+  /** Statement rules; always present in a loaded config, omitted to keep the current ones. */
+  safety?: SafetySettings;
 }
 
 /** A workspace groups the connections and startup tasks of one environment. */
@@ -72,6 +151,21 @@ export interface AiConnection {
 export interface AiActive {
   connectionId: string;
   model: string;
+}
+
+/** What the running edition supports (Rust `Capabilities`); the UI hides the rest. */
+export interface Capabilities {
+  edition: "desktop" | "web";
+  /** Startup tasks (child processes) can run. */
+  tasks: boolean;
+  /** "Show in folder" after an export. */
+  revealFile: boolean;
+  /** Exports are downloaded by the browser instead of written to ~/Downloads. */
+  browserDownloads: boolean;
+  /** Where saved passwords and API keys go, as shown in dialogs. */
+  secretStore: string;
+  /** The backend runs in a container, where `localhost` is not the user's machine. */
+  inContainer: boolean;
 }
 
 export interface AppConfig {
@@ -115,7 +209,8 @@ export interface ChatRequest {
 /** Views the assistant can open; none of them changes data. */
 export type UiAction =
   | { kind: "openDiagram"; database: string; focusTable: string | null }
-  | { kind: "openTable"; database: string; table: string; filter: string | null }
+  /** The filter is only pre-filled as a suggestion; nothing runs until the user applies it. */
+  | { kind: "openTable"; database: string; table: string; suggestedFilter: string | null }
   | { kind: "openQuery"; database: string | null; sql: string };
 
 export type ChatEvent = { type: "text"; text: string } | { type: "tool"; label: string } | { type: "action"; action: UiAction } | { type: "done" };
@@ -169,6 +264,7 @@ export interface ResultSet {
 export interface QueryOutcome {
   sets: ResultSet[];
   elapsedMs: number;
+  transaction: TransactionState;
 }
 
 export interface TablePage {

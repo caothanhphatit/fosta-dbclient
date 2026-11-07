@@ -9,19 +9,22 @@ import { assistantContext as buildAssistantContext, isQueryView, taskLogContext 
 import { AppNavigation } from "./app/navigation";
 import { welcomeScreen } from "./app/welcome";
 import { api, errorText } from "./core/api";
+import { capabilities, hideUnsupported, loadCapabilities } from "./core/capabilities";
+import { isTauri, signOut } from "./core/transport";
 import { showContextMenu, type MenuItem } from "./core/contextMenu";
 import { confirmDialog, toast } from "./core/dialogs";
 import { bigButton, clamp, h, icon, iconButton, separator, spacer, type IconName } from "./core/dom";
 import { makeSplitter } from "./core/splitter";
 import { TabManager } from "./core/tabs";
 import { describeTheme, initTheme, onThemeChange, setTheme, themePreference, toggleTheme, type ThemePreference } from "./core/theme";
-import type { AiConnection, AppConfig, ConnectionProfile, UiAction, Workspace, WorkspaceMeta } from "./core/types";
+import type { AiConnection, AppConfig, Capabilities, ConnectionProfile, UiAction, Workspace, WorkspaceMeta } from "./core/types";
 import { aiDialog } from "./features/assistant/aiDialog";
 import { AssistantPanel, type AssistantContext } from "./features/assistant/assistantPanel";
 import { connectionDialog } from "./features/connections/connectionDialog";
 import { ConnectionTree } from "./features/connections/tree";
 import { TasksPanel } from "./features/tasks/tasksPanel";
 import { embeddingDialog } from "./features/vector/embeddingDialog";
+import { relaxedFromBaseline, safetyLabel, safetyOf } from "./features/safety/safety";
 import { workspaceDialog } from "./features/workspaces/workspaceDialog";
 import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./features/workspaces/workspaceRail";
 
@@ -39,15 +42,16 @@ const ASSISTANT_STORAGE_KEY = "db-studio.assistant";
 
 const statusText = h("span", { class: "status-text" }, "Ready");
 const taskSummary = h("span", { class: "status-tasks" });
+/** The active workspace's safety preset; a warning while its rules are relaxed. */
+const safetyStatus = h("span", { class: "status-safety" });
 const welcomeName = h("span", { class: "welcome-workspace" });
 const workspaceHeader = h("div", { class: "ws-header" });
-const tabs = new TabManager(
-  welcomeScreen(welcomeName, {
-    newConnection: () => void editConnection(null),
-    newQuery: newQueryFromSelection,
-    newTask: () => void tasksPanel.edit(null),
-  }),
-);
+const welcome = welcomeScreen(welcomeName, {
+  newConnection: () => void editConnection(null),
+  newQuery: newQueryFromSelection,
+  newTask: () => void tasksPanel.edit(null),
+});
+const tabs = new TabManager(welcome);
 let currentConfig: AppConfig | null = null;
 let workspace: Workspace | null = null;
 let workspaceArea: HTMLElement | null = null;
@@ -145,7 +149,8 @@ function performAssistantAction(action: UiAction): void {
     case "openTable":
       navigation.openTable(
         { connectionId: profile.id, driver: profile.driver, database: action.database, table: action.table, kind: "table" },
-        action.filter ?? "",
+        action.suggestedFilter ?? "",
+        true,
       );
       break;
     case "openQuery":
@@ -218,8 +223,33 @@ function applyConfig(config: AppConfig): void {
   assistant.setConfigured(config.aiConnections, config.aiActive);
   assistant.setScope(workspace.id);
   welcomeName.textContent = workspace.name;
+  renderSafetyStatus(workspace);
   refreshActivity();
-  void getCurrentWindow().setTitle(`${workspace.name} — Fosta Studio`);
+  const title = `${workspace.name} — Fosta Studio`;
+  if (isTauri()) void getCurrentWindow().setTitle(title);
+  else document.title = title;
+}
+
+function renderSafetyStatus(current: Workspace): void {
+  const relaxed = relaxedFromBaseline(current);
+  const label = safetyLabel(safetyOf(current));
+  safetyStatus.classList.toggle("relaxed", relaxed.length > 0);
+  safetyStatus.replaceChildren(icon("shield"), h("span", {}, relaxed.length ? `${label} · rules relaxed` : label));
+  safetyStatus.title = relaxed.length
+    ? `Safety rules of ${current.name} are looser than its default:\n${relaxed.map((change) => change.text).join("\n")}`
+    : `Safety rules of ${current.name}: ${label}`;
+}
+
+/** Closing the window rolls back open transactions; ask first. */
+function guardWindowClose(): void {
+  // The browser preview (dev mock) has no window to guard.
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  void getCurrentWindow().onCloseRequested(async (event) => {
+    const open = tabs.contents().filter((content) => isQueryView(content) && content.hasOpenTransaction()).length;
+    if (open === 0) return;
+    const message = `${open} query tab(s) have an open transaction. Closing Fosta Studio rolls them back, so uncommitted changes are lost. Close anyway?`;
+    if (!(await confirmDialog(message, "Close"))) event.preventDefault();
+  });
 }
 
 function renderWorkspaceHeader(current: Workspace): void {
@@ -253,7 +283,19 @@ function settingsMenu(): MenuItem[] {
       run: () => void setQueryHistory(currentConfig?.queryHistory === false),
     },
     { label: "Clear query history…", icon: "trash", run: () => void clearQueryHistory() },
+    ...(capabilities().edition === "web" ? (["separator", { label: "Sign out…", icon: "key", run: () => void confirmSignOut() }] as MenuItem[]) : []),
   ];
+}
+
+/** Web edition only: there is one access token per server, so signing out ends every browser's session. */
+async function confirmSignOut(): Promise<void> {
+  const message = "Sign out of Fosta Studio? This signs out every browser using this server; sign in again with the access token.";
+  if (!(await confirmDialog(message, "Sign out"))) return;
+  try {
+    await signOut();
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
 }
 
 /** History stays on this machine (fosta-studio-history.jsonl next to the app); turning it off keeps old entries. */
@@ -384,7 +426,10 @@ function buildLayout(): void {
     bigButton("diagram", "Diagram", diagramFromSelection, "ER diagram of the selected database"),
     bigButton("refresh", "Refresh", () => tree.refreshSelected(), "Reload the selected database"),
     separator(),
-    bigButton("task", "Task", () => void tasksPanel.edit(null), "New startup task"),
+    withRequirement(
+      bigButton("task", "Task", () => void tasksPanel.edit(null), "New startup task"),
+      "tasks",
+    ),
     bigButton("vector", "Embedding", () => void configureEmbedding(), "Embedding API for vector search"),
     spacer(),
     bigButton("sparkle", "Assistant", toggleAssistant, "Chat with your database (Ctrl+Shift+A)"),
@@ -400,7 +445,7 @@ function buildLayout(): void {
       iconButton("plus", "New connection", () => void editConnection(null)),
     ),
     tree.element,
-    tasksPanel.element,
+    withRequirement(tasksPanel.element, "tasks"),
   );
   const sidebarSplitter = h("div", { class: "splitter-x" });
   const assistantSplitter = h("div", { class: "splitter-x assistant-splitter" });
@@ -423,7 +468,8 @@ function buildLayout(): void {
     // Fall through: closed by default.
   }
   area.classList.toggle("with-assistant", remembered === "open");
-  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), taskSummary);
+  const version = h("span", { class: "status-version", title: "Fosta Studio version" }, `v${__APP_VERSION__}`);
+  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), safetyStatus, taskSummary, version);
   const main = h("div", { class: "app-main" }, toolbar, area, statusBar);
   (document.getElementById("app") ?? document.body).append(rail.element, main);
 }
@@ -460,7 +506,7 @@ function suppressBrowserContextMenu(): void {
 }
 
 function revealWindowAfterFirstPaint(): void {
-  requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show()));
+  if (isTauri()) requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show()));
 }
 
 async function bootstrap(): Promise<void> {
@@ -469,18 +515,28 @@ async function bootstrap(): Promise<void> {
     const { installDevMock } = await import("./dev/devMock");
     installDevMock();
   }
+  const supported = await loadCapabilities();
   initTheme();
   onThemeChange(() => rail.refreshTheme());
   buildLayout();
+  hideUnsupported(document);
+  hideUnsupported(welcome);
   installShortcuts();
   suppressBrowserContextMenu();
+  guardWindowClose();
   revealWindowAfterFirstPaint();
   try {
     applyConfig(await api.getConfig());
-    await tasksPanel.init();
+    if (supported.tasks) await tasksPanel.init();
   } catch (error) {
     toast(errorText(error), "error");
   }
+}
+
+/** Marks an element as needing a capability; `hideUnsupported` hides it when the edition lacks it. */
+function withRequirement<T extends HTMLElement>(element: T, capability: keyof Capabilities): T {
+  element.dataset.requires = capability;
+  return element;
 }
 
 void bootstrap();

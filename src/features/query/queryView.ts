@@ -1,6 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import { api, errorText } from "../../core/api";
-import { toast } from "../../core/dialogs";
+import { confirmDialog, toast } from "../../core/dialogs";
 import { clamp, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
 import { openColumnsPopover } from "../grid/columnsPopover";
@@ -10,7 +10,9 @@ import { createSqlEditor, selectedOrAllText, setSchemaTables } from "./sqlEditor
 import { HistoryPanel } from "./historyPanel";
 import { summarizeSets } from "./historyFormat";
 import type { TabContent } from "../../core/tabs";
-import type { HistoryEntry, QueryOutcome, ResultSet } from "../../core/types";
+import type { HistoryEntry, QueryOutcome, ResultSet, TransactionOp, TransactionState } from "../../core/types";
+import { withConfirmation } from "../safety/confirmationDialog";
+import { IDLE_TRANSACTION_MINUTES, idleReminderDue, transactionLabel } from "../safety/safety";
 
 interface ResultPanel {
   title: string;
@@ -37,6 +39,7 @@ interface Message {
 }
 
 const MIN_EDITOR_HEIGHT = 80;
+const IDLE_CHECK_MS = 30_000;
 const MIN_RESULTS_HEIGHT = 120;
 
 export class QueryView implements TabContent {
@@ -64,6 +67,15 @@ export class QueryView implements TabContent {
   private sessionOpened = false;
   private running = false;
   private cancelRequested = false;
+  /** Transaction state as last reported by the engine. */
+  private transaction: TransactionState | null = null;
+  private transactionOpenedAt: number | null = null;
+  private transactionRemindedAt: number | null = null;
+  private readonly idleTimer: number;
+  private readonly transactionIndicator = h("span", { class: "tx-indicator", role: "status" });
+  private readonly autoCommit = h("input", { type: "checkbox", checked: true, title: "Commit every statement on its own" });
+  private readonly transactionButtons: HTMLButtonElement[];
+  private readonly transactionsSupported: boolean;
 
   constructor(connectionId: string, driver: string, database: string | null, initialSql: string, host: QueryHost) {
     this.connectionId = connectionId;
@@ -88,6 +100,13 @@ export class QueryView implements TabContent {
       "Open the selected cell in a larger viewer (Shift+Enter)",
     );
     this.historyButton = toolButton("history", "History", () => this.toggleHistory(), "Show or hide the query history");
+    this.transactionsSupported = info.id !== "mongodb";
+    this.transactionButtons = [
+      toolButton("bolt", "Begin", () => void this.transactionControl("begin"), "Start a transaction in this tab"),
+      toolButton("check", "Commit", () => void this.transactionControl("commit"), "Commit the open transaction"),
+      toolButton("x", "Rollback", () => void this.transactionControl("rollback"), "Roll back the open transaction"),
+    ];
+    this.autoCommit.addEventListener("change", () => void this.toggleAutoCommit());
     this.databaseSelect.addEventListener("change", () => {
       void this.loadSchema();
       this.onChanged?.();
@@ -113,6 +132,10 @@ export class QueryView implements TabContent {
         separator(),
         icon(info.icon, `driver-icon ${info.id}`),
         this.databaseSelect,
+        separator(),
+        this.transactionsSupported ? h("label", { class: "checkbox tx-autocommit" }, this.autoCommit, h("span", {}, "Auto-commit")) : null,
+        ...(this.transactionsSupported ? this.transactionButtons : []),
+        this.transactionIndicator,
         spacer(),
         this.columnsButton,
         this.cellButton,
@@ -128,7 +151,90 @@ export class QueryView implements TabContent {
     );
     this.showPanels([{ title: "Messages", element: messageList([{ text: info.queryHint, kind: "muted" }]) }]);
     this.toggleHistory(readHistoryPanelOpen(), false);
+    this.showTransaction(this.transactionsSupported ? null : { supported: false, open: false, autoCommit: true });
+    this.idleTimer = window.setInterval(() => this.remindIdleTransaction(), IDLE_CHECK_MS);
     void this.loadDatabases(database);
+  }
+
+  /** True while the engine reports an open transaction in this tab. */
+  hasOpenTransaction(): boolean {
+    return this.transaction?.open === true;
+  }
+
+  canClose(): boolean | Promise<boolean> {
+    if (!this.hasOpenTransaction()) return true;
+    return confirmDialog("This tab has an open transaction. Closing the tab rolls it back, so uncommitted changes are lost. Close anyway?", "Close tab");
+  }
+
+  private async transactionControl(op: TransactionOp): Promise<void> {
+    try {
+      await this.ensureSession();
+      const state = await api.sqlTransaction(this.sessionId, op);
+      this.showTransaction(state);
+      const done: Partial<Record<TransactionOp, string>> = { begin: "Transaction started", commit: "Committed", rollback: "Rolled back" };
+      if (op !== "status") toast(done[op] ?? transactionLabel(state), "success");
+    } catch (error) {
+      toast(errorText(error), "error");
+      void this.refreshTransaction();
+    }
+  }
+
+  private async toggleAutoCommit(): Promise<void> {
+    const on = this.autoCommit.checked;
+    if (on && this.hasOpenTransaction()) {
+      const proceed = await confirmDialog("Turning auto-commit on commits the open transaction. Continue?", "Commit and switch");
+      if (!proceed) {
+        this.autoCommit.checked = false;
+        return;
+      }
+    }
+    await this.transactionControl(on ? "autoCommitOn" : "autoCommitOff");
+  }
+
+  /** Asks the engine again (after a failed run the transaction may still be open). */
+  private async refreshTransaction(): Promise<void> {
+    if (!this.sessionOpened || !this.transactionsSupported) return;
+    try {
+      this.showTransaction(await api.sqlTransaction(this.sessionId, "status"));
+    } catch {
+      // The status is advisory; the next run reports it again.
+    }
+  }
+
+  private showTransaction(state: TransactionState | null): void {
+    const wasOpen = this.transaction?.open === true;
+    this.transaction = state;
+    const open = state?.open === true;
+    if (open && !wasOpen) {
+      this.transactionOpenedAt = Date.now();
+      this.transactionRemindedAt = null;
+    } else if (!open) {
+      this.transactionOpenedAt = null;
+      this.transactionRemindedAt = null;
+    }
+    this.transactionIndicator.textContent = transactionLabel(state);
+    this.transactionIndicator.classList.toggle("open", open);
+    this.transactionIndicator.classList.toggle("unsupported", state?.supported === false);
+    this.transactionIndicator.title =
+      state?.supported === false
+        ? "MongoDB commands run on their own here: the app does not open server sessions, so there are no transactions to show."
+        : "Reported by the database after each run";
+    if (state?.supported) this.autoCommit.checked = state.autoCommit;
+    const [, commit, rollback] = this.transactionButtons;
+    commit.disabled = !open;
+    rollback.disabled = !open;
+    this.element.classList.toggle("tx-open", open);
+  }
+
+  private remindIdleTransaction(): void {
+    const now = Date.now();
+    if (!idleReminderDue(this.transactionOpenedAt, this.transactionRemindedAt, now)) return;
+    this.transactionRemindedAt = now;
+    const minutes = Math.max(Math.round((now - (this.transactionOpenedAt ?? now)) / 60_000), IDLE_TRANSACTION_MINUTES);
+    toast(
+      `A query tab on ${this.host.connectionName(this.connectionId)} has had a transaction open for ${minutes} minutes. Commit or roll back to release its locks.`,
+      "error",
+    );
   }
 
   onActivate(): void {
@@ -168,6 +274,7 @@ export class QueryView implements TabContent {
   }
 
   dispose(): void {
+    window.clearInterval(this.idleTimer);
     this.editor.destroy();
     if (this.sessionOpened) void api.closeSession(this.sessionId);
   }
@@ -209,14 +316,20 @@ export class QueryView implements TabContent {
     this.setRunning(true);
     try {
       await this.ensureSession();
-      const outcome = await api.runSql(this.sessionId, database, sql);
+      const outcome = await withConfirmation((confirmation) => api.runSql(this.sessionId, database, sql, confirmation));
+      if (outcome === null) {
+        this.showPanels([{ title: "Messages", element: messageList([{ text: "Cancelled; nothing ran.", kind: "muted" }]) }]);
+        return;
+      }
       this.lastError = null;
       this.showOutcome(outcome);
+      if (this.transactionsSupported) this.showTransaction(outcome.transaction);
       this.record({ sql, database, startedAt, durationMs: performance.now() - started, results: summarizeSets(outcome.sets), error: null });
     } catch (error) {
       this.lastError = errorText(error);
       this.showPanels([{ title: "Messages", element: messageList([{ text: this.lastError, kind: "error" }]) }]);
       this.record({ sql, database, startedAt, durationMs: performance.now() - started, results: [], error: this.lastError });
+      void this.refreshTransaction();
     } finally {
       this.setRunning(false);
       this.onChanged?.();

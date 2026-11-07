@@ -1,3 +1,4 @@
+import { capabilities } from "./capabilities";
 import { errorText } from "./api";
 import { h } from "./dom";
 
@@ -78,7 +79,7 @@ export function promptPassword(connectionName: string): Promise<{ password: stri
   return new Promise((resolve) => {
     let answer: { password: string; remember: boolean } | null = null;
     const password = textInput("", { type: "password" });
-    const remember = checkbox("Save password in Windows Credential Manager", true);
+    const remember = checkbox(`Save password in ${capabilities().secretStore}`, true);
     openModal(
       `Password for ${connectionName}`,
       h("div", { class: "form-grid" }, field("Password", password), remember.element),

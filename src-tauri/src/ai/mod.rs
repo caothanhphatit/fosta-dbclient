@@ -20,7 +20,7 @@ use std::{collections::HashMap, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::ipc::Channel;
+
 use tokio_util::sync::CancellationToken;
 
 use self::{
@@ -97,7 +97,7 @@ impl AiProvider {
 }
 
 /// One saved LLM provider account, like a database connection. Its key is in
-/// Credential Manager under `secrets::ai_account(id)`.
+/// the secret store under `secrets::ai_account(id)`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConnection {
@@ -249,6 +249,19 @@ pub enum ChatEvent {
     Done,
 }
 
+/// Where a chat run streams its [`ChatEvent`]s: a Tauri `Channel` on the desktop, the HTTP response on the
+/// web server. Any `Fn(ChatEvent)` closure is one.
+pub trait ChatSink: Send + Sync {
+    fn send(&self, event: ChatEvent) -> AppResult<()>;
+}
+
+impl<F: Fn(ChatEvent) + Send + Sync> ChatSink for F {
+    fn send(&self, event: ChatEvent) -> AppResult<()> {
+        self(event);
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 // The variant names are the wire tags the UI matches on (`openDiagram`, …).
@@ -256,11 +269,13 @@ pub enum ChatEvent {
 pub enum UiAction {
     #[serde(rename_all = "camelCase")]
     OpenDiagram { database: String, focus_table: Option<String> },
+    /// The filter is only pre-filled, marked as suggested by the assistant: nothing runs until
+    /// the user applies it (the table view does not even load before that).
     #[serde(rename_all = "camelCase")]
     OpenTable {
         database: String,
         table: String,
-        filter: Option<String>,
+        suggested_filter: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     OpenQuery { database: Option<String>, sql: String },
@@ -310,13 +325,13 @@ pub async fn chat(
     db: &DbManager,
     runs: &AiRuns,
     request: ChatRequest,
-    events: Channel<ChatEvent>,
+    events: &dyn ChatSink,
 ) -> AppResult<String> {
     let token = runs.begin(&request.id);
     let id = request.id.clone();
     let result = tokio::select! {
         _ = token.cancelled() => Err(AppError::new(STOPPED)),
-        outcome = run(settings, api_key, db, request, &events) => outcome,
+        outcome = run(settings, api_key, db, request, events) => outcome,
     };
     runs.finish(&id);
     let _ = events.send(ChatEvent::Done);
@@ -364,7 +379,7 @@ pub async fn list_models(settings: &AiSettings, api_key: Option<String>) -> AppR
 pub async fn probe(settings: &AiSettings, api_key: Option<String>) -> AppResult<String> {
     let client = http_client()?;
     let history = vec![json!({ "role": "user", "content": "Reply with the single word OK." })];
-    let events = Channel::new(|_| Ok(()));
+    let events = |_: ChatEvent| {};
     let turn = stream_turn(
         &client,
         settings,
@@ -383,7 +398,7 @@ async fn run(
     api_key: Option<String>,
     db: &DbManager,
     request: ChatRequest,
-    events: &Channel<ChatEvent>,
+    events: &dyn ChatSink,
 ) -> AppResult<String> {
     if request.messages.is_empty() {
         return Err(AppError::new("Nothing to send"));
@@ -434,7 +449,7 @@ async fn stream_turn(
     system: &str,
     history: &[Value],
     tools: &[ToolSpec],
-    events: &Channel<ChatEvent>,
+    events: &dyn ChatSink,
 ) -> AppResult<Turn> {
     match settings.provider.wire() {
         Wire::Anthropic => anthropic::turn(client, settings, api_key, system, history, tools, events).await,

@@ -3,6 +3,7 @@ import { field, openModal, textInput } from "../../core/dialogs";
 import { h } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
 import type { ConnectionProfile } from "../../core/types";
+import { withConfirmation } from "../safety/confirmationDialog";
 
 /** "New database…" on a connection. Resolves with the created name, or null when cancelled. */
 export function databaseDialog(profile: ConnectionProfile): Promise<string | null> {
@@ -36,7 +37,8 @@ export function databaseDialog(profile: ConnectionProfile): Promise<string | nul
           run: async () => {
             const value = name.value.trim();
             if (!value) throw new Error("Database name is required");
-            await api.createDatabase(profile.id, value, mongo ? collection.value.trim() : null);
+            const done = await withConfirmation((confirmation) => api.createDatabase(profile.id, value, mongo ? collection.value.trim() : null, confirmation));
+            if (done === null) return false;
             created = value;
           },
         },

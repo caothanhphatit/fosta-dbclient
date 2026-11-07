@@ -8,8 +8,13 @@ use crate::{
     config::ConnectionProfile,
     drivers::{
         self,
-        types::{BrowseRequest, CellValue, RowChange},
-        Driver,
+        types::{BrowseRequest, CellValue, RowChange, TransactionOp},
+        DbManager, Driver, Limits,
+    },
+    gateway::{
+        self,
+        rules::{self, Preset, SafetySettings},
+        Confirmation, Context,
     },
 };
 
@@ -27,6 +32,7 @@ fn profile(id: &str, driver: &str, port: u16, user: &str, database: &str, option
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect::<HashMap<_, _>>(),
+        safety: None,
     }
 }
 
@@ -59,7 +65,7 @@ async fn create_and_drop(driver: &dyn Driver, name: &str, collection: Option<&st
     );
     driver.open_session("drop").await.expect("session");
     driver
-        .run_query("drop", run_in.map(str::to_owned), drop_sql.into())
+        .run_query("drop", run_in.map(str::to_owned), drop_sql.into(), &Limits::default())
         .await
         .expect("drop");
     driver.close_session("drop");
@@ -75,10 +81,13 @@ async fn exercise(driver: &dyn Driver, database: &str, table: &str, filter: &str
     assert!(tables.iter().any(|item| item.name == table), "{table} missing");
     let design = driver.describe_table(database, table).await.expect("describe_table");
     assert!(!design.columns.is_empty());
-    let page = driver.browse_table(&browse(database, table, None)).await.expect("browse_table");
+    let page = driver
+        .browse_table(&browse(database, table, None), &Limits::default())
+        .await
+        .expect("browse_table");
     assert_eq!(page.rows.len(), 5);
     let filtered = driver
-        .browse_table(&browse(database, table, Some(filter)))
+        .browse_table(&browse(database, table, Some(filter)), &Limits::default())
         .await
         .expect("filtered browse");
     assert!(
@@ -89,7 +98,7 @@ async fn exercise(driver: &dyn Driver, database: &str, table: &str, filter: &str
     );
     driver.open_session("live").await.expect("open_session");
     let outcome = driver
-        .run_query("live", Some(database.into()), query.into())
+        .run_query("live", Some(database.into()), query.into(), &Limits::default())
         .await
         .expect("run_query");
     assert!(outcome.sets.iter().any(|set| !set.rows.is_empty()), "query returned nothing");
@@ -336,19 +345,16 @@ async fn live_assistant_tools() {
     };
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
     let sink = seen.clone();
-    let channel = tauri::ipc::Channel::new(move |body| {
-        if let tauri::ipc::InvokeResponseBody::Json(json) = body {
-            sink.lock().unwrap().push(json);
-        }
-        Ok(())
-    });
+    let channel = move |event: crate::ai::ChatEvent| {
+        sink.lock().unwrap().push(serde_json::to_string(&event).unwrap());
+    };
     let request: crate::ai::ChatRequest = serde_json::from_value(serde_json::json!({
         "id": "t1",
         "messages": [{ "role": "user", "content": "Open the ER diagram of shop centred on orders, then write a query listing each customer's total paid order amount." }],
         "context": { "connectionId": "chat-maria", "connectionName": "Local MariaDB", "driverLabel": "MariaDB", "database": "shop" }
     }))
     .unwrap();
-    let reply = crate::ai::chat(&settings, Some(key), &manager, &crate::ai::AiRuns::default(), request, channel)
+    let reply = crate::ai::chat(&settings, Some(key), &manager, &crate::ai::AiRuns::default(), request, &channel)
         .await
         .expect("chat");
     let events = seen.lock().unwrap().clone();
@@ -358,6 +364,307 @@ async fn live_assistant_tools() {
     println!("reply:\n{reply}");
     assert!(events.iter().any(|event| event.contains("openDiagram")), "no diagram action");
     assert!(reply.contains("```"), "no code block");
+}
+
+// --- Statement gateway and transactions ------------------------------------------------
+
+const INJECTED_FILTER: &str = "1=0; DELETE FROM gate_probe; SELECT 1 WHERE 1";
+
+fn mssql_profile(id: &str) -> ConnectionProfile {
+    profile(
+        id,
+        "mssql",
+        1433,
+        "sa",
+        "ERP",
+        &[("encrypt", "true"), ("trustServerCertificate", "true")],
+    )
+}
+
+fn gate(connection_id: &str, preset: Preset) -> Context {
+    Context {
+        workspace_id: "live".into(),
+        workspace_name: "Live".into(),
+        connection_id: connection_id.into(),
+        connection_name: connection_id.into(),
+        safety: SafetySettings::preset(preset),
+    }
+}
+
+/// Runs app-internal setup SQL in a throwaway session (no gateway: this is the test's own fixture).
+async fn setup(manager: &DbManager, connection_id: &str, database: &str, sql: &str) {
+    let session = format!("setup-{connection_id}");
+    manager.open_session(connection_id, session.clone()).await.expect("setup session");
+    let driver = manager.session_driver(&session).expect("driver");
+    driver
+        .run_query(&session, Some(database.into()), sql.into(), &Limits::default())
+        .await
+        .unwrap_or_else(|error| panic!("setup {sql}: {error}"));
+    manager.close_session(&session);
+}
+
+async fn probe_rows(manager: &DbManager, connection_id: &str, database: &str) -> u64 {
+    let request = BrowseRequest {
+        connection_id: connection_id.into(),
+        ..browse(database, "gate_probe", None)
+    };
+    gateway::browse(manager, &gate(connection_id, Preset::Open), &request)
+        .await
+        .expect("browse probe")
+        .total
+}
+
+/// Filters that try to stack statements are rejected by the gateway on MariaDB and SQL Server,
+/// and on MariaDB even the driver alone cannot run them (prepared statements).
+#[tokio::test]
+#[ignore]
+async fn live_gateway_rejects_injected_filters() {
+    let cases = [
+        (profile("gate-maria", "mariadb", 3306, "root", "shop", &[]), "studio-root", "shop"),
+        (mssql_profile("gate-mssql"), "Studio#Pass2026", "ERP"),
+    ];
+    for (profile, password, database) in cases {
+        let manager = DbManager::default();
+        manager.connect(&profile, password).await.expect("connect");
+        let id = profile.id.as_str();
+        let create = if profile.driver == "mssql" {
+            "IF OBJECT_ID('dbo.gate_probe') IS NULL CREATE TABLE dbo.gate_probe (id INT PRIMARY KEY); \
+             DELETE FROM dbo.gate_probe; INSERT INTO dbo.gate_probe VALUES (1)"
+        } else {
+            "CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe; INSERT INTO gate_probe VALUES (1)"
+        };
+        setup(&manager, id, database, create).await;
+        let context = gate(id, Preset::Open);
+        let injected = BrowseRequest {
+            connection_id: id.into(),
+            ..browse(database, "gate_probe", Some(INJECTED_FILTER))
+        };
+        let error = gateway::browse(&manager, &context, &injected)
+            .await
+            .expect_err("injected filter must fail");
+        assert_eq!(error.code(), Some(gateway::filter::INVALID_FILTER), "{error}");
+        assert_eq!(
+            probe_rows(&manager, id, database).await,
+            1,
+            "{}: the probe row survived",
+            profile.driver
+        );
+        if profile.driver == "mariadb" {
+            // Defence in depth: the driver itself runs browse queries as prepared statements.
+            let direct = manager.driver(id).unwrap().browse_table(&injected, &Limits::default()).await;
+            assert!(direct.is_err(), "a prepared statement cannot carry a second statement");
+            assert_eq!(probe_rows(&manager, id, database).await, 1);
+        }
+        let fine = BrowseRequest {
+            connection_id: id.into(),
+            ..browse(database, "gate_probe", Some("id = 1"))
+        };
+        assert_eq!(gateway::browse(&manager, &context, &fine).await.expect("valid filter").total, 1);
+        println!("{}: injected filter rejected with: {error}", profile.driver);
+        setup(&manager, id, database, "DROP TABLE gate_probe").await;
+        manager.disconnect(id).await;
+    }
+}
+
+/// Read-only blocks writes (gateway and engine); Guarded asks for a confirmation and runs with the token.
+#[tokio::test]
+#[ignore]
+async fn live_gateway_rules_and_confirmation() {
+    let manager = DbManager::default();
+    let profile = profile("rules-maria", "mariadb", 3306, "root", "shop", &[]);
+    manager.connect(&profile, "studio-root").await.expect("connect");
+    setup(
+        &manager,
+        "rules-maria",
+        "shop",
+        "CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe",
+    )
+    .await;
+    manager.open_session("rules-maria", "tab".into()).await.expect("session");
+    let insert = "INSERT INTO gate_probe VALUES (7)";
+
+    let read_only = gate("rules-maria", Preset::ReadOnly);
+    let blocked = gateway::run_query(&manager, &read_only, "tab", Some("shop".into()), insert.into(), None)
+        .await
+        .expect_err("read-only blocks INSERT");
+    assert_eq!(blocked.code(), Some(gateway::BLOCKED), "{blocked}");
+    let read = gateway::run_query(
+        &manager,
+        &read_only,
+        "tab",
+        Some("shop".into()),
+        "SELECT COUNT(*) FROM gate_probe".into(),
+        None,
+    )
+    .await
+    .expect("reads still run");
+    assert_eq!(read.sets[0].rows[0][0].as_deref(), Some("0"));
+    // The session itself is read-only now: even bypassing the gateway the server refuses the write.
+    let driver = manager.session_driver("tab").unwrap();
+    let engine_refusal = driver
+        .run_query(
+            "tab",
+            Some("shop".into()),
+            insert.into(),
+            &Limits {
+                read_only: true,
+                ..Limits::default()
+            },
+        )
+        .await
+        .expect_err("READ ONLY session");
+    println!("engine refusal: {engine_refusal}");
+
+    let guarded = gate("rules-maria", Preset::Guarded);
+    let asked = gateway::run_query(&manager, &guarded, "tab", Some("shop".into()), insert.into(), None)
+        .await
+        .expect_err("guarded asks first");
+    assert_eq!(asked.code(), Some(gateway::CONFIRMATION_REQUIRED));
+    let token = asked.detail().unwrap()["token"].as_str().unwrap().to_owned();
+    let confirmation = Confirmation { token, typed: None };
+    let outcome = gateway::run_query(&manager, &guarded, "tab", Some("shop".into()), insert.into(), Some(&confirmation))
+        .await
+        .expect("runs with the token");
+    assert_eq!(outcome.sets[0].affected_rows, 1);
+    let reused = gateway::run_query(&manager, &guarded, "tab", Some("shop".into()), insert.into(), Some(&confirmation)).await;
+    assert_eq!(
+        reused.unwrap_err().code(),
+        Some(gateway::CONFIRMATION_INVALID),
+        "tokens are single-use"
+    );
+
+    // Statement timeout from the rules (MariaDB max_statement_time).
+    let mut slow = gate("rules-maria", Preset::Custom);
+    slow.safety.rules.write = rules::Action::Allow;
+    slow.safety.statement_timeout_secs = 1;
+    let started = std::time::Instant::now();
+    let timed_out = gateway::run_query(
+        &manager,
+        &slow,
+        "tab",
+        Some("shop".into()),
+        "SELECT SUM(a.seq * b.seq) FROM seq_1_to_100000 a, seq_1_to_100000 b".into(),
+        None,
+    )
+    .await;
+    println!(
+        "timeout after {:?}: {:?}",
+        started.elapsed(),
+        timed_out.as_ref().err().map(ToString::to_string)
+    );
+    assert!(
+        timed_out.is_err() && started.elapsed().as_secs() < 10,
+        "max_statement_time stops the query"
+    );
+
+    manager.close_session("tab");
+    setup(&manager, "rules-maria", "shop", "DROP TABLE gate_probe").await;
+    manager.disconnect("rules-maria").await;
+}
+
+/// Begin / Commit / Rollback and auto-commit report the engine's transaction state and roll back.
+#[tokio::test]
+#[ignore]
+async fn live_transactions() {
+    let cases = [
+        (profile("tx-maria", "mariadb", 3306, "root", "shop", &[]), "studio-root", "shop"),
+        (mssql_profile("tx-mssql"), "Studio#Pass2026", "ERP"),
+    ];
+    for (profile, password, database) in cases {
+        let manager = DbManager::default();
+        manager.connect(&profile, password).await.expect("connect");
+        let id = profile.id.as_str();
+        let create = if profile.driver == "mssql" {
+            "IF OBJECT_ID('dbo.gate_probe') IS NULL CREATE TABLE dbo.gate_probe (id INT PRIMARY KEY); DELETE FROM dbo.gate_probe"
+        } else {
+            "CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe"
+        };
+        setup(&manager, id, database, create).await;
+        manager.open_session(id, "tx".into()).await.expect("session");
+        let context = gate(id, Preset::Open);
+        let run = |sql: &'static str| gateway::run_query(&manager, &context, "tx", Some(database.into()), sql.into(), None);
+
+        let idle = gateway::transaction(&manager, &context, "tx", TransactionOp::Status)
+            .await
+            .expect("status");
+        assert!(idle.supported && !idle.open && idle.auto_commit, "{}: {idle:?}", profile.driver);
+        let begun = gateway::transaction(&manager, &context, "tx", TransactionOp::Begin)
+            .await
+            .expect("begin");
+        assert!(begun.open, "{}: begin opens a transaction", profile.driver);
+        let inserted = run("INSERT INTO gate_probe VALUES (1)").await.expect("insert");
+        assert!(inserted.transaction.open, "still open after the run");
+        let rolled = gateway::transaction(&manager, &context, "tx", TransactionOp::Rollback)
+            .await
+            .expect("rollback");
+        assert!(!rolled.open);
+        let count = run("SELECT COUNT(*) FROM gate_probe").await.expect("count");
+        assert_eq!(count.sets[0].rows[0][0].as_deref(), Some("0"), "{}: rolled back", profile.driver);
+        assert!(!count.transaction.open);
+
+        // Auto-commit off: the first write opens a transaction implicitly.
+        let manual = gateway::transaction(&manager, &context, "tx", TransactionOp::AutoCommitOff)
+            .await
+            .expect("autocommit off");
+        assert!(!manual.auto_commit && !manual.open, "{}: {manual:?}", profile.driver);
+        let pending = run("INSERT INTO gate_probe VALUES (2)").await.expect("insert");
+        assert!(pending.transaction.open, "{}: implicit transaction", profile.driver);
+        gateway::transaction(&manager, &context, "tx", TransactionOp::Commit)
+            .await
+            .expect("commit");
+        let back = gateway::transaction(&manager, &context, "tx", TransactionOp::AutoCommitOn)
+            .await
+            .expect("autocommit on");
+        assert!(back.auto_commit && !back.open);
+        let count = run("SELECT COUNT(*) FROM gate_probe").await.expect("count");
+        assert_eq!(count.sets[0].rows[0][0].as_deref(), Some("1"), "{}: committed", profile.driver);
+        println!("{}: transaction states {idle:?} → {begun:?} → {rolled:?}", profile.driver);
+
+        manager.close_session("tx");
+        setup(&manager, id, database, "DROP TABLE gate_probe").await;
+        manager.disconnect(id).await;
+    }
+}
+
+/// MongoDB: Read-only refuses write commands, filters must be query documents, no transactions.
+#[tokio::test]
+#[ignore]
+async fn live_gateway_mongo() {
+    let manager = DbManager::default();
+    let profile = profile("gate-mongo", "mongodb", 27017, "root", "admin", &[]);
+    manager.connect(&profile, "studio-root").await.expect("connect");
+    manager.open_session("gate-mongo", "m".into()).await.expect("session");
+    let read_only = gate("gate-mongo", Preset::ReadOnly);
+    let insert = r#"{ "insert": "clicks", "documents": [ { "type": "probe" } ] }"#;
+    let blocked = gateway::run_query(&manager, &read_only, "m", Some("events".into()), insert.into(), None)
+        .await
+        .expect_err("blocked");
+    assert_eq!(blocked.code(), Some(gateway::BLOCKED));
+    let out = r#"{ "aggregate": "clicks", "pipeline": [ { "$out": "copy" } ], "cursor": {} }"#;
+    assert!(
+        gateway::run_query(&manager, &read_only, "m", Some("events".into()), out.into(), None)
+            .await
+            .is_err()
+    );
+    let read = gateway::run_query(
+        &manager,
+        &read_only,
+        "m",
+        Some("events".into()),
+        r#"{ "count": "clicks" }"#.into(),
+        None,
+    )
+    .await
+    .expect("count runs");
+    assert!(!read.transaction.supported);
+    let request = BrowseRequest {
+        connection_id: "gate-mongo".into(),
+        ..browse("events", "clicks", Some(r#"{ "$where": "sleep(100) || true" }"#))
+    };
+    let error = gateway::browse(&manager, &read_only, &request).await.expect_err("$where rejected");
+    assert_eq!(error.code(), Some(gateway::filter::INVALID_FILTER));
+    manager.close_session("m");
+    manager.disconnect("gate-mongo").await;
 }
 
 /// Writes into the real Downloads folder (twice, to check the " (2)" suffix), then cleans up.
