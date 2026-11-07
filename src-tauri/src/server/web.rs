@@ -290,8 +290,15 @@ async fn login(State(server): State<Arc<Server>>, request: Request) -> Response 
     signed_in(&server.auth)
 }
 
+/// `POST /api/logout`: ends every session (one token per server, so every browser is signed out).
 async fn logout(State(server): State<Arc<Server>>) -> Response {
-    let mut response = StatusCode::NO_CONTENT.into_response();
+    let mut response = match server.auth.revoke_sessions() {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            eprintln!("fosta-studio-server: cannot sign out: {error}");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "Could not end the sessions; see the server log")
+        }
+    };
     if let Ok(cookie) = HeaderValue::from_str(&server.auth.clear_cookie()) {
         response.headers_mut().insert(header::SET_COOKIE, cookie);
     }

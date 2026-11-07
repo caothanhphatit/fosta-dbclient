@@ -73,7 +73,11 @@ mock installs it), otherwise HTTP. `api.ts` is unchanged apart from that.
 
 - **Authentication**: one access token per server (`FOSTA_STUDIO_TOKEN`, or generated on first start, saved with owner-only
   permissions and printed once in the log). `/?token=…` or the sign-in form exchanges it for an `HttpOnly`, `SameSite=Strict` session
-  cookie signed with HMAC-SHA256 under a key derived from the token (30 days; a new token signs everyone out). Failed attempts are
+  cookie carrying its issue time, signed with HMAC-SHA256 under a key derived from the token and a random signing key
+  (`fosta-studio-session-key`), valid 30 days. Signing out writes the time to `fosta-studio-sessions-since` and cookies issued before
+  it are refused, so it signs out every browser (one token per server). `fosta-studio-server rotate-token` replaces the token and the
+  signing key; the running server re-reads these files when their modification time changes, so it takes effect on the next request
+  without a restart. Failed attempts are
   rate-limited per address and overall. `FOSTA_STUDIO_AUTH=off` disables this with a loud warning and restricts `Host` to loopback names.
 - **CSRF**: API calls need the `X-Fosta-Studio` header (cross-site pages cannot send it without a CORS preflight, which is never
   approved), an `Origin` equal to the server's (or listed in `FOSTA_STUDIO_ALLOWED_ORIGINS`) and no cross-site `Sec-Fetch-Site`.
@@ -153,7 +157,8 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
   `ai-key-<id>`, the embedding key under `embedding-api-key`. A password in a pasted connection string is moved there, never into the file.
 - **Web edition**: the same accounts in `fosta-studio-secrets.enc` in the data directory, a JSON map encrypted with XChaCha20-Poly1305;
   the key comes from `FOSTA_STUDIO_SECRET_KEY` or `fosta-studio-secret.key` next to it (generated, owner-only). The server refuses
-  to start rather than overwrite a store it cannot decrypt. The access token is in `fosta-studio-token`.
+  to start rather than overwrite a store it cannot decrypt. The access token is in `fosta-studio-token`, the cookie signing key in
+  `fosta-studio-session-key` and the last sign-out time in `fosta-studio-sessions-since`.
 - **`fosta-studio-history.jsonl`** next to the executable: the query history (see above). No secrets.
 - **localStorage** (`db-studio.*`): UI preferences only (theme, assistant panel open/closed, diagram node positions, hidden columns per
   table, the history panel and cell-editor wrap toggles).

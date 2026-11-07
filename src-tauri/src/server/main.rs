@@ -125,12 +125,13 @@ fn main() -> ExitCode {
         None | Some("serve") => serve(settings),
         Some("healthcheck") => web::healthcheck(settings.listen),
         Some("token") => print_login(&settings),
+        Some("rotate-token") => rotate_token(&settings),
         Some("--version" | "version") => {
             println!("fosta-studio-server {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some(other) => Err(format!(
-            "unknown command '{other}'. Usage: fosta-studio-server [serve | token | healthcheck | version]"
+            "unknown command '{other}'. Usage: fosta-studio-server [serve | token | rotate-token | healthcheck | version]"
         )),
     };
     match result {
@@ -149,6 +150,22 @@ fn print_login(settings: &Settings) -> Result<(), String> {
         return Ok(());
     }
     let (token, _) = auth::load_token(&settings.data_dir, settings.token.clone())?;
+    println!("{}/?token={token}", settings.login_base());
+    Ok(())
+}
+
+/// `fosta-studio-server rotate-token`: replaces the access token and the cookie signing key, which signs out
+/// every browser; a running server picks up the new token on its next request.
+fn rotate_token(settings: &Settings) -> Result<(), String> {
+    if settings.auth_off {
+        return Err(String::from(
+            "authentication is off (FOSTA_STUDIO_AUTH=off): there is no token to rotate",
+        ));
+    }
+    std::fs::create_dir_all(&settings.data_dir)
+        .map_err(|error| format!("cannot create the data directory {}: {error}", settings.data_dir.display()))?;
+    let token = auth::rotate_token(&settings.data_dir, settings.token.as_deref())?;
+    println!("New access token saved; every browser is signed out. Sign in again at:");
     println!("{}/?token={token}", settings.login_base());
     Ok(())
 }
@@ -183,9 +200,9 @@ async fn run(settings: Settings) -> Result<(), String> {
         warn_auth_off();
         Auth::off()
     } else {
-        let (token, generated) = auth::load_token(&settings.data_dir, settings.token.clone())?;
+        let (auth, token, generated) = Auth::open(&settings.data_dir, settings.token.clone(), settings.secure_cookie)?;
         announce_token(&settings, &token, generated);
-        Auth::with_token(&token, settings.secure_cookie)
+        auth
     };
     if settings.tasks {
         println!("Startup tasks are on (FOSTA_STUDIO_TASKS): the UI can run programs inside this container.");

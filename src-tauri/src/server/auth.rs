@@ -3,15 +3,20 @@
 //! - One access token per installation: `FOSTA_STUDIO_TOKEN`, or a random one generated on first start and
 //!   kept in `fosta-studio-token` in the data directory.
 //! - Opening `/?token=…` (or posting the token to `/api/login`) exchanges it for a session cookie:
-//!   `HttpOnly`, `SameSite=Strict`, valid for 30 days, signed with a key derived from the token, so a new
-//!   token signs everyone out. The cookie needs no server-side storage and survives restarts.
+//!   `HttpOnly`, `SameSite=Strict`, valid for 30 days. The cookie carries its issue time and is signed with
+//!   a key derived from the token and a random signing key kept in `fosta-studio-session-key`, so a new
+//!   token or key signs everyone out. Cookies need no per-session storage and survive restarts.
+//! - Signing out writes the time to `fosta-studio-sessions-since`; cookies issued before it are refused.
+//!   There is one access token per server, so this signs out every browser.
+//! - `fosta-studio-server rotate-token` replaces the token and the signing key. The running server notices
+//!   changed files on the next request, so the old token and every old cookie stop working at once.
 //! - Failed attempts are rate-limited per client address and overall.
 
 use std::{
     collections::HashMap,
     net::IpAddr,
-    path::Path,
-    sync::Mutex,
+    path::{Path, PathBuf},
+    sync::{Mutex, RwLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,6 +25,8 @@ use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 pub const TOKEN_FILE: &str = "fosta-studio-token";
+pub const SESSION_KEY_FILE: &str = "fosta-studio-session-key";
+pub const SESSIONS_SINCE_FILE: &str = "fosta-studio-sessions-since";
 pub const COOKIE_NAME: &str = "fosta_studio_session";
 const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const MIN_TOKEN_LEN: usize = 16;
@@ -40,52 +47,178 @@ pub fn load_token(data_dir: &Path, configured: Option<String>) -> Result<(String
         }
         return Ok((token, false));
     }
-    let path = data_dir.join(TOKEN_FILE);
-    if path.exists() {
-        let token = std::fs::read_to_string(&path)
-            .map_err(|error| format!("cannot read {}: {error}", path.display()))?
-            .trim()
-            .to_owned();
-        if token.len() >= MIN_TOKEN_LEN {
-            return Ok((token, false));
-        }
+    if let Some(token) = read_saved_token(data_dir)? {
+        return Ok((token, false));
     }
-    let token = to_hex(&random::<32>().map_err(|error| error.to_string())?);
-    write_private(&path, format!("{token}\n").as_bytes()).map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    let token = new_token()?;
+    save(&data_dir.join(TOKEN_FILE), &token)?;
     Ok((token, true))
+}
+
+/// `fosta-studio-server rotate-token`: saves a new access token and a new cookie signing key, which signs
+/// out every browser. Returns the new token.
+pub fn rotate_token(data_dir: &Path, configured: Option<&str>) -> Result<String, String> {
+    if configured.is_some() {
+        return Err(String::from(
+            "the access token comes from FOSTA_STUDIO_TOKEN: set a new value there and restart the server",
+        ));
+    }
+    let token = new_token()?;
+    save(&data_dir.join(SESSION_KEY_FILE), &to_hex(&random_key()?))?;
+    save(&data_dir.join(TOKEN_FILE), &token)?;
+    Ok(token)
+}
+
+fn read_saved_token(data_dir: &Path) -> Result<Option<String>, String> {
+    let path = data_dir.join(TOKEN_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let token = std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?
+        .trim()
+        .to_owned();
+    Ok((token.len() >= MIN_TOKEN_LEN).then_some(token))
+}
+
+/// The saved signing key, or a new one saved now.
+fn load_signing_key(data_dir: &Path) -> Result<[u8; 32], String> {
+    let path = data_dir.join(SESSION_KEY_FILE);
+    if let Some(key) = read_signing_key(&path)? {
+        return Ok(key);
+    }
+    let key = random_key()?;
+    save(&path, &to_hex(&key))?;
+    Ok(key)
+}
+
+fn read_signing_key(path: &Path) -> Result<Option<[u8; 32]>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    Ok(from_hex(text.trim()).and_then(|bytes| <[u8; 32]>::try_from(bytes).ok()))
+}
+
+fn read_sessions_since(data_dir: &Path) -> Result<u64, String> {
+    let path = data_dir.join(SESSIONS_SINCE_FILE);
+    if !path.exists() {
+        return Ok(0);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    text.trim()
+        .parse()
+        .map_err(|_| format!("{} must hold a time in milliseconds", path.display()))
+}
+
+fn new_token() -> Result<String, String> {
+    Ok(to_hex(&random_key()?))
+}
+
+fn random_key() -> Result<[u8; 32], String> {
+    random::<32>().map_err(|error| error.to_string())
+}
+
+fn save(path: &Path, text: &str) -> Result<(), String> {
+    write_private(path, format!("{text}\n").as_bytes()).map_err(|error| format!("cannot write {}: {error}", path.display()))
 }
 
 pub struct Auth {
     /// `None` when authentication is off.
-    keys: Option<Keys>,
+    live: Option<Live>,
     secure_cookie: bool,
     limiter: Mutex<Limiter>,
 }
 
+/// Where the keys come from, and the keys as last read.
+struct Live {
+    data_dir: PathBuf,
+    configured_token: Option<String>,
+    keys: RwLock<Keys>,
+}
+
+#[derive(Clone, Copy)]
 struct Keys {
+    /// Modification times of the files the keys were read from; a change means they must be read again.
+    stamp: Stamp,
     /// SHA-256 of the token, compared in constant time.
     token_digest: [u8; 32],
-    /// Signs session cookies.
+    /// Signs session cookies; derived from the signing key and the token.
     session_key: [u8; 32],
+    /// Cookies issued at or before this time (Unix milliseconds) are refused; 0 when nobody signed out.
+    sessions_since: u64,
+}
+
+type Stamp = [Option<SystemTime>; 3];
+
+impl Keys {
+    fn stamp(data_dir: &Path) -> Stamp {
+        [TOKEN_FILE, SESSION_KEY_FILE, SESSIONS_SINCE_FILE]
+            .map(|name| std::fs::metadata(data_dir.join(name)).and_then(|meta| meta.modified()).ok())
+    }
+
+    fn read(data_dir: &Path, configured_token: Option<&str>) -> Result<Self, String> {
+        let stamp = Self::stamp(data_dir);
+        let token = match configured_token {
+            Some(token) => token.to_owned(),
+            None => read_saved_token(data_dir)?.ok_or_else(|| format!("{TOKEN_FILE} is missing or too short"))?,
+        };
+        let signing_key = read_signing_key(&data_dir.join(SESSION_KEY_FILE))?
+            .ok_or_else(|| format!("{SESSION_KEY_FILE} is missing or not a 32-byte hex key"))?;
+        Ok(Self {
+            stamp,
+            token_digest: digest(token.as_bytes()),
+            session_key: mac(&signing_key, token.as_bytes()),
+            sessions_since: read_sessions_since(data_dir)?,
+        })
+    }
 }
 
 impl Auth {
     pub fn off() -> Self {
         Self {
-            keys: None,
+            live: None,
             secure_cookie: false,
             limiter: Mutex::default(),
         }
     }
 
-    pub fn with_token(token: &str, secure_cookie: bool) -> Self {
-        Self {
-            keys: Some(Keys {
-                token_digest: digest(token.as_bytes()),
-                session_key: mac(token.as_bytes(), b"fosta-studio session key v1"),
+    /// Loads (or creates) the token and the signing key in `data_dir`. Returns the token and whether it was
+    /// generated now.
+    pub fn open(data_dir: &Path, configured_token: Option<String>, secure_cookie: bool) -> Result<(Self, String, bool), String> {
+        let (token, generated) = load_token(data_dir, configured_token.clone())?;
+        load_signing_key(data_dir)?;
+        let keys = Keys::read(data_dir, configured_token.as_deref())?;
+        let auth = Self {
+            live: Some(Live {
+                data_dir: data_dir.to_owned(),
+                configured_token,
+                keys: RwLock::new(keys),
             }),
             secure_cookie,
             limiter: Mutex::default(),
+        };
+        Ok((auth, token, generated))
+    }
+
+    /// The current keys, read again when their files changed (`rotate-token`, a sign-out). `None` when
+    /// authentication is off.
+    fn keys(&self) -> Option<Keys> {
+        let live = self.live.as_ref()?;
+        let cached = *live.keys.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if Keys::stamp(&live.data_dir) == cached.stamp {
+            return Some(cached);
+        }
+        match Keys::read(&live.data_dir, live.configured_token.as_deref()) {
+            Ok(keys) => {
+                *live.keys.write().unwrap_or_else(std::sync::PoisonError::into_inner) = keys;
+                Some(keys)
+            }
+            Err(error) => {
+                // Keep the previous keys rather than locking everyone out over a half-written file.
+                eprintln!("fosta-studio-server: cannot reload the access keys: {error}");
+                Some(cached)
+            }
         }
     }
 
@@ -96,7 +229,7 @@ impl Auth {
 
     /// Checks a token typed or passed in the URL, recording failures for the rate limit.
     pub fn check_token(&self, client: IpAddr, candidate: &str) -> bool {
-        let Some(keys) = &self.keys else {
+        let Some(keys) = self.keys() else {
             return true;
         };
         let valid = constant_time_eq(&digest(candidate.trim().as_bytes()), &keys.token_digest);
@@ -108,8 +241,8 @@ impl Auth {
 
     /// The `Set-Cookie` value for a new session.
     pub fn session_cookie(&self) -> String {
-        let issued = now_secs();
-        let signature = self.keys.as_ref().map(|keys| sign(&keys.session_key, issued)).unwrap_or_default();
+        let issued = now_millis();
+        let signature = self.keys().map(|keys| sign(&keys.session_key, issued)).unwrap_or_default();
         let secure = if self.secure_cookie { "; Secure" } else { "" };
         format!(
             "{COOKIE_NAME}={issued}.{signature}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}{secure}",
@@ -122,9 +255,20 @@ impl Auth {
         format!("{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{secure}")
     }
 
-    /// Whether the request's `Cookie` header carries a valid, unexpired session.
+    /// Signs out every browser: cookies issued until now are refused from now on, also after a restart.
+    pub fn revoke_sessions(&self) -> Result<(), String> {
+        let Some(live) = &self.live else {
+            return Ok(());
+        };
+        save(&live.data_dir.join(SESSIONS_SINCE_FILE), &now_millis().to_string())?;
+        let keys = Keys::read(&live.data_dir, live.configured_token.as_deref())?;
+        *live.keys.write().unwrap_or_else(std::sync::PoisonError::into_inner) = keys;
+        Ok(())
+    }
+
+    /// Whether the request's `Cookie` header carries a valid, unexpired, not signed-out session.
     pub fn has_session(&self, cookie_header: Option<&str>) -> bool {
-        let Some(keys) = &self.keys else {
+        let Some(keys) = self.keys() else {
             return true;
         };
         let Some(value) = cookie_header.and_then(|header| cookie_value(header, COOKIE_NAME)) else {
@@ -136,8 +280,9 @@ impl Auth {
         let (Ok(issued), Some(signature)) = (issued.parse::<u64>(), from_hex(signature)) else {
             return false;
         };
-        let now = now_secs();
-        if issued > now + 60 || now - issued.min(now) > SESSION_LIFETIME.as_secs() {
+        let now = now_millis();
+        let lifetime = u64::try_from(SESSION_LIFETIME.as_millis()).unwrap_or(u64::MAX);
+        if issued > now + 60_000 || now - issued.min(now) > lifetime || issued <= keys.sessions_since {
             return false;
         }
         let mut verifier = <HmacSha256 as KeyInit>::new_from_slice(&keys.session_key).expect("HMAC takes any key length");
@@ -169,8 +314,10 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     left.len() == right.len() && left.iter().zip(right).fold(0u8, |difference, (a, b)| difference | (a ^ b)) == 0
 }
 
-fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs())
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// The value of cookie `name` in a `Cookie` header.
@@ -217,34 +364,107 @@ mod tests {
 
     const CLIENT: IpAddr = IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
 
+    /// An empty data directory for one test, removed when dropped.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("fosta-auth-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The `name=value` pair of a `Set-Cookie` value.
+    fn pair(set_cookie: &str) -> String {
+        set_cookie.split(';').next().unwrap().to_owned()
+    }
+
+    /// A cookie issued strictly later than any before it (issue times have millisecond resolution).
+    fn fresh_cookie(auth: &Auth) -> String {
+        std::thread::sleep(Duration::from_millis(3));
+        pair(&auth.session_cookie())
+    }
+
     #[test]
     fn a_session_cookie_is_accepted_until_the_token_changes() {
-        let auth = Auth::with_token("0123456789abcdef0123", false);
+        let dir = TempDir::new("cookie");
+        let (auth, _, _) = Auth::open(&dir.0, None, false).unwrap();
         let set_cookie = auth.session_cookie();
         assert!(set_cookie.contains("HttpOnly") && set_cookie.contains("SameSite=Strict"));
-        let pair = set_cookie.split(';').next().unwrap();
-        assert!(auth.has_session(Some(&format!("theme=dark; {pair}"))));
+        let cookie = pair(&set_cookie);
+        assert!(auth.has_session(Some(&format!("theme=dark; {cookie}"))));
         assert!(!auth.has_session(None));
         assert!(!auth.has_session(Some(&format!("{COOKIE_NAME}=1.00"))));
-        let other = Auth::with_token("another-token-0123456789", false);
-        assert!(!other.has_session(Some(pair)));
+        let (other, _, _) = Auth::open(&dir.0, Some("another-token-0123456789".into()), false).unwrap();
+        assert!(!other.has_session(Some(&cookie)));
     }
 
     #[test]
     fn expired_or_forged_sessions_are_refused() {
-        let auth = Auth::with_token("0123456789abcdef0123", false);
-        let key = auth.keys.as_ref().unwrap().session_key;
-        let old = now_secs() - SESSION_LIFETIME.as_secs() - 10;
+        let dir = TempDir::new("forged");
+        let (auth, _, _) = Auth::open(&dir.0, None, false).unwrap();
+        let key = auth.keys().unwrap().session_key;
+        let lifetime = u64::try_from(SESSION_LIFETIME.as_millis()).unwrap();
+        let old = now_millis() - lifetime - 10_000;
         assert!(!auth.has_session(Some(&format!("{COOKIE_NAME}={old}.{}", sign(&key, old)))));
-        let now = now_secs();
+        let now = now_millis();
         assert!(auth.has_session(Some(&format!("{COOKIE_NAME}={now}.{}", sign(&key, now)))));
         assert!(!auth.has_session(Some(&format!("{COOKIE_NAME}={}.{}", now + 1, sign(&key, now)))));
     }
 
     #[test]
+    fn signing_out_revokes_earlier_cookies_also_after_a_restart() {
+        let dir = TempDir::new("logout");
+        let (auth, token, _) = Auth::open(&dir.0, None, false).unwrap();
+        let before = fresh_cookie(&auth);
+        let other_browser = fresh_cookie(&auth);
+        assert!(auth.has_session(Some(&before)));
+        std::thread::sleep(Duration::from_millis(3));
+        auth.revoke_sessions().unwrap();
+        assert!(!auth.has_session(Some(&before)));
+        assert!(!auth.has_session(Some(&other_browser)));
+        assert!(auth.check_token(CLIENT, &token), "the token still signs in");
+        let after = fresh_cookie(&auth);
+        assert!(auth.has_session(Some(&after)));
+
+        let (restarted, _, _) = Auth::open(&dir.0, None, false).unwrap();
+        assert!(!restarted.has_session(Some(&before)));
+        assert!(restarted.has_session(Some(&after)));
+    }
+
+    #[test]
+    fn rotating_the_token_refuses_the_old_token_and_cookies_in_the_running_server() {
+        let dir = TempDir::new("rotate");
+        let (auth, old_token, _) = Auth::open(&dir.0, None, false).unwrap();
+        let old_key = std::fs::read_to_string(dir.0.join(SESSION_KEY_FILE)).unwrap();
+        let cookie = fresh_cookie(&auth);
+        assert!(auth.has_session(Some(&cookie)));
+
+        let new_token = rotate_token(&dir.0, None).unwrap();
+        assert_ne!(new_token, old_token);
+        assert_ne!(std::fs::read_to_string(dir.0.join(SESSION_KEY_FILE)).unwrap(), old_key);
+        assert!(!auth.check_token(CLIENT, &old_token));
+        assert!(auth.check_token(CLIENT, &new_token));
+        assert!(!auth.has_session(Some(&cookie)));
+        assert!(auth.has_session(Some(&fresh_cookie(&auth))));
+        assert_eq!(load_token(&dir.0, None).unwrap(), (new_token, false));
+
+        assert!(rotate_token(&dir.0, Some("from-the-environment-0123")).is_err());
+    }
+
+    #[test]
     fn tokens_are_checked_and_failures_limited() {
-        let auth = Auth::with_token("0123456789abcdef0123", false);
-        assert!(auth.check_token(CLIENT, " 0123456789abcdef0123 "));
+        let dir = TempDir::new("limit");
+        let (auth, token, _) = Auth::open(&dir.0, None, false).unwrap();
+        assert!(auth.check_token(CLIENT, &format!(" {token} ")));
         for _ in 0..MAX_FAILURES_PER_CLIENT {
             assert!(auth.may_attempt(CLIENT));
             assert!(!auth.check_token(CLIENT, "wrong"));
@@ -257,17 +477,15 @@ mod tests {
     fn auth_off_lets_everything_through() {
         let auth = Auth::off();
         assert!(auth.has_session(None));
+        assert!(auth.revoke_sessions().is_ok());
     }
 
     #[test]
     fn tokens_are_generated_once_and_reused() {
-        let directory = std::env::temp_dir().join(format!("fosta-token-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let _ = std::fs::remove_file(directory.join(TOKEN_FILE));
-        let (first, generated) = load_token(&directory, None).unwrap();
+        let dir = TempDir::new("generate");
+        let (first, generated) = load_token(&dir.0, None).unwrap();
         assert!(generated && first.len() == 64);
-        assert_eq!(load_token(&directory, None).unwrap(), (first, false));
-        assert!(load_token(&directory, Some("short".into())).is_err());
-        std::fs::remove_dir_all(directory).unwrap();
+        assert_eq!(load_token(&dir.0, None).unwrap(), (first, false));
+        assert!(load_token(&dir.0, Some("short".into())).is_err());
     }
 }

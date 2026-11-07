@@ -56,6 +56,10 @@ Until then, build it from this repository with `docker build -t fosta-studio .` 
    `http://localhost:8080/?token=3f9c…`. Open it; the token is exchanged for a session cookie (30 days) and removed from the address.
    The token is kept in the data volume; print the address again with
    `docker exec fosta-studio /app/fosta-studio-server token`.
+   Signing out (`POST /api/logout`) ends **every** session, in all browsers: there is one access token per server, not per user.
+   If the token may have leaked, replace it with `docker exec fosta-studio /app/fosta-studio-server rotate-token`: the old token
+   and all sessions stop working at once, without a restart, and the new sign-in address is printed. (With `FOSTA_STUDIO_TOKEN`
+   set, change that variable and recreate the container instead.)
 2. **Data**: workspaces, connections, query history, the access token and the encrypted saved passwords live in the `/data` volume.
    Saved passwords are encrypted with a key that is also stored there (`fosta-studio-secret.key`) unless you set
    `FOSTA_STUDIO_SECRET_KEY`; **if the key is lost, saved passwords cannot be recovered** (re-enter them).
