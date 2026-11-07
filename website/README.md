@@ -113,7 +113,30 @@ The hero shows three app views (SQL grid, MongoDB documents, ER diagram) in one 
 horizontally scrollable, snapping strip that starts on the first view. `main.js` adds arrows, dots, a pause button and
 auto-advance every 6 s; it pauses on hover, on keyboard focus inside the carousel and in background tabs, and with
 `prefers-reduced-motion` it neither auto-advances nor animates. The MongoDB view previews the document view and query bar
-from the roadmap, and its caption says so.
+from the roadmap, and its caption says so. `#slide=2` (or 3) in the URL opens that view with auto-advance paused, which is
+handy for links and screenshots.
+
+On phones (600 px and below) each slide shows only the main area of the window: the workspace rail, the tree and the
+assistant panel are hidden, the MongoDB view drops its secondary buttons, and the ER diagram switches to a two-column
+version of the schema so its text stays readable.
+
+## Effects
+
+All effects decorate a page that is already complete: without JavaScript, or with `prefers-reduced-motion`, the final state
+is shown and nothing moves.
+
+- Hero backdrop: faint table rules (rows and columns) behind the title, masked to fade out (CSS only).
+- Scroll reveal: section headings, cards and feature rows fade up once when they scroll into view (`IntersectionObserver`).
+- Numbers band in "Why": the figures count up once when visible, and always end on the real number.
+- Query demo in "Features": the query is typed into the editor, Run is pressed and the rows arrive in the grid; it replays
+  only while it stays on screen.
+- ER diagram slide: the relation lines flow from the "one" side to the "many" side (CSS animation).
+
+## Caching
+
+`build.mjs` adds a short content hash to the `styles.css` and `main.js` URLs (`styles.css?v=…`). The CDN keeps those files
+for hours, so without it a phone could get the new page with an old stylesheet (which is how the carousel once showed its
+slides stacked on iOS). Never link the two files without going through the build.
 
 ## Deployment
 
@@ -138,7 +161,7 @@ Server layout (installed once; kept next to the other sites without touching the
   `sudo certbot certonly --webroot -w /var/www/acme-db --cert-name dbcl.fosta.app --expand -d dbcl.fosta.app -d db.fosta.app`.
 - `/etc/nginx/snippets/db.fosta.app-site.conf` and `db.fosta.app-headers.conf`: the static site, caching and security
   headers (CSP, nosniff, frame denial, HSTS). The language folders are plain directories with an `index.html` each.
-- DNS is on Cloudflare (proxied); keep the zone's SSL/TLS mode on *Full (strict)*.
+- DNS is on Cloudflare (proxied); keep the zone's SSL/TLS mode on _Full (strict)_.
 
 ## Editing notes
 

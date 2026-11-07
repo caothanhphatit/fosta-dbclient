@@ -410,8 +410,13 @@ kbd {
   user-select: none;
 }
 
+/* No disclosure triangle: iOS Safari draws one unless both the WebKit marker and ::marker are removed. */
 .lang-switch summary::-webkit-details-marker {
   display: none;
+}
+
+.lang-switch summary::marker {
+  content: "";
 }
 
 .lang-switch summary:hover,
@@ -784,6 +789,15 @@ kbd {
 .carousel-dot[aria-current="true"]::before {
   width: 22px;
   background: var(--link);
+}
+
+/* Touch screens: 44 px targets for the arrows and dots. */
+@media (pointer: coarse) {
+  .carousel-btn,
+  .carousel-dot {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 .sr-only {
@@ -1548,151 +1562,389 @@ kbd {
   color: var(--fg-3);
 }
 
-/* MongoDB slide: query bar, view switch and document list */
+/* MongoDB slide: collection header, sub-tabs, query bar, action row and document cards */
 .mq-fn {
   color: var(--syn-number);
 }
 
-.am-seg {
-  display: inline-flex;
-  flex: none;
-  align-self: center;
-  margin: 0 10px 0 auto;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.am-seg span {
-  padding: 0 9px;
-  border-left: 1px solid var(--border);
-  color: var(--fg-2);
-  font-size: 11.5px;
-  line-height: 24px;
-}
-
-.am-seg span:first-child {
-  border-left: 0;
-}
-
-.am-seg .on {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.am-docs {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
-  padding: 10px;
-  overflow: hidden;
-  background: var(--surface-2);
-}
-
-.md-doc {
-  flex: none;
-  padding: 5px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+.am-mongo .am-main {
   background: var(--surface);
-  font: 11.5px/1.45 var(--font-mono);
 }
 
-.md-doc.open {
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-
-.md-line {
+.mg-head {
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 21px;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px 10px;
+}
+
+.mg-title {
   min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font: 600 19px/1.2 var(--font-display);
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.md-line.l1 {
-  padding-left: 17px;
-}
-
-.md-line.l2 {
-  padding-left: 34px;
-}
-
-.md-line .chev {
-  width: 11px;
-  height: 11px;
-  margin-right: 2px;
+.mg-db {
   color: var(--fg-3);
+  font-weight: 500;
 }
 
-.md-line .chev.open {
-  transform: rotate(90deg);
+.mg-stats {
+  display: flex;
+  flex: none;
+  gap: 18px;
 }
 
-.md-key {
+.mg-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.mg-stat b {
+  color: var(--fg);
+  font: 600 17px/1.15 var(--font-display);
+}
+
+.mg-stat span {
+  color: var(--fg-3);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.mg-subtabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+}
+
+.mg-subtabs span {
+  position: relative;
+  flex: none;
+  padding: 6px 8px 8px;
+  color: var(--fg-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mg-subtabs .on {
   color: var(--fg);
   font-weight: 600;
 }
 
-.md-oid {
-  color: var(--ws-purple);
+.mg-subtabs .on::after {
+  content: "";
+  position: absolute;
+  inset: auto 6px -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
-.md-date {
-  color: var(--ws-teal);
+.mg-query,
+.mg-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 14px 0;
 }
 
-.md-hint {
-  margin-left: 6px;
-  padding: 0 5px;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--ws-teal) 14%, transparent);
-  color: var(--ws-teal);
-  font-size: 10px;
+.mg-qlabel {
+  flex: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
 }
 
-.md-dim {
+.mg-qinput {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.mg-qcode {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: 11px/26px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mg-ask {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.am-body .mg-ask .icon {
+  width: 11px;
+  height: 11px;
+}
+
+.mg-query .am-btn,
+.mg-actions .am-btn {
+  flex: none;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.mg-query .am-btn.ghost {
+  padding: 0 7px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--fg-2);
+}
+
+.mg-add {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.am-body .mg-add .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.mg-danger {
+  color: var(--danger);
+}
+
+.mg-count {
+  flex: none;
+  margin-left: auto;
+  padding-left: 6px;
+  color: var(--fg-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.mg-pager {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.mg-pager span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius);
+  color: var(--fg-2);
+}
+
+.mg-pager span:first-child {
   color: var(--fg-3);
 }
 
-.md-preview {
+.am-body .mg-pager .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.mg-pager .flip {
+  transform: rotate(180deg);
+}
+
+/* Segmented switch: separate segments with a gap, never run together */
+.mg-seg {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.mg-seg span {
+  padding: 0 9px;
+  border-radius: 4px;
+  color: var(--fg-2);
+  font-size: 11px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.mg-seg .on {
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.mg-docs {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  margin-top: 10px;
+  padding: 12px 14px;
+  overflow: hidden;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+/* Fade the last card out instead of cutting it hard at the status bar. */
+.mg-docs::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 36px;
+  background: linear-gradient(transparent, var(--surface-2));
+  pointer-events: none;
+}
+
+.mg-doc {
+  position: relative;
+  flex: none;
+  padding: 9px 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font: 11.5px/1.5 var(--font-mono);
+}
+
+.mg-doc.is-hover,
+.mg-doc:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  box-shadow: var(--shadow-sm);
+}
+
+.mg-doc-tools {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  display: none;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.mg-doc.is-hover .mg-doc-tools,
+.mg-doc:hover .mg-doc-tools {
+  display: flex;
+}
+
+.am-body .mg-doc-tools .icon {
+  width: 22px;
+  height: 20px;
+  padding: 4px 5px;
+  color: var(--fg-2);
+}
+
+.am-body .mg-doc-tools .icon:last-child {
+  color: var(--danger);
+}
+
+.mg-f {
+  display: flex;
+  align-items: center;
   min-width: 0;
-  margin-left: 6px;
+  height: 20px;
+  padding-left: 15px;
+  white-space: nowrap;
+}
+
+.mg-f.l1 {
+  padding-left: 33px;
+}
+
+/* The first line stops short of the hover tools, so they never cover the _id. */
+.mg-doc-tools + .mg-f {
+  padding-right: 104px;
+}
+
+.mg-f.nest {
+  padding-left: 0;
+}
+
+.am-body .mg-f .chev {
+  width: 11px;
+  height: 11px;
+  margin-right: 4px;
+  color: var(--fg-3);
+}
+
+.mg-f.nest.open .chev {
+  transform: rotate(90deg);
+}
+
+.mg-k {
+  flex: none;
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.mg-k::after {
+  content: ":";
+  margin-right: 0.6ch;
+  color: var(--fg-3);
+  font-weight: 400;
+}
+
+.mg-v {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.md-type {
-  flex: none;
-  margin-left: auto;
-  padding: 0 5px;
-  border-radius: 3px;
-  background: var(--surface-3);
-  color: var(--fg-3);
-  font: 600 9px/14px var(--font-ui);
-  letter-spacing: 0.02em;
+.mg-v.str {
+  color: var(--syn-string);
 }
 
-.am-code-lang {
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-bottom: 0;
-  border-radius: 8px 8px 0 0;
-  background: var(--surface-2);
-  color: var(--fg-3);
-  font: 10px/1.4 var(--font-mono);
+.mg-v.num {
+  color: var(--syn-number);
 }
 
-.am-code-lang + pre {
-  border-radius: 0;
+.mg-v.oid {
+  color: var(--ws-purple);
 }
 
-.am-msg pre.am-pre-json {
-  font-size: 10.2px;
+.mg-v.date {
+  color: var(--ws-teal);
+}
+
+.mg-v.obj {
+  color: var(--fg-2);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
 }
 
 /* Diagram slide */
@@ -1716,6 +1968,10 @@ kbd {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.am-canvas svg.er-compact {
+  display: none;
 }
 
 .er-links path,
@@ -1793,7 +2049,7 @@ kbd {
 
 .why-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 20px;
 }
 
@@ -2191,7 +2447,7 @@ kbd {
 /* Engines */
 .engine-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 16px;
 }
 
@@ -2487,6 +2743,309 @@ kbd {
 }
 
 /* ---------------------------------------------------------------------------
+   Effects. Every one of them is decoration on top of a complete static page: without JavaScript, or with
+   prefers-reduced-motion, the final state shows as is.
+   --------------------------------------------------------------------------- */
+
+/* 1. Hero backdrop: faint table rules (rows and columns), fading out from the centre. */
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 760px;
+  background-image:
+    linear-gradient(to bottom, color-mix(in srgb, var(--text) 9%, transparent) 1px, transparent 1px),
+    linear-gradient(to right, color-mix(in srgb, var(--text) 6%, transparent) 1px, transparent 1px);
+  background-size:
+    100% 36px,
+    132px 100%;
+  background-position:
+    0 -1px,
+    50% 0;
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 32%, #000 20%, transparent 75%);
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 32%, #000 20%, transparent 75%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hero > .container {
+  position: relative;
+  z-index: 1;
+}
+
+/* 2. Scroll reveal (main.js adds .reveal to sections' blocks and .is-in once they are on screen). */
+.reveal {
+  transition:
+    opacity 0.6s ease,
+    transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition-delay: var(--reveal-delay, 0s);
+}
+
+.reveal:not(.is-in) {
+  opacity: 0;
+  transform: translateY(18px);
+}
+
+/* 3. Relation lines in the ER diagram slide flow from the "one" side to the "many" side. */
+.carousel .er-links path {
+  stroke-dasharray: 5 5;
+  animation: er-flow 1.4s linear infinite;
+}
+
+@keyframes er-flow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+/* 4. Numbers band in "Why" (main.js counts up once). */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 0 40px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--line);
+  list-style: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.stats li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 24px 16px 22px;
+  background: var(--card);
+  text-align: center;
+}
+
+.stat-num {
+  color: var(--link);
+  font: 700 clamp(30px, 3.6vw, 40px) / 1.05 var(--font-display);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.stats li > span {
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.why-card h3 .tag-coming {
+  vertical-align: 2px;
+}
+
+/* 5. Query demo: an editor, a run bar and the result grid. */
+.mock-query {
+  background: var(--surface);
+}
+
+.qd-tabs {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.qd-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 14px;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.qd-tab::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--accent);
+}
+
+.qd-tab .icon {
+  color: var(--accent);
+}
+
+.qd-conn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 0 12px;
+  color: var(--fg-2);
+  font-size: 11.5px;
+}
+
+.qd-editor {
+  display: flex;
+  min-height: 124px;
+  padding: 10px 0;
+  font: 12px/20px var(--font-mono);
+}
+
+.qd-gutter {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 34px;
+  padding-right: 10px;
+  color: var(--fg-3);
+  text-align: right;
+}
+
+.qd-code {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font: inherit;
+  white-space: pre;
+}
+
+.qd-code.is-typing::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  margin-left: 1px;
+  vertical-align: -3px;
+  background: var(--accent);
+  animation: qd-caret 1s steps(1) infinite;
+}
+
+@keyframes qd-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.qd-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.qd-run {
+  gap: 5px;
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+
+.qd-run .icon {
+  width: 10px !important;
+  height: 10px !important;
+  fill: currentColor;
+}
+
+.qd-run.is-pressed {
+  transform: scale(0.94);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.qd-status {
+  color: var(--fg-2);
+  font-size: 11.5px;
+}
+
+.qd-status.is-running::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: qd-spin 0.7s linear infinite;
+}
+
+@keyframes qd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.qd-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.qd-grid th {
+  height: 28px;
+  padding: 0 12px;
+  border-right: 1px solid var(--grid-line);
+  border-bottom: 1px solid var(--border);
+  background: var(--grid-head);
+  font-weight: 600;
+  text-align: left;
+}
+
+.qd-grid td {
+  height: 27px;
+  padding: 0 12px;
+  border-right: 1px solid var(--grid-line);
+  border-bottom: 1px solid var(--grid-line);
+  white-space: nowrap;
+}
+
+.qd-grid .num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.qd-grid .rn {
+  width: 34px;
+  padding: 0 8px;
+  background: var(--grid-head);
+  color: var(--fg-3);
+  text-align: right;
+}
+
+.qd-grid th:last-child,
+.qd-grid td:last-child {
+  border-right: 0;
+}
+
+.qd-grid tbody tr {
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+}
+
+.qd-grid tbody tr.is-pending {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.qd-grid tbody tr.is-new td {
+  animation: qd-flash 1.2s ease-out;
+}
+
+@keyframes qd-flash {
+  from {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+}
+
+/* ---------------------------------------------------------------------------
    Languages. Latin text keeps the Segoe UI stack (it covers Vietnamese); Chinese and Japanese
    add system CJK fonts behind it, so code, numbers and product names still match the English page.
    --------------------------------------------------------------------------- */
@@ -2529,7 +3088,7 @@ kbd {
 }
 
 /* Japanese: break headings, buttons and the lede between phrases (Chromium 119+; others ignore it). */
-:root:lang(ja) :is(h2, h3, .lede, .btn, .section-head p) {
+:root:lang(ja) :is(h2, h3, .lede, .btn, .section-head p, .stats li > span) {
   word-break: auto-phrase;
 }
 
@@ -2557,6 +3116,14 @@ kbd {
   }
 }
 
+/* MongoDB slide on a narrower window: keep the filter, Find, Add data, the count and the view switch. */
+@media (max-width: 1000px) {
+  .mg-query .mg-opt,
+  .mg-actions .mg-opt {
+    display: none;
+  }
+}
+
 @media (max-width: 900px) {
   .feature,
   .oss {
@@ -2573,6 +3140,9 @@ kbd {
 }
 
 @media (max-width: 760px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .nav-optional {
     display: none;
   }
@@ -2628,23 +3198,103 @@ kbd {
   .privacy-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .am-rail {
-    width: 58px;
-  }
-  .am-rail-heading,
+  /* Phones: each hero slide shows only the main area of the window (tabs, content, status bar). */
+  .am-rail,
+  .am-sidebar,
+  .am-assistant,
   .am-tool-btn,
-  .am-seg,
   .am-tab:nth-child(3) {
     display: none;
   }
+  .am-tab {
+    padding: 0 12px;
+  }
   .carousel-viewport {
-    margin-inline: -16px;
+    margin-left: -16px;
+    margin-right: -16px;
   }
   .carousel-slide {
-    padding-inline: 16px;
+    padding-left: 16px;
+    padding-right: 16px;
   }
   .am-body {
-    height: 380px;
+    height: 440px;
+  }
+  .am-status span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .am-canvas {
+    padding: 10px 8px;
+  }
+  .am-canvas svg.er-full {
+    display: none;
+  }
+  .am-canvas svg.er-compact {
+    display: block;
+  }
+  .mg-head {
+    padding: 12px 12px 8px;
+  }
+  .mg-title {
+    font-size: 16px;
+  }
+  .mg-stats {
+    gap: 12px;
+  }
+  .mg-stat b {
+    font-size: 14px;
+  }
+  .mg-stat span {
+    font-size: 8.5px;
+  }
+  .mg-subtabs {
+    padding: 0 6px;
+    -webkit-mask-image: linear-gradient(to right, #000 80%, transparent);
+    mask-image: linear-gradient(to right, #000 80%, transparent);
+  }
+  .mg-query,
+  .mg-actions {
+    padding: 8px 10px 0;
+  }
+  .mg-ask,
+  .mg-pager,
+  .mg-docs .mg-doc .mg-doc-tools {
+    display: none;
+  }
+  .am-toolbar .am-tool-btn:first-child {
+    display: block;
+  }
+  .mg-doc-tools + .mg-f {
+    padding-right: 0;
+  }
+  .mg-actions .am-btn,
+  .mg-query .am-btn {
+    padding: 0 9px;
+  }
+  .mg-count {
+    font-size: 11px;
+  }
+  .mg-seg span {
+    padding: 0 7px;
+  }
+  .mg-docs {
+    margin-top: 8px;
+    padding: 10px;
+  }
+  .mg-doc {
+    padding: 8px 10px;
+  }
+  .carousel-controls {
+    gap: 2px;
+  }
+  .carousel-btn {
+    width: 44px;
+    height: 44px;
+  }
+  .carousel-dot {
+    width: 44px;
+    height: 44px;
   }
   .footer-inner {
     grid-template-columns: minmax(0, 1fr);

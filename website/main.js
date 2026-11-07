@@ -35,6 +35,7 @@
   if (saved) root.setAttribute("data-theme", saved);
   sync();
   if (media && media.addEventListener) media.addEventListener("change", sync);
+  else if (media && media.addListener) media.addListener(sync); // Safari before 14
 
   function init() {
     var button = document.querySelector("[data-theme-toggle]");
@@ -55,6 +56,7 @@
 
     initLanguages();
     initCarousel();
+    initEffects();
 
     // Screenshot slots: each <figure data-shot="..."> shows its HTML mock until its PNG is listed in
     // assets/screenshots/shots.json (a JSON array of file names). Listing them avoids 404s for missing files.
@@ -204,12 +206,26 @@
       }
     }
 
+    // Element.scrollTo with options is missing in older Safari; fall back to setting scrollLeft (no animation).
+    function scrollToSlide(i, smooth) {
+      var left = i * viewport.clientWidth;
+      if (typeof viewport.scrollTo === "function") {
+        try {
+          viewport.scrollTo({ left: left, behavior: smooth && !reduced ? "smooth" : "auto" });
+          return;
+        } catch (e) {
+          /* fall through */
+        }
+      }
+      viewport.scrollLeft = left;
+    }
+
     function go(i, announce) {
       i = (i + slides.length) % slides.length;
       setActive(i, announce);
       programmatic = true;
       target = i;
-      viewport.scrollTo({ left: i * viewport.clientWidth, behavior: reduced ? "auto" : "smooth" });
+      scrollToSlide(i, true);
     }
 
     function running() {
@@ -308,13 +324,191 @@
     });
     document.addEventListener("visibilitychange", schedule);
     window.addEventListener("resize", function () {
-      viewport.scrollTo({ left: index * viewport.clientWidth, behavior: "auto" });
+      scrollToSlide(index, false);
     });
 
     root.classList.add("is-enhanced");
     controls.hidden = false;
-    setActive(0, false);
+
+    // "#slide=2" in the URL opens that view (handy for links and screenshots); it pauses auto-advance.
+    var start = /(?:^#|&)slide=(\d+)/.exec(window.location.hash || "");
+    var first = start ? Math.min(Math.max(parseInt(start[1], 10) - 1, 0), slides.length - 1) : 0;
+    setActive(first, false);
+    if (first) {
+      userPaused = true;
+      if (toggle) {
+        toggle.classList.add("is-paused");
+        var playLabel = toggle.getAttribute("data-label-play");
+        if (playLabel) toggle.setAttribute("aria-label", playLabel);
+      }
+      scrollToSlide(first, false);
+    }
     schedule();
+  }
+
+  // Effects: scroll reveal, number count-up and the query demo. All of them start from the finished page and only
+  // run when IntersectionObserver exists and the visitor has not asked for reduced motion.
+  function initEffects() {
+    var reduced = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    if (reduced || !("IntersectionObserver" in window)) return;
+
+    function onVisible(elements, callback, options) {
+      var observer = new IntersectionObserver(
+        function (entries) {
+          entries.forEach(function (entry) {
+            if (!entry.isIntersecting) return;
+            observer.unobserve(entry.target);
+            callback(entry.target);
+          });
+        },
+        options || { rootMargin: "0px 0px -8% 0px" },
+      );
+      Array.prototype.forEach.call(elements, function (el) {
+        observer.observe(el);
+      });
+      return observer;
+    }
+
+    // Scroll reveal: section headings, cards and feature rows fade up, siblings slightly staggered.
+    var revealable = document.querySelectorAll(".section-head, .stats, .why-card, .feature, .mini-card, .engine, .privacy-grid > li, .roadmap > li, .oss > *");
+    Array.prototype.forEach.call(revealable, function (el) {
+      // Anything already on screen at load stays as it is.
+      if (el.getBoundingClientRect().top < window.innerHeight) return;
+      var siblings = el.parentNode ? Array.prototype.indexOf.call(el.parentNode.children, el) : 0;
+      el.style.setProperty("--reveal-delay", Math.min(siblings, 5) * 0.06 + "s");
+      el.classList.add("reveal");
+    });
+    onVisible(document.querySelectorAll(".reveal"), function (el) {
+      el.classList.add("is-in");
+    });
+    // Printing or a very tall window: show everything.
+    window.addEventListener("beforeprint", function () {
+      Array.prototype.forEach.call(document.querySelectorAll(".reveal"), function (el) {
+        el.classList.add("is-in");
+      });
+    });
+
+    // Count-up numbers.
+    onVisible(document.querySelectorAll("[data-count-to]"), function (el) {
+      var to = parseInt(el.getAttribute("data-count-to"), 10);
+      if (!(to > 0)) return;
+      var start = null;
+      var duration = 900;
+      var finished = false;
+      function frame(now) {
+        if (finished) return;
+        if (start === null) start = now;
+        var t = Math.min(1, (now - start) / duration);
+        var eased = 1 - Math.pow(1 - t, 3);
+        el.textContent = String(Math.round(to * eased));
+        if (t < 1) window.requestAnimationFrame(frame);
+      }
+      el.textContent = "0";
+      window.requestAnimationFrame(frame);
+      // If frames are throttled or frozen (background tab), still end on the real number.
+      window.setTimeout(function () {
+        finished = true;
+        el.textContent = String(to);
+      }, duration + 200);
+    });
+
+    initQueryDemo();
+  }
+
+  // Query demo: types the query, presses Run, then the rows arrive one by one. Replays while it stays on screen.
+  function initQueryDemo() {
+    var demo = document.querySelector("[data-query-demo]");
+    if (!demo) return;
+    var code = demo.querySelector("[data-qd-code]");
+    var run = demo.querySelector("[data-qd-run]");
+    var status = demo.querySelector("[data-qd-status]");
+    var rows = demo.querySelectorAll("[data-qd-rows] tr");
+    if (!code || !run || !status) return;
+
+    // Text nodes of the highlighted query with their full text, so typing keeps the colours.
+    var nodes = [];
+    (function collect(node) {
+      for (var child = node.firstChild; child; child = child.nextSibling) {
+        if (child.nodeType === 3) nodes.push({ node: child, text: child.nodeValue });
+        else collect(child);
+      }
+    })(code);
+    var total = nodes.reduce(function (sum, n) {
+      return sum + n.text.length;
+    }, 0);
+    var done = status.getAttribute("data-done") || status.textContent;
+    var timers = [];
+    var visible = false;
+    var playing = false;
+
+    function later(fn, ms) {
+      timers.push(window.setTimeout(fn, ms));
+    }
+
+    function show(count) {
+      var left = count;
+      nodes.forEach(function (n) {
+        var take = Math.max(0, Math.min(n.text.length, left));
+        n.node.nodeValue = n.text.slice(0, take);
+        left -= take;
+      });
+    }
+
+    function play() {
+      if (playing) return;
+      playing = true;
+      Array.prototype.forEach.call(rows, function (row) {
+        row.classList.add("is-pending");
+        row.classList.remove("is-new");
+      });
+      status.textContent = "";
+      status.classList.remove("is-running");
+      code.classList.add("is-typing");
+      var typed = 0;
+      (function type() {
+        typed += 2 + Math.floor(Math.random() * 3);
+        show(Math.min(typed, total));
+        if (typed < total) return later(type, 28 + Math.random() * 40);
+        code.classList.remove("is-typing");
+        later(function () {
+          run.classList.add("is-pressed");
+          status.textContent = "Running…";
+          status.classList.add("is-running");
+          later(function () {
+            run.classList.remove("is-pressed");
+          }, 180);
+          later(function () {
+            status.classList.remove("is-running");
+            status.textContent = done;
+            Array.prototype.forEach.call(rows, function (row, i) {
+              later(function () {
+                row.classList.remove("is-pending");
+                row.classList.add("is-new");
+              }, i * 110);
+            });
+            later(
+              function () {
+                playing = false;
+                if (visible)
+                  later(function () {
+                    if (visible) play();
+                  }, 5200);
+              },
+              rows.length * 110 + 400,
+            );
+          }, 700);
+        }, 450);
+      })();
+    }
+
+    // Start when it comes into view; replay only while it stays visible.
+    new IntersectionObserver(
+      function (entries) {
+        visible = entries[0].isIntersecting;
+        if (visible && !playing) play();
+      },
+      { threshold: 0.4 },
+    ).observe(demo);
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);

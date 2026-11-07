@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ORIGIN = "https://dbcl.fosta.app";
@@ -35,6 +36,16 @@ const INLINE = { strong: [], b: [], em: [], code: [], kbd: [], br: [], a: ["href
 const VOID = new Set(["br"]);
 
 class BuildError extends Error {}
+
+// Short content hash of a shared file, appended to its URL in the pages (cache busting, see renderPage).
+const versions = new Map();
+function assetVersion(name) {
+  if (!versions.has(name)) {
+    const data = fs.readFileSync(path.join(HERE, name));
+    versions.set(name, createHash("sha256").update(data).digest("hex").slice(0, 10));
+  }
+  return versions.get(name);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -368,6 +379,10 @@ export function renderPage(html, loc, dicts) {
 
   // 4. Pages in a sub-folder reach the shared files one level up.
   if (loc.dir) out = out.replace(/(\s(?:href|src|data-shot)=")(assets\/|styles\.css|main\.js)/g, "$1../$2");
+
+  // 5. Cache busting: the stylesheet and script URLs carry a hash of their content, so a CDN or browser cache never
+  // pairs a new page with an old styles.css or main.js (that mix left the carousel slides stacked on phones).
+  out = out.replace(/(\s(?:href|src)="(?:\.\.\/)?)(styles\.css|main\.js)"/g, (_, a, name) => `${a}${name}?v=${assetVersion(name)}"`);
 
   return out;
 }
