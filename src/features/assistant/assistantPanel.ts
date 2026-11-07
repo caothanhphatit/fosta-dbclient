@@ -1,3 +1,4 @@
+import { capabilities } from "../../core/capabilities";
 /**
  * The assistant panel: a chat docked on the right of the workspace. The model
  * writes queries; it never runs them. Every code block it produces carries
@@ -123,7 +124,7 @@ export class AssistantPanel {
       h(
         "p",
         {},
-        "Connect Anthropic, OpenAI, Ollama or any OpenAI-compatible endpoint with your key. The key stays in Windows Credential Manager; requests go straight from this computer to the provider.",
+        `Connect Anthropic, OpenAI, Ollama or any OpenAI-compatible endpoint with your key. The key stays in ${capabilities().secretStore}; requests go straight from ${capabilities().edition === "web" ? "the Fosta Studio server" : "this computer"} to the provider.`,
       ),
       h("p", {}, "The assistant sees table and column names, your editor text and errors. It writes queries; you run them."),
       configureButton,

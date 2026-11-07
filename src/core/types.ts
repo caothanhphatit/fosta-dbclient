@@ -74,6 +74,21 @@ export interface AiActive {
   model: string;
 }
 
+/** What the running edition supports (Rust `Capabilities`); the UI hides the rest. */
+export interface Capabilities {
+  edition: "desktop" | "web";
+  /** Startup tasks (child processes) can run. */
+  tasks: boolean;
+  /** "Show in folder" after an export. */
+  revealFile: boolean;
+  /** Exports are downloaded by the browser instead of written to ~/Downloads. */
+  browserDownloads: boolean;
+  /** Where saved passwords and API keys go, as shown in dialogs. */
+  secretStore: string;
+  /** The backend runs in a container, where `localhost` is not the user's machine. */
+  inContainer: boolean;
+}
+
 export interface AppConfig {
   workspaces: Workspace[];
   activeWorkspace: string;

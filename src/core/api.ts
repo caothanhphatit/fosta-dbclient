@@ -1,9 +1,9 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { downloadInBrowser, invoke, invokeStreaming, isTauri, listen, type UnlistenFn } from "./transport";
 import type {
   AiConnection,
   AiSettings,
   AppConfig,
+  Capabilities,
   BrowseRequest,
   CellValue,
   ChatEvent,
@@ -83,15 +83,18 @@ export const api = {
     invoke<string[]>("list_ai_models", { settings, apiKey, connectionId }),
   /** One short exchange with the settings as typed (unsaved); an empty key means `connectionId`'s saved one. */
   testAi: (settings: AiSettings, apiKey: string | null, connectionId: string | null = null) => invoke<string>("test_ai", { settings, apiKey, connectionId }),
-  /** Writes into Downloads and returns the full path; `base64` for binary data. */
-  saveDownload: (name: string, text: string | null, base64: string | null) => invoke<string>("save_download", { name, text, base64 }),
+  /**
+   * Desktop: writes into Downloads and returns the full path. Web: the browser downloads the file; returns its name.
+   * `base64` for binary data.
+   */
+  saveDownload: (name: string, text: string | null, base64: string | null) =>
+    isTauri() ? invoke<string>("save_download", { name, text, base64 }) : Promise.resolve(downloadInBrowser(name, text, base64)),
+  /** Desktop only (`capabilities().revealFile`). */
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),
+  /** What this edition supports; see `core/capabilities.ts`. */
+  capabilities: () => invoke<Capabilities>("capabilities"),
   /** Streams the reply through `onEvent`; resolves with the full text. */
-  aiChat: (request: ChatRequest, onEvent: (event: ChatEvent) => void) => {
-    const channel = new Channel<ChatEvent>();
-    channel.onmessage = onEvent;
-    return invoke<string>("ai_chat", { request, onEvent: channel });
-  },
+  aiChat: (request: ChatRequest, onEvent: (event: ChatEvent) => void) => invokeStreaming<string, ChatEvent>("ai_chat", { request }, "onEvent", onEvent),
   aiCancel: (id: string) => invoke<void>("ai_cancel", { id }),
   /** Records a query run; resolves with the stored entry, or null when history is turned off. */
   historyAppend: (entry: HistoryEntry) => invoke<HistoryEntry | null>("history_append", { entry }),
@@ -103,11 +106,11 @@ export const api = {
 };
 
 export function onTaskStatus(handler: (status: TaskStatus) => void): Promise<UnlistenFn> {
-  return listen<TaskStatus>("task-status", (event) => handler(event.payload));
+  return listen<TaskStatus>("task-status", handler);
 }
 
 export function onTaskLog(handler: (event: TaskLogEvent) => void): Promise<UnlistenFn> {
-  return listen<TaskLogEvent>("task-log", (event) => handler(event.payload));
+  return listen<TaskLogEvent>("task-log", handler);
 }
 
 export function errorText(error: unknown): string {

@@ -9,13 +9,15 @@ import { assistantContext as buildAssistantContext, isQueryView, taskLogContext 
 import { AppNavigation } from "./app/navigation";
 import { welcomeScreen } from "./app/welcome";
 import { api, errorText } from "./core/api";
+import { hideUnsupported, loadCapabilities } from "./core/capabilities";
+import { isTauri } from "./core/transport";
 import { showContextMenu, type MenuItem } from "./core/contextMenu";
 import { confirmDialog, toast } from "./core/dialogs";
 import { bigButton, clamp, h, icon, iconButton, separator, spacer, type IconName } from "./core/dom";
 import { makeSplitter } from "./core/splitter";
 import { TabManager } from "./core/tabs";
 import { describeTheme, initTheme, onThemeChange, setTheme, themePreference, toggleTheme, type ThemePreference } from "./core/theme";
-import type { AiConnection, AppConfig, ConnectionProfile, UiAction, Workspace, WorkspaceMeta } from "./core/types";
+import type { AiConnection, AppConfig, Capabilities, ConnectionProfile, UiAction, Workspace, WorkspaceMeta } from "./core/types";
 import { aiDialog } from "./features/assistant/aiDialog";
 import { AssistantPanel, type AssistantContext } from "./features/assistant/assistantPanel";
 import { connectionDialog } from "./features/connections/connectionDialog";
@@ -41,13 +43,12 @@ const statusText = h("span", { class: "status-text" }, "Ready");
 const taskSummary = h("span", { class: "status-tasks" });
 const welcomeName = h("span", { class: "welcome-workspace" });
 const workspaceHeader = h("div", { class: "ws-header" });
-const tabs = new TabManager(
-  welcomeScreen(welcomeName, {
-    newConnection: () => void editConnection(null),
-    newQuery: newQueryFromSelection,
-    newTask: () => void tasksPanel.edit(null),
-  }),
-);
+const welcome = welcomeScreen(welcomeName, {
+  newConnection: () => void editConnection(null),
+  newQuery: newQueryFromSelection,
+  newTask: () => void tasksPanel.edit(null),
+});
+const tabs = new TabManager(welcome);
 let currentConfig: AppConfig | null = null;
 let workspace: Workspace | null = null;
 let workspaceArea: HTMLElement | null = null;
@@ -219,7 +220,9 @@ function applyConfig(config: AppConfig): void {
   assistant.setScope(workspace.id);
   welcomeName.textContent = workspace.name;
   refreshActivity();
-  void getCurrentWindow().setTitle(`${workspace.name} — Fosta Studio`);
+  const title = `${workspace.name} — Fosta Studio`;
+  if (isTauri()) void getCurrentWindow().setTitle(title);
+  else document.title = title;
 }
 
 function renderWorkspaceHeader(current: Workspace): void {
@@ -384,7 +387,10 @@ function buildLayout(): void {
     bigButton("diagram", "Diagram", diagramFromSelection, "ER diagram of the selected database"),
     bigButton("refresh", "Refresh", () => tree.refreshSelected(), "Reload the selected database"),
     separator(),
-    bigButton("task", "Task", () => void tasksPanel.edit(null), "New startup task"),
+    withRequirement(
+      bigButton("task", "Task", () => void tasksPanel.edit(null), "New startup task"),
+      "tasks",
+    ),
     bigButton("vector", "Embedding", () => void configureEmbedding(), "Embedding API for vector search"),
     spacer(),
     bigButton("sparkle", "Assistant", toggleAssistant, "Chat with your database (Ctrl+Shift+A)"),
@@ -400,7 +406,7 @@ function buildLayout(): void {
       iconButton("plus", "New connection", () => void editConnection(null)),
     ),
     tree.element,
-    tasksPanel.element,
+    withRequirement(tasksPanel.element, "tasks"),
   );
   const sidebarSplitter = h("div", { class: "splitter-x" });
   const assistantSplitter = h("div", { class: "splitter-x assistant-splitter" });
@@ -460,7 +466,7 @@ function suppressBrowserContextMenu(): void {
 }
 
 function revealWindowAfterFirstPaint(): void {
-  requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show()));
+  if (isTauri()) requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show()));
 }
 
 async function bootstrap(): Promise<void> {
@@ -469,18 +475,27 @@ async function bootstrap(): Promise<void> {
     const { installDevMock } = await import("./dev/devMock");
     installDevMock();
   }
+  const supported = await loadCapabilities();
   initTheme();
   onThemeChange(() => rail.refreshTheme());
   buildLayout();
+  hideUnsupported(document);
+  hideUnsupported(welcome);
   installShortcuts();
   suppressBrowserContextMenu();
   revealWindowAfterFirstPaint();
   try {
     applyConfig(await api.getConfig());
-    await tasksPanel.init();
+    if (supported.tasks) await tasksPanel.init();
   } catch (error) {
     toast(errorText(error), "error");
   }
+}
+
+/** Marks an element as needing a capability; `hideUnsupported` hides it when the edition lacks it. */
+function withRequirement<T extends HTMLElement>(element: T, capability: keyof Capabilities): T {
+  element.dataset.requires = capability;
+  return element;
 }
 
 void bootstrap();

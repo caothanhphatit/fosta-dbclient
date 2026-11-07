@@ -5,6 +5,7 @@
  * written to Downloads by the backend; imports run as batched INSERTs, each
  * batch in one transaction.
  */
+import { capabilities } from "../../core/capabilities";
 import { api, errorText } from "../../core/api";
 import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs";
 import { formatNumber, h } from "../../core/dom";
@@ -63,7 +64,7 @@ export function exportDialog(source: ExportSource): void {
       h("label", { class: "checkbox" }, scopeAll, h("span", {}, `All ${formatNumber(source.total)} rows${filtered}`)),
       h("label", { class: "checkbox" }, scopePage, h("span", {}, `This page only (${formatNumber(source.pageRows.length)} rows)`)),
     ),
-    field("File name", fileName, "Saved to your Downloads folder"),
+    field("File name", fileName, capabilities().browserDownloads ? "Downloaded by your browser" : "Saved to your Downloads folder"),
     progress,
   );
   openModal(
@@ -115,6 +116,11 @@ function render(format: FileFormat, columns: ColumnMeta[], rows: Cell[][], table
 
 /** Small result dialog with a "Show in folder" button. */
 export function savedDialog(title: string, path: string): void {
+  if (!capabilities().revealFile) {
+    // Web edition: the browser has the file (`path` is its name); its own download UI shows where.
+    toast(`${title}: ${path} downloaded`, "success");
+    return;
+  }
   openModal(
     title,
     h("p", { class: "confirm-text mono saved-path" }, path),

@@ -1,3 +1,4 @@
+import { capabilities } from "../../core/capabilities";
 import { api } from "../../core/api";
 import { field, openModal, textInput, toast } from "../../core/dialogs";
 import { h } from "../../core/dom";
@@ -46,7 +47,7 @@ export function embeddingDialog(existing: EmbeddingSettings | null): Promise<App
       field("Endpoint URL", url),
       field("Model", model),
       field("Authentication", auth),
-      field("API key", apiKey, "Stored in Windows Credential Manager"),
+      field("API key", apiKey, `Stored in ${capabilities().secretStore}`),
       field("Dimensions", dimensions, "Sent as `dimensions` for models that support shortening (OpenAI v3)"),
     );
     openModal(

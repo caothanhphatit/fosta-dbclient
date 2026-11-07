@@ -374,6 +374,15 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       return ["C:", "Users", "you", "Downloads", String(payload.name)].join("\\");
     case "reveal_file":
       return null;
+    case "capabilities":
+      return {
+        edition: "desktop",
+        tasks: true,
+        revealFile: true,
+        browserDownloads: false,
+        secretStore: "Windows Credential Manager",
+        inContainer: false,
+      };
     case "create_database":
       return null;
     case "schema_graph":

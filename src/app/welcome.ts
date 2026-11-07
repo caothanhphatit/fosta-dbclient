@@ -43,9 +43,18 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
         { class: "welcome-actions" },
         card("plug", "New connection", "Save a MariaDB or MySQL server in this workspace", () => actions.newConnection()),
         card("query", "New query", "Open a SQL editor on the selected connection", () => actions.newQuery()),
-        card("task", "New startup task", "Keep a port-forward alive while this workspace is open", () => actions.newTask()),
+        requires(
+          card("task", "New startup task", "Keep a port-forward alive while this workspace is open", () => actions.newTask()),
+          "tasks",
+        ),
       ),
       h("ul", { class: "shortcuts" }, ...SHORTCUTS.map(([keys, action]) => h("li", {}, h("kbd", {}, keys), h("span", {}, action)))),
     ),
   );
+}
+
+/** Hidden by `hideUnsupported` when the edition lacks `capability` (startup tasks in the web edition). */
+function requires(element: HTMLElement, capability: string): HTMLElement {
+  element.dataset.requires = capability;
+  return element;
 }

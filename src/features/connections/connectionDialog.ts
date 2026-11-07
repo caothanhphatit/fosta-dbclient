@@ -1,3 +1,4 @@
+import { capabilities, localhostHint } from "../../core/capabilities";
 import { api, errorText } from "../../core/api";
 import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs";
 import { h, icon } from "../../core/dom";
@@ -19,7 +20,7 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
     let driver = driverInfo(existing?.driver);
     let previousDriver = driver;
     const name = textInput(existing?.name ?? "", { placeholder: "e.g. Staging replica" });
-    const host = textInput(existing?.host ?? "127.0.0.1");
+    const host = textInput(existing?.host ?? (capabilities().inContainer ? "host.docker.internal" : "127.0.0.1"));
     const port = textInput(String(existing?.port ?? driver.defaultPort), { type: "number", min: 1, max: 65535 });
     const user = textInput(existing?.user ?? driver.defaultUser);
     const password = textInput("", {
@@ -28,7 +29,7 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
     });
     const database = textInput(existing?.database ?? "", { placeholder: driver.databaseHint });
     const databaseField = field(driver.databaseLabel, database);
-    const remember = checkbox("Save password in Windows Credential Manager", existing?.savePassword ?? true);
+    const remember = checkbox(`Save password in ${capabilities().secretStore}`, existing?.savePassword ?? true);
     const optionsHost = h("div", { class: "form-grid driver-options" });
     const availability = h("p", { class: "driver-note" });
     const options: Record<string, string> = { ...(existing?.options ?? {}) };
@@ -36,6 +37,22 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
     let mode: "params" | "string" = existing?.options[MODE_OPTION] === "string" || existing?.options.uri ? "string" : "params";
     const connectionString = h("textarea", { class: "input mono connection-string", rows: "3", spellcheck: "false" });
     const stringHint = h("span", { class: "field-hint" });
+    /** In the Docker edition, localhost is the container: suggest host.docker.internal. */
+    const hostNote = h("p", { class: "driver-note" });
+    const updateHostNote = () => {
+      let candidate = host.value;
+      if (mode === "string") {
+        try {
+          candidate = parseConnectionString(driver.id, connectionString.value).host;
+        } catch {
+          candidate = "";
+        }
+      }
+      hostNote.textContent = localhostHint(candidate);
+      hostNote.hidden = hostNote.textContent === "";
+    };
+    host.addEventListener("input", updateHostNote);
+    connectionString.addEventListener("input", updateHostNote);
     const stringField = h("label", { class: "field" }, h("span", { class: "field-label" }, "Connection string"), connectionString, stringHint);
     const paramsSection = h("div", { class: "form-grid" });
     const modeButtons = (["params", "string"] as const).map((value) => {
@@ -62,10 +79,11 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       renderOptions();
     };
     const renderMode = () => {
+      updateHostNote();
       for (const button of modeButtons) button.classList.toggle("active", button.dataset.mode === mode);
       paramsSection.hidden = mode !== "params";
       stringField.hidden = mode !== "string";
-      stringHint.textContent = `e.g. ${CONNECTION_STRING_EXAMPLES[driver.id]}. A password in the string goes to Credential Manager, not into the config file.`;
+      stringHint.textContent = `e.g. ${CONNECTION_STRING_EXAMPLES[driver.id]}. A password in the string goes to ${capabilities().secretStore}, not into the config file.`;
     };
     const switchMode = (next: "params" | "string") => {
       if (next === mode) return;
@@ -202,6 +220,7 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       h("div", { class: "segmented" }, ...modeButtons),
       paramsSection,
       stringField,
+      hostNote,
       remember.element,
     );
     openModal(
