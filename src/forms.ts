@@ -1,7 +1,7 @@
 import { api, errorText } from "./api";
 import { checkbox, field, openModal, textInput, toast } from "./dialogs";
 import { h, icon, iconButton } from "./dom";
-import { AI_PROVIDERS, providerPreset, type ProviderPreset } from "./aiProviders";
+import { AI_PROVIDERS, endpointProblem, providerPreset, type ProviderPreset } from "./aiProviders";
 import { describeServer, driverInfo, DRIVERS, type DriverInfo } from "./drivers";
 import { formatArgs, parseArgs } from "./shell";
 import type { AiSettings, AppConfig, ConnectionProfile, EmbeddingAuth, EmbeddingSettings, TaskDef, WorkspaceMeta } from "./types";
@@ -300,10 +300,15 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
   return new Promise((resolve) => {
     let saved: AppConfig | null = null;
     let preset = providerPreset(existing?.provider ?? "fosta");
-    const baseUrl = textInput(existing?.baseUrl ?? "", { class: "input mono" });
+    const baseUrl = textInput(existing?.provider === "custom" ? existing.baseUrl : "", { class: "input mono", placeholder: "http://localhost:11434/v1" });
     const apiKey = textInput("", { type: "password", placeholder: existing ? "Saved, leave empty to keep" : "" });
     const hint = h("p", { class: "form-intro provider-hint" });
-    const endpointField = field("Endpoint", baseUrl, "Leave empty for the provider's public endpoint");
+    /** Only Custom asks for a URL; the built-in providers have theirs fixed. */
+    const endpointField = field("Endpoint", baseUrl, "The base URL that has /chat/completions under it");
+    const describeProvider = (item: ProviderPreset) => {
+      hint.replaceChildren(item.hint, item.url ? " Endpoint: " : "", item.url ? h("code", {}, item.url) : "");
+      endpointField.hidden = item.value !== "custom";
+    };
     const modelSelect = h("select", { class: "input mono" });
     const customModel = textInput("", { class: "input mono", placeholder: "model name as the provider expects it" });
     const modelStatus = h("span", { class: "field-hint" });
@@ -331,12 +336,13 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
     /** The list is only fetched once there is a key to send (typed, or saved earlier). Custom endpoints may need none. */
     const loadModels = async () => {
       const wanted = currentModel() || preset.model;
-      const draft: AiSettings = { provider: preset.value, baseUrl: baseUrl.value.trim(), model: wanted || "-" };
+      const draft: AiSettings = { provider: preset.value, baseUrl: preset.value === "custom" ? baseUrl.value.trim() : "", model: wanted || "-" };
       const hasKey = Boolean(apiKey.value.trim()) || (existing !== null && existing.provider === preset.value);
-      if (preset.value === "custom" && !draft.baseUrl) {
+      const problem = endpointProblem(draft.baseUrl, preset.value);
+      if (problem) {
         models = [];
         renderModels(wanted);
-        modelStatus.textContent = "Enter the endpoint to list its models";
+        modelStatus.textContent = problem;
         return;
       }
       if (!hasKey && preset.value !== "custom") {
@@ -371,17 +377,14 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
       models = [];
       for (const card of cards) card.classList.toggle("active", card.dataset.provider === next.value);
       baseUrl.value = "";
-      baseUrl.placeholder = next.url || "http://localhost:11434/v1";
-      hint.textContent = next.hint;
-      endpointField.querySelector(".field-hint")!.textContent = next.value === "custom" ? "Required: the base URL that has /chat/completions under it" : "Leave empty for the provider's public endpoint";
+      describeProvider(next);
       renderModels(next.model);
       void loadModels();
     };
     for (const card of cards) {
       if (card.dataset.provider === preset.value) card.classList.add("active");
     }
-    baseUrl.placeholder = preset.url || "http://localhost:11434/v1";
-    hint.textContent = preset.hint;
+    describeProvider(preset);
     renderModels(existing?.model ?? preset.model);
     void loadModels();
     apiKey.addEventListener("change", () => void loadModels());
@@ -390,8 +393,9 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
     const readSettings = (): AiSettings => {
       const model = currentModel();
       if (!model) throw new Error("Model is required");
-      if (preset.value === "custom" && !baseUrl.value.trim()) throw new Error("Endpoint is required for a custom provider");
-      return { provider: preset.value, baseUrl: baseUrl.value.trim(), model };
+      const problem = endpointProblem(baseUrl.value, preset.value);
+      if (problem) throw new Error(problem);
+      return { provider: preset.value, baseUrl: preset.value === "custom" ? baseUrl.value.trim() : "", model };
     };
     const save = async () => {
       saved = await api.saveAiSettings(readSettings(), apiKey.value || null);

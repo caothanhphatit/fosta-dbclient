@@ -16,7 +16,7 @@ export interface ProviderPreset {
 }
 
 export const AI_PROVIDERS: ProviderPreset[] = [
-  { value: "fosta", label: "Fosta", icon: "rocket", url: "https://admin.fosta.app/v1", model: "astra", hint: "Fosta gateway. Key from admin.fosta.app.", wire: "openai" },
+  { value: "fosta", label: "Fosta", icon: "rocket", url: "https://admin.fosta.app/v1", model: "cx/gpt-6-astra", hint: "Fosta gateway. Key from admin.fosta.app.", wire: "openai" },
   { value: "openai", label: "OpenAI", icon: "bolt", url: "https://api.openai.com/v1", model: "gpt-5", hint: "Key from platform.openai.com.", wire: "openai" },
   { value: "gemini", label: "Gemini", icon: "globe", url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-flash", hint: "Key from aistudio.google.com (Google's OpenAI-compatible endpoint).", wire: "openai" },
   { value: "anthropic", label: "Claude", icon: "layers", url: "https://api.anthropic.com", model: "claude-opus-5-5", hint: "Key from console.anthropic.com.", wire: "anthropic" },
@@ -30,4 +30,12 @@ export function providerPreset(value: string | undefined): ProviderPreset {
 /** The endpoint requests go to: the user's, or the provider's public one. */
 export function baseUrlOf(settings: AiSettings): string {
   return (settings.baseUrl.trim() || providerPreset(settings.provider).url).replace(/\/+$/, "");
+}
+
+/** Why `endpoint` cannot be used as a base URL, or null when it is fine (empty means the default). */
+export function endpointProblem(endpoint: string, provider: AiProvider): string | null {
+  const value = endpoint.trim();
+  if (!value) return provider === "custom" ? "Enter the endpoint URL of your server, e.g. http://localhost:11434/v1" : null;
+  if (!/^https?:\/\/\S+$/i.test(value)) return `Endpoint must be a URL starting with http:// or https://, not "${value.slice(0, 40)}"`;
+  return null;
 }

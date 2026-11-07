@@ -96,6 +96,9 @@ impl AiSettings {
     fn base_url(&self) -> AppResult<String> {
         let trimmed = self.base_url.trim().trim_end_matches('/');
         if !trimmed.is_empty() {
+            if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+                return Err(AppError::new(format!("Endpoint must be a URL starting with http:// or https://, not \"{trimmed}\" (assistant settings)")));
+            }
             return Ok(trimmed.to_owned());
         }
         let default = self.provider.default_url();

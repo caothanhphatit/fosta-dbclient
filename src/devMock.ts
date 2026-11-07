@@ -5,7 +5,7 @@
  */
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import { baseUrlOf, providerPreset } from "./aiProviders";
+import { baseUrlOf, endpointProblem, providerPreset } from "./aiProviders";
 import type { AiSettings, AppConfig, ChatEvent, ChatRequest, ConnectionProfile, TablePage, Workspace } from "./types";
 
 const DIMS = 4;
@@ -249,14 +249,29 @@ async function failureText(response: Response): Promise<string> {
   return `${response.status}: ${body.slice(0, 300)}`;
 }
 
+/** Parses JSON, naming the URL when the server answered with something else (a login page, HTML). */
+async function jsonBody(response: Response, url: string): Promise<unknown> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`${url} did not return JSON (got "${text.slice(0, 40).replace(/\s+/g, " ")}…"). Check the endpoint URL.`);
+  }
+}
+
 async function fetchModels(settings: AiSettings, apiKey: string | null): Promise<string[]> {
+  const problem = endpointProblem(settings.baseUrl, settings.provider);
+  if (problem) throw new Error(problem);
   const key = apiKey || browserApiKey;
   const anthropic = providerPreset(settings.provider).wire === "anthropic";
   const url = `${baseUrlOf(settings)}${anthropic ? "/v1/models?limit=1000" : "/models"}`;
   const response = await fetch(url, { headers: providerHeaders(settings, key) });
   if (!response.ok) throw new Error(`${providerPreset(settings.provider).label} API returned ${await failureText(response)}`);
-  const payload = (await response.json()) as { data?: { id?: string; name?: string }[] };
-  const ids = (payload.data ?? []).map((item) => (item.id ?? item.name ?? "").replace(/^models\//, "")).filter(Boolean);
+  const payload = (await jsonBody(response, url)) as { data?: unknown; models?: unknown } | unknown[];
+  // Same shapes the backend accepts: { data: [...] } (OpenAI, Anthropic), { models: [...] } (Ollama native), or a bare array.
+  const items = Array.isArray(payload) ? payload : (payload as { data?: unknown }).data ?? (payload as { models?: unknown }).models;
+  if (!Array.isArray(items)) throw new Error(`${url} returned no model list`);
+  const ids = items.map((item) => (typeof item === "string" ? item : String((item as { id?: string; name?: string }).id ?? (item as { name?: string }).name ?? ""))).map((id) => id.replace(/^models\//, "")).filter(Boolean);
   return [...new Set(ids)].sort();
 }
 
@@ -341,7 +356,7 @@ async function probeChat(): Promise<string> {
   const body = anthropic ? { model: settings.model, max_tokens: 64, messages: [prompt] } : { model: settings.model, messages: [prompt] };
   const response = await fetch(`${baseUrlOf(settings)}${anthropic ? "/v1/messages" : "/chat/completions"}`, { method: "POST", headers: providerHeaders(settings, browserApiKey), body: JSON.stringify(body) });
   if (!response.ok) throw new Error(`${preset.label} API returned ${await failureText(response)}`);
-  const payload = (await response.json()) as { content?: { text?: string }[]; choices?: { message?: { content?: string } }[] };
+  const payload = (await jsonBody(response, baseUrlOf(settings))) as { content?: { text?: string }[]; choices?: { message?: { content?: string } }[] };
   return (anthropic ? payload.content?.map((block) => block.text ?? "").join("") : payload.choices?.[0]?.message?.content)?.trim() || "(empty reply)";
 }
 
