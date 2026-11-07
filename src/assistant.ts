@@ -8,7 +8,8 @@ import { showContextMenu, type MenuItem } from "./contextMenu";
 import { toast } from "./dialogs";
 import { copyText, h, icon, iconButton, spacer, type IconName } from "./dom";
 import { driverInfo, DRIVERS } from "./drivers";
-import type { AiSettings, ChatContext, ChatEvent, ChatMessage, DriverId } from "./types";
+import { ModelSwitcher } from "./modelSwitcher";
+import type { AiActive, AiConnection, AppConfig, ChatContext, ChatEvent, ChatMessage, DriverId, UiAction } from "./types";
 
 /** What the UI knows about where the user is. Getters are read at send time. */
 export interface AssistantContext {
@@ -31,7 +32,13 @@ export interface AssistantHost {
   /** Puts `text` into the active query editor, or opens a query tab for it. */
   insertSql(text: string): void;
   openQuery(text: string): void;
+  /** Opens what the model asked for (diagram, table, query tab) on the current connection. */
+  perform(action: UiAction): void;
+  /** Opens the LLM provider dialog for the active connection (or a new one). */
   configure(): void;
+  /** Opens the LLM provider dialog for `connection`, or an empty one to add a provider. */
+  editProvider(connection: AiConnection | null): void;
+  configChanged(config: AppConfig): void;
   close(): void;
 }
 
@@ -66,7 +73,8 @@ export class AssistantPanel {
   private readonly chat: HTMLElement;
   private readonly conversations = new Map<string, Conversation>();
   private conversation: Conversation = { messages: [], log: h("div", { class: "chat-log" }) };
-  private settings: AiSettings | null = null;
+  private readonly switcher: ModelSwitcher;
+  private configured = false;
   private activeRequest: string | null = null;
 
   constructor(host: AssistantHost) {
@@ -83,6 +91,11 @@ export class AssistantPanel {
       }
     });
     this.composer.addEventListener("input", () => this.growComposer());
+    this.switcher = new ModelSwitcher({
+      edit: (connection) => host.editProvider(connection),
+      configChanged: (config) => host.configChanged(config),
+      focusComposer: () => this.composer.focus(),
+    });
 
     const header = h(
       "div",
@@ -92,7 +105,7 @@ export class AssistantPanel {
       this.modelBadge,
       spacer(),
       iconButton("plus", "New conversation", () => this.reset()),
-      iconButton("settings", "Assistant settings", () => host.configure()),
+      iconButton("settings", "LLM providers", () => host.configure()),
       iconButton("x", "Close panel", () => host.close()),
     );
     const configureButton = h("button", { class: "btn primary", type: "button" }, "Set up…");
@@ -111,18 +124,23 @@ export class AssistantPanel {
       { class: "assistant-chat" },
       this.logHost,
       this.actions,
+      this.switcher.element,
       h("div", { class: "chat-composer" }, this.composer, this.sendButton, this.stopButton),
     );
     this.element = h("aside", { class: "assistant" }, header, this.contextRow, this.setup, this.chat);
     this.logHost.append(this.conversation.log);
-    this.setConfigured(null);
+    this.setConfigured([], null);
   }
 
-  setConfigured(settings: AiSettings | null): void {
-    this.settings = settings;
-    this.modelBadge.textContent = settings?.model ?? "";
-    this.setup.hidden = settings !== null;
-    this.chat.hidden = settings === null;
+  setConfigured(connections: AiConnection[], active: AiActive | null): void {
+    this.configured = connections.length > 0;
+    const connection = connections.find((item) => item.id === active?.connectionId);
+    this.modelBadge.textContent = active?.model ?? "";
+    this.modelBadge.title = connection && active ? `${connection.name} · ${active.model}` : "";
+    this.switcher.set(connections, active);
+    if (!this.configured) this.switcher.close();
+    this.setup.hidden = this.configured;
+    this.chat.hidden = !this.configured;
   }
 
   /** One conversation per workspace; switching keeps the others. */
@@ -163,7 +181,7 @@ export class AssistantPanel {
 
   private async send(): Promise<void> {
     const text = this.composer.value.trim();
-    if (!text || this.activeRequest || !this.settings) return;
+    if (!text || this.activeRequest || !this.configured) return;
     this.composer.value = "";
     this.growComposer();
     const context = this.host.context();
@@ -185,6 +203,8 @@ export class AssistantPanel {
         } else if (event.type === "tool") {
           bubble.before(h("div", { class: "chat-tool" }, icon("search"), event.label));
           this.scrollToEnd();
+        } else if (event.type === "action") {
+          this.host.perform(event.action);
         }
       });
       reply = full || reply;

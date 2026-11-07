@@ -2,9 +2,10 @@ import { api, errorText } from "./api";
 import { checkbox, field, openModal, textInput, toast } from "./dialogs";
 import { h, icon, iconButton } from "./dom";
 import { AI_PROVIDERS, endpointProblem, providerPreset, type ProviderPreset } from "./aiProviders";
+import { CONNECTION_STRING_EXAMPLES, formatConnectionString, MODE_OPTION, parseConnectionString, type ConnectionFields, type ParsedConnection } from "./connectionString";
 import { describeServer, driverInfo, DRIVERS, type DriverInfo } from "./drivers";
 import { formatArgs, parseArgs } from "./shell";
-import type { AiSettings, AppConfig, ConnectionProfile, EmbeddingAuth, EmbeddingSettings, TaskDef, WorkspaceMeta } from "./types";
+import type { AiConnection, AiSettings, AppConfig, ConnectionProfile, EmbeddingAuth, EmbeddingSettings, TaskDef, WorkspaceMeta } from "./types";
 import { WORKSPACE_COLORS, WORKSPACE_ICONS, workspaceColor, workspaceIcon } from "./workspaces";
 
 const AUTH_OPTIONS: { value: EmbeddingAuth; label: string }[] = [
@@ -41,6 +42,57 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
     const availability = h("p", { class: "driver-note" });
     const options: Record<string, string> = { ...(existing?.options ?? {}) };
     const optionInputs = new Map<string, HTMLInputElement>();
+    let mode: "params" | "string" = existing?.options[MODE_OPTION] === "string" || existing?.options.uri ? "string" : "params";
+    const connectionString = h("textarea", { class: "input mono connection-string", rows: "3", spellcheck: "false" });
+    const stringHint = h("span", { class: "field-hint" });
+    const stringField = h("label", { class: "field" }, h("span", { class: "field-label" }, "Connection string"), connectionString, stringHint);
+    const paramsSection = h("div", { class: "form-grid" });
+    const modeButtons = (["params", "string"] as const).map((value) => {
+      const button = h("button", { class: "segment", type: "button", "data-mode": value }, value === "params" ? "Parameters" : "Connection string");
+      button.addEventListener("click", () => switchMode(value));
+      return button;
+    });
+    const currentFields = (): ConnectionFields => ({
+      host: host.value.trim(),
+      port: Number(port.value) || driver.defaultPort,
+      user: user.value.trim(),
+      database: database.value.trim() || null,
+      options: { ...options, ...readOptions() },
+    });
+    /** Fills the parameter inputs from a parsed string, so either tab shows the same connection. */
+    const applyParsed = (parsed: ParsedConnection) => {
+      host.value = parsed.host;
+      port.value = String(parsed.port);
+      user.value = parsed.user;
+      database.value = parsed.database ?? "";
+      if (parsed.password !== null) password.value = parsed.password;
+      Object.assign(options, parsed.options);
+      if (driver.id !== "mongodb") delete options.uri;
+      renderOptions();
+    };
+    const renderMode = () => {
+      for (const button of modeButtons) button.classList.toggle("active", button.dataset.mode === mode);
+      paramsSection.hidden = mode !== "params";
+      stringField.hidden = mode !== "string";
+      stringHint.textContent = `e.g. ${CONNECTION_STRING_EXAMPLES[driver.id]}. A password in the string goes to Credential Manager, not into the config file.`;
+    };
+    const switchMode = (next: "params" | "string") => {
+      if (next === mode) return;
+      if (next === "string") {
+        if (driver.id === "mongodb") delete options.uri;
+        connectionString.value = formatConnectionString(driver.id, currentFields());
+      } else if (connectionString.value.trim()) {
+        try {
+          applyParsed(parseConnectionString(driver.id, connectionString.value));
+        } catch (error) {
+          toast(errorText(error), "error");
+          return;
+        }
+      }
+      if (next === "params") delete options.uri;
+      mode = next;
+      renderMode();
+    };
 
     const renderOptions = () => {
       optionInputs.clear();
@@ -73,6 +125,11 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       databaseField.querySelector(".field-label")!.textContent = next.databaseLabel;
       for (const card of cards) card.classList.toggle("active", card.dataset.driver === next.id);
       renderOptions();
+      if (mode === "string") {
+        delete options.uri;
+        connectionString.value = formatConnectionString(next.id, currentFields());
+      }
+      renderMode();
     };
 
     const cards = DRIVERS.map((info) => {
@@ -97,18 +154,50 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       }
       return result;
     };
-    const readProfile = (): ConnectionProfile => ({
-      id,
-      name: name.value.trim() || `${host.value.trim()}:${port.value}`,
-      driver: driver.id,
-      host: host.value.trim(),
-      port: Number(port.value) || driver.defaultPort,
-      user: user.value.trim(),
-      database: database.value.trim() || null,
-      savePassword: remember.input.checked,
-      options: readOptions(),
-    });
-    const readPassword = (): string | null => (password.value === "" && existing?.savePassword ? null : password.value);
+    /** In string mode the string is the source of truth; its password, if any, is returned by readPassword. */
+    let stringPassword: string | null = null;
+    const readProfile = (): ConnectionProfile => {
+      if (mode === "string") {
+        const parsed = parseConnectionString(driver.id, connectionString.value);
+        stringPassword = parsed.password;
+        const label = parsed.options.uri ? parsed.host : `${parsed.host}:${parsed.port}`;
+        return {
+          id,
+          name: name.value.trim() || label,
+          driver: driver.id,
+          host: parsed.host,
+          port: parsed.port,
+          user: parsed.user,
+          database: parsed.database,
+          savePassword: remember.input.checked,
+          options: { ...parsed.options, [MODE_OPTION]: "string" },
+        };
+      }
+      stringPassword = null;
+      return {
+        id,
+        name: name.value.trim() || `${host.value.trim()}:${port.value}`,
+        driver: driver.id,
+        host: host.value.trim(),
+        port: Number(port.value) || driver.defaultPort,
+        user: user.value.trim(),
+        database: database.value.trim() || null,
+        savePassword: remember.input.checked,
+        options: readOptions(),
+      };
+    };
+    const readPassword = (): string | null => {
+      if (mode === "string") return stringPassword ?? (existing?.savePassword ? null : "");
+      return password.value === "" && existing?.savePassword ? null : password.value;
+    };
+    if (mode === "string") connectionString.value = existing?.options.uri ?? formatConnectionString(driver.id, currentFields());
+    paramsSection.append(
+      h("div", { class: "field-row" }, field("Host", host), h("div", { class: "narrow" }, field("Port", port))),
+      h("div", { class: "field-row even" }, field("User", user), field("Password", password)),
+      databaseField,
+      optionsHost,
+    );
+    renderMode();
 
     const body = h(
       "div",
@@ -117,10 +206,9 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       field("Database type", h("div", { class: "driver-cards" }, ...cards)),
       availability,
       field("Connection name", name),
-      h("div", { class: "field-row" }, field("Host", host), h("div", { class: "narrow" }, field("Port", port))),
-      h("div", { class: "field-row even" }, field("User", user), field("Password", password)),
-      databaseField,
-      optionsHost,
+      h("div", { class: "segmented" }, ...modeButtons),
+      paramsSection,
+      stringField,
       remember.element,
     );
     openModal(existing ? "Edit connection" : "New connection", body, [
@@ -296,12 +384,17 @@ export function taskDialog(existing: TaskDef | null, workspaceName: string): Pro
 
 const CUSTOM_MODEL = "__custom__";
 
-export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null> {
+/** Adds (`existing` null) or edits one LLM connection. */
+export function aiDialog(existing: AiConnection | null): Promise<AppConfig | null> {
   return new Promise((resolve) => {
     let saved: AppConfig | null = null;
+    const id = existing?.id ?? crypto.randomUUID();
     let preset = providerPreset(existing?.provider ?? "fosta");
+    const name = textInput(existing?.name ?? preset.label, { placeholder: "e.g. Work OpenAI" });
     const baseUrl = textInput(existing?.provider === "custom" ? existing.baseUrl : "", { class: "input mono", placeholder: "http://localhost:11434/v1" });
     const apiKey = textInput("", { type: "password", placeholder: existing ? "Saved, leave empty to keep" : "" });
+    /** The saved key only belongs to the provider it was saved for. */
+    const savedKeyOwner = () => (existing !== null && existing.provider === preset.value ? existing.id : null);
     const hint = h("p", { class: "form-intro provider-hint" });
     /** Only Custom asks for a URL; the built-in providers have theirs fixed. */
     const endpointField = field("Endpoint", baseUrl, "The base URL that has /chat/completions under it");
@@ -325,7 +418,7 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
         h("option", { value: CUSTOM_MODEL, selected: custom }, "Custom…"),
       );
       if (custom) customModel.value = selected;
-      customModel.hidden = !custom;
+      customModel.hidden = !custom && known.length > 0;
     };
     const currentModel = () => (modelSelect.value === CUSTOM_MODEL ? customModel.value.trim() : modelSelect.value);
     modelSelect.addEventListener("change", () => {
@@ -337,7 +430,7 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
     const loadModels = async () => {
       const wanted = currentModel() || preset.model;
       const draft: AiSettings = { provider: preset.value, baseUrl: preset.value === "custom" ? baseUrl.value.trim() : "", model: wanted || "-" };
-      const hasKey = Boolean(apiKey.value.trim()) || (existing !== null && existing.provider === preset.value);
+      const hasKey = Boolean(apiKey.value.trim()) || savedKeyOwner() !== null;
       const problem = endpointProblem(draft.baseUrl, preset.value);
       if (problem) {
         models = [];
@@ -354,7 +447,7 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
       const ticket = ++loading;
       modelStatus.textContent = "Loading the provider's models…";
       try {
-        const loaded = await api.listAiModels(draft, apiKey.value || null);
+        const loaded = await api.listAiModels(draft, apiKey.value || null, savedKeyOwner());
         if (ticket !== loading) return;
         models = loaded;
         renderModels(wanted);
@@ -373,6 +466,7 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
       return card;
     });
     const select = (next: ProviderPreset) => {
+      if (!name.value.trim() || name.value.trim() === preset.label) name.value = next.label;
       preset = next;
       models = [];
       for (const card of cards) card.classList.toggle("active", card.dataset.provider === next.value);
@@ -385,20 +479,24 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
       if (card.dataset.provider === preset.value) card.classList.add("active");
     }
     describeProvider(preset);
-    renderModels(existing?.model ?? preset.model);
+    renderModels(existing?.defaultModel ?? preset.model);
     void loadModels();
     apiKey.addEventListener("change", () => void loadModels());
     baseUrl.addEventListener("change", () => void loadModels());
 
     const readSettings = (): AiSettings => {
       const model = currentModel();
-      if (!model) throw new Error("Model is required");
+      if (!model) throw new Error("Default model is required");
       const problem = endpointProblem(baseUrl.value, preset.value);
       if (problem) throw new Error(problem);
       return { provider: preset.value, baseUrl: preset.value === "custom" ? baseUrl.value.trim() : "", model };
     };
     const save = async () => {
-      saved = await api.saveAiSettings(readSettings(), apiKey.value || null);
+      const settings = readSettings();
+      const label = name.value.trim();
+      if (!label) throw new Error("Name is required");
+      const connection: AiConnection = { id, name: label, provider: settings.provider, baseUrl: settings.baseUrl, defaultModel: settings.model };
+      saved = await api.saveAiConnection(connection, apiKey.value || null);
     };
 
     const body = h(
@@ -407,21 +505,72 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
       h("p", { class: "form-intro" }, "The assistant calls the provider directly from this computer with your key. It only sees table and column names, your editor text and the errors you ask about; it never runs queries."),
       field("Provider", h("div", { class: "driver-cards provider-cards" }, ...cards)),
       hint,
+      field("Name", name, "Shown in the model switcher of the chat"),
       endpointField,
       field("API key", apiKey, "Stored in Windows Credential Manager"),
-      h("div", { class: "field" }, h("span", { class: "field-label" }, "Model"), h("div", { class: "model-row" }, modelSelect, reloadButton), customModel, modelStatus),
+      h("div", { class: "field" }, h("span", { class: "field-label" }, "Default model"), h("div", { class: "model-row" }, modelSelect, reloadButton), customModel, modelStatus),
     );
-    openModal("Assistant", body, [
-      { label: "Remove", alignLeft: true, danger: true, run: async () => void (saved = await api.saveAiSettings(null, null)) },
+    const testStatus = h("p", { class: "test-status" });
+    body.append(testStatus);
+    /** Tries the settings as typed; the dialog stays open either way. */
+    const test = async (): Promise<false> => {
+      testStatus.className = "test-status";
+      testStatus.textContent = "Connecting…";
+      try {
+        const settings = readSettings();
+        const started = performance.now();
+        const reply = await api.testAi(settings, apiKey.value || null, savedKeyOwner());
+        testStatus.classList.add("ok");
+        testStatus.textContent = `${providerPreset(settings.provider).label} · ${settings.model} replied "${reply}" in ${Math.round(performance.now() - started)} ms`;
+      } catch (error) {
+        testStatus.classList.add("error");
+        testStatus.textContent = errorText(error);
+      }
+      return false;
+    };
+    const remove = existing ? [{ label: "Remove", alignLeft: true, danger: true, run: async () => void (saved = await api.deleteAiConnection(existing.id)) }] : [];
+    openModal(existing ? "Edit LLM provider" : "Add LLM provider", body, [
+      ...remove,
+      { label: "Test connection", alignLeft: true, run: test },
       { label: "Cancel", run: () => undefined },
-      {
-        label: "Save & test",
-        run: async () => {
-          await save();
-          toast(`Model replied: ${await api.testAi()}`, "success");
-        },
-      },
       { label: "Save", primary: true, run: save },
     ], { width: 580, onClose: () => resolve(saved) });
+  });
+}
+
+/** "New database…" on a connection. Resolves with the created name, or null when cancelled. */
+export function databaseDialog(profile: ConnectionProfile): Promise<string | null> {
+  return new Promise((resolve) => {
+    let created: string | null = null;
+    const info = driverInfo(profile.driver);
+    const mongo = info.id === "mongodb";
+    const name = textInput("", { class: "input mono", placeholder: mongo ? "e.g. analytics" : "e.g. shop_staging" });
+    const collection = textInput("", { class: "input mono", placeholder: "e.g. events" });
+    const note =
+      info.id === "mssql"
+        ? "Created with the server's default size and collation."
+        : mongo
+          ? "MongoDB only keeps a database once it holds a collection, so the first one is created with it."
+          : "Created with utf8mb4 / utf8mb4_unicode_ci.";
+    const body = h(
+      "div",
+      { class: "form-grid" },
+      h("p", { class: "form-intro" }, "On ", h("strong", {}, profile.name), ` (${info.label}). ${note}`),
+      field("Database name", name),
+      mongo ? field("First collection", collection) : null,
+    );
+    openModal("New database", body, [
+      { label: "Cancel", run: () => undefined },
+      {
+        label: "Create",
+        primary: true,
+        run: async () => {
+          const value = name.value.trim();
+          if (!value) throw new Error("Database name is required");
+          await api.createDatabase(profile.id, value, mongo ? collection.value.trim() : null);
+          created = value;
+        },
+      },
+    ], { width: 440, onClose: () => resolve(created) });
   });
 }

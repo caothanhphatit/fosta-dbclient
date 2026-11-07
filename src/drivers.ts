@@ -97,9 +97,8 @@ export const DRIVERS: DriverInfo[] = [
     filterPlaceholder: 'Filter: JSON query, e.g. { "status": "ACTIVE", "stock": { "$gt": 0 } }',
     queryHint: 'Write a database command as JSON and press Ctrl+Enter, e.g. { "find": "products", "filter": { "stock": 0 }, "limit": 50 }',
     supportsCancel: false,
-    options: [
-      { key: "uri", kind: "text", label: "Connection URI", placeholder: "mongodb+srv://user:pass@cluster.example.net/", hint: "Optional. When set, host, port and user above are ignored." },
-    ],
+    // Replica sets and mongodb+srv:// go through the "Connection string" tab (stored as options.uri).
+    options: [],
   },
 ];
 

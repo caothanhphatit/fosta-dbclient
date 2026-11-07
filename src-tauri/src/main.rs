@@ -7,11 +7,15 @@ mod db;
 mod drivers;
 mod embedding;
 mod error;
+mod files;
 mod job;
+#[cfg(test)]
+mod live_tests;
 mod lock;
 mod mongo;
 mod mssql;
 mod relations;
+mod schema;
 mod secrets;
 mod tasks;
 mod vector;
@@ -52,6 +56,10 @@ fn main() {
             commands::connect,
             commands::disconnect,
             commands::list_databases,
+            commands::create_database,
+            commands::schema_graph,
+            commands::save_download,
+            commands::reveal_file,
             commands::list_tables,
             commands::describe_table,
             commands::browse_table,
@@ -78,7 +86,9 @@ fn main() {
             commands::index_recall,
             commands::save_embedding_settings,
             commands::test_embedding,
-            commands::save_ai_settings,
+            commands::save_ai_connection,
+            commands::delete_ai_connection,
+            commands::set_ai_active,
             commands::list_ai_models,
             commands::test_ai,
             commands::ai_chat,

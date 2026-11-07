@@ -4,9 +4,10 @@
  * be reviewed without a MariaDB server. Never bundled into the desktop build.
  */
 import type { Channel } from "@tauri-apps/api/core";
+import { errorText } from "./api";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import { baseUrlOf, endpointProblem, providerPreset } from "./aiProviders";
-import type { AiSettings, AppConfig, ChatEvent, ChatRequest, ConnectionProfile, TablePage, Workspace } from "./types";
+import { baseUrlOf, connectionSettings, endpointProblem, providerPreset } from "./aiProviders";
+import type { AiConnection, AiSettings, AppConfig, ChatEvent, ChatRequest, ConnectionProfile, TablePage, Workspace } from "./types";
 
 const DIMS = 4;
 
@@ -40,7 +41,7 @@ const workspaces: Workspace[] = [
   { id: "prod", name: "Production", color: "red", icon: "shield", connections: [], tasks: [] },
 ];
 
-let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null, ai: null };
+let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null, aiConnections: [], aiActive: null };
 
 const columns = [
   { name: "id", typeName: "int(11)", numeric: true, binary: false, primary: true, vectorDims: null },
@@ -114,6 +115,25 @@ function compareCell(value: string | null, operator: string, operand: string): b
   }
 }
 
+const col = (name: string, columnType: string, primary = false, nullable = false) => ({ name, columnType, primary, nullable });
+const SHOP_GRAPH = {
+  totalTables: 6,
+  tables: [
+    { name: "categories", kind: "table", rows: 8, comment: "", columns: [col("id", "int(11)", true), col("name", "varchar(60)"), col("slug", "varchar(60)")] },
+    { name: "customers", kind: "table", rows: 2000, comment: "", columns: [col("id", "int(11)", true), col("full_name", "varchar(120)"), col("email", "varchar(160)"), col("city", "varchar(60)"), col("tier", "enum('bronze','silver','gold')"), col("created_at", "datetime")] },
+    { name: "products", kind: "table", rows: 1240, comment: "", columns: [col("id", "int(11)", true), col("sku", "varchar(32)"), col("name", "varchar(120)"), col("category_id", "int(11)"), col("price", "decimal(10,2)"), col("stock", "int(11)", false, true), col("updated_at", "datetime"), col("embedding", "vector(4)")] },
+    { name: "orders", kind: "table", rows: 8000, comment: "", columns: [col("id", "int(11)", true), col("customer_id", "int(11)"), col("status", "enum('pending','paid','shipped','cancelled')"), col("ordered_at", "datetime"), col("total", "decimal(12,2)")] },
+    { name: "order_items", kind: "table", rows: 16001, comment: "", columns: [col("id", "int(11)", true), col("order_id", "int(11)"), col("product_id", "int(11)"), col("quantity", "int(11)"), col("unit_price", "decimal(10,2)")] },
+    { name: "v_daily_sales", kind: "view", rows: null, comment: "", columns: [col("day", "date", false, true), col("orders", "bigint(21)"), col("revenue", "decimal(34,2)", false, true)] },
+  ],
+  relations: [
+    ["fk_orders_customer", "orders", "customer_id", "customers"],
+    ["fk_items_order", "order_items", "order_id", "orders"],
+    ["fk_items_product", "order_items", "product_id", "products"],
+    ["fk_products_category", "products", "category_id", "categories"],
+  ].map(([constraint, table, column, target]) => ({ constraint, database: "shop", table, columns: [column], referencedDatabase: "shop", referencedTable: target, referencedColumns: ["id"] })),
+};
+
 function handle(command: string, payload: Record<string, unknown> = {}): unknown {
   switch (command) {
     case "plugin:event|listen":
@@ -145,15 +165,16 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "delete_task":
     case "save_embedding_settings":
       return config;
-    case "save_ai_settings":
-      config = { ...config, ai: (payload.settings as AppConfig["ai"]) ?? null };
-      if (typeof payload.apiKey === "string" && payload.apiKey) browserApiKey = payload.apiKey;
-      if (!config.ai) browserApiKey = "";
-      return config;
+    case "save_ai_connection":
+      return saveAiConnection(payload.connection as AiConnection, (payload.apiKey as string | null) ?? null);
+    case "delete_ai_connection":
+      return deleteAiConnection(String(payload.id));
+    case "set_ai_active":
+      return setAiActive(String(payload.connectionId), String(payload.model ?? ""));
     case "test_ai":
-      return probeChat();
+      return probeChat(payload.settings as AiSettings, draftKey(payload));
     case "list_ai_models":
-      return fetchModels(payload.settings as AiSettings, (payload.apiKey as string | null) ?? null);
+      return fetchModels(payload.settings as AiSettings, draftKey(payload));
     case "ai_chat":
       return streamChat(payload.request as ChatRequest, payload.onEvent as Channel<ChatEvent>);
     case "ai_cancel":
@@ -173,6 +194,14 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "stop_task":
     case "restart_task":
       return null;
+    case "save_download":
+      return ["C:", "Users", "you", "Downloads", String(payload.name)].join("\\");
+    case "reveal_file":
+      return null;
+    case "create_database":
+      return null;
+    case "schema_graph":
+      return SHOP_GRAPH;
     case "list_databases":
       return ["shop", "analytics", "information_schema", "mysql", "performance_schema", "sys"];
     case "list_tables":
@@ -222,8 +251,62 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
 // this page load and requests go straight to the provider from the browser.
 // Schema lookups (tools) are desktop-only; here the model gets the table list.
 
-let browserApiKey = "";
+/** Keys per LLM connection id, for this page load only. */
+const browserKeys = new Map<string, string>();
 const chatRuns = new Map<string, AbortController>();
+
+/** Mirrors the backend: the active connection must exist; else the first one with its default model. */
+function repairActive(next: AppConfig): AppConfig {
+  const valid = next.aiConnections.some((item) => item.id === next.aiActive?.connectionId);
+  if (valid) return next;
+  const first = next.aiConnections[0];
+  return { ...next, aiActive: first ? { connectionId: first.id, model: first.defaultModel } : null };
+}
+
+function saveAiConnection(connection: AiConnection, apiKey: string | null): AppConfig {
+  const item = { ...connection, name: connection.name.trim(), defaultModel: connection.defaultModel.trim(), baseUrl: connection.baseUrl.trim() };
+  if (!item.name) throw new Error("Name is required");
+  if (!item.defaultModel) throw new Error("Default model is required");
+  const problem = endpointProblem(item.baseUrl, item.provider);
+  if (problem) throw new Error(problem);
+  if (apiKey) browserKeys.set(item.id, apiKey);
+  const previous = config.aiConnections.find((existing) => existing.id === item.id);
+  const aiConnections = previous ? config.aiConnections.map((existing) => (existing.id === item.id ? item : existing)) : [...config.aiConnections, item];
+  let aiActive = config.aiActive;
+  const moved = previous && (previous.provider !== item.provider || previous.baseUrl !== item.baseUrl);
+  if (previous && aiActive?.connectionId === item.id && (moved || aiActive.model === previous.defaultModel)) aiActive = { ...aiActive, model: item.defaultModel };
+  config = repairActive({ ...config, aiConnections, aiActive });
+  return config;
+}
+
+function deleteAiConnection(id: string): AppConfig {
+  browserKeys.delete(id);
+  config = repairActive({ ...config, aiConnections: config.aiConnections.filter((item) => item.id !== id) });
+  return config;
+}
+
+function setAiActive(connectionId: string, model: string): AppConfig {
+  if (!model.trim()) throw new Error("Model is required");
+  if (!config.aiConnections.some((item) => item.id === connectionId)) throw new Error(`LLM provider '${connectionId}' no longer exists`);
+  config = { ...config, aiActive: { connectionId, model: model.trim() } };
+  return config;
+}
+
+/** The typed key, else the one kept for `connectionId`. */
+function draftKey(payload: Record<string, unknown>): string {
+  const typed = typeof payload.apiKey === "string" ? payload.apiKey : "";
+  return typed || browserKeys.get(String(payload.connectionId ?? "")) || "";
+}
+
+/** Settings and key for a chat request, like the backend's `chat_settings`. */
+function chatSettings(request: ChatRequest): { settings: AiSettings; apiKey: string } {
+  const connectionId = request.connectionId ?? config.aiActive?.connectionId;
+  if (!connectionId) throw new Error("Add an LLM provider first (Assistant → Set up…)");
+  const connection = config.aiConnections.find((item) => item.id === connectionId);
+  if (!connection) throw new Error(`LLM provider '${connectionId}' no longer exists`);
+  const model = request.model?.trim() || (config.aiActive?.connectionId === connection.id ? config.aiActive.model : connection.defaultModel);
+  return { settings: connectionSettings(connection, model), apiKey: browserKeys.get(connection.id) ?? "" };
+}
 
 function providerHeaders(settings: AiSettings, apiKey: string): Record<string, string> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -259,13 +342,21 @@ async function jsonBody(response: Response, url: string): Promise<unknown> {
   }
 }
 
-async function fetchModels(settings: AiSettings, apiKey: string | null): Promise<string[]> {
+/** fetch() from a page fails without detail when the provider blocks cross-origin calls; say so. */
+async function providerFetch(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    throw new Error(`The browser preview could not reach ${new URL(url).host} (${errorText(error)}). The provider probably blocks cross-origin requests; the desktop app calls it from Rust and is not affected.`);
+  }
+}
+
+async function fetchModels(settings: AiSettings, key: string): Promise<string[]> {
   const problem = endpointProblem(settings.baseUrl, settings.provider);
   if (problem) throw new Error(problem);
-  const key = apiKey || browserApiKey;
   const anthropic = providerPreset(settings.provider).wire === "anthropic";
   const url = `${baseUrlOf(settings)}${anthropic ? "/v1/models?limit=1000" : "/models"}`;
-  const response = await fetch(url, { headers: providerHeaders(settings, key) });
+  const response = await providerFetch(url, { headers: providerHeaders(settings, key) });
   if (!response.ok) throw new Error(`${providerPreset(settings.provider).label} API returned ${await failureText(response)}`);
   const payload = (await jsonBody(response, url)) as { data?: unknown; models?: unknown } | unknown[];
   // Same shapes the backend accepts: { data: [...] } (OpenAI, Anthropic), { models: [...] } (Ollama native), or a bare array.
@@ -291,8 +382,7 @@ function systemPrompt(context: ChatRequest["context"]): string {
 
 /** Streams the provider's reply through the channel the UI passed, like the backend does. */
 async function streamChat(request: ChatRequest, channel: Channel<ChatEvent>): Promise<string> {
-  const settings = config.ai;
-  if (!settings) throw new Error("Set up the assistant first (toolbar → Assistant → settings)");
+  const { settings, apiKey } = chatSettings(request);
   const internals = (window as unknown as { __TAURI_INTERNALS__: { runCallback(id: number, data: unknown): void } }).__TAURI_INTERNALS__;
   let index = 0;
   const emit = (message: ChatEvent) => internals.runCallback(channel.id, { index: index++, message });
@@ -307,9 +397,9 @@ async function streamChat(request: ChatRequest, channel: Channel<ChatEvent>): Pr
   chatRuns.set(request.id, controller);
   let text = "";
   try {
-    const response = await fetch(`${baseUrlOf(settings)}${anthropic ? "/v1/messages" : "/chat/completions"}`, {
+    const response = await providerFetch(`${baseUrlOf(settings)}${anthropic ? "/v1/messages" : "/chat/completions"}`, {
       method: "POST",
-      headers: providerHeaders(settings, browserApiKey),
+      headers: providerHeaders(settings, apiKey),
       body: JSON.stringify(body),
       signal: controller.signal,
     });
@@ -347,14 +437,14 @@ async function streamChat(request: ChatRequest, channel: Channel<ChatEvent>): Pr
 
 
 /** "Save & test": one short exchange without streaming. */
-async function probeChat(): Promise<string> {
-  const settings = config.ai;
-  if (!settings) throw new Error("Set up the assistant first");
+async function probeChat(settings: AiSettings, apiKey: string): Promise<string> {
+  const problem = endpointProblem(settings.baseUrl, settings.provider);
+  if (problem) throw new Error(problem);
   const preset = providerPreset(settings.provider);
   const anthropic = preset.wire === "anthropic";
   const prompt = { role: "user", content: "Reply with the single word OK." };
   const body = anthropic ? { model: settings.model, max_tokens: 64, messages: [prompt] } : { model: settings.model, messages: [prompt] };
-  const response = await fetch(`${baseUrlOf(settings)}${anthropic ? "/v1/messages" : "/chat/completions"}`, { method: "POST", headers: providerHeaders(settings, browserApiKey), body: JSON.stringify(body) });
+  const response = await providerFetch(`${baseUrlOf(settings)}${anthropic ? "/v1/messages" : "/chat/completions"}`, { method: "POST", headers: providerHeaders(settings, apiKey), body: JSON.stringify(body) });
   if (!response.ok) throw new Error(`${preset.label} API returned ${await failureText(response)}`);
   const payload = (await jsonBody(response, baseUrlOf(settings))) as { content?: { text?: string }[]; choices?: { message?: { content?: string } }[] };
   return (anthropic ? payload.content?.map((block) => block.text ?? "").join("") : payload.choices?.[0]?.message?.content)?.trim() || "(empty reply)";

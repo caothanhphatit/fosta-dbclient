@@ -6,6 +6,7 @@ import { showContextMenu, type MenuItem } from "./contextMenu";
 import { confirmDialog, toast } from "./dialogs";
 import { bigButton, clamp, h, icon, iconButton, separator, spacer, type IconName } from "./dom";
 import { DesignView } from "./designView";
+import { DiagramView } from "./diagramView";
 import { aiDialog, connectionDialog, embeddingDialog, workspaceDialog } from "./forms";
 import type { Navigator } from "./navigator";
 import type { QueryView } from "./queryView";
@@ -15,7 +16,7 @@ import { TabManager, type TabContent } from "./tabs";
 import { createLogView, TasksPanel, type LogTabContent } from "./tasksPanel";
 import { describeTheme, initTheme, onThemeChange, setTheme, themePreference, toggleTheme, type ThemePreference } from "./theme";
 import { ConnectionTree } from "./tree";
-import type { AppConfig, CellValue, ConnectionProfile, TableTarget, TaskDef, Workspace, WorkspaceMeta } from "./types";
+import type { AiConnection, AppConfig, CellValue, ConnectionProfile, TableTarget, TaskDef, UiAction, Workspace, WorkspaceMeta } from "./types";
 import { VectorHealthView } from "./vectorHealth";
 import { VectorSearchView } from "./vectorSearch";
 import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./workspaces";
@@ -62,7 +63,10 @@ const assistant = new AssistantPanel({
     else openQueryWithText(text);
   },
   openQuery: openQueryWithText,
+  perform: performAssistantAction,
   configure: () => void configureAssistant(),
+  editProvider: (connection) => void editAiProvider(connection),
+  configChanged: applyConfig,
   close: () => showAssistant(false),
 });
 
@@ -90,6 +94,7 @@ const tree = new ConnectionTree({
   openTable: (target) => openTable(target),
   openDesign,
   openQuery,
+  openDiagram,
   editConnection: (profile) => void editConnection(profile),
   deleteConnection: (profile) => void deleteConnection(profile),
   connectionClosed: closeConnectionTabs,
@@ -167,6 +172,30 @@ function assistantContext(): AssistantContext {
   return selection ? withConnection(selection.connectionId, { database: selection.database ?? undefined }) : { kind: "none" };
 }
 
+/** Runs a view request from the assistant against the connection the chat is about. */
+function performAssistantAction(action: UiAction): void {
+  const context = assistantContext();
+  const profile = context.connectionId ? tree.profileOf(context.connectionId) : null;
+  if (!profile) {
+    toast("The assistant wanted to open a view, but no connection is open");
+    return;
+  }
+  switch (action.kind) {
+    case "openDiagram": {
+      openDiagram(profile, action.database);
+      const view = tabs.contentOf(tabKey(profile.id, "diagram", action.database));
+      if (action.focusTable && view instanceof DiagramView) view.focus(action.focusTable);
+      break;
+    }
+    case "openTable":
+      openTable({ connectionId: profile.id, driver: profile.driver, database: action.database, table: action.table, kind: "table" }, action.filter ?? "");
+      break;
+    case "openQuery":
+      openQuery(profile.id, action.database ?? context.database ?? null, action.sql);
+      break;
+  }
+}
+
 function openQueryWithText(text: string): void {
   const context = assistantContext();
   const connectionId = context.connectionId ?? tree.activeContext()?.connectionId;
@@ -194,8 +223,14 @@ function toggleAssistant(): void {
   showAssistant(!workspaceArea?.classList.contains("with-assistant"));
 }
 
-async function configureAssistant(): Promise<void> {
-  const config = await aiDialog(currentConfig?.ai ?? null);
+/** "LLM providers…": the active connection, or a new one when there is none. */
+function configureAssistant(): Promise<void> {
+  const active = currentConfig?.aiConnections.find((item) => item.id === currentConfig?.aiActive?.connectionId);
+  return editAiProvider(active ?? null);
+}
+
+async function editAiProvider(connection: AiConnection | null): Promise<void> {
+  const config = await aiDialog(connection);
   if (config) applyConfig(config);
 }
 
@@ -222,7 +257,7 @@ function applyConfig(config: AppConfig): void {
   tree.setConnections(workspace.connections);
   tasksPanel.setTasks(workspace.tasks);
   tabs.setScope(workspace.id);
-  assistant.setConfigured(config.ai);
+  assistant.setConfigured(config.aiConnections, config.aiActive);
   assistant.setScope(workspace.id);
   welcomeName.textContent = workspace.name;
   refreshActivity();
@@ -251,7 +286,7 @@ function workspaceMenu(current: Workspace): MenuItem[] {
 
 function settingsMenu(): MenuItem[] {
   return [
-    { label: "Assistant…", icon: "sparkle", run: () => void configureAssistant() },
+    { label: "LLM providers…", icon: "sparkle", run: () => void configureAssistant() },
     { label: "Embedding API…", icon: "vector", run: () => void configureEmbedding() },
   ];
 }
@@ -333,6 +368,16 @@ function openDesign(target: TableTarget): void {
   });
 }
 
+function openDiagram(profile: ConnectionProfile, database: string): void {
+  tabs.open({
+    key: tabKey(profile.id, "diagram", database),
+    title: `${database} · diagram`,
+    subtitle: `${profile.name} · ${database}`,
+    icon: "diagram",
+    create: () => new DiagramView(profile.id, profile.driver, database, appNavigator),
+  });
+}
+
 function openQuery(connectionId: string, database: string | null, initialSql = ""): void {
   void openQueryTab(connectionId, database, initialSql);
 }
@@ -363,6 +408,20 @@ function openLogs(task: TaskDef): void {
     icon: "logs",
     create: () => createLogView(task, tasksPanel),
   });
+}
+
+function diagramFromSelection(): void {
+  const context = tree.activeContext();
+  const profile = context ? tree.profileOf(context.connectionId) : null;
+  if (!context || !profile) {
+    toast("Connect to a database first (double-click a connection)");
+    return;
+  }
+  if (!context.database) {
+    toast("Select a database in the tree, then open its diagram");
+    return;
+  }
+  openDiagram(profile, context.database);
 }
 
 function newQueryFromSelection(): void {
@@ -456,6 +515,7 @@ function buildLayout(): void {
     { class: "app-toolbar" },
     bigButton("plug", "Connection", () => void editConnection(null), "New connection (Ctrl+N)"),
     bigButton("query", "Query", newQueryFromSelection, "New query (Ctrl+T)"),
+    bigButton("diagram", "Diagram", diagramFromSelection, "ER diagram of the selected database"),
     bigButton("refresh", "Refresh", () => tree.refreshSelected(), "Reload the selected database"),
     separator(),
     bigButton("task", "Task", () => void tasksPanel.edit(null), "New startup task"),

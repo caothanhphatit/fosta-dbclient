@@ -5,6 +5,7 @@ import { showContextMenu, type MenuItem } from "./contextMenu";
 import { confirmDialog, toast } from "./dialogs";
 import { clamp, copyText, formatNumber, h, icon, iconButton, separator, spacer, toolButton } from "./dom";
 import { EXPORT_LABELS, type ExportFormat } from "./exporters";
+import { exportDialog, importDialog } from "./importExport";
 import { DataGrid, type SortState } from "./grid";
 import type { Navigator } from "./navigator";
 import { RecordPanel } from "./recordPanel";
@@ -36,6 +37,8 @@ export class TableView implements TabContent {
   private readonly discardButton: HTMLButtonElement;
   private readonly vectorTools = h("div", { class: "toolbar-group" });
   private readonly content: HTMLElement;
+  private readonly pendingText = h("span", { class: "pending-text" });
+  private pendingBar: HTMLElement | null = null;
   private offset = 0;
   private limit = 200;
   private total = 0;
@@ -60,6 +63,9 @@ export class TableView implements TabContent {
     this.submitButton = toolButton("check", "Submit", () => void this.submit(), "Save changes (Ctrl+S)");
     this.discardButton = toolButton("x", "Discard", () => this.grid.discard(), "Discard all changes");
     const exportButton = toolButton("copy", "Copy as", () => undefined, "Copy this page to the clipboard");
+    const exportFileButton = toolButton("download", "Export", () => this.exportFile(), "Export rows to a file in Downloads");
+    const importButton = toolButton("upload", "Import", () => importDialog(this.target, this.columns, () => void this.reload({ force: true })), "Import rows from CSV or JSON");
+    importButton.hidden = !this.editable;
     exportButton.addEventListener("click", (event) => showContextMenu(event, this.exportMenu()));
     const recordButton = toolButton("design", "Record", () => this.toggleRecord(), "Show or hide the record panel");
 
@@ -81,6 +87,8 @@ export class TableView implements TabContent {
       h("div", { class: "filter-box" }, icon("filter"), this.filter),
       this.vectorTools,
       spacer(),
+      importButton,
+      exportFileButton,
       exportButton,
       recordButton,
       this.pager(),
@@ -89,7 +97,13 @@ export class TableView implements TabContent {
     makeSplitter(splitter, "x", (delta) => this.resizeRecord(-delta));
     this.content = h("div", { class: "table-content" }, this.grid.element, splitter, this.record.element);
     this.content.style.setProperty("--record-width", `${this.panelWidth}px`);
-    this.element = h("div", { class: "view table-view" }, toolbar, this.content);
+    const applyButton = h("button", { class: "btn primary", type: "button", title: "Save changes in one transaction (Ctrl+S)" }, "Apply");
+    applyButton.addEventListener("click", () => void this.submit());
+    const discardPending = h("button", { class: "btn", type: "button" }, "Discard");
+    discardPending.addEventListener("click", () => this.grid.discard());
+    this.pendingBar = h("div", { class: "pending-bar" }, icon("edit"), this.pendingText, spacer(), discardPending, applyButton);
+    this.pendingBar.hidden = true;
+    this.element = h("div", { class: "view table-view" }, toolbar, this.content, this.pendingBar);
     this.element.addEventListener("keydown", (event) => this.handleShortcut(event));
     void this.loadMetadata();
     void this.reload({});
@@ -129,6 +143,29 @@ export class TableView implements TabContent {
       toolButton("vector", "Vector search", () => this.navigator.openVectorSearch(this.target, first), "Similarity search on this table"),
       toolButton("health", "Vector health", () => this.navigator.openVectorHealth(this.target, first), "Check vector data and index quality"),
     );
+  }
+
+  private exportFile(): void {
+    exportDialog({
+      target: this.target,
+      columns: this.columns,
+      pageRows: this.grid.pageRows(),
+      request: {
+        connectionId: this.target.connectionId,
+        database: this.target.database,
+        table: this.target.table,
+        orderBy: this.sort?.column ?? null,
+        descending: this.sort?.descending ?? false,
+        filter: this.currentFilter(),
+      },
+      total: this.total,
+    });
+  }
+
+  private currentFilter(): string | null {
+    return this.driver.filterKind === "json"
+      ? combinedJsonFilter(this.columns, this.columnFilters, this.filter.value)
+      : combinedCondition(this.columns, this.columnFilters, this.filter.value);
   }
 
   private exportMenu(): MenuItem[] {
@@ -292,6 +329,13 @@ export class TableView implements TabContent {
 
   private refreshButtons(): void {
     const dirty = this.grid.hasChanges();
+    if (this.pendingBar) {
+      const { updated, inserted, deleted } = this.grid.changeSummary();
+      const total = updated + inserted + deleted;
+      const parts = [updated ? `${updated} updated` : "", inserted ? `${inserted} new` : "", deleted ? `${deleted} deleted` : ""].filter(Boolean);
+      this.pendingText.textContent = `${total} pending ${total === 1 ? "change" : "changes"} · ${parts.join(" · ")}`;
+      this.pendingBar.hidden = !dirty;
+    }
     this.submitButton.disabled = !dirty;
     this.discardButton.disabled = !dirty;
   }

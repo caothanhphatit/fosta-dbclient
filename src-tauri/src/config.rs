@@ -8,8 +8,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ai::AiSettings,
+    ai::{AiActive, AiConnection, AiSettings},
     embedding::EmbeddingSettings,
+    secrets::LEGACY_AI_CONNECTION,
     error::{AppError, AppResult},
     lock::lock,
     tasks::TaskDef,
@@ -123,7 +124,9 @@ pub struct AppConfig {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: String,
     pub embedding: Option<EmbeddingSettings>,
-    pub ai: Option<AiSettings>,
+    pub ai_connections: Vec<AiConnection>,
+    /// Always set while there is at least one connection.
+    pub ai_active: Option<AiActive>,
 }
 
 /// On-disk shape. Accepts both the current layout (`workspaces`) and the
@@ -138,6 +141,11 @@ struct StoredConfig {
     active_workspace: Option<String>,
     #[serde(default)]
     embedding: Option<EmbeddingSettings>,
+    #[serde(default)]
+    ai_connections: Vec<AiConnection>,
+    #[serde(default)]
+    ai_active: Option<AiActive>,
+    /// Legacy single assistant setting, migrated into one connection.
     #[serde(default)]
     ai: Option<AiSettings>,
     #[serde(default)]
@@ -169,12 +177,27 @@ impl From<StoredConfig> for AppConfig {
             .active_workspace
             .filter(|id| workspaces.iter().any(|workspace| &workspace.id == id))
             .unwrap_or_else(|| workspaces[0].id.clone());
-        Self {
+        let mut ai_connections = stored.ai_connections;
+        let mut ai_active = stored.ai_active;
+        if let (true, Some(legacy)) = (ai_connections.is_empty(), stored.ai) {
+            ai_connections.push(AiConnection {
+                id: LEGACY_AI_CONNECTION.into(),
+                name: legacy.provider.display_name().into(),
+                provider: legacy.provider,
+                base_url: legacy.base_url,
+                default_model: legacy.model,
+            });
+            ai_active = None;
+        }
+        let mut config = Self {
             workspaces,
             active_workspace,
             embedding: stored.embedding,
-            ai: stored.ai,
-        }
+            ai_connections,
+            ai_active,
+        };
+        config.repair_ai_active();
+        config
     }
 }
 
@@ -302,6 +325,61 @@ impl AppConfig {
         self.active_workspace = id.to_owned();
         Ok(())
     }
+
+    pub fn ai_connection(&self, id: &str) -> AppResult<&AiConnection> {
+        self.ai_connections
+            .iter()
+            .find(|connection| connection.id == id)
+            .ok_or_else(|| AppError::new(format!("LLM provider '{id}' no longer exists")))
+    }
+
+    /// Adds or replaces `connection`; the first one saved becomes active. When
+    /// the active connection is edited, its model follows the new default if it
+    /// was the old default or the provider/endpoint changed.
+    pub fn put_ai_connection(&mut self, connection: AiConnection) {
+        let previous = self.ai_connections.iter().find(|item| item.id == connection.id);
+        if let (Some(previous), Some(active)) = (previous, self.ai_active.as_mut()) {
+            let moved = previous.provider != connection.provider || previous.base_url != connection.base_url;
+            if active.connection_id == connection.id && (moved || active.model == previous.default_model) {
+                active.model = connection.default_model.clone();
+            }
+        }
+        upsert(&mut self.ai_connections, connection, |item| item.id.as_str());
+        self.repair_ai_active();
+    }
+
+    pub fn remove_ai_connection(&mut self, id: &str) {
+        self.ai_connections.retain(|connection| connection.id != id);
+        self.repair_ai_active();
+    }
+
+    pub fn set_ai_active(&mut self, connection_id: &str, model: &str) -> AppResult<()> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(AppError::new("Model is required"));
+        }
+        self.ai_connection(connection_id)?;
+        self.ai_active = Some(AiActive {
+            connection_id: connection_id.to_owned(),
+            model: model.to_owned(),
+        });
+        Ok(())
+    }
+
+    /// Points `ai_active` at an existing connection (the first one, with its
+    /// default model, when the active one is gone), or clears it when none is left.
+    fn repair_ai_active(&mut self) {
+        let valid = self
+            .ai_active
+            .as_ref()
+            .is_some_and(|active| self.ai_connections.iter().any(|connection| connection.id == active.connection_id));
+        if !valid {
+            self.ai_active = self.ai_connections.first().map(|connection| AiActive {
+                connection_id: connection.id.clone(),
+                model: connection.default_model.clone(),
+            });
+        }
+    }
 }
 
 fn missing_workspace(id: &str) -> AppError {
@@ -381,4 +459,53 @@ fn config_path() -> AppResult<PathBuf> {
 fn write_config(path: &Path, config: &AppConfig) -> AppResult<()> {
     fs::write(path, serde_json::to_string_pretty(config)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrates_legacy_ai_setting_into_an_active_connection() {
+        let config: AppConfig = serde_json::from_str(r#"{ "ai": { "provider": "anthropic", "baseUrl": "", "model": "claude-x" } }"#).unwrap();
+        assert_eq!(config.ai_connections.len(), 1);
+        let connection = &config.ai_connections[0];
+        assert_eq!((connection.id.as_str(), connection.name.as_str(), connection.default_model.as_str()), ("default", "Claude", "claude-x"));
+        let active = config.ai_active.as_ref().unwrap();
+        assert_eq!((active.connection_id.as_str(), active.model.as_str()), ("default", "claude-x"));
+        let saved = serde_json::to_value(&config).unwrap();
+        assert!(saved.get("ai").is_none());
+        assert_eq!(saved["aiActive"]["connectionId"], "default");
+    }
+
+    #[test]
+    fn removing_the_active_connection_activates_the_next() {
+        let mut config = AppConfig::default();
+        assert!(config.ai_active.is_none());
+        for id in ["a", "b"] {
+            config.put_ai_connection(AiConnection { id: id.into(), name: id.into(), provider: Default::default(), base_url: String::new(), default_model: format!("{id}-model") });
+        }
+        assert_eq!(config.ai_active.as_ref().unwrap().connection_id, "a");
+        config.set_ai_active("a", "other").unwrap();
+        assert!(config.set_ai_active("missing", "x").is_err());
+        config.remove_ai_connection("a");
+        let active = config.ai_active.as_ref().unwrap();
+        assert_eq!((active.connection_id.as_str(), active.model.as_str()), ("b", "b-model"));
+        config.remove_ai_connection("b");
+        assert!(config.ai_active.is_none());
+    }
+
+    #[test]
+    fn editing_the_active_connection_follows_its_new_default() {
+        let mut config = AppConfig::default();
+        let connection = AiConnection { id: "a".into(), name: "A".into(), provider: Default::default(), base_url: String::new(), default_model: "m1".into() };
+        config.put_ai_connection(connection.clone());
+        config.put_ai_connection(AiConnection { default_model: "m2".into(), ..connection.clone() });
+        assert_eq!(config.ai_active.as_ref().unwrap().model, "m2");
+        config.set_ai_active("a", "picked").unwrap();
+        config.put_ai_connection(AiConnection { name: "Renamed".into(), default_model: "m2".into(), ..connection.clone() });
+        assert_eq!(config.ai_active.as_ref().unwrap().model, "picked");
+        config.put_ai_connection(AiConnection { provider: crate::ai::AiProvider::Openai, default_model: "gpt".into(), ..connection });
+        assert_eq!(config.ai_active.as_ref().unwrap().model, "gpt");
+    }
 }

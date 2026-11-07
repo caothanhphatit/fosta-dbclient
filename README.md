@@ -45,6 +45,14 @@ Xem nhanh giao diện trong trình duyệt, không cần MariaDB (backend đư�
 npm run dev
 ```
 
+Database test bằng Docker (MariaDB 11.8 `shop` có cột vector, SQL Server `ERP`, MongoDB `events`, đều có dữ liệu giả; tài khoản ghi trong `dev/docker-compose.yml`):
+
+```powershell
+docker compose -f dev/docker-compose.yml up -d
+sh dev/seed-mssql.sh
+cd src-tauri; cargo test live_ -- --ignored --test-threads=1
+```
+
 Build file `.exe` (không cần installer):
 
 ```powershell

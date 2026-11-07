@@ -5,6 +5,7 @@ import { clamp, copyText, h, icon } from "./dom";
 import { EXPORT_LABELS, exportRows, type ExportFormat } from "./exporters";
 import { rowKey } from "./sql";
 import type { Cell, CellValue, ColumnMeta, RowChange } from "./types";
+import "./grid-virtual.css";
 
 export interface SortState {
   column: string;
@@ -44,6 +45,15 @@ type RowState = "clean" | "modified" | "new" | "deleted";
 const PREVIEW_LIMIT = 300;
 const FILTER_DEBOUNCE_MS = 350;
 const TOOLTIP_THRESHOLD = 60;
+/** Rows rendered beyond the viewport on each side. */
+const OVERSCAN = 12;
+/** Window bounds snap to this many rows (even, so zebra striping keeps its parity). */
+const WINDOW_CHUNK = 16;
+/** Viewport assumed before the grid is attached and sized. */
+const DEFAULT_VIEWPORT = 800;
+/** Row height (26px cell incl. its 1px border), refined by measuring once. */
+let rowHeight = 26;
+let rowHeightMeasured = false;
 const MOVES: Record<string, Position> = {
   ArrowUp: { row: -1, column: 0 },
   ArrowDown: { row: 1, column: 0 },
@@ -75,6 +85,22 @@ export function textColumn(name: string): ColumnMeta {
 
 const EXPORT_FORMATS: ExportFormat[] = ["csv", "json", "markdown", "insert"];
 
+type TypeKind = "number" | "text" | "date" | "bool" | "json" | "binary" | "vector";
+
+const TYPE_LABELS: Record<TypeKind, string> = { number: "123", text: "abc", date: "date", bool: "bool", json: "json", binary: "bin", vector: "vec" };
+
+/** Coarse family of a column type, for the badge under its name. */
+function typeKind(column: ColumnMeta): TypeKind {
+  const type = column.typeName.toLowerCase();
+  if (column.vectorDims != null) return "vector";
+  if (/^(bit|bool|boolean|tinyint\(1\))/.test(type)) return "bool";
+  if (/date|time|year/.test(type)) return "date";
+  if (/json|object|array|document/.test(type)) return "json";
+  if (column.binary || /blob|binary|image|objectid/.test(type)) return "binary";
+  if (column.numeric) return "number";
+  return "text";
+}
+
 export class DataGrid {
   readonly element: HTMLElement;
   private setup: GridSetup = gridSetup([], []);
@@ -84,12 +110,26 @@ export class DataGrid {
   private editing = false;
   private filters: ColumnFilters = {};
   private visible: number[] = [];
+  /** Row index -> position in `visible`. */
+  private visiblePosition = new Map<number, number>();
   private pendingFilterFocus: string | null = null;
   private readonly onChange: () => void;
+  // Virtualization: only visible positions [windowStart, windowEnd) have <tr> elements.
+  private windowStart = 0;
+  private windowEnd = 0;
+  private topSpacer: HTMLTableCellElement = h("td");
+  private bottomSpacer: HTMLTableCellElement = h("td");
+  private headerCells: HTMLElement[] = [];
+  private columnWidths: number[] = [];
+  private frame: number | null = null;
+  private editingRow: number | null = null;
+  private commitEdit: (() => void) | null = null;
 
   constructor(onChange: () => void = () => undefined) {
     this.onChange = onChange;
     this.element = h("div", { class: "grid", tabIndex: 0 });
+    this.element.addEventListener("scroll", () => this.scheduleWindow(), { passive: true });
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => this.scheduleWindow()).observe(this.element);
     this.element.addEventListener("keydown", (event) => this.handleKey(event));
     this.element.addEventListener("mousedown", (event) => this.handlePointer(event));
     this.element.addEventListener("dblclick", (event) => this.handleDoubleClick(event));
@@ -108,6 +148,11 @@ export class DataGrid {
 
   selectedRow(): Cell[] | null {
     return this.selection ? this.rows[this.selection.row]?.current ?? null : null;
+  }
+
+  /** Rows currently shown (after client-side filters), as edited. */
+  pageRows(): Cell[][] {
+    return this.visibleRows();
   }
 
   exportPage(format: ExportFormat): string {
@@ -161,6 +206,18 @@ export class DataGrid {
     return this.rows.some((row) => rowState(row) !== "clean");
   }
 
+  /** Pending edits by kind, for the bar under the grid. */
+  changeSummary(): { updated: number; inserted: number; deleted: number } {
+    const summary = { updated: 0, inserted: 0, deleted: 0 };
+    for (const row of this.rows) {
+      const state = rowState(row);
+      if (state === "modified") summary.updated += 1;
+      else if (state === "new") summary.inserted += 1;
+      else if (state === "deleted") summary.deleted += 1;
+    }
+    return summary;
+  }
+
   changes(): RowChange[] {
     return this.rows.flatMap((row) => this.changeOf(row));
   }
@@ -169,9 +226,9 @@ export class DataGrid {
     if (!this.setup.editable) return;
     const row: GridRow = { original: null, current: this.setup.columns.map(() => null), deleted: false, element: null };
     const index = this.rows.push(row) - 1;
-    this.visible.push(index);
-    this.tbody.append(this.renderRow(row, index));
+    this.visiblePosition.set(index, this.visible.push(index) - 1);
     this.element.querySelector(".grid-empty")?.remove();
+    this.updateWindow(true);
     this.select({ row: index, column: 0 });
     this.onChange();
   }
@@ -211,15 +268,137 @@ export class DataGrid {
 
   private render(): void {
     this.visible = this.computeVisible();
-    const header = h("tr", {}, h("th", { class: "row-number" }), ...this.setup.columns.map((column) => this.headerCell(column)));
+    this.visiblePosition = new Map(this.visible.map((index, position) => [index, position]));
+    this.headerCells = [h("th", { class: "row-number" }), ...this.setup.columns.map((column) => this.headerCell(column))];
+    this.columnWidths = this.headerCells.map(() => 0);
+    const header = h("tr", {}, ...this.headerCells);
     const filterRow = this.filtersEnabled ? this.filterRow() : null;
     this.tbody = h("tbody");
     for (const row of this.rows) row.element = null;
-    for (const index of this.visible) this.tbody.append(this.renderRow(this.rows[index], index));
-    const table = h("table", { class: "grid-table" }, h("thead", {}, header, filterRow), this.tbody);
+    this.editingRow = null;
+    this.commitEdit = null;
+    this.windowStart = 0;
+    this.windowEnd = 0;
+    const span = this.setup.columns.length + 1;
+    this.topSpacer = h("td", { colspan: span });
+    this.bottomSpacer = h("td", { colspan: span });
+    const table = h(
+      "table",
+      { class: "grid-table" },
+      h("thead", {}, header, filterRow),
+      h("tbody", { class: "grid-spacer", "aria-hidden": "true" }, h("tr", {}, this.topSpacer)),
+      this.tbody,
+      h("tbody", { class: "grid-spacer", "aria-hidden": "true" }, h("tr", {}, this.bottomSpacer)),
+    );
     const empty = this.visible.length === 0 ? h("div", { class: "grid-empty" }, this.emptyMessage()) : null;
     this.element.replaceChildren(table, ...(empty ? [empty] : []));
+    this.updateWindow(true);
     this.restoreFilterFocus();
+  }
+
+  private scheduleWindow(): void {
+    if (this.frame !== null) return;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = null;
+      this.updateWindow(false);
+    });
+  }
+
+  /** Visible positions that should have rows given the current scroll offset. */
+  private windowRange(): { start: number; end: number } {
+    const total = this.visible.length;
+    const viewport = this.element.clientHeight || DEFAULT_VIEWPORT;
+    const first = Math.floor(this.element.scrollTop / rowHeight);
+    const last = first + Math.ceil(viewport / rowHeight);
+    const start = Math.max(0, Math.floor((first - OVERSCAN) / WINDOW_CHUNK) * WINDOW_CHUNK);
+    const end = Math.min(total, Math.ceil((last + OVERSCAN) / WINDOW_CHUNK) * WINDOW_CHUNK);
+    return { start: Math.min(start, end), end };
+  }
+
+  /** Renders the rows in view (plus overscan) and sizes the spacers for the rest. */
+  private updateWindow(force: boolean): void {
+    const { start, end } = this.windowRange();
+    if (force || start !== this.windowStart || end !== this.windowEnd) this.applyWindow(start, end);
+    this.topSpacer.style.height = `${this.windowStart * rowHeight}px`;
+    this.bottomSpacer.style.height = `${(this.visible.length - this.windowEnd) * rowHeight}px`;
+    if (!rowHeightMeasured && this.element.isConnected) this.measureRowHeight();
+  }
+
+  private applyWindow(start: number, end: number): void {
+    // An open editor would lose focus with its row; commit it first.
+    if (this.editingRow !== null) {
+      const position = this.visiblePosition.get(this.editingRow);
+      if (position === undefined || position < start || position >= end) this.commitEdit?.();
+    }
+    const oldStart = this.windowStart;
+    const oldEnd = this.windowEnd;
+    const keepStart = Math.max(start, oldStart);
+    const keepEnd = Math.min(end, oldEnd);
+    for (let position = oldStart; position < oldEnd; position += 1) {
+      if (position >= keepStart && position < keepEnd) continue;
+      const row = this.rows[this.visible[position]];
+      if (!row) continue;
+      row.element?.remove();
+      row.element = null;
+    }
+    const build = (from: number, to: number): DocumentFragment => {
+      const fragment = document.createDocumentFragment();
+      for (let position = from; position < to; position += 1) {
+        const index = this.visible[position];
+        const row = this.rows[index];
+        fragment.append(row.element ?? this.renderRow(row, index));
+      }
+      return fragment;
+    };
+    if (keepStart < keepEnd) {
+      this.tbody.prepend(build(start, keepStart));
+      this.tbody.append(build(keepEnd, end));
+    } else {
+      this.tbody.replaceChildren(build(start, end));
+    }
+    this.windowStart = start;
+    this.windowEnd = end;
+    this.lockColumnWidths();
+  }
+
+  /** Columns only grow as new rows scroll in, so the layout does not jitter. */
+  private lockColumnWidths(): void {
+    if (!this.element.isConnected || this.windowEnd === this.windowStart) return;
+    const widths = this.headerCells.map((cell) => Math.ceil(cell.getBoundingClientRect().width));
+    widths.forEach((width, column) => {
+      if (width <= this.columnWidths[column]) return;
+      this.columnWidths[column] = width;
+      this.headerCells[column].style.minWidth = `${width}px`;
+    });
+  }
+
+  private measureRowHeight(): void {
+    const first = this.tbody.rows[0];
+    const height = first?.getBoundingClientRect().height ?? 0;
+    if (height <= 0) return;
+    rowHeightMeasured = true;
+    if (Math.abs(height - rowHeight) < 0.01) return;
+    rowHeight = height;
+    this.updateWindow(true);
+  }
+
+  /** Scrolls a row that is outside the rendered window into it. */
+  private ensureRendered(index: number): void {
+    if (this.rows[index]?.element) return;
+    const position = this.visiblePosition.get(index);
+    if (position === undefined) return;
+    const top = position * rowHeight;
+    const header = this.element.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+    if (top < this.element.scrollTop) this.element.scrollTop = top;
+    else this.element.scrollTop = Math.max(0, top + rowHeight + header - (this.element.clientHeight || DEFAULT_VIEWPORT));
+    this.updateWindow(false);
+    if (!this.rows[index]?.element) {
+      // Scrolling was clamped (e.g. a detached grid); render a window around the row.
+      const start = Math.max(0, Math.floor((position - OVERSCAN) / WINDOW_CHUNK) * WINDOW_CHUNK);
+      this.applyWindow(start, Math.min(this.visible.length, start + WINDOW_CHUNK * 4));
+      this.topSpacer.style.height = `${this.windowStart * rowHeight}px`;
+      this.bottomSpacer.style.height = `${(this.visible.length - this.windowEnd) * rowHeight}px`;
+    }
   }
 
   private emptyMessage(): string {
@@ -273,10 +452,12 @@ export class DataGrid {
     const sort = this.setup.sort?.column === column.name ? (this.setup.sort.descending ? "▼" : "▲") : "";
     const isKey = column.primary || this.setup.primaryKey.includes(column.name);
     const onSort = this.setup.onSort;
+    const kind = typeKind(column);
     const cell = h(
       "th",
-      { class: onSort ? "sortable" : "", title: column.typeName ? `${column.name} · ${column.typeName}` : column.name },
-      h("div", { class: "th-content" }, isKey ? icon("key", "key-icon") : null, h("span", {}, column.name), h("span", { class: "sort-mark" }, sort)),
+      { class: onSort ? "sortable" : "", title: column.typeName ? `${column.name} · ${column.typeName}${isKey ? " · primary key" : ""}` : column.name },
+      h("div", { class: "th-content" }, isKey ? icon("key", "key-icon") : null, h("span", { class: "th-name" }, column.name), h("span", { class: "sort-mark" }, sort)),
+      column.typeName ? h("div", { class: "th-type" }, h("span", { class: `type-badge type-${kind}` }, TYPE_LABELS[kind]), h("span", { class: "th-type-name" }, column.typeName)) : null,
     );
     if (onSort) cell.addEventListener("click", () => onSort(column.name));
     return cell;
@@ -284,13 +465,15 @@ export class DataGrid {
 
   private renderRow(row: GridRow, index: number): HTMLTableRowElement {
     const label = row.original ? String(this.setup.rowOffset + index + 1) : "*";
+    const current = this.selection?.row === index ? " current" : "";
     const element = h(
       "tr",
-      { class: `state-${rowState(row)}`, "data-row": index },
+      { class: `state-${rowState(row)}${current}`, "data-row": index },
       h("td", { class: "row-number" }, label),
       ...row.current.map((value, column) => this.renderCell(row, value, column)),
     );
     row.element = element;
+    if (current) element.cells[this.selection!.column + 1]?.classList.add("selected");
     return element;
   }
 
@@ -310,9 +493,11 @@ export class DataGrid {
 
   private refreshRow(index: number): void {
     const row = this.rows[index];
-    const previous = row.element;
+    const previous = row?.element;
+    // Rows outside the rendered window are drawn fresh when they scroll in.
+    if (!previous) return;
     const next = this.renderRow(row, index);
-    previous?.replaceWith(next);
+    previous.replaceWith(next);
     if (this.selection?.row === index) this.cellAt(this.selection)?.classList.add("selected");
   }
 
@@ -321,12 +506,17 @@ export class DataGrid {
     const column = clamp(position.column, 0, this.setup.columns.length - 1);
     if (row < 0 || column < 0) return;
     const rowChanged = this.selection?.row !== row;
+    this.ensureRendered(row);
     this.cellAt(this.selection)?.classList.remove("selected");
     this.selection = { row, column };
     const cell = this.cellAt(this.selection);
     cell?.classList.add("selected");
     cell?.scrollIntoView({ block: "nearest", inline: "nearest" });
-    if (rowChanged) this.setup.onSelect?.(this.rows[row].current);
+    if (rowChanged) {
+      for (const element of this.tbody.querySelectorAll("tr.current")) element.classList.remove("current");
+      this.rows[row].element?.classList.add("current");
+      this.setup.onSelect?.(this.rows[row].current);
+    }
   }
 
   private cellAt(position: Position | null): HTMLElement | null {
@@ -406,7 +596,7 @@ export class DataGrid {
     const move = MOVES[event.key];
     if (move) {
       event.preventDefault();
-      const position = this.visible.indexOf(this.selection.row);
+      const position = this.visiblePosition.get(this.selection.row) ?? -1;
       const target = this.visible[clamp(position + move.row, 0, this.visible.length - 1)];
       if (target !== undefined) this.select({ row: target, column: this.selection.column + move.column });
       return;
@@ -435,6 +625,8 @@ export class DataGrid {
       if (finished) return;
       finished = true;
       this.editing = false;
+      this.editingRow = null;
+      this.commitEdit = null;
       if (commit && input.value !== (original ?? "")) row.current[position.column] = input.value;
       this.refreshRow(position.row);
       if (refocus) this.element.focus({ preventScroll: true });
@@ -452,6 +644,8 @@ export class DataGrid {
     });
     input.addEventListener("blur", () => finish(true, null, false));
     this.editing = true;
+    this.editingRow = position.row;
+    this.commitEdit = () => finish(true, null, true);
     cell.classList.add("editing");
     cell.replaceChildren(input);
     input.focus();

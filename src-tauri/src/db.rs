@@ -26,6 +26,7 @@ use crate::{
     error::{AppError, AppResult},
     lock::lock,
     relations::{self, TableRelations},
+    schema::{BulkSchema, SchemaColumn},
     vector,
 };
 
@@ -253,6 +254,13 @@ impl Driver for MysqlConnection {
         Ok(conn.query("SHOW DATABASES").await?)
     }
 
+    async fn create_database(&self, name: &str, _first_collection: Option<&str>) -> AppResult<()> {
+        let mut conn = self.pooled().await?;
+        let sql = format!("CREATE DATABASE {} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", quote_ident(name));
+        conn.query_drop(sql).await?;
+        Ok(())
+    }
+
     async fn list_tables(&self, database: &str) -> AppResult<Vec<TableInfo>> {
         let mut conn = self.pooled().await?;
         let rows = text_rows(
@@ -399,6 +407,39 @@ impl Driver for MysqlConnection {
     async fn table_relations(&self, database: &str, table: &str) -> AppResult<TableRelations> {
         let mut conn = self.pooled().await?;
         relations::table_relations(&mut conn, database, table).await
+    }
+
+    async fn schema_bulk(&self, database: &str) -> AppResult<Option<BulkSchema>> {
+        let tables = self.list_tables(database).await?;
+        let mut conn = self.pooled().await?;
+        let column_rows = text_rows(
+            &mut conn,
+            "SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY \
+             FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME, ORDINAL_POSITION",
+            (database.to_owned(),),
+        )
+        .await?;
+        let mut columns: HashMap<String, Vec<SchemaColumn>> = HashMap::new();
+        for row in &column_rows {
+            columns.entry(row.text(0)).or_default().push(SchemaColumn {
+                name: row.text(1),
+                column_type: row.text(2),
+                nullable: row.text(3) == "YES",
+                primary: row.text(4).eq_ignore_ascii_case("PRI"),
+            });
+        }
+        let relation_rows = text_rows(
+            &mut conn,
+            "SELECT CONSTRAINT_NAME, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, \
+                    REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME \
+             FROM information_schema.KEY_COLUMN_USAGE \
+             WHERE TABLE_SCHEMA = ? AND REFERENCED_TABLE_NAME IS NOT NULL \
+             ORDER BY TABLE_SCHEMA, TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION",
+            (database.to_owned(),),
+        )
+        .await?;
+        let relations = relations::group_relations(&relation_rows);
+        Ok(Some(BulkSchema { tables, columns, relations }))
     }
 
     async fn close(&self) {

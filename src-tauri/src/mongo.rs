@@ -62,6 +62,15 @@ impl Driver for MongoConnection {
         Ok(self.client.list_database_names().await?)
     }
 
+    async fn create_database(&self, name: &str, first_collection: Option<&str>) -> AppResult<()> {
+        let collection = first_collection
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AppError::new("MongoDB creates a database together with its first collection; enter a collection name"))?;
+        self.client.database(name).create_collection(collection).await?;
+        Ok(())
+    }
+
     async fn list_tables(&self, database: &str) -> AppResult<Vec<TableInfo>> {
         let db = self.client.database(database);
         let mut names = db.list_collection_names().await?;
@@ -225,7 +234,16 @@ impl Driver for MongoConnection {
 async fn build_options(profile: &ConnectionProfile, password: &str) -> AppResult<ClientOptions> {
     let uri = profile.options.get("uri").map(|value| value.trim()).filter(|value| !value.is_empty());
     let mut options = match uri {
-        Some(uri) => ClientOptions::parse(uri).await?,
+        Some(uri) => {
+            // The dialog stores the URI without its password (that lives in Credential Manager).
+            let mut options = ClientOptions::parse(uri).await?;
+            if let Some(credential) = options.credential.as_mut() {
+                if credential.password.is_none() && !password.is_empty() {
+                    credential.password = Some(password.to_owned());
+                }
+            }
+            options
+        }
         None => {
             let address = ServerAddress::Tcp {
                 host: profile.host.clone(),

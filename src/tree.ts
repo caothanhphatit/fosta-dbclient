@@ -3,9 +3,17 @@ import { showContextMenu, type MenuItem } from "./contextMenu";
 import { promptPassword, toast } from "./dialogs";
 import { copyText, formatCompact, h, icon, type IconName } from "./dom";
 import { describeServer, driverOf } from "./drivers";
+import { databaseDialog } from "./forms";
 import type { AppConfig, ConnectionProfile, TableInfo, TableTarget } from "./types";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "error";
+
+const STATUS_LABELS: Record<ConnectionState, string> = {
+  idle: "Disconnected",
+  connecting: "Connecting…",
+  connected: "Connected",
+  error: "Connection failed",
+};
 
 interface DatabaseNode {
   name: string;
@@ -43,12 +51,17 @@ interface RowSpec {
   onToggle?: () => void;
   onOpen: () => void;
   menu: () => MenuItem[];
+  /** Connection status dot drawn on the icon. */
+  status?: ConnectionState;
+  /** Small button shown on hover at the end of the row. */
+  action?: { icon: IconName; title: string; run: () => void };
 }
 
 export interface TreeHost {
   openTable(target: TableTarget): void;
   openDesign(target: TableTarget): void;
   openQuery(connectionId: string, database: string | null, initialSql?: string): void;
+  openDiagram(profile: ConnectionProfile, database: string): void;
   editConnection(profile: ConnectionProfile): void;
   deleteConnection(profile: ConnectionProfile): void;
   connectionClosed(connectionId: string): void;
@@ -95,6 +108,11 @@ export class ConnectionTree {
   }
 
   /** Ids of every connection (in any workspace) that is currently connected. */
+  /** Profile of a connection in the current workspace, if known. */
+  profileOf(connectionId: string): ConnectionProfile | null {
+    return this.nodeOf(connectionId)?.profile ?? null;
+  }
+
   /** Version reported by a connected server, or null when not connected. */
   serverVersion(connectionId: string): string | null {
     const node = this.nodeOf(connectionId);
@@ -174,6 +192,18 @@ export class ConnectionTree {
     this.render();
   }
 
+  private async createDatabase(node: ConnectionNode): Promise<void> {
+    const created = await databaseDialog(node.profile);
+    if (!created) return;
+    await this.loadDatabases(node);
+    const database = node.databases?.find((item) => item.name === created);
+    if (database) {
+      database.expanded = true;
+      await this.loadTables(node, database);
+    }
+    this.host.status(`Created database ${created} on ${node.profile.name}`);
+  }
+
   private async loadTables(node: ConnectionNode, database: DatabaseNode): Promise<void> {
     database.loading = true;
     this.render();
@@ -224,6 +254,7 @@ export class ConnectionTree {
       tag: driver.label,
       title: node.message ?? `${driver.label} · ${node.profile.user}@${node.profile.host}:${node.profile.port}`,
       className: `connection driver-${driver.id} state-${node.state}`,
+      status: node.state,
       expanded: connected && node.expanded,
       onToggle: () => this.toggleConnection(node),
       onOpen: () => this.toggleConnection(node),
@@ -249,6 +280,7 @@ export class ConnectionTree {
       onToggle: () => this.toggleDatabase(node, database),
       onOpen: () => this.toggleDatabase(node, database),
       menu: () => this.databaseMenu(node, database),
+      action: { icon: "diagram", title: "ER diagram", run: () => this.host.openDiagram(node.profile, database.name) },
     });
     const showChildren = database.expanded || (query !== "" && database.tables !== null);
     if (!showChildren) return [row];
@@ -289,11 +321,23 @@ export class ConnectionTree {
       "div",
       { class: classes.filter(Boolean).join(" "), "data-key": spec.key, title: spec.title ?? null, style: `padding-left:${6 + spec.depth * 16}px` },
       chevron,
-      icon(spec.iconName),
+      spec.status
+        ? h("span", { class: "tree-icon-wrap" }, icon(spec.iconName), h("span", { class: `conn-dot conn-${spec.status}`, title: STATUS_LABELS[spec.status] }))
+        : icon(spec.iconName),
       h("span", { class: "tree-label" }, spec.label),
       spec.tag ? h("span", { class: "tree-tag" }, spec.tag) : null,
       spec.meta ? h("span", { class: "tree-meta" }, spec.meta) : null,
     );
+    if (spec.action) {
+      const action = spec.action;
+      const button = h("button", { class: "tree-action", type: "button", title: action.title }, icon(action.icon));
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        action.run();
+      });
+      button.addEventListener("dblclick", (event) => event.stopPropagation());
+      element.append(button);
+    }
     element.addEventListener("click", () => this.select(spec.key));
     element.addEventListener("dblclick", spec.onOpen);
     element.addEventListener("contextmenu", (event) => {
@@ -318,6 +362,7 @@ export class ConnectionTree {
         : { label: "Connect", icon: "plug", disabled: node.state === "connecting", run: () => void this.connect(node) },
       { label: "New query", icon: "query", disabled: !connected, run: () => this.host.openQuery(node.profile.id, node.profile.database) },
       { label: "Refresh", icon: "refresh", disabled: !connected, run: () => void this.loadDatabases(node) },
+      { label: "New database…", icon: "database", disabled: !connected, run: () => void this.createDatabase(node) },
       "separator",
       { label: "Edit connection…", icon: "edit", run: () => this.host.editConnection(node.profile) },
       { label: "Delete connection", icon: "trash", danger: true, run: () => this.host.deleteConnection(node.profile) },
@@ -327,6 +372,7 @@ export class ConnectionTree {
   private databaseMenu(node: ConnectionNode, database: DatabaseNode): MenuItem[] {
     return [
       { label: "New query", icon: "query", run: () => this.host.openQuery(node.profile.id, database.name) },
+      { label: "ER diagram", icon: "diagram", run: () => this.host.openDiagram(node.profile, database.name) },
       { label: "Refresh tables", icon: "refresh", run: () => void this.loadTables(node, database) },
       "separator",
       { label: "Copy name", icon: "copy", run: () => void copyText(database.name) },

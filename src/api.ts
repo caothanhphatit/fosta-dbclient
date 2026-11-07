@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AiConnection,
   AiSettings,
   AppConfig,
   BrowseRequest,
@@ -13,6 +14,7 @@ import type {
   QueryOutcome,
   RecallReport,
   RowChange,
+  SchemaGraph,
   TableDesign,
   TableInfo,
   TablePage,
@@ -38,6 +40,9 @@ export const api = {
   connect: (id: string, password: string | null) => invoke<string>("connect", { id, password }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   listDatabases: (connectionId: string) => invoke<string[]>("list_databases", { connectionId }),
+  schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),
+  createDatabase: (connectionId: string, name: string, firstCollection: string | null) =>
+    invoke<void>("create_database", { connectionId, name, firstCollection }),
   listTables: (connectionId: string, database: string) =>
     invoke<TableInfo[]>("list_tables", { connectionId, database }),
   describeTable: (connectionId: string, database: string, table: string) =>
@@ -75,10 +80,20 @@ export const api = {
   saveEmbeddingSettings: (settings: EmbeddingSettings | null, apiKey: string | null) =>
     invoke<AppConfig>("save_embedding_settings", { settings, apiKey }),
   testEmbedding: () => invoke<number>("test_embedding"),
-  saveAiSettings: (settings: AiSettings | null, apiKey: string | null) =>
-    invoke<AppConfig>("save_ai_settings", { settings, apiKey }),
-  listAiModels: (settings: AiSettings, apiKey: string | null) => invoke<string[]>("list_ai_models", { settings, apiKey }),
-  testAi: () => invoke<string>("test_ai"),
+  /** Upserts an LLM connection; an empty key keeps the saved one. */
+  saveAiConnection: (connection: AiConnection, apiKey: string | null) =>
+    invoke<AppConfig>("save_ai_connection", { connection, apiKey }),
+  deleteAiConnection: (id: string) => invoke<AppConfig>("delete_ai_connection", { id }),
+  setAiActive: (connectionId: string, model: string) => invoke<AppConfig>("set_ai_active", { connectionId, model }),
+  /** An empty key falls back to the one saved for `connectionId`. */
+  listAiModels: (settings: AiSettings, apiKey: string | null, connectionId: string | null = null) =>
+    invoke<string[]>("list_ai_models", { settings, apiKey, connectionId }),
+  /** One short exchange with the settings as typed (unsaved); an empty key means `connectionId`'s saved one. */
+  testAi: (settings: AiSettings, apiKey: string | null, connectionId: string | null = null) =>
+    invoke<string>("test_ai", { settings, apiKey, connectionId }),
+  /** Writes into Downloads and returns the full path; `base64` for binary data. */
+  saveDownload: (name: string, text: string | null, base64: string | null) => invoke<string>("save_download", { name, text, base64 }),
+  revealFile: (path: string) => invoke<void>("reveal_file", { path }),
   /** Streams the reply through `onEvent`; resolves with the full text. */
   aiChat: (request: ChatRequest, onEvent: (event: ChatEvent) => void) => {
     const channel = new Channel<ChatEvent>();

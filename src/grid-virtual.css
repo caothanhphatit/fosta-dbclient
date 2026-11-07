@@ -1,0 +1,16 @@
+/* Virtualized grid: spacer bodies stand in for rows outside the viewport. */
+.grid-table tbody.grid-spacer td {
+  height: 0;
+  max-width: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.grid {
+  overflow-anchor: none;
+}
+
+.grid {
+  overflow-anchor: none;
+}

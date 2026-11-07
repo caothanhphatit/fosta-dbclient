@@ -2,7 +2,7 @@
 //! `schema.table` inside a database, so one tree level maps to `[db].[schema].[table]`.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -25,6 +25,7 @@ use crate::{
     error::{AppError, AppResult},
     lock::lock,
     relations::{self, TableRelations},
+    schema::{BulkSchema, SchemaColumn},
 };
 
 type TdsClient = Client<Compat<TcpStream>>;
@@ -91,6 +92,17 @@ impl Driver for MssqlConnection {
             Box::pin(async move {
                 let rows = fetch(client, "SELECT name FROM sys.databases WHERE state = 0 ORDER BY name", &[]).await?;
                 Ok(rows.iter().map(|row| row.text(0)).collect())
+            })
+        })
+        .await
+    }
+
+    async fn create_database(&self, name: &str, _first_collection: Option<&str>) -> AppResult<()> {
+        let sql = format!("CREATE DATABASE {}", bracket(name));
+        self.with_main(move |client| {
+            Box::pin(async move {
+                client.simple_query(sql).await?.into_results().await?;
+                Ok(())
             })
         })
         .await
@@ -295,6 +307,74 @@ impl Driver for MssqlConnection {
                     })
                     .collect();
                 Ok(relations::split_relations(relations::group_relations(&folded), &database, &object))
+            })
+        })
+        .await
+    }
+
+    async fn schema_bulk(&self, database: &str) -> AppResult<Option<BulkSchema>> {
+        let tables = self.list_tables(database).await?;
+        let db = bracket(database);
+        let columns_sql = format!(
+            "SELECT c.TABLE_SCHEMA, c.TABLE_NAME, c.COLUMN_NAME, c.DATA_TYPE, c.CHARACTER_MAXIMUM_LENGTH, \
+                    c.NUMERIC_PRECISION, c.NUMERIC_SCALE, c.IS_NULLABLE \
+             FROM {db}.INFORMATION_SCHEMA.COLUMNS c \
+             ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION"
+        );
+        let keys_sql = format!(
+            "SELECT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.COLUMN_NAME FROM {db}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc \
+             JOIN {db}.INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu \
+               ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA AND tc.TABLE_NAME = kcu.TABLE_NAME \
+             WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'"
+        );
+        let relations_sql = format!(
+            "SELECT fk.name, SCHEMA_NAME(tp.schema_id), tp.name, cp.name, SCHEMA_NAME(tr.schema_id), tr.name, cr.name \
+             FROM {db}.sys.foreign_keys fk \
+             JOIN {db}.sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id \
+             JOIN {db}.sys.tables tp ON fkc.parent_object_id = tp.object_id \
+             JOIN {db}.sys.columns cp ON cp.object_id = tp.object_id AND cp.column_id = fkc.parent_column_id \
+             JOIN {db}.sys.tables tr ON fkc.referenced_object_id = tr.object_id \
+             JOIN {db}.sys.columns cr ON cr.object_id = tr.object_id AND cr.column_id = fkc.referenced_column_id \
+             ORDER BY SCHEMA_NAME(tp.schema_id), tp.name, fk.name, fkc.constraint_column_id"
+        );
+        let database = database.to_owned();
+        self.with_main(|client| {
+            Box::pin(async move {
+                let column_rows = fetch(client, &columns_sql, &[]).await?;
+                let keys: HashSet<(String, String, String)> = fetch(client, &keys_sql, &[])
+                    .await?
+                    .iter()
+                    .map(|row| (row.text(0), row.text(1), row.text(2)))
+                    .collect();
+                let relation_rows = fetch(client, &relations_sql, &[]).await?;
+                let mut columns: HashMap<String, Vec<SchemaColumn>> = HashMap::new();
+                for row in &column_rows {
+                    let (schema, table, name) = (row.text(0), row.text(1), row.text(2));
+                    let primary = keys.contains(&(schema.clone(), table.clone(), name.clone()));
+                    columns.entry(object_name(&schema, &table)).or_default().push(SchemaColumn {
+                        column_type: type_label(&row.text(3), row.optional(4), row.optional(5), row.optional(6)),
+                        nullable: row.text(7) == "YES",
+                        primary,
+                        name,
+                    });
+                }
+                // Fold schema into the table name so the UI addresses it the same way as the tree.
+                let folded: Vec<TextRow> = relation_rows
+                    .into_iter()
+                    .map(|row| {
+                        TextRow(vec![
+                            row.optional(0),
+                            Some(database.clone()),
+                            Some(object_name(&row.text(1), &row.text(2))),
+                            row.optional(3),
+                            Some(database.clone()),
+                            Some(object_name(&row.text(4), &row.text(5))),
+                            row.optional(6),
+                        ])
+                    })
+                    .collect();
+                let relations = relations::group_relations(&folded);
+                Ok(Some(BulkSchema { tables, columns, relations }))
             })
         })
         .await

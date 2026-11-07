@@ -17,6 +17,7 @@ use crate::{
     mongo::MongoConnection,
     mssql::MssqlConnection,
     relations::TableRelations,
+    schema::BulkSchema,
 };
 
 const NEEDS_MYSQL: &str = "This feature needs a MariaDB or MySQL connection";
@@ -24,6 +25,9 @@ const NEEDS_MYSQL: &str = "This feature needs a MariaDB or MySQL connection";
 #[async_trait]
 pub trait Driver: Send + Sync {
     async fn list_databases(&self) -> AppResult<Vec<String>>;
+    /// Creates an empty database. MongoDB only materialises a database with
+    /// a collection in it, so it needs `first_collection`.
+    async fn create_database(&self, name: &str, first_collection: Option<&str>) -> AppResult<()>;
     async fn list_tables(&self, database: &str) -> AppResult<Vec<TableInfo>>;
     async fn describe_table(&self, database: &str, table: &str) -> AppResult<TableDesign>;
     async fn browse_table(&self, request: &BrowseRequest) -> AppResult<TablePage>;
@@ -37,6 +41,11 @@ pub trait Driver: Send + Sync {
     async fn cancel_query(&self, session_id: &str) -> AppResult<()>;
     async fn table_relations(&self, _database: &str, _table: &str) -> AppResult<TableRelations> {
         Ok(TableRelations::default())
+    }
+    /// The whole catalog of a database in a few bulk queries, for the ER diagram.
+    /// `None` makes the caller fall back to per-table describe calls.
+    async fn schema_bulk(&self, _database: &str) -> AppResult<Option<BulkSchema>> {
+        Ok(None)
     }
     /// Releases pools and sockets; the driver is dropped right after.
     async fn close(&self) {}

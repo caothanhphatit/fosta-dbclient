@@ -1,5 +1,5 @@
 import type { IconName } from "./dom";
-import type { AiProvider, AiSettings } from "./types";
+import type { AiConnection, AiProvider, AiSettings } from "./types";
 
 /** What the settings dialog knows about each provider; the backend holds the same default URLs. */
 export interface ProviderPreset {
@@ -25,6 +25,11 @@ export const AI_PROVIDERS: ProviderPreset[] = [
 
 export function providerPreset(value: string | undefined): ProviderPreset {
   return AI_PROVIDERS.find((preset) => preset.value === value) ?? AI_PROVIDERS[0];
+}
+
+/** Request settings for `connection` with `model` (its default model when omitted). */
+export function connectionSettings(connection: AiConnection, model = connection.defaultModel): AiSettings {
+  return { provider: connection.provider, baseUrl: connection.baseUrl, model };
 }
 
 /** The endpoint requests go to: the user's, or the provider's public one. */

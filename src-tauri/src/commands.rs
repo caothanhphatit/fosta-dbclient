@@ -1,13 +1,15 @@
 use tauri::{ipc::Channel, State};
 
 use crate::{
-    ai::{self, AiSettings, ChatEvent, ChatRequest},
+    ai::{self, AiConnection, AiSettings, ChatEvent, ChatRequest},
     config::{AppConfig, ConnectionProfile, WorkspaceMeta},
     db::{BrowseRequest, CellValue, QueryOutcome, RowChange, TableDesign, TableInfo, TablePage},
     drivers,
     embedding::{self, EmbeddingSettings},
     error::{AppError, AppResult, PASSWORD_REQUIRED},
     relations::TableRelations,
+    files,
+    schema,
     secrets,
     tasks::{TaskDef, TaskStatus},
     vector::{self, HealthCheck, QueryVector, RecallReport, VectorInfo, VectorSearchRequest, VectorSearchResult},
@@ -65,6 +67,27 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()>
 #[tauri::command]
 pub async fn list_databases(state: State<'_, AppState>, connection_id: String) -> AppResult<Vec<String>> {
     state.db.driver(&connection_id)?.list_databases().await
+}
+
+/// Tables, columns and foreign keys of one database, for the ER diagram.
+#[tauri::command]
+pub async fn schema_graph(state: State<'_, AppState>, connection_id: String, database: String) -> AppResult<schema::SchemaGraph> {
+    let driver = state.db.driver(&connection_id)?;
+    schema::schema_graph(driver.as_ref(), &database).await
+}
+
+#[tauri::command]
+pub async fn create_database(
+    state: State<'_, AppState>,
+    connection_id: String,
+    name: String,
+    first_collection: Option<String>,
+) -> AppResult<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::new("Database name is required"));
+    }
+    state.db.driver(&connection_id)?.create_database(name, first_collection.as_deref()).await
 }
 
 #[tauri::command]
@@ -316,47 +339,54 @@ async fn embed_text(state: &State<'_, AppState>, text: &str) -> AppResult<Vec<f3
     embedding::embed(&settings, api_key, text).await
 }
 
+/// Adds or updates an LLM connection; an empty key keeps the saved one.
 #[tauri::command]
-pub fn save_ai_settings(
+pub fn save_ai_connection(
     state: State<'_, AppState>,
-    settings: Option<AiSettings>,
+    connection: AiConnection,
     api_key: Option<String>,
 ) -> AppResult<AppConfig> {
-    if let Some(settings) = &settings {
-        if settings.model.trim().is_empty() {
-            return Err(AppError::new("Model is required"));
-        }
-    }
-    match (&settings, api_key.as_deref()) {
-        (None, _) => secrets::forget_password(secrets::AI_ACCOUNT)?,
-        (Some(_), Some(key)) if !key.is_empty() => secrets::save_password(secrets::AI_ACCOUNT, key)?,
-        (Some(_), _) => {}
+    let connection = connection.normalized()?;
+    if let Some(key) = api_key.as_deref().filter(|key| !key.is_empty()) {
+        secrets::save_ai_key(&connection.id, key)?;
     }
     state.config.update(|config| {
-        config.ai = settings;
+        config.put_ai_connection(connection);
         Ok(())
     })
 }
 
-/// Lists the models of `settings` as typed in the dialog (not yet saved);
-/// an empty key falls back to the saved one.
+#[tauri::command]
+pub fn delete_ai_connection(state: State<'_, AppState>, id: String) -> AppResult<AppConfig> {
+    secrets::forget_ai_key(&id)?;
+    state.config.update(|config| {
+        config.remove_ai_connection(&id);
+        Ok(())
+    })
+}
+
+/// Picks the connection and model the chat uses.
+#[tauri::command]
+pub fn set_ai_active(state: State<'_, AppState>, connection_id: String, model: String) -> AppResult<AppConfig> {
+    state.config.update(|config| config.set_ai_active(&connection_id, &model))
+}
+
+/// Lists the models of `settings` as typed in the dialog (not yet saved), or
+/// of a saved connection; an empty key falls back to `connection_id`'s saved one.
 #[tauri::command]
 pub async fn list_ai_models(
-    state: State<'_, AppState>,
     settings: AiSettings,
     api_key: Option<String>,
+    connection_id: Option<String>,
 ) -> AppResult<Vec<String>> {
-    let api_key = match api_key.filter(|key| !key.is_empty()) {
-        Some(key) => Some(key),
-        None => secrets::load_password(secrets::AI_ACCOUNT)?,
-    };
-    let _ = &state;
+    let api_key = draft_key(api_key, connection_id.as_deref())?;
     ai::list_models(&settings, api_key).await
 }
 
+/// "Test connection" in the dialog: tries the settings as typed, before saving.
 #[tauri::command]
-pub async fn test_ai(state: State<'_, AppState>) -> AppResult<String> {
-    let (settings, api_key) = ai_settings(&state)?;
+pub async fn test_ai(settings: AiSettings, api_key: Option<String>, connection_id: Option<String>) -> AppResult<String> {
+    let api_key = draft_key(api_key, connection_id.as_deref())?;
     ai::probe(&settings, api_key).await
 }
 
@@ -367,7 +397,7 @@ pub async fn ai_chat(
     request: ChatRequest,
     on_event: Channel<ChatEvent>,
 ) -> AppResult<String> {
-    let (settings, api_key) = ai_settings(&state)?;
+    let (settings, api_key) = chat_settings(&state.config.snapshot(), &request)?;
     ai::chat(&settings, api_key, &state.db, &state.ai, request, on_event).await
 }
 
@@ -376,13 +406,30 @@ pub fn ai_cancel(state: State<'_, AppState>, id: String) {
     state.ai.cancel(&id);
 }
 
-fn ai_settings(state: &State<'_, AppState>) -> AppResult<(AiSettings, Option<String>)> {
-    let settings = state
-        .config
-        .snapshot()
-        .ai
-        .ok_or_else(|| AppError::new("Set up the assistant first (toolbar → Assistant → settings)"))?;
-    Ok((settings, secrets::load_password(secrets::AI_ACCOUNT)?))
+fn draft_key(supplied: Option<String>, connection_id: Option<&str>) -> AppResult<Option<String>> {
+    match (supplied.filter(|key| !key.is_empty()), connection_id) {
+        (Some(key), _) => Ok(Some(key)),
+        (None, Some(id)) => secrets::load_ai_key(id),
+        (None, None) => Ok(None),
+    }
+}
+
+/// Provider, endpoint, model and key for a chat request: the request's own
+/// connection/model when given, otherwise the active ones.
+fn chat_settings(config: &AppConfig, request: &ChatRequest) -> AppResult<(AiSettings, Option<String>)> {
+    let active = config.ai_active.as_ref();
+    let connection_id = request
+        .connection_id
+        .as_deref()
+        .or(active.map(|active| active.connection_id.as_str()))
+        .ok_or_else(|| AppError::new("Add an LLM provider first (Assistant → Set up…)"))?;
+    let connection = config.ai_connection(connection_id)?;
+    let model = match (request.model.as_deref().map(str::trim).filter(|model| !model.is_empty()), active) {
+        (Some(model), _) => model,
+        (None, Some(active)) if active.connection_id == connection.id => active.model.as_str(),
+        (None, _) => connection.default_model.as_str(),
+    };
+    Ok((connection.settings(model), secrets::load_ai_key(&connection.id)?))
 }
 
 fn resolve_password(connection_id: &str, supplied: Option<String>) -> AppResult<String> {
@@ -398,4 +445,45 @@ fn remember_password(profile: &ConnectionProfile, password: Option<&str>) -> App
         (true, None) => Ok(()),
         (false, _) => secrets::forget_password(&profile.id),
     }
+}
+
+/// Saves an export into Downloads; `base64` is for binary content such as PNG.
+#[tauri::command]
+pub fn save_download(name: String, text: Option<String>, base64: Option<String>) -> AppResult<String> {
+    let bytes = match (text, base64) {
+        (Some(text), _) => text.into_bytes(),
+        (None, Some(encoded)) => decode_base64(&encoded)?,
+        (None, None) => return Err(AppError::new("Nothing to save")),
+    };
+    files::save_download(&name, &bytes)
+}
+
+#[tauri::command]
+pub fn reveal_file(path: String) -> AppResult<()> {
+    files::reveal(&path)
+}
+
+fn decode_base64(encoded: &str) -> AppResult<Vec<u8>> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut lookup = [255u8; 256];
+    for (index, byte) in ALPHABET.iter().enumerate() {
+        lookup[*byte as usize] = index as u8;
+    }
+    let mut output = Vec::with_capacity(encoded.len() * 3 / 4);
+    let mut buffer = 0u32;
+    let mut bits = 0;
+    for byte in encoded.bytes().filter(|byte| !byte.is_ascii_whitespace() && *byte != b'=') {
+        let value = lookup[byte as usize];
+        if value == 255 {
+            return Err(AppError::new("Invalid base64 data"));
+        }
+        buffer = (buffer << 6) | value as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((buffer >> bits) as u8);
+            buffer &= (1 << bits) - 1;
+        }
+    }
+    Ok(output)
 }

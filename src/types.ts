@@ -58,11 +58,29 @@ export interface AiSettings {
   model: string;
 }
 
+/** A saved LLM provider account; its key is in Credential Manager. */
+export interface AiConnection {
+  id: string;
+  name: string;
+  provider: AiProvider;
+  /** Empty means the provider's public endpoint. */
+  baseUrl: string;
+  defaultModel: string;
+}
+
+/** The connection and model the chat uses. */
+export interface AiActive {
+  connectionId: string;
+  model: string;
+}
+
 export interface AppConfig {
   workspaces: Workspace[];
   activeWorkspace: string;
   embedding: EmbeddingSettings | null;
-  ai: AiSettings | null;
+  aiConnections: AiConnection[];
+  /** Set whenever there is at least one connection. */
+  aiActive: AiActive | null;
 }
 
 export interface ChatMessage {
@@ -87,9 +105,22 @@ export interface ChatRequest {
   id: string;
   messages: ChatMessage[];
   context: ChatContext;
+  /** Overrides the active LLM connection / model for this request. */
+  connectionId?: string;
+  model?: string;
 }
 
-export type ChatEvent = { type: "text"; text: string } | { type: "tool"; label: string } | { type: "done" };
+/** Views the assistant can open; none of them changes data. */
+export type UiAction =
+  | { kind: "openDiagram"; database: string; focusTable: string | null }
+  | { kind: "openTable"; database: string; table: string; filter: string | null }
+  | { kind: "openQuery"; database: string | null; sql: string };
+
+export type ChatEvent =
+  | { type: "text"; text: string }
+  | { type: "tool"; label: string }
+  | { type: "action"; action: UiAction }
+  | { type: "done" };
 
 export type TaskState = "stopped" | "starting" | "running" | "restarting" | "failed";
 
@@ -189,6 +220,28 @@ export interface Relation {
   referencedDatabase: string;
   referencedTable: string;
   referencedColumns: string[];
+}
+
+export interface SchemaColumn {
+  name: string;
+  columnType: string;
+  nullable: boolean;
+  primary: boolean;
+}
+
+export interface SchemaTable {
+  name: string;
+  kind: "table" | "view";
+  rows: number | null;
+  comment: string;
+  columns: SchemaColumn[];
+}
+
+/** Everything the ER diagram draws for one database. */
+export interface SchemaGraph {
+  tables: SchemaTable[];
+  relations: Relation[];
+  totalTables: number;
 }
 
 export interface TableRelations {
