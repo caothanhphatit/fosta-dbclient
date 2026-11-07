@@ -1,16 +1,18 @@
 import "./styles.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, errorText } from "./api";
+import { AssistantPanel, type AssistantContext } from "./assistant";
 import { showContextMenu, type MenuItem } from "./contextMenu";
 import { confirmDialog, toast } from "./dialogs";
 import { bigButton, clamp, h, icon, iconButton, separator, spacer, type IconName } from "./dom";
 import { DesignView } from "./designView";
-import { connectionDialog, embeddingDialog, workspaceDialog } from "./forms";
+import { aiDialog, connectionDialog, embeddingDialog, workspaceDialog } from "./forms";
 import type { Navigator } from "./navigator";
+import type { QueryView } from "./queryView";
 import { makeSplitter } from "./splitter";
 import { TableView } from "./tableView";
-import { TabManager } from "./tabs";
-import { createLogView, TasksPanel } from "./tasksPanel";
+import { TabManager, type TabContent } from "./tabs";
+import { createLogView, TasksPanel, type LogTabContent } from "./tasksPanel";
 import { describeTheme, initTheme, onThemeChange, setTheme, themePreference, toggleTheme, type ThemePreference } from "./theme";
 import { ConnectionTree } from "./tree";
 import type { AppConfig, CellValue, ConnectionProfile, TableTarget, TaskDef, Workspace, WorkspaceMeta } from "./types";
@@ -21,6 +23,7 @@ import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type Wor
 const SHORTCUTS: [string, string][] = [
   ["Ctrl+N", "New connection"],
   ["Ctrl+T", "New query"],
+  ["Ctrl+Shift+A", "Assistant panel"],
   ["Ctrl+1 … 9", "Switch workspace"],
   ["Ctrl+Enter", "Run SQL (selection or all)"],
   ["Enter / F2", "Edit the selected cell"],
@@ -36,6 +39,10 @@ const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
 
 const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 640;
+const ASSISTANT_MIN = 300;
+const ASSISTANT_MAX = 720;
+const ASSISTANT_STORAGE_KEY = "db-studio.assistant";
+const LOG_TAIL_LINES = 80;
 
 const statusText = h("span", { class: "status-text" }, "Ready");
 const taskSummary = h("span", { class: "status-tasks" });
@@ -45,6 +52,19 @@ const tabs = new TabManager(welcomeScreen());
 let queryCounter = 0;
 let currentConfig: AppConfig | null = null;
 let workspace: Workspace | null = null;
+let workspaceArea: HTMLElement | null = null;
+
+const assistant = new AssistantPanel({
+  context: assistantContext,
+  insertSql: (text) => {
+    const active = tabs.activeContent();
+    if (isQueryView(active)) active.insertText(text);
+    else openQueryWithText(text);
+  },
+  openQuery: openQueryWithText,
+  configure: () => void configureAssistant(),
+  close: () => showAssistant(false),
+});
 
 const appNavigator: Navigator = {
   openTable,
@@ -75,7 +95,10 @@ const tree = new ConnectionTree({
   connectionClosed: closeConnectionTabs,
   configChanged: applyConfig,
   status: setStatus,
-  stateChanged: refreshActivity,
+  stateChanged: () => {
+    refreshActivity();
+    assistant.refreshContext();
+  },
 });
 
 const tasksPanel = new TasksPanel({
@@ -86,7 +109,95 @@ const tasksPanel = new TasksPanel({
     taskSummary.textContent = text;
   },
   activityChanged: refreshActivity,
+  askAssistant: (task, logLines) => {
+    openLogs(task);
+    showAssistant(true);
+    assistant.ask(`Startup task "${task.name}" is not working. Read its log, explain what is wrong and how to fix it.`);
+    void logLines;
+  },
 });
+
+tabs.onActiveChange = () => assistant.refreshContext();
+
+function isQueryView(content: TabContent | null): content is QueryView {
+  return content !== null && typeof (content as QueryView).currentText === "function";
+}
+
+function isLogTab(content: TabContent | null): content is LogTabContent {
+  return content !== null && typeof (content as LogTabContent).logLines === "function";
+}
+
+/** What the assistant should know about the active tab (or the tree selection). */
+function assistantContext(): AssistantContext {
+  const active = tabs.activeContent();
+  const withConnection = (connectionId: string, rest: Partial<AssistantContext>): AssistantContext => {
+    const profile = currentConfig?.workspaces.flatMap((item) => item.connections).find((item) => item.id === connectionId);
+    const connected = tree.connectedIds().has(connectionId);
+    return {
+      kind: "connection",
+      connectionId: connected ? connectionId : undefined,
+      connectionName: profile?.name,
+      driver: profile?.driver,
+      serverVersion: tree.serverVersion(connectionId) ?? undefined,
+      ...rest,
+    };
+  };
+  if (isQueryView(active)) {
+    return withConnection(active.connectionId, {
+      kind: "query",
+      database: active.currentDatabase() ?? undefined,
+      editorText: () => active.currentText(),
+      lastError: () => active.lastError,
+    });
+  }
+  if (active instanceof TableView) {
+    return withConnection(active.target.connectionId, { kind: "table", database: active.target.database, table: active.target.table });
+  }
+  if (isLogTab(active)) {
+    const task = active.task;
+    const selection = tree.activeContext();
+    const base: AssistantContext = selection ? withConnection(selection.connectionId, { database: selection.database ?? undefined }) : { kind: "none" };
+    return {
+      ...base,
+      kind: "task",
+      extra: () => `Startup task "${task.name}" runs: ${task.program} ${task.args.join(" ")}\nLast log lines:\n${active.logLines().slice(-LOG_TAIL_LINES).join("\n")}`,
+    };
+  }
+  const selection = tree.activeContext();
+  return selection ? withConnection(selection.connectionId, { database: selection.database ?? undefined }) : { kind: "none" };
+}
+
+function openQueryWithText(text: string): void {
+  const context = assistantContext();
+  const connectionId = context.connectionId ?? tree.activeContext()?.connectionId;
+  if (!connectionId) {
+    toast("Connect to a database first to open a query tab");
+    return;
+  }
+  openQuery(connectionId, context.database ?? null, text);
+}
+
+function showAssistant(visible: boolean): void {
+  workspaceArea?.classList.toggle("with-assistant", visible);
+  try {
+    localStorage.setItem(ASSISTANT_STORAGE_KEY, visible ? "open" : "closed");
+  } catch {
+    // Storage can be unavailable; the panel state then lasts for this session only.
+  }
+  if (visible) {
+    assistant.refreshContext();
+    assistant.focus();
+  }
+}
+
+function toggleAssistant(): void {
+  showAssistant(!workspaceArea?.classList.contains("with-assistant"));
+}
+
+async function configureAssistant(): Promise<void> {
+  const config = await aiDialog(currentConfig?.ai ?? null);
+  if (config) applyConfig(config);
+}
 
 /** Recomputes the per-workspace badges on the rail from live connection and task state. */
 function refreshActivity(): void {
@@ -111,6 +222,8 @@ function applyConfig(config: AppConfig): void {
   tree.setConnections(workspace.connections);
   tasksPanel.setTasks(workspace.tasks);
   tabs.setScope(workspace.id);
+  assistant.setConfigured(config.ai);
+  assistant.setScope(workspace.id);
   welcomeName.textContent = workspace.name;
   refreshActivity();
   void getCurrentWindow().setTitle(`${workspace.name} — DB Studio`);
@@ -137,7 +250,10 @@ function workspaceMenu(current: Workspace): MenuItem[] {
 }
 
 function settingsMenu(): MenuItem[] {
-  return [{ label: "Embedding API…", icon: "sparkle", run: () => void configureEmbedding() }];
+  return [
+    { label: "Assistant…", icon: "sparkle", run: () => void configureAssistant() },
+    { label: "Embedding API…", icon: "vector", run: () => void configureEmbedding() },
+  ];
 }
 
 /** Right-click menu of the theme button: the one place to pick "follow system". */
@@ -230,7 +346,13 @@ async function openQueryTab(connectionId: string, database: string | null, initi
     title: `Query ${queryCounter}`,
     subtitle: database ?? undefined,
     icon: "query",
-    create: () => new QueryView(connectionId, driver, database, initialSql),
+    create: () => {
+      const view = new QueryView(connectionId, driver, database, initialSql);
+      view.onChanged = () => {
+        if (tabs.activeContent() === view) assistant.refreshContext();
+      };
+      return view;
+    },
   });
 }
 
@@ -337,8 +459,9 @@ function buildLayout(): void {
     bigButton("refresh", "Refresh", () => tree.refreshSelected(), "Reload the selected database"),
     separator(),
     bigButton("task", "Task", () => void tasksPanel.edit(null), "New startup task"),
-    bigButton("sparkle", "Embedding", () => void configureEmbedding(), "Embedding API for vector search"),
+    bigButton("vector", "Embedding", () => void configureEmbedding(), "Embedding API for vector search"),
     spacer(),
+    bigButton("sparkle", "Assistant", toggleAssistant, "Chat with your database (Ctrl+Shift+A)"),
   );
   const sidebar = h(
     "aside",
@@ -349,14 +472,28 @@ function buildLayout(): void {
     tasksPanel.element,
   );
   const sidebarSplitter = h("div", { class: "splitter-x" });
-  const workspaceArea = h("main", { class: "workspace" }, sidebar, sidebarSplitter, tabs.element);
+  const assistantSplitter = h("div", { class: "splitter-x assistant-splitter" });
+  const area = h("main", { class: "workspace" }, sidebar, sidebarSplitter, tabs.element, assistantSplitter, assistant.element);
+  workspaceArea = area;
   let sidebarWidth = 290;
   makeSplitter(sidebarSplitter, "x", (delta) => {
     sidebarWidth = clamp(sidebarWidth + delta, SIDEBAR_MIN, SIDEBAR_MAX);
-    workspaceArea.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
+    area.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
   });
+  let assistantWidth = 380;
+  makeSplitter(assistantSplitter, "x", (delta) => {
+    assistantWidth = clamp(assistantWidth - delta, ASSISTANT_MIN, ASSISTANT_MAX);
+    area.style.setProperty("--assistant-width", `${assistantWidth}px`);
+  });
+  let remembered: string | null = null;
+  try {
+    remembered = localStorage.getItem(ASSISTANT_STORAGE_KEY);
+  } catch {
+    // Fall through: closed by default.
+  }
+  area.classList.toggle("with-assistant", remembered === "open");
   const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), taskSummary);
-  const main = h("div", { class: "app-main" }, toolbar, workspaceArea, statusBar);
+  const main = h("div", { class: "app-main" }, toolbar, area, statusBar);
   (document.getElementById("app") ?? document.body).append(rail.element, main);
 }
 
@@ -376,6 +513,9 @@ function installShortcuts(): void {
     } else if (key === "t" && !event.shiftKey) {
       event.preventDefault();
       newQueryFromSelection();
+    } else if (key === "a" && event.shiftKey) {
+      event.preventDefault();
+      toggleAssistant();
     }
   });
 }

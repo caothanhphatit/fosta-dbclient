@@ -3,8 +3,9 @@
  * page is opened in a plain browser (no `__TAURI_INTERNALS__`). It lets the UI
  * be reviewed without a MariaDB server. Never bundled into the desktop build.
  */
+import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { AppConfig, ConnectionProfile, TablePage, Workspace } from "./types";
+import type { AppConfig, ChatEvent, ChatRequest, ConnectionProfile, TablePage, Workspace } from "./types";
 
 const DIMS = 4;
 
@@ -38,7 +39,7 @@ const workspaces: Workspace[] = [
   { id: "prod", name: "Production", color: "red", icon: "shield", connections: [], tasks: [] },
 ];
 
-let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null };
+let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null, ai: { provider: "anthropic", baseUrl: "", model: "claude-opus-5-5" } };
 
 const columns = [
   { name: "id", typeName: "int(11)", numeric: true, binary: false, primary: true, vectorDims: null },
@@ -143,6 +144,15 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "delete_task":
     case "save_embedding_settings":
       return config;
+    case "save_ai_settings":
+      config = { ...config, ai: (payload.settings as AppConfig["ai"]) ?? null };
+      return config;
+    case "test_ai":
+      return "OK";
+    case "ai_chat":
+      return mockChat(payload.request as ChatRequest, payload.onEvent as Channel<ChatEvent>);
+    case "ai_cancel":
+      return null;
     case "test_connection":
     case "connect": {
       const profile = (payload.profile as ConnectionProfile | undefined) ?? config.workspaces.flatMap((item) => item.connections).find((item) => item.id === payload.id);
@@ -199,6 +209,60 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     default:
       throw new Error(`devMock: no handler for ${command}`);
   }
+}
+
+const SQL_REPLY = `Dựa trên bảng \`products\` (đã xem cấu trúc), đây là query:
+
+\`\`\`sql
+SELECT p.id, p.name, p.price, p.stock, c.name AS category
+FROM products p
+JOIN categories c ON c.id = p.category_id
+WHERE p.stock < 20
+ORDER BY p.stock ASC
+LIMIT 50;
+\`\`\`
+
+- \`stock\` có thể NULL với vài dòng; nếu muốn tính cả những dòng đó, thêm \`OR p.stock IS NULL\`.
+- Có index trên \`category_id\` nên JOIN rẻ.`;
+
+const MONGO_REPLY = `Pipeline theo category, tính tồn kho và giá trung bình:
+
+\`\`\`json
+{
+  "aggregate": "products",
+  "pipeline": [
+    { "$match": { "stock": { "$gt": 0 } } },
+    { "$group": { "_id": "$category_id", "items": { "$sum": 1 }, "avgPrice": { "$avg": "$price" } } },
+    { "$sort": { "items": -1 } }
+  ],
+  "cursor": {}
+}
+\`\`\`
+
+Chạy trực tiếp trong tab Query, hoặc chèn vào editor rồi sửa \`$match\`.`;
+
+/** Streams a canned reply through the channel the UI passed, like the backend would. */
+function mockChat(request: ChatRequest, channel: Channel<ChatEvent>): Promise<string> {
+  const internals = (window as unknown as { __TAURI_INTERNALS__: { runCallback(id: number, data: unknown): void } }).__TAURI_INTERNALS__;
+  let index = 0;
+  const emit = (message: ChatEvent) => internals.runCallback(channel.id, { index: index++, message });
+  const reply = request.context.driverLabel === "MongoDB" ? MONGO_REPLY : SQL_REPLY;
+  const pieces = reply.match(/[\s\S]{1,14}/g) ?? [];
+  return new Promise((resolve) => {
+    emit({ type: "tool", label: `Looked at ${request.context.table ?? "products"}` });
+    let position = 0;
+    const tick = () => {
+      if (position >= pieces.length) {
+        emit({ type: "done" });
+        resolve(reply);
+        return;
+      }
+      emit({ type: "text", text: pieces[position] });
+      position += 1;
+      setTimeout(tick, 18);
+    };
+    setTimeout(tick, 350);
+  });
 }
 
 export function installDevMock(): void {

@@ -49,11 +49,47 @@ export interface Workspace extends WorkspaceMeta {
   tasks: TaskDef[];
 }
 
+export type AiProvider = "anthropic" | "openai";
+
+export interface AiSettings {
+  provider: AiProvider;
+  /** Empty means the provider's public endpoint. */
+  baseUrl: string;
+  model: string;
+}
+
 export interface AppConfig {
   workspaces: Workspace[];
   activeWorkspace: string;
   embedding: EmbeddingSettings | null;
+  ai: AiSettings | null;
 }
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Where the user is when they ask; the backend adds the table list itself. */
+export interface ChatContext {
+  connectionId?: string;
+  connectionName?: string;
+  driverLabel?: string;
+  serverVersion?: string;
+  database?: string;
+  table?: string;
+  editorText?: string;
+  lastError?: string;
+  extra?: string;
+}
+
+export interface ChatRequest {
+  id: string;
+  messages: ChatMessage[];
+  context: ChatContext;
+}
+
+export type ChatEvent = { type: "text"; text: string } | { type: "tool"; label: string } | { type: "done" };
 
 export type TaskState = "stopped" | "starting" | "running" | "restarting" | "failed";
 

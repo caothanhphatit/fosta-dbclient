@@ -4,6 +4,7 @@ use crate::error::AppResult;
 
 const SERVICE: &str = "db-studio";
 pub const EMBEDDING_ACCOUNT: &str = "embedding-api-key";
+pub const AI_ACCOUNT: &str = "ai-api-key";
 
 pub fn save_password(account: &str, password: &str) -> AppResult<()> {
     Entry::new(SERVICE, account)?.set_password(password)?;

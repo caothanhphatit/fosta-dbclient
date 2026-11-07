@@ -24,7 +24,12 @@ const MIN_RESULTS_HEIGHT = 120;
 
 export class QueryView implements TabContent {
   readonly element: HTMLElement;
-  private readonly connectionId: string;
+  readonly connectionId: string;
+  readonly driver: string;
+  /** Message of the last failed run, cleared by a successful one. */
+  lastError: string | null = null;
+  /** Called when the database selection or the run outcome changes. */
+  onChanged: (() => void) | null = null;
   private readonly sessionId = crypto.randomUUID();
   private readonly editorHost = h("div", { class: "editor-host" });
   private readonly editor: EditorView;
@@ -38,13 +43,17 @@ export class QueryView implements TabContent {
 
   constructor(connectionId: string, driver: string, database: string | null, initialSql: string) {
     this.connectionId = connectionId;
+    this.driver = driver;
     const info = driverInfo(driver);
     this.editor = createSqlEditor(this.editorHost, initialSql, () => void this.run());
     this.runButton = toolButton("play", "Run", () => void this.run(), "Run (Ctrl+Enter). Runs the selection if there is one.");
     this.stopButton = toolButton("stop", "Stop", () => void this.cancel(), "Cancel the running query");
     this.stopButton.disabled = true;
     this.stopButton.hidden = !info.supportsCancel;
-    this.databaseSelect.addEventListener("change", () => void this.loadSchema());
+    this.databaseSelect.addEventListener("change", () => {
+      void this.loadSchema();
+      this.onChanged?.();
+    });
 
     const splitter = h("div", { class: "splitter-y" });
     makeSplitter(splitter, "y", (delta) => this.resizeEditor(delta));
@@ -64,6 +73,27 @@ export class QueryView implements TabContent {
     requestAnimationFrame(() => this.editor.focus());
   }
 
+  currentDatabase(): string | null {
+    return this.databaseSelect.value || null;
+  }
+
+  /** The selection if there is one, otherwise the whole editor. */
+  currentText(): string {
+    return selectedOrAllText(this.editor);
+  }
+
+  /** Replaces the selection (or appends when nothing is selected) and focuses the editor. */
+  insertText(text: string): void {
+    const { state } = this.editor;
+    const range = state.selection.main;
+    const empty = range.empty;
+    const from = empty ? state.doc.length : range.from;
+    const to = empty ? state.doc.length : range.to;
+    const prefix = empty && state.doc.length > 0 && !state.doc.toString().endsWith("\n") ? "\n\n" : empty && state.doc.length > 0 ? "\n" : "";
+    this.editor.dispatch({ changes: { from, to, insert: prefix + text }, selection: { anchor: from + prefix.length, head: from + prefix.length + text.length } });
+    this.editor.focus();
+  }
+
   dispose(): void {
     this.editor.destroy();
     if (this.sessionOpened) void api.closeSession(this.sessionId);
@@ -76,6 +106,7 @@ export class QueryView implements TabContent {
         h("option", { value: "" }, "(no database)"),
         ...databases.map((name) => h("option", { value: name, selected: name === preferred }, name)),
       );
+      this.onChanged?.();
       await this.loadSchema();
     } catch (error) {
       toast(errorText(error), "error");
@@ -99,11 +130,14 @@ export class QueryView implements TabContent {
     try {
       await this.ensureSession();
       const outcome = await api.runSql(this.sessionId, this.databaseSelect.value || null, sql);
+      this.lastError = null;
       this.showOutcome(outcome);
     } catch (error) {
-      this.showPanels([{ title: "Messages", element: messageList([{ text: errorText(error), kind: "error" }]) }]);
+      this.lastError = errorText(error);
+      this.showPanels([{ title: "Messages", element: messageList([{ text: this.lastError, kind: "error" }]) }]);
     } finally {
       this.setRunning(false);
+      this.onChanged?.();
     }
   }
 

@@ -8,6 +8,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    ai::AiSettings,
     embedding::EmbeddingSettings,
     error::{AppError, AppResult},
     lock::lock,
@@ -122,6 +123,7 @@ pub struct AppConfig {
     pub workspaces: Vec<Workspace>,
     pub active_workspace: String,
     pub embedding: Option<EmbeddingSettings>,
+    pub ai: Option<AiSettings>,
 }
 
 /// On-disk shape. Accepts both the current layout (`workspaces`) and the
@@ -136,6 +138,8 @@ struct StoredConfig {
     active_workspace: Option<String>,
     #[serde(default)]
     embedding: Option<EmbeddingSettings>,
+    #[serde(default)]
+    ai: Option<AiSettings>,
     #[serde(default)]
     connections: Vec<ConnectionProfile>,
     #[serde(default)]
@@ -169,6 +173,7 @@ impl From<StoredConfig> for AppConfig {
             workspaces,
             active_workspace,
             embedding: stored.embedding,
+            ai: stored.ai,
         }
     }
 }

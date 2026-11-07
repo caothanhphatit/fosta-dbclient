@@ -25,7 +25,7 @@ interface ReloadOptions {
 
 export class TableView implements TabContent {
   readonly element: HTMLElement;
-  private readonly target: TableTarget;
+  readonly target: TableTarget;
   private readonly navigator: Navigator;
   private readonly driver: DriverInfo;
   private readonly grid: DataGrid;

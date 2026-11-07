@@ -53,6 +53,7 @@ const ICONS = {
   mysql: '<path d="M2 12.5c.3-3.3 1.4-6 4-7.5 1.3-.8 2.4-.4 3.3.5l1.4 1.5c.8.9 2 1 3.3.6-.4 1.2-1.4 1.9-2.6 1.9l1.1 2.2c-1.6-.3-2.6-1.3-3.4-2.6-.9.7-1.9 1-3.1 1.1-1.2 1-2.3 1.6-4 2.3z"/>',
   mssql: '<rect x="2" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="2" y="8.8" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="8.8" width="5.2" height="5.2" rx="0.8"/>',
   mongodb: '<path d="M8 1.5c3.3 2.6 4.8 5.4 4.3 8.4-.4 2.4-2.1 4-4.3 4.6-2.2-.6-3.9-2.2-4.3-4.6C3.2 6.9 4.7 4.1 8 1.5z"/><path d="M8 4.5v10"/>',
+  send: '<path d="M2.5 8L13.5 2.5 10 13.5 7.5 9z"/><path d="M7.5 9l6-6.5"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;

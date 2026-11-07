@@ -1,6 +1,7 @@
-use tauri::State;
+use tauri::{ipc::Channel, State};
 
 use crate::{
+    ai::{self, AiSettings, ChatEvent, ChatRequest},
     config::{AppConfig, ConnectionProfile, WorkspaceMeta},
     db::{BrowseRequest, CellValue, QueryOutcome, RowChange, TableDesign, TableInfo, TablePage},
     drivers,
@@ -313,6 +314,59 @@ async fn embed_text(state: &State<'_, AppState>, text: &str) -> AppResult<Vec<f3
         .ok_or_else(|| AppError::new("Configure an embedding API first (toolbar → Embedding)"))?;
     let api_key = secrets::load_password(secrets::EMBEDDING_ACCOUNT)?;
     embedding::embed(&settings, api_key, text).await
+}
+
+#[tauri::command]
+pub fn save_ai_settings(
+    state: State<'_, AppState>,
+    settings: Option<AiSettings>,
+    api_key: Option<String>,
+) -> AppResult<AppConfig> {
+    if let Some(settings) = &settings {
+        if settings.model.trim().is_empty() {
+            return Err(AppError::new("Model is required"));
+        }
+    }
+    match (&settings, api_key.as_deref()) {
+        (None, _) => secrets::forget_password(secrets::AI_ACCOUNT)?,
+        (Some(_), Some(key)) if !key.is_empty() => secrets::save_password(secrets::AI_ACCOUNT, key)?,
+        (Some(_), _) => {}
+    }
+    state.config.update(|config| {
+        config.ai = settings;
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub async fn test_ai(state: State<'_, AppState>) -> AppResult<String> {
+    let (settings, api_key) = ai_settings(&state)?;
+    ai::probe(&settings, api_key).await
+}
+
+/// Streams one assistant reply over `on_event`; resolves with the full text.
+#[tauri::command]
+pub async fn ai_chat(
+    state: State<'_, AppState>,
+    request: ChatRequest,
+    on_event: Channel<ChatEvent>,
+) -> AppResult<String> {
+    let (settings, api_key) = ai_settings(&state)?;
+    ai::chat(&settings, api_key, &state.db, &state.ai, request, on_event).await
+}
+
+#[tauri::command]
+pub fn ai_cancel(state: State<'_, AppState>, id: String) {
+    state.ai.cancel(&id);
+}
+
+fn ai_settings(state: &State<'_, AppState>) -> AppResult<(AiSettings, Option<String>)> {
+    let settings = state
+        .config
+        .snapshot()
+        .ai
+        .ok_or_else(|| AppError::new("Set up the assistant first (toolbar → Assistant → settings)"))?;
+    Ok((settings, secrets::load_password(secrets::AI_ACCOUNT)?))
 }
 
 fn resolve_password(connection_id: &str, supplied: Option<String>) -> AppResult<String> {

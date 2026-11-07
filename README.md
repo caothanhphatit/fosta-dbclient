@@ -15,6 +15,7 @@ Database client nhẹ (Tauri 2 + Rust, frontend TypeScript thuần) cho **MariaD
 - Query editor: syntax highlight, autocomplete tên bảng, chạy nhiều câu lệnh, Stop (KILL QUERY), mỗi tab giữ session riêng (BEGIN/COMMIT qua nhiều lần chạy được).
 - Design view: danh sách cột + DDL.
 - Vector (chỉ MariaDB 11.7+): tìm kiếm theo embedding, kiểm tra sức khoẻ cột/index, đo recall ANN so với exact.
+- **Assistant** (panel bên phải, `Ctrl+Shift+A`): chat với model của bạn (Anthropic, OpenAI, Ollama hoặc bất kỳ endpoint OpenAI-compatible) bằng key của bạn, key lưu trong Credential Manager, request đi thẳng từ máy tới provider. Model chỉ thấy tên bảng/cột (tra bằng tool `describe_table`), nội dung editor, lỗi và log bạn hỏi; **không bao giờ chạy query**. Mỗi code block có nút Insert / New tab để bạn tự chạy trong editor. Quick action theo ngữ cảnh: giải thích, tối ưu, sửa lỗi, dịch giữa MySQL ↔ SQL Server ↔ Mongo, viết aggregation pipeline, sinh dữ liệu test, giải thích log startup task.
 - Theme sáng / tối / theo hệ thống (nút dưới rail).
 
 Config (workspaces, connections, tasks) lưu ở `db-studio.json` cạnh file `.exe`, nên app là portable. File config cũ (chỉ có `connections` + `tasks`) được tự chuyển thành một workspace khi mở.
@@ -59,6 +60,7 @@ File chạy: `src-tauri\target\release\db-studio.exe`.
 | Ctrl+1 … 9 | Chuyển workspace |
 | Ctrl+N | Connection mới |
 | Ctrl+T | Query mới |
+| Ctrl+Shift+A | Bật/tắt panel Assistant |
 | Double-click connection | Kết nối |
 | Double-click table | Mở dữ liệu |
 | Ctrl+Enter / F9 | Chạy SQL (phần bôi đen, hoặc toàn bộ) |

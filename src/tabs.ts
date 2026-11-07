@@ -36,11 +36,17 @@ export class TabManager {
   private tabs: OpenTab[] = [];
   private scope = DEFAULT_SCOPE;
   private activeKey: string | null = null;
+  /** Called after the active tab changes (also when the last tab closes). */
+  onActiveChange: ((content: TabContent | null) => void) | null = null;
 
   constructor(placeholder: HTMLElement) {
     this.placeholder = placeholder;
     this.body.append(placeholder);
     this.element = h("div", { class: "tabs" }, this.strip, this.body);
+  }
+
+  activeContent(): TabContent | null {
+    return this.tabs.find((tab) => tab.key === this.activeKey)?.content ?? null;
   }
 
   /** Shows only the tabs of `scope`, restoring the tab that was last active there. */
@@ -110,6 +116,7 @@ export class TabManager {
       }
     }
     this.refreshPlaceholder();
+    this.onActiveChange?.(this.activeContent());
   }
 
   private refreshPlaceholder(): void {

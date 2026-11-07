@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ai;
 mod commands;
 mod config;
 mod db;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub config: config::ConfigStore,
     pub db: drivers::DbManager,
     pub tasks: Arc<tasks::TaskManager>,
+    pub ai: ai::AiRuns,
 }
 
 fn main() {
@@ -37,6 +39,7 @@ fn main() {
                 config,
                 db: drivers::DbManager::default(),
                 tasks,
+                ai: ai::AiRuns::default(),
             });
             show_window_if_frontend_stalls(app);
             Ok(())
@@ -75,6 +78,10 @@ fn main() {
             commands::index_recall,
             commands::save_embedding_settings,
             commands::test_embedding,
+            commands::save_ai_settings,
+            commands::test_ai,
+            commands::ai_chat,
+            commands::ai_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start DB Studio")

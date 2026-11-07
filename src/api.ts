@@ -1,9 +1,12 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  AiSettings,
   AppConfig,
   BrowseRequest,
   CellValue,
+  ChatEvent,
+  ChatRequest,
   ConnectionProfile,
   EmbeddingSettings,
   HealthCheck,
@@ -72,6 +75,16 @@ export const api = {
   saveEmbeddingSettings: (settings: EmbeddingSettings | null, apiKey: string | null) =>
     invoke<AppConfig>("save_embedding_settings", { settings, apiKey }),
   testEmbedding: () => invoke<number>("test_embedding"),
+  saveAiSettings: (settings: AiSettings | null, apiKey: string | null) =>
+    invoke<AppConfig>("save_ai_settings", { settings, apiKey }),
+  testAi: () => invoke<string>("test_ai"),
+  /** Streams the reply through `onEvent`; resolves with the full text. */
+  aiChat: (request: ChatRequest, onEvent: (event: ChatEvent) => void) => {
+    const channel = new Channel<ChatEvent>();
+    channel.onmessage = onEvent;
+    return invoke<string>("ai_chat", { request, onEvent: channel });
+  },
+  aiCancel: (id: string) => invoke<void>("ai_cancel", { id }),
 };
 
 export function onTaskStatus(handler: (status: TaskStatus) => void): Promise<UnlistenFn> {

@@ -20,6 +20,8 @@ interface ConnectionNode {
   expanded: boolean;
   databases: DatabaseNode[] | null;
   message: string | null;
+  /** Version string the server reported, once connected. */
+  version: string | null;
 }
 
 export interface TreeContext {
@@ -77,7 +79,7 @@ export class ConnectionTree {
 
   setConnections(profiles: ConnectionProfile[]): void {
     this.nodes = profiles.map((profile): ConnectionNode => {
-      const node = this.cache.get(profile.id) ?? { profile, state: "idle", expanded: false, databases: null, message: null };
+      const node = this.cache.get(profile.id) ?? { profile, state: "idle", expanded: false, databases: null, message: null, version: null };
       node.profile = profile;
       this.cache.set(profile.id, node);
       return node;
@@ -93,6 +95,12 @@ export class ConnectionTree {
   }
 
   /** Ids of every connection (in any workspace) that is currently connected. */
+  /** Version reported by a connected server, or null when not connected. */
+  serverVersion(connectionId: string): string | null {
+    const node = this.nodeOf(connectionId);
+    return node?.state === "connected" ? node.version : null;
+  }
+
   connectedIds(): Set<string> {
     return new Set([...this.cache.values()].filter((node) => node.state === "connected").map((node) => node.profile.id));
   }
@@ -117,6 +125,7 @@ export class ConnectionTree {
     try {
       const version = await api.connect(node.profile.id, password);
       node.state = "connected";
+      node.version = version;
       node.expanded = true;
       this.host.status(`Connected to ${node.profile.name} · ${describeServer(node.profile, version)}`);
       await this.loadDatabases(node);

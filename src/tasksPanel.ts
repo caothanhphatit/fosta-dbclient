@@ -14,6 +14,14 @@ export interface TasksHost {
   workspaceName(): string;
   /** Fired whenever any task (in any workspace) changes state. */
   activityChanged?(): void;
+  /** Opens the assistant on a task's log. */
+  askAssistant?(task: TaskDef, logLines: string[]): void;
+}
+
+/** What a log tab exposes so the assistant can read the task's output. */
+export interface LogTabContent extends TabContent {
+  task: TaskDef;
+  logLines(): string[];
 }
 
 type LogListener = (line: string) => void;
@@ -82,6 +90,14 @@ export class TasksPanel {
     if (config) this.host.configChanged(config);
   }
 
+  canAsk(): boolean {
+    return Boolean(this.host.askAssistant);
+  }
+
+  ask(task: TaskDef, logLines: string[]): void {
+    this.host.askAssistant?.(task, logLines);
+  }
+
   private render(): void {
     const rows = this.tasks.map((task) => this.renderTask(task));
     this.list.replaceChildren(...(rows.length ? rows : [h("div", { class: "empty-hint" }, "No startup tasks in this workspace")]));
@@ -130,8 +146,9 @@ export class TasksPanel {
   }
 }
 
-export function createLogView(task: TaskDef, panel: TasksPanel): TabContent {
+export function createLogView(task: TaskDef, panel: TasksPanel): LogTabContent {
   const output = h("pre", { class: "log-output" });
+  const logLines = () => output.textContent?.split("\n").filter(Boolean) ?? [];
   const append = (line: string) => {
     const following = output.scrollTop + output.clientHeight >= output.scrollHeight - 8;
     output.append(`${line}\n`);
@@ -151,10 +168,11 @@ export function createLogView(task: TaskDef, panel: TasksPanel): TabContent {
     icon("terminal", "toolbar-icon"),
     h("span", { class: "toolbar-title mono" }, `${task.program} ${formatArgs(task.args)}`),
     spacer(),
+    panel.canAsk() ? toolButton("sparkle", "Ask assistant", () => panel.ask(task, logLines()), "Explain this log with the assistant") : null,
     toolButton("refresh", "Restart", () => void attempt(() => api.restartTask(task.id))),
     toolButton("x", "Clear view", () => output.replaceChildren()),
   );
-  return { element: h("div", { class: "view log-view" }, toolbar, output), dispose: unsubscribe };
+  return { element: h("div", { class: "view log-view" }, toolbar, output), dispose: unsubscribe, task, logLines };
 }
 
 async function attempt(action: () => Promise<unknown>): Promise<void> {

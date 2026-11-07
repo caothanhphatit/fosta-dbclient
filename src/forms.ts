@@ -3,7 +3,7 @@ import { checkbox, field, openModal, textInput, toast } from "./dialogs";
 import { h, icon } from "./dom";
 import { describeServer, driverInfo, DRIVERS, type DriverInfo } from "./drivers";
 import { formatArgs, parseArgs } from "./shell";
-import type { AppConfig, ConnectionProfile, EmbeddingAuth, EmbeddingSettings, TaskDef, WorkspaceMeta } from "./types";
+import type { AiProvider, AiSettings, AppConfig, ConnectionProfile, EmbeddingAuth, EmbeddingSettings, TaskDef, WorkspaceMeta } from "./types";
 import { WORKSPACE_COLORS, WORKSPACE_ICONS, workspaceColor, workspaceIcon } from "./workspaces";
 
 const AUTH_OPTIONS: { value: EmbeddingAuth; label: string }[] = [
@@ -290,5 +290,69 @@ export function taskDialog(existing: TaskDef | null, workspaceName: string): Pro
       { label: "Cancel", run: () => undefined },
       { label: "Save", primary: true, run: async () => void (saved = await api.saveTask(readTask())) },
     ], { width: 520, onClose: () => resolve(saved) });
+  });
+}
+
+interface ProviderPreset {
+  value: AiProvider;
+  label: string;
+  url: string;
+  model: string;
+  hint: string;
+}
+
+const AI_PROVIDERS: ProviderPreset[] = [
+  { value: "anthropic", label: "Anthropic (Claude)", url: "https://api.anthropic.com", model: "claude-opus-5-5", hint: "Key from console.anthropic.com" },
+  { value: "openai", label: "OpenAI-compatible (OpenAI, Ollama, OpenRouter, DeepSeek…)", url: "https://api.openai.com/v1", model: "", hint: "Ollama: http://localhost:11434/v1 with any model you pulled, no key needed" },
+];
+
+export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null> {
+  return new Promise((resolve) => {
+    let saved: AppConfig | null = null;
+    const presetOf = (value: string) => AI_PROVIDERS.find((preset) => preset.value === value) ?? AI_PROVIDERS[0];
+    let preset = presetOf(existing?.provider ?? "anthropic");
+    const provider = h("select", { class: "input" }, ...AI_PROVIDERS.map((item) => h("option", { value: item.value, selected: item.value === preset.value }, item.label)));
+    const baseUrl = textInput(existing?.baseUrl ?? "", { class: "input mono", placeholder: preset.url });
+    const model = textInput(existing?.model ?? "", { class: "input mono", placeholder: preset.model || "e.g. gpt-5, llama3.1, deepseek-chat" });
+    const apiKey = textInput("", { type: "password", placeholder: existing ? "Saved, leave empty to keep" : "" });
+    const hint = h("span", { class: "field-hint" }, preset.hint);
+    provider.addEventListener("change", () => {
+      const previous = preset;
+      preset = presetOf(provider.value);
+      baseUrl.placeholder = preset.url;
+      model.placeholder = preset.model || "e.g. gpt-5, llama3.1, deepseek-chat";
+      if (!model.value || model.value === previous.model) model.value = preset.model;
+      hint.textContent = preset.hint;
+    });
+
+    const readSettings = (): AiSettings => {
+      if (!model.value.trim()) throw new Error("Model is required");
+      return { provider: preset.value, baseUrl: baseUrl.value.trim(), model: model.value.trim() };
+    };
+    const save = async () => {
+      saved = await api.saveAiSettings(readSettings(), apiKey.value || null);
+    };
+
+    const body = h(
+      "div",
+      { class: "form-grid" },
+      h("p", { class: "form-intro" }, "The assistant calls the provider directly from this computer with your key. It only sees table and column names, your editor text and the errors you ask about; it never runs queries."),
+      field("Provider", provider),
+      field("Endpoint", baseUrl, "Leave empty for the provider's public endpoint"),
+      field("Model", model),
+      h("label", { class: "field" }, h("span", { class: "field-label" }, "API key"), apiKey, h("span", { class: "field-hint" }, "Stored in Windows Credential Manager"), hint),
+    );
+    openModal("Assistant", body, [
+      { label: "Remove", alignLeft: true, danger: true, run: async () => void (saved = await api.saveAiSettings(null, null)) },
+      { label: "Cancel", run: () => undefined },
+      {
+        label: "Save & test",
+        run: async () => {
+          await save();
+          toast(`Model replied: ${await api.testAi()}`, "success");
+        },
+      },
+      { label: "Save", primary: true, run: save },
+    ], { width: 560, onClose: () => resolve(saved) });
   });
 }
