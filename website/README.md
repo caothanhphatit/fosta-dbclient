@@ -1,6 +1,6 @@
-# DB Studio website
+# Fosta Studio website
 
-The marketing page for DB Studio, published at https://db.fosta.app. It is a static site with no build step and no dependencies:
+The marketing page for Fosta Studio, published at https://db.fosta.app. It is a static site with no build step and no dependencies:
 
 ```
 website/

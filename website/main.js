@@ -1,9 +1,9 @@
-// DB Studio website: progressive enhancement only. The page works without this file.
+// Fosta Studio website: progressive enhancement only. The page works without this file.
 (function () {
   "use strict";
 
   var root = document.documentElement;
-  var KEY = "dbstudio-site-theme";
+  var KEY = "fosta-studio-site-theme";
   var media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 
   function stored() {

@@ -12,7 +12,7 @@ use crate::{
     AppState,
 };
 
-const EMBEDDING_PROBE: &str = "DB Studio embedding test";
+const EMBEDDING_PROBE: &str = "Fosta Studio embedding test";
 
 #[tauri::command]
 pub async fn vector_info(state: State<'_, AppState>, connection_id: String, database: String, table: String) -> AppResult<VectorInfo> {

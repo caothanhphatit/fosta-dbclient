@@ -1,4 +1,4 @@
-//! Query history: every run in a query tab, kept in `db-studio-history.jsonl` next to `db-studio.json`.
+//! Query history: every run in a query tab, kept in `fosta-studio-history.jsonl` next to `fosta-studio.json`.
 //!
 //! The file is append-only JSON Lines (one entry per line). All access goes through one mutex, so appends
 //! from several tabs never interleave. When the file grows past the cap plus some slack it is rewritten
@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{config, error::AppResult, lock::lock};
 
-pub const HISTORY_FILE: &str = "db-studio-history.jsonl";
+pub const HISTORY_FILE: &str = "fosta-studio-history.jsonl";
+/// The history file's name before the rename to Fosta Studio; moved on first use.
+const LEGACY_HISTORY_FILE: &str = "db-studio-history.jsonl";
 /// Entries kept after a compaction.
 pub const DEFAULT_CAP: usize = 5_000;
 /// Longer statements are cut so one huge script cannot bloat the file.
@@ -104,7 +106,10 @@ impl HistoryStore {
     }
 
     pub fn open_default() -> AppResult<Self> {
-        Ok(Self::new(config::data_path(HISTORY_FILE)?, DEFAULT_CAP))
+        Ok(Self::new(
+            config::data_path_renamed(HISTORY_FILE, LEGACY_HISTORY_FILE)?,
+            DEFAULT_CAP,
+        ))
     }
 
     /// Appends `entry` with a new id and returns it as stored.
@@ -270,7 +275,7 @@ mod tests {
     impl TempDir {
         fn new(name: &str) -> Self {
             let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-            let path = std::env::temp_dir().join(format!("db-studio-history-{name}-{}-{nanos}", std::process::id()));
+            let path = std::env::temp_dir().join(format!("fosta-studio-history-{name}-{}-{nanos}", std::process::id()));
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
@@ -384,7 +389,7 @@ mod tests {
         assert_eq!(listed.last().unwrap().sql, "SELECT 2");
         let text = fs::read_to_string(dir.0.join(HISTORY_FILE)).unwrap();
         assert_eq!(text.lines().count(), 10);
-        assert!(!dir.0.join("db-studio-history.jsonl.tmp").exists());
+        assert!(!dir.0.join("fosta-studio-history.jsonl.tmp").exists());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 [package]
-name = "db-studio"
+name = "fosta-studio"
 version = "0.1.0"
 license = "GPL-3.0-only"
 repository = "https://github.com/caothanhphatit/fosta-dbclient"

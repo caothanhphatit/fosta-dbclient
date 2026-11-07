@@ -16,7 +16,9 @@ use crate::{
     tasks::TaskDef,
 };
 
-const CONFIG_FILE: &str = "db-studio.json";
+const CONFIG_FILE: &str = "fosta-studio.json";
+/// The config file's name before the app was renamed to Fosta Studio; moved on first start.
+const LEGACY_CONFIG_FILE: &str = "db-studio.json";
 const DEFAULT_WORKSPACE_ID: &str = "default";
 const DEFAULT_WORKSPACE_NAME: &str = "Local";
 const DEFAULT_WORKSPACE_COLOR: &str = "blue";
@@ -432,16 +434,35 @@ pub fn upsert<T>(items: &mut Vec<T>, item: T, id_of: impl Fn(&T) -> &str) {
 }
 
 fn config_path() -> AppResult<PathBuf> {
-    data_path(CONFIG_FILE)
+    data_path_renamed(CONFIG_FILE, LEGACY_CONFIG_FILE)
 }
 
-/// A file next to the executable, where `db-studio.json` lives (the app is portable).
+/// A file next to the executable, where `fosta-studio.json` lives (the app is portable).
 pub fn data_path(name: &str) -> AppResult<PathBuf> {
     let executable = std::env::current_exe()?;
     let directory = executable
         .parent()
         .ok_or_else(|| AppError::new("Cannot resolve the application directory"))?;
     Ok(directory.join(name))
+}
+
+/// Like [`data_path`], but first moves a file left under its pre-rename name (`legacy`) to `name`.
+pub fn data_path_renamed(name: &str, legacy: &str) -> AppResult<PathBuf> {
+    let path = data_path(name)?;
+    move_legacy_file(&path, &data_path(legacy)?)?;
+    Ok(path)
+}
+
+/// Moves `legacy` to `path` when only the legacy file exists; never overwrites `path`.
+fn move_legacy_file(path: &Path, legacy: &Path) -> AppResult<()> {
+    if path.exists() || !legacy.exists() {
+        return Ok(());
+    }
+    if fs::rename(legacy, path).is_err() {
+        // Another volume or a locked file: copy instead and leave the old file in place.
+        fs::copy(legacy, path)?;
+    }
+    Ok(())
 }
 
 fn write_config(path: &Path, config: &AppConfig) -> AppResult<()> {
@@ -452,6 +473,21 @@ fn write_config(path: &Path, config: &AppConfig) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_files_are_moved_once_and_never_overwrite() {
+        let dir = std::env::temp_dir().join(format!("fosta-rename-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (new, old) = (dir.join("fosta-studio.json"), dir.join("db-studio.json"));
+        fs::write(&old, "old").unwrap();
+        move_legacy_file(&new, &old).unwrap();
+        assert_eq!(fs::read_to_string(&new).unwrap(), "old");
+        assert!(!old.exists());
+        fs::write(&old, "stale").unwrap();
+        move_legacy_file(&new, &old).unwrap();
+        assert_eq!(fs::read_to_string(&new).unwrap(), "old", "an existing new file wins");
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn migrates_legacy_ai_setting_into_an_active_connection() {

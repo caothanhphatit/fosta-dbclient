@@ -318,7 +318,7 @@ export interface HistoryResult {
   truncated: boolean;
 }
 
-/** A run in a query tab, stored by the backend in db-studio-history.jsonl on this machine. */
+/** A run in a query tab, stored by the backend in fosta-studio-history.jsonl on this machine. */
 export interface HistoryEntry {
   /** Assigned by the backend; empty when appending. */
   id: string;

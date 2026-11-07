@@ -123,7 +123,7 @@ const workspaces: Workspace[] = [
 
 let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null, aiConnections: [], aiActive: null, queryHistory: true };
 
-/** Query history for this page load only (the desktop app keeps it in db-studio-history.jsonl). */
+/** Query history for this page load only (the desktop app keeps it in fosta-studio-history.jsonl). */
 let history: HistoryEntry[] = [];
 let historySequence = 0;
 
@@ -689,7 +689,7 @@ async function fetchModels(settings: AiSettings, key: string): Promise<string[]>
 
 function systemPrompt(context: ChatRequest["context"]): string {
   const lines = [
-    "You are the assistant built into DB Studio, a desktop database client. You cannot run anything: put every runnable query in a fenced code block (```sql, or ```json for MongoDB commands) for the user to run from the editor. Answer in the user's language and keep prose short.",
+    "You are the assistant built into Fosta Studio, a desktop database client. You cannot run anything: put every runnable query in a fenced code block (```sql, or ```json for MongoDB commands) for the user to run from the editor. Answer in the user's language and keep prose short.",
     "Context:",
     context.connectionId
       ? `- Connection: ${context.connectionName ?? "connection"} (${context.driverLabel ?? "unknown"} ${context.serverVersion ?? ""})`

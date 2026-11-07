@@ -1,4 +1,4 @@
-# DB Studio
+# Fosta Studio
 
 
 A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend) for **MariaDB, MySQL, SQL Server and MongoDB**, with
@@ -26,7 +26,7 @@ A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend
 - **Query editor**: syntax highlighting, table-name completion, several statements per run, Stop (`KILL QUERY`), and one session per tab
   (`BEGIN`/`COMMIT` can span runs).
   - **Query history**: every run (text, connection, database, time, duration, rows or error) is listed in the tab's History panel, with
-    search; Insert or open an entry in a new tab. History stays on this machine, in `db-studio-history.jsonl` next to the `.exe` (newest
+    search; Insert or open an entry in a new tab. History stays on this machine, in `fosta-studio-history.jsonl` next to the `.exe` (newest
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
 - **Vector tools** (MariaDB 11.7+ only): embedding search, column/index health checks, ANN recall versus exact search.
@@ -36,7 +36,7 @@ A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend
   code block has Insert / New tab buttons so you run it yourself.
 - Light, dark or system theme.
 
-Configuration (workspaces, connections, tasks, LLM providers) is stored in `db-studio.json` next to the `.exe`, so the app is portable.
+Configuration (workspaces, connections, tasks, LLM providers) is stored in `fosta-studio.json` next to the `.exe`, so the app is portable.
 
 ## Getting started
 
@@ -54,7 +54,7 @@ Preview the UI in a browser without any database (a mock backend with sample dat
 npm run dev
 ```
 
-Build a portable `.exe` (no installer); the result is `src-tauri\target\release\db-studio.exe`:
+Build a portable `.exe` (no installer); the result is `src-tauri\target\release\fosta-studio.exe`:
 
 ```powershell
 npm run tauri build -- --no-bundle
@@ -87,12 +87,12 @@ Test databases (MariaDB, SQL Server and MongoDB with sample data) run in Docker;
 
 ## License
 
-DB Studio is free software under the [GNU General Public License v3.0](LICENSE). Contributions are accepted under the
+Fosta Studio is free software under the [GNU General Public License v3.0](LICENSE). Contributions are accepted under the
 [Contributor License Agreement](CLA.md), which lets the maintainer also offer commercial licenses (for example to companies that
-want to embed DB Studio without the GPL's obligations) while the project itself stays GPL.
+want to embed Fosta Studio without the GPL's obligations) while the project itself stays GPL.
 
 ### About Fosta
 
-Fosta, the assistant's default provider, is a separate AI API service run by the author of DB Studio. It is listed first for
+Fosta, the assistant's default provider, is a separate AI API service run by the author of Fosta Studio. It is listed first for
 convenience only: every other provider (OpenAI, Gemini, Claude, or any OpenAI-compatible endpoint such as a local Ollama) works the
-same way, nothing in DB Studio requires a Fosta account, and requests only go to the provider you configure.
+same way, nothing in Fosta Studio requires a Fosta account, and requests only go to the provider you configure.

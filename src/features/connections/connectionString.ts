@@ -2,7 +2,7 @@
  * Connection strings for the "Connection string" tab of the connection dialog.
  * Strings are parsed into the same profile fields the "Parameters" tab edits;
  * the password is returned separately so it goes to Credential Manager and
- * never into db-studio.json. MongoDB keeps its URI (minus the password)
+ * never into fosta-studio.json. MongoDB keeps its URI (minus the password)
  * because options such as replica sets and SRV records live in it.
  */
 import type { DriverId } from "../../core/types";

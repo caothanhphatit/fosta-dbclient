@@ -219,7 +219,7 @@ function applyConfig(config: AppConfig): void {
   assistant.setScope(workspace.id);
   welcomeName.textContent = workspace.name;
   refreshActivity();
-  void getCurrentWindow().setTitle(`${workspace.name} — DB Studio`);
+  void getCurrentWindow().setTitle(`${workspace.name} — Fosta Studio`);
 }
 
 function renderWorkspaceHeader(current: Workspace): void {
@@ -256,7 +256,7 @@ function settingsMenu(): MenuItem[] {
   ];
 }
 
-/** History stays on this machine (db-studio-history.jsonl next to the app); turning it off keeps old entries. */
+/** History stays on this machine (fosta-studio-history.jsonl next to the app); turning it off keeps old entries. */
 async function setQueryHistory(enabled: boolean): Promise<void> {
   try {
     applyConfig(await api.setQueryHistory(enabled));

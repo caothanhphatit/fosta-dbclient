@@ -99,7 +99,7 @@ fn main() {
             commands::history::set_query_history,
         ])
         .build(tauri::generate_context!())
-        .expect("failed to start DB Studio")
+        .expect("failed to start Fosta Studio")
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 app.state::<AppState>().tasks.stop_all();

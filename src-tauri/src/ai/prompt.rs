@@ -8,7 +8,7 @@ const MAX_EDITOR_CHARS: usize = 6000;
 
 pub(super) async fn system_prompt(db: &DbManager, context: &ChatContext) -> String {
     let mut text = String::from(
-        "You are the assistant built into DB Studio, a desktop database client. You help the user write and understand queries for the database they have open.\n\n\
+        "You are the assistant built into Fosta Studio, a desktop database client. You help the user write and understand queries for the database they have open.\n\n\
 Rules:\n\
 - You cannot run anything. The user runs queries themselves from the editor, so put every runnable query in its own fenced code block (```sql for SQL engines, ```json for MongoDB commands and pipelines) so it can be inserted as-is. Independent statements go in separate blocks.\n\
 - Before writing a query against a table, look at its columns with describe_table unless the structure is already known from this conversation. Never guess column names. For joins across several tables, read schema_overview once instead of describing each table.\n\

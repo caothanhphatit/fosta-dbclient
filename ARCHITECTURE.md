@@ -1,6 +1,6 @@
-# DB Studio architecture
+# Fosta Studio architecture
 
-DB Studio is a [Tauri 2](https://tauri.app) desktop app: a Rust process owns the database connections, secrets and child processes, and a
+Fosta Studio is a [Tauri 2](https://tauri.app) desktop app: a Rust process owns the database connections, secrets and child processes, and a
 webview renders a plain TypeScript UI. They talk only through Tauri commands (request/response) and events/channels (streams).
 
 ## Layers
@@ -14,8 +14,8 @@ webview renders a plain TypeScript UI. They talk only through Tauri commands (re
         ▼                               │                                       ├─ mssql.rs   SQL Server (tiberius)
  core/api.ts ── invoke() ─────────────► │ ── DbManager ──────────────────────►  └─ mongo.rs   MongoDB (mongodb)
              ◄─ events / Channel ────── │                                       types.rs     shared data shapes
-                                        ├─ ConfigStore (config.rs) → db-studio.json
-                                        ├─ HistoryStore (history.rs) → db-studio-history.jsonl
+                                        ├─ ConfigStore (config.rs) → fosta-studio.json
+                                        ├─ HistoryStore (history.rs) → fosta-studio-history.jsonl
                                         ├─ secrets.rs → Windows Credential Manager
                                         ├─ TaskManager (tasks.rs, job.rs) → child processes
                                         └─ ai/ → LLM provider HTTP APIs
@@ -72,11 +72,11 @@ webview renders a plain TypeScript UI. They talk only through Tauri commands (re
 
 ## Query history
 
-`history.rs` keeps every run in `db-studio-history.jsonl` next to `db-studio.json`: one JSON object per line, appended under a mutex
+`history.rs` keeps every run in `fosta-studio-history.jsonl` next to `fosta-studio.json`: one JSON object per line, appended under a mutex
 so runs from several tabs never interleave, on Tauri's blocking pool so the UI never waits for the disk. When the file grows past
 5,000 entries plus 10% it is rewritten (temporary file, then rename) with the newest 5,000. Statements longer than 64 KiB are cut.
 The history **never leaves this machine**; it holds only what the user ran (never passwords), and `queryHistory: false` in
-`db-studio.json` (Settings → Record query history) stops recording without deleting what is there.
+`fosta-studio.json` (Settings → Record query history) stops recording without deleting what is there.
 
 ## The assistant
 
@@ -97,12 +97,12 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
 
 ## Config and secrets
 
-- **`db-studio.json`** next to the executable (portable): workspaces with their connections and startup tasks, the active workspace, LLM
+- **`fosta-studio.json`** next to the executable (portable): workspaces with their connections and startup tasks, the active workspace, LLM
   provider connections, the active model, the embedding API settings and the `queryHistory` switch. No secrets. Old layouts (flat
   `connections` + `tasks`, the single `ai` setting) are migrated on load (`config.rs`).
-- **Windows Credential Manager** (`secrets.rs`, service `db-studio`): connection passwords under the connection id, LLM keys under
+- **Windows Credential Manager** (`secrets.rs`, service `fosta-studio`; secrets saved under the pre-rename service `db-studio` are moved on first read, and `db-studio.json` / `db-studio-history.jsonl` are renamed on first start): connection passwords under the connection id, LLM keys under
   `ai-key-<id>`, the embedding key under `embedding-api-key`. A password in a pasted connection string is moved there, never into the file.
-- **`db-studio-history.jsonl`** next to the executable: the query history (see above). No secrets.
+- **`fosta-studio-history.jsonl`** next to the executable: the query history (see above). No secrets.
 - **localStorage** (`db-studio.*`): UI preferences only (theme, assistant panel open/closed, diagram node positions, hidden columns per
   table, the history panel and cell-editor wrap toggles).
 
@@ -110,7 +110,7 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
 
 `tasks.rs` runs each task as a child process, streams stdout/stderr lines to the UI as events, marks it running when a line matches the
 "ready" pattern, and restarts it with backoff when it exits. On Windows `job.rs` puts children in a job object that is killed with the
-app, so a `kubectl port-forward` never outlives DB Studio.
+app, so a `kubectl port-forward` never outlives Fosta Studio.
 
 ## The dev mock
 

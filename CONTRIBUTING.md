@@ -1,11 +1,11 @@
-# Contributing to DB Studio
+# Contributing to Fosta Studio
 
 Thanks for helping. This guide covers the local setup, the checks CI runs, and the conventions of the code base.
 [ARCHITECTURE.md](ARCHITECTURE.md) explains how the pieces fit together.
 
-> **License and CLA**: DB Studio is licensed under the [GPL v3.0](LICENSE). On your first pull request a bot asks you to sign the
+> **License and CLA**: Fosta Studio is licensed under the [GPL v3.0](LICENSE). On your first pull request a bot asks you to sign the
 > [Contributor License Agreement](CLA.md) by posting a comment; you keep the copyright in your work, and the CLA lets the
-> maintainer also offer DB Studio under commercial terms.
+> maintainer also offer Fosta Studio under commercial terms.
 
 ## Project layout
 
@@ -23,7 +23,7 @@ src-tauri/src/           Rust backend
   commands/              Tauri commands, grouped by area
   drivers/               Driver trait + MariaDB/MySQL, SQL Server and MongoDB drivers, shared types
   ai/                    assistant: prompt, tools, Anthropic and OpenAI wire formats
-  config.rs secrets.rs   db-studio.json and Credential Manager
+  config.rs secrets.rs   fosta-studio.json and Credential Manager
   tasks.rs job.rs        startup tasks and their child processes
   schema.rs vector.rs    ER diagram data, MariaDB vector tools
 dev/                     docker-compose.yml and seed data for the test databases
@@ -56,7 +56,7 @@ scripts/                 toolchain installer and icon generator (PowerShell)
 npm install
 npm run tauri dev      # desktop app with hot reload
 npm run dev            # UI only, in a browser, against the mock backend (src/dev/devMock.ts)
-npm run tauri build -- --no-bundle   # portable src-tauri\target\release\db-studio.exe
+npm run tauri build -- --no-bundle   # portable src-tauri\target\release\fosta-studio.exe
 ```
 
 The mock backend is loaded only when Vite runs in dev mode and the page is not inside Tauri, so it never reaches the desktop build. Keep it
@@ -107,8 +107,8 @@ Notes on the live tests (`src-tauri/src/live_tests.rs`):
   chunk: the query view (CodeMirror) and the dev mock are loaded with dynamic `import()`.
 - **Rust**: errors are `AppError` strings shown to the user, so write them as sentences that say what to do. Serialised types use
   `#[serde(rename_all = "camelCase")]` and must match `src/core/types.ts`.
-- **Compatibility**: Tauri command names and argument names, the JSON shapes, the `db-studio.json` layout, the keyring service
-  `db-studio` and its account names, and the `db-studio.*` localStorage keys are a contract with existing installs. Change them only with
+- **Compatibility**: Tauri command names and argument names, the JSON shapes, the `fosta-studio.json` layout, the keyring service
+  `fosta-studio` and its account names, and the `db-studio.*` localStorage keys are a contract with existing installs. Change them only with
   a migration.
 - Unit-test pure logic (parsers, SQL builders) next to the code: `foo.test.ts` with Vitest, `#[cfg(test)] mod tests` in Rust.
 

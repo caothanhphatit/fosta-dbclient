@@ -1,4 +1,4 @@
-# Local test databases for DB Studio. Test-only credentials; never reuse them.
+# Local test databases for Fosta Studio. Test-only credentials; never reuse them.
 #   docker compose -f dev/docker-compose.yml up -d
 #   then: dev/seed-mssql.sh  (SQL Server has no init directory)
 #

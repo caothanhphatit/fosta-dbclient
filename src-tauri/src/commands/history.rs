@@ -43,7 +43,7 @@ pub async fn history_clear(state: State<'_, AppState>) -> AppResult<()> {
     with_store(&state, |store| store.clear()).await
 }
 
-/// Turns recording on or off (`queryHistory` in `db-studio.json`); existing entries are kept.
+/// Turns recording on or off (`queryHistory` in `fosta-studio.json`); existing entries are kept.
 #[tauri::command]
 pub fn set_query_history(state: State<'_, AppState>, enabled: bool) -> AppResult<AppConfig> {
     state.config.update(|config| {

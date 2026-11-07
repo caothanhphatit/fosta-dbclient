@@ -2,7 +2,9 @@ use keyring::Entry;
 
 use crate::error::AppResult;
 
-const SERVICE: &str = "db-studio";
+const SERVICE: &str = "fosta-studio";
+/// The Credential Manager service before the rename to Fosta Studio. Secrets found there are moved on first read.
+const LEGACY_SERVICE: &str = "db-studio";
 pub const EMBEDDING_ACCOUNT: &str = "embedding-api-key";
 /// Where the single assistant key lived before there were several LLM connections.
 const LEGACY_AI_ACCOUNT: &str = "ai-api-key";
@@ -15,15 +17,33 @@ pub fn save_password(account: &str, password: &str) -> AppResult<()> {
 }
 
 pub fn load_password(account: &str) -> AppResult<Option<String>> {
-    match Entry::new(SERVICE, account)?.get_password() {
+    if let Some(password) = read(SERVICE, account)? {
+        return Ok(Some(password));
+    }
+    // Saved before the rename: move it under the new service name so the old entry disappears.
+    let Some(password) = read(LEGACY_SERVICE, account)? else {
+        return Ok(None);
+    };
+    save_password(account, &password)?;
+    delete(LEGACY_SERVICE, account)?;
+    Ok(Some(password))
+}
+
+pub fn forget_password(account: &str) -> AppResult<()> {
+    delete(SERVICE, account)?;
+    delete(LEGACY_SERVICE, account)
+}
+
+fn read(service: &str, account: &str) -> AppResult<Option<String>> {
+    match Entry::new(service, account)?.get_password() {
         Ok(password) => Ok(Some(password)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(error.into()),
     }
 }
 
-pub fn forget_password(account: &str) -> AppResult<()> {
-    match Entry::new(SERVICE, account)?.delete_credential() {
+fn delete(service: &str, account: &str) -> AppResult<()> {
+    match Entry::new(service, account)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(error.into()),
     }

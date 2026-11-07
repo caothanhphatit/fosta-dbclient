@@ -274,7 +274,7 @@ async fn build_options(profile: &ConnectionProfile, password: &str) -> AppResult
             options
         }
     };
-    options.app_name = Some("DB Studio".to_owned());
+    options.app_name = Some("Fosta Studio".to_owned());
     options.connect_timeout = Some(CONNECT_TIMEOUT);
     options.server_selection_timeout = Some(CONNECT_TIMEOUT);
     Ok(options)

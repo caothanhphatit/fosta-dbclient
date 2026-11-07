@@ -36,7 +36,7 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
     h(
       "div",
       { class: "welcome-inner" },
-      h("div", { class: "welcome-brand" }, icon("database", "welcome-icon"), h("h1", {}, "DB Studio")),
+      h("div", { class: "welcome-brand" }, icon("database", "welcome-icon"), h("h1", {}, "Fosta Studio")),
       h("p", { class: "welcome-sub" }, "Workspace ", workspaceName, ". Connect on the left, then open a table or a query."),
       h(
         "div",
