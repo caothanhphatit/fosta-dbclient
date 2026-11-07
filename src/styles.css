@@ -1792,6 +1792,11 @@ pre.field-value.text {
   white-space: nowrap;
 }
 
+.status-version {
+  flex-shrink: 0;
+  color: var(--fg-3);
+}
+
 /* ---------------------------------------------------------------------------
    Overlays: menus, modals, toasts
    --------------------------------------------------------------------------- */

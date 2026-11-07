@@ -13,7 +13,9 @@
     "format:check": "prettier --check \"src/**/*.{ts,css}\" \"*.{ts,js}\"",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "version:set": "node scripts/version.mjs set",
+    "version:check": "node scripts/version.mjs check"
   },
   "dependencies": {
     "@codemirror/lang-sql": "^6.8.0",
