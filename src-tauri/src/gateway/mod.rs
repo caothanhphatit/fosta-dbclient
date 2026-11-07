@@ -1,0 +1,817 @@
+//! The statement gateway: every statement the app sends to a database on behalf of a
+//! caller — a query tab, a grid filter, a grid save, an import, "New database", or the
+//! assistant — passes through here before it reaches a [`Driver`](crate::drivers::Driver).
+//!
+//! 1. The statement is classified ([`classify`]): SQL is parsed per dialect, MongoDB
+//!    commands are classified by name. Grid filters must be a single condition ([`filter`]).
+//! 2. The workspace's rules ([`rules`]) give an [`Action`] per category: allow, confirm,
+//!    typed confirm or block. The assistant can only ever read metadata.
+//! 3. A confirmation is a structured `CONFIRMATION_REQUIRED` error with a one-time token
+//!    bound to the exact statement text and session; the UI asks the user and calls again
+//!    with the token. Blocked and confirmed operations go to the local audit log.
+//! 4. The rules also set engine-level backstops passed to the driver as [`Limits`]:
+//!    read-only sessions, statement timeouts and the result row limit.
+
+pub mod classify;
+pub mod filter;
+pub mod rules;
+
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
+use serde::{Deserialize, Serialize};
+
+use self::{
+    classify::{classify_changes, classify_mongo, classify_sql, Category, Classification, StatementInfo},
+    filter::{validate_filter, INVALID_FILTER},
+    rules::{Action, SafetySettings},
+};
+use crate::{
+    audit::{AuditEntry, AuditLog, Outcome},
+    config::AppConfig,
+    drivers::{
+        types::{BrowseRequest, QueryOutcome, RowChange, TablePage, TransactionOp, TransactionState},
+        DbManager, Engine, Limits,
+    },
+    error::{AppError, AppResult},
+    lock::lock,
+};
+
+pub const CONFIRMATION_REQUIRED: &str = "CONFIRMATION_REQUIRED";
+pub const CONFIRMATION_INVALID: &str = "CONFIRMATION_INVALID";
+pub const BLOCKED: &str = "BLOCKED";
+const TOKEN_LIFETIME: Duration = Duration::from_secs(5 * 60);
+const MAX_PENDING_TOKENS: usize = 64;
+
+/// Who is sending a statement; each caller gets its own rules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Caller {
+    QueryTab,
+    GridFilter,
+    GridSave,
+    Import,
+    CreateDatabase,
+    Assistant,
+    /// Begin / Commit / Rollback / auto-commit from the query toolbar.
+    Transaction,
+    /// Changes to the rules themselves (audit only).
+    Settings,
+}
+
+impl Caller {
+    fn id(self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    }
+}
+
+/// The user's answer to a `CONFIRMATION_REQUIRED` error.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Confirmation {
+    pub token: String,
+    /// What the user typed, for typed confirmations.
+    #[serde(default)]
+    pub typed: Option<String>,
+}
+
+/// Where a statement runs: workspace and connection identity plus the rules in force.
+#[derive(Clone, Debug)]
+pub struct Context {
+    pub workspace_id: String,
+    pub workspace_name: String,
+    pub connection_id: String,
+    pub connection_name: String,
+    pub safety: SafetySettings,
+}
+
+impl Context {
+    /// The rules for a saved connection: its own override, else its workspace's.
+    pub fn for_connection(config: &AppConfig, connection_id: &str) -> AppResult<Self> {
+        let (workspace, profile) = config
+            .connection_scope(connection_id)
+            .ok_or_else(|| AppError::new(format!("Connection '{connection_id}' no longer exists")))?;
+        Ok(Self {
+            workspace_id: workspace.id.clone(),
+            workspace_name: workspace.name.clone(),
+            connection_id: profile.id.clone(),
+            connection_name: profile.name.clone(),
+            safety: profile.safety.clone().unwrap_or_else(|| workspace.safety()),
+        })
+    }
+
+    fn limits(&self) -> Limits {
+        let effective = self.safety.effective();
+        Limits {
+            max_rows: effective.max_rows as usize,
+            timeout_secs: effective.statement_timeout_secs,
+            read_only: effective.read_only(),
+        }
+    }
+}
+
+/// The payload of `CONFIRMATION_REQUIRED` and `BLOCKED` errors (`GatewayProblem` in `src/core/types.ts`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Problem<'a> {
+    code: &'static str,
+    caller: Caller,
+    workspace: &'a str,
+    connection: &'a str,
+    preset: rules::Preset,
+    /// `confirm` or `typed` for confirmations, `block` when blocked.
+    level: Action,
+    token: Option<String>,
+    /// What the user must type for a typed confirmation.
+    expected: Option<String>,
+    categories: Vec<Category>,
+    tables: Vec<String>,
+    statements: &'a [StatementInfo],
+}
+
+#[derive(Clone)]
+struct Pending {
+    binding: String,
+    expected: Option<String>,
+    expires: Instant,
+    /// Already used once (only reusable tokens survive their first use).
+    used: bool,
+}
+
+struct Request<'a> {
+    caller: Caller,
+    context: &'a Context,
+    /// Session id for query tabs, connection id otherwise: tokens are bound to it.
+    scope: &'a str,
+    /// The exact statement text (or a canonical form of the grid changes).
+    text: &'a str,
+    classification: &'a Classification,
+    confirmation: Option<&'a Confirmation>,
+    /// One import run sends its rows in batches: its token is bound to the run (id, database,
+    /// table) and stays valid for the following batches until it expires. Everything else is single-use.
+    reusable: bool,
+}
+
+#[derive(Default)]
+pub struct Gateway {
+    tokens: Mutex<HashMap<String, Pending>>,
+    audit: Mutex<Option<Arc<AuditLog>>>,
+}
+
+impl Gateway {
+    #[cfg(test)]
+    pub fn with_audit(log: AuditLog) -> Self {
+        Self {
+            tokens: Mutex::default(),
+            audit: Mutex::new(Some(Arc::new(log))),
+        }
+    }
+
+    /// Writes one audit entry; a failing disk never stops the operation.
+    pub fn audit(&self, entry: AuditEntry) {
+        let log = {
+            let mut slot = lock(&self.audit);
+            if slot.is_none() {
+                *slot = AuditLog::open_default().ok().map(Arc::new);
+            }
+            slot.clone()
+        };
+        if let Some(log) = log {
+            if let Err(error) = log.append(entry) {
+                eprintln!("audit log: {error}");
+            }
+        }
+    }
+
+    fn authorize(&self, request: &Request<'_>) -> AppResult<()> {
+        let effective = request.context.safety.effective();
+        let statements = &request.classification.statements;
+        if request.caller == Caller::QueryTab && !effective.allow_multi_statement && statements.len() > 1 {
+            return Err(self.block(
+                request,
+                format!(
+                    "Running several statements at once is turned off in workspace {}. Run them one at a time.",
+                    request.context.workspace_name
+                ),
+            ));
+        }
+        let action = match request.caller {
+            // The assistant never changes anything, whatever the rules say.
+            Caller::Assistant if statements.iter().any(|statement| statement.category != Category::Read) => Action::Block,
+            Caller::Transaction => Action::Allow,
+            _ => statements
+                .iter()
+                .map(|statement| effective.rules.action(statement.category))
+                .max()
+                .unwrap_or(Action::Allow),
+        };
+        match action {
+            Action::Allow => Ok(()),
+            Action::Block => {
+                let worst = worst_category(request.classification);
+                let message = if request.caller == Caller::Assistant {
+                    "The assistant cannot run statements that change anything.".to_owned()
+                } else {
+                    format!(
+                        "Blocked: {} statements are not allowed by the {} rules of workspace {}. \
+                         Change them under Edit workspace → Safety, or use a read-write connection elsewhere.",
+                        worst.map(Category::label).unwrap_or("These"),
+                        preset_label(request.context.safety.preset),
+                        request.context.workspace_name
+                    )
+                };
+                Err(self.block(request, message))
+            }
+            Action::Confirm | Action::Typed => self.confirm(request, action),
+        }
+    }
+
+    fn block(&self, request: &Request<'_>, message: String) -> AppError {
+        self.audit(audit_entry(request, Outcome::Blocked, &message));
+        AppError::structured(
+            message,
+            Problem {
+                code: BLOCKED,
+                caller: request.caller,
+                workspace: &request.context.workspace_name,
+                connection: &request.context.connection_name,
+                preset: request.context.safety.preset,
+                level: Action::Block,
+                token: None,
+                expected: None,
+                categories: request.classification.categories(),
+                tables: request.classification.tables(),
+                statements: &request.classification.statements,
+            },
+        )
+    }
+
+    fn confirm(&self, request: &Request<'_>, level: Action) -> AppResult<()> {
+        let binding = binding(request);
+        if let Some(confirmation) = request.confirmation {
+            let now = Instant::now();
+            let pending = {
+                let mut tokens = lock(&self.tokens);
+                let matches = tokens
+                    .get(&confirmation.token)
+                    .is_some_and(|pending| pending.binding == binding && pending.expires > now);
+                if request.reusable && matches {
+                    tokens.get_mut(&confirmation.token).map(|pending| {
+                        let before = pending.clone();
+                        pending.used = true;
+                        pending.expires = now + TOKEN_LIFETIME;
+                        before
+                    })
+                } else {
+                    tokens.remove(&confirmation.token)
+                }
+            };
+            let valid = pending
+                .as_ref()
+                .is_some_and(|pending| pending.binding == binding && pending.expires > now);
+            let first_use = pending.as_ref().is_some_and(|pending| !pending.used);
+            if !valid {
+                return Err(AppError::structured(
+                    "This confirmation is no longer valid: it is single-use and bound to the exact statement. Run it again to confirm anew.",
+                    serde_json::json!({ "code": CONFIRMATION_INVALID }),
+                ));
+            }
+            if let Some(expected) = pending.and_then(|pending| pending.expected) {
+                let typed = confirmation.typed.as_deref().map(str::trim).unwrap_or_default();
+                if typed != expected {
+                    return Err(AppError::structured(
+                        format!("The typed name does not match \"{expected}\". Nothing was run."),
+                        serde_json::json!({ "code": CONFIRMATION_INVALID }),
+                    ));
+                }
+            }
+            if first_use {
+                self.audit(audit_entry(request, Outcome::Confirmed, ""));
+            }
+            return Ok(());
+        }
+        let expected = (level == Action::Typed).then(|| expected_name(request));
+        let token = new_token();
+        {
+            let mut tokens = lock(&self.tokens);
+            let now = Instant::now();
+            tokens.retain(|_, pending| pending.expires > now);
+            if tokens.len() >= MAX_PENDING_TOKENS {
+                tokens.clear();
+            }
+            tokens.insert(
+                token.clone(),
+                Pending {
+                    binding,
+                    expected: expected.clone(),
+                    expires: now + TOKEN_LIFETIME,
+                    used: false,
+                },
+            );
+        }
+        let worst = worst_category(request.classification).map(Category::label).unwrap_or("These");
+        let message = match &expected {
+            Some(name) => format!(
+                "{worst} statements need a typed confirmation in workspace {}: type \"{name}\" to run them.",
+                request.context.workspace_name
+            ),
+            None => format!(
+                "{worst} statements need a confirmation in workspace {}.",
+                request.context.workspace_name
+            ),
+        };
+        Err(AppError::structured(
+            message,
+            Problem {
+                code: CONFIRMATION_REQUIRED,
+                caller: request.caller,
+                workspace: &request.context.workspace_name,
+                connection: &request.context.connection_name,
+                preset: request.context.safety.preset,
+                level,
+                token: Some(token),
+                expected,
+                categories: request.classification.categories(),
+                tables: request.classification.tables(),
+                statements: &request.classification.statements,
+            },
+        ))
+    }
+}
+
+fn worst_category(classification: &Classification) -> Option<Category> {
+    classification.statements.iter().map(|statement| statement.category).max()
+}
+
+fn preset_label(preset: rules::Preset) -> &'static str {
+    match preset {
+        rules::Preset::Open => "Open",
+        rules::Preset::Guarded => "Guarded",
+        rules::Preset::ReadOnly => "Read-only",
+        rules::Preset::Custom => "Custom",
+    }
+}
+
+fn binding(request: &Request<'_>) -> String {
+    format!(
+        "{:?}\u{0}{}\u{0}{}\u{0}{}",
+        request.caller, request.context.connection_id, request.scope, request.text
+    )
+}
+
+/// A typed confirmation asks for the table name when one table is at stake, else the workspace name.
+fn expected_name(request: &Request<'_>) -> String {
+    let effective = request.context.safety.effective();
+    let mut tables: Vec<String> = Vec::new();
+    for statement in &request.classification.statements {
+        if effective.rules.action(statement.category) != Action::Typed {
+            continue;
+        }
+        for table in &statement.tables {
+            let short = short_name(table);
+            if !tables.contains(&short) {
+                tables.push(short);
+            }
+        }
+    }
+    match tables.as_slice() {
+        [table] if !table.is_empty() => table.clone(),
+        _ => request.context.workspace_name.clone(),
+    }
+}
+
+/// `shop.orders` → `orders`, `[sales].[Invoices]` → `Invoices`.
+fn short_name(table: &str) -> String {
+    table
+        .rsplit('.')
+        .next()
+        .unwrap_or(table)
+        .trim_matches(|c| c == '`' || c == '"' || c == '[' || c == ']')
+        .to_owned()
+}
+
+fn new_token() -> String {
+    let mut bytes = [0u8; 16];
+    if getrandom::fill(&mut bytes).is_err() {
+        // Extremely unlikely; fall back to time and address entropy (still single-use and bound).
+        let seed = format!("{:?}{:p}", Instant::now(), &bytes);
+        for (index, byte) in seed.bytes().enumerate() {
+            bytes[index % 16] ^= byte;
+        }
+    }
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn audit_entry(request: &Request<'_>, outcome: Outcome, detail: &str) -> AuditEntry {
+    let category = worst_category(request.classification)
+        .and_then(|category| serde_json::to_value(category).ok())
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    AuditEntry {
+        time: 0,
+        caller: request.caller.id(),
+        workspace_id: request.context.workspace_id.clone(),
+        workspace: request.context.workspace_name.clone(),
+        connection_id: request.context.connection_id.clone(),
+        connection: request.context.connection_name.clone(),
+        category,
+        statement: request
+            .classification
+            .statements
+            .iter()
+            .map(|statement| statement.excerpt.as_str())
+            .collect::<Vec<_>>()
+            .join("; "),
+        outcome: Some(outcome),
+        detail: detail.to_owned(),
+    }
+}
+
+// --- Gated operations: what the Tauri commands call -------------------------------------
+
+/// `browse_table`: validates the filter as one condition, then reads a page.
+pub async fn browse(db: &DbManager, context: &Context, request: &BrowseRequest) -> AppResult<TablePage> {
+    let driver = db.driver(&request.connection_id)?;
+    check_filter(db, context, driver.engine(), request.filter.as_deref())?;
+    driver.browse_table(request, &context.limits()).await
+}
+
+/// Validates a grid (or vector-search) filter and audits a rejection.
+pub fn check_filter(db: &DbManager, context: &Context, engine: Engine, filter: Option<&str>) -> AppResult<()> {
+    validate_filter(engine, filter).inspect_err(|error| {
+        if error.code() == Some(INVALID_FILTER) {
+            db.gateway.audit(AuditEntry {
+                caller: Caller::GridFilter.id(),
+                workspace_id: context.workspace_id.clone(),
+                workspace: context.workspace_name.clone(),
+                connection_id: context.connection_id.clone(),
+                connection: context.connection_name.clone(),
+                category: "filter".to_owned(),
+                statement: filter.unwrap_or_default().to_owned(),
+                outcome: Some(Outcome::Blocked),
+                detail: error.to_string(),
+                ..AuditEntry::default()
+            });
+        }
+    })
+}
+
+/// `apply_changes` from a grid save or an import.
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_changes(
+    db: &DbManager,
+    context: &Context,
+    caller: Caller,
+    database: &str,
+    table: &str,
+    changes: Vec<RowChange>,
+    import_id: Option<&str>,
+    confirmation: Option<&Confirmation>,
+) -> AppResult<u64> {
+    if !matches!(caller, Caller::GridSave | Caller::Import) {
+        return Err(AppError::new("Row changes come from a grid save or an import"));
+    }
+    let driver = db.driver(&context.connection_id)?;
+    let classification = classify_changes(table, &changes);
+    // An import run is confirmed once for all of its batches; a grid save for its exact changes.
+    let import_run = import_id.filter(|id| caller == Caller::Import && !id.is_empty());
+    let text = match import_run {
+        Some(id) => format!("{database}\u{0}{table}\u{0}import:{id}"),
+        None => format!("{database}\u{0}{table}\u{0}{}", serde_json::to_string(&changes)?),
+    };
+    db.gateway.authorize(&Request {
+        caller,
+        context,
+        scope: &context.connection_id,
+        text: &text,
+        classification: &classification,
+        confirmation,
+        reusable: import_run.is_some(),
+    })?;
+    driver.apply_changes(database, table, changes).await
+}
+
+/// "New database…" (DDL).
+pub async fn create_database(
+    db: &DbManager,
+    context: &Context,
+    name: &str,
+    first_collection: Option<&str>,
+    confirmation: Option<&Confirmation>,
+) -> AppResult<()> {
+    let driver = db.driver(&context.connection_id)?;
+    let classification = Classification::single(StatementInfo {
+        category: Category::Ddl,
+        kind: "CREATE DATABASE".to_owned(),
+        tables: Vec::new(),
+        excerpt: format!("CREATE DATABASE {name}"),
+        reason: None,
+    });
+    let text = format!("{name}\u{0}{}", first_collection.unwrap_or_default());
+    db.gateway.authorize(&Request {
+        caller: Caller::CreateDatabase,
+        context,
+        scope: &context.connection_id,
+        text: &text,
+        classification: &classification,
+        confirmation,
+        reusable: false,
+    })?;
+    driver.create_database(name, first_collection).await
+}
+
+/// `run_sql` from a query tab: classified, checked against the rules, then run with the limits.
+pub async fn run_query(
+    db: &DbManager,
+    context: &Context,
+    session_id: &str,
+    database: Option<String>,
+    text: String,
+    confirmation: Option<&Confirmation>,
+) -> AppResult<QueryOutcome> {
+    let driver = db.session_driver(session_id)?;
+    let classification = classify_for(driver.engine(), &text);
+    let binding = format!("{}\u{0}{text}", database.as_deref().unwrap_or_default());
+    db.gateway.authorize(&Request {
+        caller: Caller::QueryTab,
+        context,
+        scope: session_id,
+        text: &binding,
+        classification: &classification,
+        confirmation,
+        reusable: false,
+    })?;
+    driver.run_query(session_id, database, text, &context.limits()).await
+}
+
+/// Begin / Commit / Rollback / auto-commit from the query toolbar: always allowed, even in a
+/// Read-only workspace (Begin then opens a read-only transaction where the engine has one).
+pub async fn transaction(db: &DbManager, context: &Context, session_id: &str, op: TransactionOp) -> AppResult<TransactionState> {
+    let driver = db.session_driver(session_id)?;
+    let classification = Classification::single(StatementInfo {
+        category: Category::Transaction,
+        kind: format!("{op:?}").to_uppercase(),
+        tables: Vec::new(),
+        excerpt: format!("{op:?}"),
+        reason: None,
+    });
+    db.gateway.authorize(&Request {
+        caller: Caller::Transaction,
+        context,
+        scope: session_id,
+        text: "",
+        classification: &classification,
+        confirmation: None,
+        reusable: false,
+    })?;
+    driver.transaction(session_id, op, &context.limits()).await
+}
+
+pub fn classify_for(engine: Engine, text: &str) -> Classification {
+    match engine {
+        Engine::MongoDb => classify_mongo(text),
+        _ => classify_sql(engine, text),
+    }
+}
+
+/// What an assistant tool may do. Every tool the model can call must be listed here; the
+/// assistant has no tool that runs a statement or changes data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssistantToolEffect {
+    /// Reads catalog metadata (names, columns, DDL) through the driver; never row data.
+    ReadMetadata,
+    /// Asks the UI to open a view; the UI pre-fills it and runs nothing on its own.
+    OpenView,
+}
+
+pub fn assistant_tool_effect(name: &str) -> AppResult<AssistantToolEffect> {
+    match name {
+        "list_databases" | "list_tables" | "describe_table" | "schema_overview" => Ok(AssistantToolEffect::ReadMetadata),
+        "open_diagram" | "open_table" | "open_query" => Ok(AssistantToolEffect::OpenView),
+        other => Err(AppError::new(format!("The assistant has no tool called {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rules::Preset, *};
+
+    fn gateway() -> (Gateway, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!("fosta-gateway-{}-{}.jsonl", std::process::id(), new_token()));
+        (Gateway::with_audit(AuditLog::new(path.clone(), 1000)), path)
+    }
+
+    fn context(preset: Preset) -> Context {
+        Context {
+            workspace_id: "w".into(),
+            workspace_name: "Production".into(),
+            connection_id: "c".into(),
+            connection_name: "Main DB".into(),
+            safety: SafetySettings::preset(preset),
+        }
+    }
+
+    fn ask(gateway: &Gateway, context: &Context, sql: &str, confirmation: Option<&Confirmation>) -> AppResult<()> {
+        let classification = classify_sql(Engine::MariaDb, sql);
+        gateway.authorize(&Request {
+            caller: Caller::QueryTab,
+            context,
+            scope: "session-1",
+            text: sql,
+            classification: &classification,
+            confirmation,
+            reusable: false,
+        })
+    }
+
+    fn token_of(error: &AppError) -> (String, Option<String>) {
+        let detail = error.detail().expect("structured");
+        (
+            detail["token"].as_str().expect("token").to_owned(),
+            detail["expected"].as_str().map(str::to_owned),
+        )
+    }
+
+    #[test]
+    fn open_allows_everything_and_read_only_blocks_writes() {
+        let (gateway, path) = gateway();
+        let open = context(Preset::Open);
+        for sql in ["SELECT 1", "DELETE FROM t", "DROP TABLE t", "GRANT ALL ON *.* TO x"] {
+            assert!(ask(&gateway, &open, sql, None).is_ok(), "{sql}");
+        }
+        let read_only = context(Preset::ReadOnly);
+        assert!(ask(&gateway, &read_only, "SELECT * FROM t", None).is_ok());
+        assert!(ask(&gateway, &read_only, "COMMIT", None).is_ok(), "commit is always allowed");
+        let error = ask(&gateway, &read_only, "INSERT INTO t VALUES (1)", None).unwrap_err();
+        assert_eq!(error.code(), Some(BLOCKED));
+        assert_eq!(error.detail().unwrap()["categories"][0], "write");
+        assert_eq!(ask(&gateway, &read_only, "FROBNICATE", None).unwrap_err().code(), Some(BLOCKED));
+        let audit = AuditLog::new(path.clone(), 1000).read_all().unwrap();
+        assert_eq!(audit.len(), 2);
+        assert_eq!(audit[0].outcome, Some(Outcome::Blocked));
+        assert_eq!(audit[0].caller, "queryTab");
+        assert_eq!(audit[0].workspace, "Production");
+        assert!(audit[0].statement.starts_with("INSERT INTO t"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn guarded_confirmation_tokens_are_single_use_and_bound() {
+        let (gateway, path) = gateway();
+        let guarded = context(Preset::Guarded);
+        let sql = "UPDATE orders SET status = 'paid' WHERE id = 7";
+        let error = ask(&gateway, &guarded, sql, None).unwrap_err();
+        assert_eq!(error.code(), Some(CONFIRMATION_REQUIRED));
+        assert_eq!(error.detail().unwrap()["level"], "confirm");
+        assert_eq!(error.detail().unwrap()["tables"][0], "orders");
+        let (token, expected) = token_of(&error);
+        assert!(expected.is_none());
+        // Bound to the exact text: a different statement cannot use it (and it is spent).
+        let wrong = Confirmation {
+            token: token.clone(),
+            typed: None,
+        };
+        let other = ask(&gateway, &guarded, "DELETE FROM orders WHERE id > 0", Some(&wrong)).unwrap_err();
+        assert_eq!(other.code(), Some(CONFIRMATION_INVALID));
+        assert_eq!(
+            ask(&gateway, &guarded, sql, Some(&wrong)).unwrap_err().code(),
+            Some(CONFIRMATION_INVALID)
+        );
+        // A fresh token works once.
+        let (token, _) = token_of(&ask(&gateway, &guarded, sql, None).unwrap_err());
+        let good = Confirmation { token, typed: None };
+        assert!(ask(&gateway, &guarded, sql, Some(&good)).is_ok());
+        assert_eq!(
+            ask(&gateway, &guarded, sql, Some(&good)).unwrap_err().code(),
+            Some(CONFIRMATION_INVALID)
+        );
+        // Bound to the session too.
+        let (token, _) = token_of(&ask(&gateway, &guarded, sql, None).unwrap_err());
+        let classification = classify_sql(Engine::MariaDb, sql);
+        let elsewhere = gateway.authorize(&Request {
+            caller: Caller::QueryTab,
+            context: &guarded,
+            scope: "session-2",
+            text: sql,
+            classification: &classification,
+            confirmation: Some(&Confirmation { token, typed: None }),
+            reusable: false,
+        });
+        assert_eq!(elsewhere.unwrap_err().code(), Some(CONFIRMATION_INVALID));
+        let audit = AuditLog::new(path.clone(), 1000).read_all().unwrap();
+        assert_eq!(audit.iter().filter(|entry| entry.outcome == Some(Outcome::Confirmed)).count(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn destructive_statements_need_the_typed_name() {
+        let (gateway, path) = gateway();
+        let guarded = context(Preset::Guarded);
+        let error = ask(&gateway, &guarded, "DELETE FROM shop.orders", None).unwrap_err();
+        assert_eq!(error.detail().unwrap()["level"], "typed");
+        let (token, expected) = token_of(&error);
+        assert_eq!(expected.as_deref(), Some("orders"));
+        let typo = Confirmation {
+            token,
+            typed: Some("order".into()),
+        };
+        assert_eq!(
+            ask(&gateway, &guarded, "DELETE FROM shop.orders", Some(&typo)).unwrap_err().code(),
+            Some(CONFIRMATION_INVALID)
+        );
+        let (token, _) = token_of(&ask(&gateway, &guarded, "DELETE FROM shop.orders", None).unwrap_err());
+        let typed = Confirmation {
+            token,
+            typed: Some(" orders ".into()),
+        };
+        assert!(ask(&gateway, &guarded, "DELETE FROM shop.orders", Some(&typed)).is_ok());
+        // Several tables (or none) ask for the workspace name.
+        let error = ask(&gateway, &guarded, "DROP TABLE a, b", None).unwrap_err();
+        assert_eq!(token_of(&error).1.as_deref(), Some("Production"));
+        let error = ask(&gateway, &guarded, "KILL 12", None).unwrap_err();
+        assert_eq!(token_of(&error).1.as_deref(), Some("Production"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn multi_statement_switch_and_the_assistant() {
+        let (gateway, path) = gateway();
+        let mut custom = context(Preset::Custom);
+        custom.safety.rules.write = Action::Allow;
+        custom.safety.allow_multi_statement = false;
+        assert!(ask(&gateway, &custom, "SELECT 1", None).is_ok());
+        assert_eq!(
+            ask(&gateway, &custom, "SELECT 1; SELECT 2", None).unwrap_err().code(),
+            Some(BLOCKED)
+        );
+        let open = context(Preset::Open);
+        for (sql, allowed) in [("SELECT 1", true), ("DELETE FROM t WHERE id = 1", false)] {
+            let classification = classify_sql(Engine::MariaDb, sql);
+            let outcome = gateway.authorize(&Request {
+                caller: Caller::Assistant,
+                context: &open,
+                scope: "c",
+                text: sql,
+                classification: &classification,
+                confirmation: None,
+                reusable: false,
+            });
+            assert_eq!(outcome.is_ok(), allowed, "{sql}");
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn an_import_run_is_confirmed_once_for_all_batches() {
+        let (gateway, path) = gateway();
+        let guarded = context(Preset::Guarded);
+        let classification = classify_sql(Engine::MariaDb, "INSERT INTO t VALUES (1)");
+        let request = |text: &'static str, reusable: bool, confirmation: Option<&'static Confirmation>| Request {
+            caller: Caller::Import,
+            context: &guarded,
+            scope: "c",
+            text,
+            classification: &classification,
+            confirmation,
+            reusable,
+        };
+        let error = gateway.authorize(&request("shop\0t\0import:run-1", true, None)).unwrap_err();
+        let token = token_of(&error).0;
+        let confirmation: &'static Confirmation = Box::leak(Box::new(Confirmation { token, typed: None }));
+        for _batch in 0..3 {
+            assert!(gateway
+                .authorize(&request("shop\0t\0import:run-1", true, Some(confirmation)))
+                .is_ok());
+        }
+        // Not for another run or another table.
+        assert!(gateway
+            .authorize(&request("shop\0t\0import:run-2", true, Some(confirmation)))
+            .is_err());
+        let audit = AuditLog::new(path.clone(), 1000).read_all().unwrap();
+        assert_eq!(audit.iter().filter(|entry| entry.outcome == Some(Outcome::Confirmed)).count(), 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn every_assistant_tool_is_read_only_or_opens_a_view() {
+        for name in [
+            "list_databases",
+            "list_tables",
+            "describe_table",
+            "schema_overview",
+            "open_diagram",
+            "open_table",
+            "open_query",
+        ] {
+            assert!(assistant_tool_effect(name).is_ok(), "{name}");
+        }
+        assert!(assistant_tool_effect("run_sql").is_err());
+        assert!(assistant_tool_effect("apply_changes").is_err());
+    }
+}

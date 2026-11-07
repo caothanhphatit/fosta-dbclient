@@ -24,6 +24,8 @@ tiberius = { version = "0.12", default-features = false, features = ["tds73", "n
 mongodb = "3"
 keyring = { version = "3", features = ["windows-native"] }
 reqwest = { version = "0.12", features = ["json"] }
+sqlparser = { version = "0.63", default-features = false, features = ["std", "visitor"] }
+getrandom = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

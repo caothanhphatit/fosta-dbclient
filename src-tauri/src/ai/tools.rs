@@ -1,6 +1,8 @@
 //! Tools the model may call. They only read metadata (database, table and
 //! column names, DDL) or ask the UI to open a view; none of them runs a query
-//! or changes data.
+//! or changes data. Each tool is registered with the statement gateway
+//! (`gateway::assistant_tool_effect`), and a filter from `open_table` is only
+//! pre-filled in the grid for the user to apply.
 
 use serde_json::{json, Value};
 use tauri::ipc::Channel;
@@ -8,6 +10,7 @@ use tauri::ipc::Channel;
 use super::{prompt::truncate, ChatContext, ChatEvent, ToolCall, UiAction, Wire};
 use crate::{
     drivers::{types::TableDesign, DbManager},
+    gateway,
     schema::{self, SchemaGraph},
 };
 
@@ -39,7 +42,7 @@ pub(super) fn tool_definitions() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "open_table",
-            description: "Opens a table's data grid in the app, optionally filtered (a SQL WHERE condition, or a JSON query for MongoDB). The user sees the rows; you do not.",
+            description: "Opens a table's data grid in the app. A filter (a SQL WHERE condition, or a JSON query for MongoDB) is only pre-filled as your suggestion: nothing runs until the user applies it. The user sees the rows; you do not.",
             schema: json!({
                 "type": "object",
                 "properties": {
@@ -112,6 +115,8 @@ pub(super) async fn run_tool(
     call: &ToolCall,
     events: &Channel<ChatEvent>,
 ) -> Result<String, String> {
+    // Every tool is registered with the gateway as metadata-only or view-opening; anything else is refused.
+    gateway::assistant_tool_effect(&call.name).map_err(|error| error.to_string())?;
     let connection_id = context.connection_id.as_deref().ok_or("No connection is open")?;
     let driver = db.driver(connection_id).map_err(|error| error.to_string())?;
     let argument = |key: &str| {
@@ -155,16 +160,23 @@ pub(super) async fn run_tool(
             let table = argument("table").ok_or("`table` is required")?;
             let database = database()?;
             let filter = argument("filter");
+            if let Some(filter) = filter.as_deref() {
+                // Same check as a grid filter, so the model can fix a bad one; it still never runs here.
+                gateway::filter::validate_filter(driver.engine(), Some(filter)).map_err(|error| error.to_string())?;
+            }
             show(
                 events,
                 UiAction::OpenTable {
                     database: database.clone(),
                     table: table.clone(),
-                    filter: filter.clone(),
+                    suggested_filter: filter.clone(),
                 },
             );
             return Ok(match filter {
-                Some(filter) => format!("Opened {database}.{table} filtered by {filter}. The user sees the rows; you do not."),
+                Some(filter) => format!(
+                    "Opened {database}.{table} with the filter {filter} pre-filled as your suggestion. It has not run: \
+                     the user reviews it and applies it. You do not see the rows."
+                ),
                 None => format!("Opened {database}.{table}. The user sees the rows; you do not."),
             });
         }
@@ -308,4 +320,148 @@ fn format_overview(database: &str, graph: &SchemaGraph) -> String {
         }
     }
     truncate(&text, MAX_OVERVIEW_CHARS)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use tauri::ipc::InvokeResponseBody;
+
+    use super::*;
+    use crate::{
+        drivers::{
+            types::{BrowseRequest, ColumnDesign, QueryOutcome, RowChange, TableInfo, TablePage, TransactionOp, TransactionState},
+            Driver, Engine, Limits,
+        },
+        error::{AppError, AppResult},
+    };
+
+    /// Answers catalog reads and records every call that would run a statement or change data.
+    #[derive(Default)]
+    struct Recorder {
+        executed: Mutex<Vec<&'static str>>,
+    }
+
+    impl Recorder {
+        fn ran(&self, what: &'static str) -> AppError {
+            self.executed.lock().unwrap().push(what);
+            AppError::new(format!("{what} must not be called by an assistant tool"))
+        }
+    }
+
+    #[async_trait]
+    impl Driver for Recorder {
+        fn engine(&self) -> Engine {
+            Engine::MariaDb
+        }
+        async fn list_databases(&self) -> AppResult<Vec<String>> {
+            Ok(vec!["shop".into()])
+        }
+        async fn create_database(&self, _: &str, _: Option<&str>) -> AppResult<()> {
+            Err(self.ran("create_database"))
+        }
+        async fn list_tables(&self, _: &str) -> AppResult<Vec<TableInfo>> {
+            Ok(vec![TableInfo {
+                name: "orders".into(),
+                kind: "table".into(),
+                rows: Some(3),
+                comment: String::new(),
+            }])
+        }
+        async fn describe_table(&self, _: &str, _: &str) -> AppResult<TableDesign> {
+            Ok(TableDesign {
+                columns: vec![ColumnDesign {
+                    name: "id".into(),
+                    column_type: "int".into(),
+                    nullable: false,
+                    key: "PRI".into(),
+                    default_value: None,
+                    extra: String::new(),
+                    comment: String::new(),
+                }],
+                ddl: "CREATE TABLE orders (id INT PRIMARY KEY)".into(),
+            })
+        }
+        async fn browse_table(&self, _: &BrowseRequest, _: &Limits) -> AppResult<TablePage> {
+            Err(self.ran("browse_table"))
+        }
+        async fn apply_changes(&self, _: &str, _: &str, _: Vec<RowChange>) -> AppResult<u64> {
+            Err(self.ran("apply_changes"))
+        }
+        async fn open_session(&self, _: &str) -> AppResult<()> {
+            Err(self.ran("open_session"))
+        }
+        fn close_session(&self, _: &str) {}
+        async fn run_query(&self, _: &str, _: Option<String>, _: String, _: &Limits) -> AppResult<QueryOutcome> {
+            Err(self.ran("run_query"))
+        }
+        async fn cancel_query(&self, _: &str) -> AppResult<()> {
+            Err(self.ran("cancel_query"))
+        }
+        async fn transaction(&self, _: &str, _: TransactionOp, _: &Limits) -> AppResult<TransactionState> {
+            Err(self.ran("transaction"))
+        }
+    }
+
+    fn call(name: &str, input: Value) -> ToolCall {
+        ToolCall {
+            id: "call-1".into(),
+            name: name.into(),
+            input,
+        }
+    }
+
+    #[tokio::test]
+    async fn no_assistant_tool_runs_a_statement_or_changes_data() {
+        let db = DbManager::default();
+        let recorder = Arc::new(Recorder::default());
+        db.insert_driver("c", recorder.clone());
+        let context: ChatContext = serde_json::from_value(json!({ "connectionId": "c", "database": "shop" })).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let sink = seen.clone();
+        let events = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(json) = body {
+                sink.lock().unwrap().push(json);
+            }
+            Ok(())
+        });
+        let inputs = [
+            ("list_databases", json!({})),
+            ("list_tables", json!({})),
+            ("describe_table", json!({ "table": "orders" })),
+            ("schema_overview", json!({})),
+            ("open_diagram", json!({ "focus_table": "orders" })),
+            ("open_table", json!({ "table": "orders", "filter": "status = 'paid'" })),
+            ("open_query", json!({ "sql": "DELETE FROM orders" })),
+        ];
+        let defined: Vec<&str> = tool_definitions().iter().map(|tool| tool.name).collect();
+        assert_eq!(defined.len(), inputs.len(), "every tool is exercised here");
+        for (name, input) in inputs {
+            assert!(defined.contains(&name), "{name}");
+            let outcome = run_tool(&db, &context, &call(name, input), &events).await;
+            assert!(outcome.is_ok(), "{name}: {outcome:?}");
+        }
+        // Stacked statements in a suggested filter are rejected before the UI ever sees them.
+        let injected = call(
+            "open_table",
+            json!({ "table": "orders", "filter": "1=0; DELETE FROM orders; SELECT 1 WHERE 1" }),
+        );
+        assert!(run_tool(&db, &context, &injected, &events).await.is_err());
+        assert!(
+            run_tool(&db, &context, &call("run_sql", json!({ "sql": "DELETE FROM orders" })), &events)
+                .await
+                .is_err()
+        );
+        assert!(
+            recorder.executed.lock().unwrap().is_empty(),
+            "assistant tools ran statements: {:?}",
+            recorder.executed.lock().unwrap()
+        );
+        let events = seen.lock().unwrap().clone();
+        let tables: Vec<&String> = events.iter().filter(|event| event.contains("openTable")).collect();
+        assert_eq!(tables.len(), 1, "{events:?}");
+        assert!(tables[0].contains(r#""suggestedFilter":"status = 'paid'""#), "{}", tables[0]);
+    }
 }
