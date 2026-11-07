@@ -88,9 +88,9 @@ Code: `src-tauri/src/gateway/` (backend), `src/features/safety/` (dialogs, the S
   (`apply_changes`), `create_database`, transaction controls and the assistant. The gateway knows which one is calling.
 - **Classification** (`gateway/classify.rs`): SQL is parsed with `sqlparser` in the engine's dialect (MySQL for MariaDB/MySQL, MsSql for
   SQL Server, Generic as a fallback). Every statement, including statements nested in CTEs, `EXPLAIN ANALYZE` and control flow, gets a
-  category: *read*, *transaction*, *write* (INSERT/UPDATE/DELETE/MERGE/REPLACE, procedure calls), *DDL*, *destructive* (DROP, TRUNCATE,
-  UPDATE/DELETE without WHERE, ALTER … DROP) or *administrative* (users, grants, KILL, SET GLOBAL, settings that switch off the app's own
-  backstops). MySQL's `/*! … */` comments are classified as the code the server runs. SQL the parser does not understand is *unknown*
+  category: _read_, _transaction_, _write_ (INSERT/UPDATE/DELETE/MERGE/REPLACE, procedure calls), _DDL_, _destructive_ (DROP, TRUNCATE,
+  UPDATE/DELETE without WHERE, ALTER … DROP) or _administrative_ (users, grants, KILL, SET GLOBAL, settings that switch off the app's own
+  backstops). MySQL's `/*! … */` comments are classified as the code the server runs. SQL the parser does not understand is _unknown_
   and treated like a write. MongoDB commands are classified by name (`aggregate` with `$out`/`$merge` is a write, an empty
   delete filter is destructive).
 - **Filters** (`gateway/filter.rs`): a SQL filter must parse as exactly `SELECT 1 WHERE <condition>` — one statement, no comments, no
@@ -98,17 +98,18 @@ Code: `src-tauri/src/gateway/` (backend), `src/features/safety/` (dialogs, the S
   MongoDB filter must be a JSON query document without server-side JavaScript operators.
 - **Rules** (`gateway/rules.rs`), stored per workspace as `safety` in `fosta-studio.json` (and optionally per connection):
 
-  | Preset | Read | Write | DDL | Destructive | Administrative | Timeout |
-  | --- | --- | --- | --- | --- | --- | --- |
-  | Open | allow | allow | allow | allow | allow | none |
-  | Guarded | allow | confirm | confirm | typed confirm | typed confirm | 60 s |
-  | Read-only | allow | block | block | block | block | 60 s |
-  | Custom | any of allow / confirm / typed confirm / block per category, plus multi-statement runs, timeout and row limit | | | | | |
+  | Preset    | Read                                                                                                          | Write   | DDL     | Destructive   | Administrative | Timeout |
+  | --------- | ------------------------------------------------------------------------------------------------------------- | ------- | ------- | ------------- | -------------- | ------- |
+  | Open      | allow                                                                                                         | allow   | allow   | allow         | allow          | none    |
+  | Guarded   | allow                                                                                                         | confirm | confirm | typed confirm | typed confirm  | 60 s    |
+  | Read-only | allow                                                                                                         | block   | block   | block         | block          | 60 s    |
+  | Custom    | any of allow / confirm / typed confirm / block per category, plus multi-statement runs, timeout and row limit |         |         |               |                |         |
 
   Workspaces saved before the gateway keep working as before (Open); a workspace marked Production (shield icon) defaults to Read-only;
   new workspaces start Guarded.
+
 - **Confirmations**: a call that needs one fails with a structured error `{ code: "CONFIRMATION_REQUIRED", level, token, expected,
-  categories, tables, statements, … }`; `BLOCKED` has the same shape without a token. The UI shows what will run and why, asks for the
+categories, tables, statements, … }`; `BLOCKED` has the same shape without a token. The UI shows what will run and why, asks for the
   table or workspace name for a typed confirmation, and repeats the call with `confirmation: { token, typed }`. Tokens are random,
   single-use, valid for five minutes and bound to the caller, connection, session and exact statement text (an import run's token covers
   its batches).
