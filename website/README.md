@@ -1,6 +1,6 @@
 # Fosta Studio website
 
-The marketing page for Fosta Studio, published at https://db.fosta.app. It is a static site with no build step and no dependencies:
+The marketing page for Fosta Studio, published at https://dbcl.fosta.app. It is a static site with no build step and no dependencies:
 
 ```
 website/
@@ -27,7 +27,7 @@ keep showing their mocks, because browsers block `fetch` of `shots.json` from `f
 
 ## Deployment
 
-The site is served at `https://db.fosta.app/` by nginx on the project's web server, from `/var/www/db.fosta.app`. That URL
+The site is served at `https://dbcl.fosta.app/` by nginx on the project's web server, from `/var/www/db.fosta.app`. That URL
 is hard-coded in the canonical link and the Open Graph / Twitter tags in `index.html`.
 
 To publish, run from the repository root with the server's SSH key (the key is never stored in the repository):
@@ -40,18 +40,19 @@ The script uploads into a staging folder and swaps it in, so visitors never see 
 
 Server layout (installed once; kept next to the other sites without touching their files):
 
-- `/etc/nginx/sites-available/db.fosta.app.conf` (+ link in `sites-enabled`): HTTP until DNS points at the server.
+- `/etc/nginx/sites-available/db.fosta.app.conf` (+ link in `sites-enabled`): HTTPS for `dbcl.fosta.app` (and
+  `db.fosta.app` once that name has a DNS record), HTTP redirected to HTTPS, Let's Encrypt certificate `dbcl.fosta.app`
+  (webroot `/var/www/acme-db`, renewed by `certbot.timer`). To add `db.fosta.app` later:
+  `sudo certbot certonly --webroot -w /var/www/acme-db --cert-name dbcl.fosta.app --expand -d dbcl.fosta.app -d db.fosta.app`.
 - `/etc/nginx/snippets/db.fosta.app-site.conf` and `db.fosta.app-headers.conf`: the static site, caching and security
   headers (CSP, nosniff, frame denial, HSTS).
-- `/etc/nginx/db.fosta.app.tls.conf` and `/etc/nginx/db.fosta.app-enable-tls.sh`: once the DNS record exists, run
-  `sudo /etc/nginx/db.fosta.app-enable-tls.sh` to get a Let's Encrypt certificate (webroot `/var/www/acme-db`, renewed by
-  `certbot.timer`) and switch the site to HTTPS. Behind Cloudflare, use SSL mode *Full (strict)*.
+- DNS is on Cloudflare (proxied); keep the zone's SSL/TLS mode on *Full (strict)*.
 
 ## Editing notes
 
 - Stick to facts from `README.md`, `ROADMAP.md` and `ARCHITECTURE.md`. Roadmap items are labelled "coming".
 - Links to repository files must be absolute GitHub URLs (`https://github.com/caothanhphatit/fosta-dbclient/blob/main/...`),
-  because the site is served from db.fosta.app, not from the repository.
+  because the site is served from dbcl.fosta.app, not from the repository.
 - No third-party logos: engines are shown with generic labels and icons.
 - When the first release ships, update the hero note and the "Build from source" card, and consider linking the Download
   button to `releases/latest`.

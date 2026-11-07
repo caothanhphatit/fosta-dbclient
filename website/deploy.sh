@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Publishes website/ to the web server behind https://db.fosta.app.
+# Publishes website/ to the web server behind https://dbcl.fosta.app.
 #   website/deploy.sh <ssh-key> [user@host]
 # The key is passed on the command line and never stored in the repository.
 # The server serves /var/www/db.fosta.app with nginx (see website/README.md).

@@ -116,6 +116,15 @@ Create, start, stop and delete database servers for development without leaving 
   latter confirmed by typing its name), backup/restore, load sample data.
 - One machine-wide list of servers that workspaces reference. (L)
 
+### Assistant-built databases (after sections 0, 3 and 5)
+
+"Create a sales database on PostgreSQL with customers, orders and products, and fill it with 10,000 rows": the assistant answers
+with a **plan card** (server to create, schema DDL with an ER preview, data-generation rules with sample rows) that the user can
+edit and must approve. The app, not the model, then creates the server, applies the DDL through the gateway (create-only, no
+DROP or changes to existing data) and runs the rule-based generator, with progress and a choice to retry or remove what was
+created if a step fails. Allowed only on servers the app created or Development workspaces, never Production; every step is
+audited. Works in the desktop app with local servers and in the Docker web edition.
+
 ## 6. Web edition (Docker image)
 
 `docker run` the whole app (backend and UI) and use it in a browser, with no local install. Useful for teams and servers.
