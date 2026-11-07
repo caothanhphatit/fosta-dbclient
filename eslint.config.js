@@ -9,4 +9,6 @@ export default defineConfig(
   { ignores: ["dist/", "node_modules/", "src-tauri/", "dev/", "website/"] },
   js.configs.recommended,
   tseslint.configs.recommended,
+  // Node scripts (scripts/*.mjs) run outside the browser.
+  { files: ["scripts/**/*.mjs"], languageOptions: { globals: { process: "readonly", console: "readonly" } } },
 );
