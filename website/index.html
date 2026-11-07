@@ -12,7 +12,7 @@
     <meta
       name="description"
       data-i18n-attr="content:meta.description"
-      content="Fosta Studio is a free, open-source (GPL-3.0) desktop database client for Windows: MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks, a fast data grid, ER diagrams and an AI assistant that never runs your queries."
+      content="Fosta Studio is a free, open-source (GPL-3.0) desktop database client for Windows: MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks, a fast data grid, ER diagrams and a built-in AI agent that knows your schema."
     />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
@@ -27,7 +27,7 @@
     <meta
       property="og:description"
       data-i18n-attr="content:meta.socialDescription"
-      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and an AI assistant that never runs your queries."
+      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and a built-in AI agent that knows your schema."
     />
     <meta property="og:url" content="https://dbcl.fosta.app/" />
     <!-- i18n:og-locale -->
@@ -44,7 +44,7 @@
     <meta
       name="twitter:description"
       data-i18n-attr="content:meta.socialDescription"
-      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and an AI assistant that never runs your queries."
+      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and a built-in AI agent that knows your schema."
     />
     <meta name="twitter:image" content="https://dbcl.fosta.app/assets/og-image.png" />
 
@@ -227,10 +227,7 @@
             <span data-i18n="hero.facts">Windows · about 10 MB · GPL-3.0</span>
           </p>
           <h1 id="hero-title">Fosta Studio</h1>
-          <p class="lede" data-i18n="hero.lede">
-            A small, fast database client for <strong>MariaDB, MySQL, SQL Server and MongoDB</strong>, with workspaces that bring their own tunnels and an AI
-            assistant that writes queries but never runs them.
-          </p>
+          <p class="lede" data-i18n="hero.lede">A small, fast database client for <strong>MariaDB, MySQL, SQL Server and MongoDB</strong>, with workspaces that bring their own tunnels and a built-in AI agent that knows your schema.</p>
           <div class="cta-row">
             <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/releases">
               <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg><span data-i18n="hero.download">Download for Windows</span>
@@ -1101,7 +1098,7 @@
               <b class="stat-num">+<span data-count-to="6">6</span></b
               ><span data-i18n="stats.roadmap">more engines on the roadmap</span>
             </li>
-            <li><b class="stat-num">0</b><span data-i18n="stats.ai">queries run by the assistant</span></li>
+            <li><b class="stat-num"><span data-count-to="5">5</span>+</b><span data-i18n="stats.ai">AI providers, from Claude and GPT to local models</span></li>
           </ul>
           <ul class="why-grid">
             <li class="why-card">
@@ -1151,9 +1148,9 @@
               <span class="why-icon"
                 ><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg
               ></span>
-              <h3 data-i18n="why.ai.title">An assistant that never runs queries</h3>
+              <h3 data-i18n="why.ai.title">An AI agent that knows your schema</h3>
               <p data-i18n="why.ai.text">
-                Use any model, from a hosted API to a local Ollama. It reads schema metadata and writes the query; it has no tool to run it. You do.
+                Ask in plain words. The agent explores tables and relations, writes and explains queries, opens the right view and reads task logs to help you debug. Use Claude, GPT, Gemini, Fosta or a local Ollama model.
               </p>
             </li>
             <li class="why-card">
@@ -1504,15 +1501,12 @@
               <span class="feature-icon"
                 ><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg
               ></span>
-              <h3 id="f-assistant" data-i18n="ai.title">An AI assistant that never executes</h3>
-              <p data-i18n="ai.text">
-                Ask in plain words. The assistant reads table and column metadata, writes the query, and can open a diagram, a table or a new query tab for you.
-                Every code block has <b>Insert</b> and <b>New tab</b> buttons.
-              </p>
+              <h3 id="f-assistant" data-i18n="ai.title">A built-in AI agent for your databases</h3>
+              <p data-i18n="ai.text">Ask in plain words. The agent looks up tables, columns and relations, writes and explains queries, fixes errors, and opens a table, a diagram or a new query tab for you. Every code block has <b>Insert</b> and <b>New tab</b> buttons.</p>
               <p class="callout">
                 <svg class="icon" aria-hidden="true"><use href="#i-ban" /></svg
                 ><span data-i18n="ai.callout"
-                  ><b>It has no tool that runs queries or changes data.</b> You read what it wrote, and you decide whether to run it.</span
+                  ><b>You stay in control.</b> The agent prepares the work; anything that touches your data runs only when you run it.</span
                 >
               </p>
               <ul class="checks">
@@ -1554,7 +1548,7 @@
                   </div>
                 </div>
               </div>
-              <figcaption data-i18n="ai.caption">Suggestions land in your editor, never on your server.</figcaption>
+              <figcaption data-i18n="ai.caption">From question to a ready-to-run query in seconds.</figcaption>
             </figure>
           </article>
 
@@ -1735,11 +1729,8 @@
             <li>
               <svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg>
               <div>
-                <h3 data-i18n="privacy.ai.title">Assistant boundaries</h3>
-                <p data-i18n="privacy.ai.text">
-                  The model sees table and column metadata plus the editor text, errors and logs you choose to share. It reads no rows and cannot run
-                  statements.
-                </p>
+                <h3 data-i18n="privacy.ai.title">What the agent sees</h3>
+                <p data-i18n="privacy.ai.text">The model sees table and column metadata plus the editor text, errors and logs you choose to share. It reads no rows, and statements run only when you run them.</p>
               </div>
             </li>
             <li class="wide">

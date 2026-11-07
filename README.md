@@ -1,6 +1,5 @@
 # Fosta Studio
 
-
 A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend) for **MariaDB, MySQL, SQL Server and MongoDB**, with
 **workspaces** and **startup tasks**: it can run `kubectl port-forward` when a workspace opens and reconnect when the tunnel drops.
 
@@ -30,10 +29,11 @@ A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
 - **Vector tools** (MariaDB 11.7+ only): embedding search, column/index health checks, ANN recall versus exact search.
-- **Assistant** (right panel, `Ctrl+Shift+A`): chat with a model of your choice (Fosta by default, OpenAI, Gemini, Claude, or any
-  OpenAI-compatible endpoint such as Ollama) using your own key, stored in Credential Manager; requests go straight from your machine to
-  the provider. The model only sees table/column metadata, the editor text, errors and logs you ask about. **It never runs queries**: every
-  code block has Insert / New tab buttons so you run it yourself.
+- **AI agent** (right panel, `Ctrl+Shift+A`): ask in plain words and the agent looks up tables, columns and relations, writes and
+  explains queries, fixes errors, reads task logs, and opens tables, diagrams or query tabs for you. Use the model of your choice (Fosta by
+  default, OpenAI, Gemini, Claude, or any OpenAI-compatible endpoint such as Ollama) with your own key, stored in Credential Manager;
+  requests go straight from your machine to the provider. The model sees table/column metadata and the editor text, errors and logs you
+  share, and every code block has Insert / New tab buttons: statements run only when you run them.
 - Light, dark or system theme.
 
 Configuration (workspaces, connections, tasks, LLM providers) is stored in `fosta-studio.json` next to the `.exe`, so the app is portable.
@@ -65,19 +65,19 @@ Test databases (MariaDB, SQL Server and MongoDB with sample data) run in Docker;
 
 ## Keyboard shortcuts
 
-| Keys                         | Action                                  |
-| ---------------------------- | --------------------------------------- |
-| Ctrl+1 … 9                   | Switch workspace                        |
-| Ctrl+N                       | New connection                          |
-| Ctrl+T                       | New query                               |
-| Ctrl+Shift+A                 | Toggle the assistant panel              |
-| Double-click a connection    | Connect                                 |
-| Double-click a table         | Open its data                           |
-| Ctrl+Enter / F9              | Run SQL (the selection, or everything)  |
-| Enter / F2 / double-click    | Edit the selected cell                  |
-| Shift+Enter                  | Open the selected cell in the editor    |
-| Ctrl+S                       | Save grid changes                       |
-| F5                           | Reload the table                        |
+| Keys                      | Action                                 |
+| ------------------------- | -------------------------------------- |
+| Ctrl+1 … 9                | Switch workspace                       |
+| Ctrl+N                    | New connection                         |
+| Ctrl+T                    | New query                              |
+| Ctrl+Shift+A              | Toggle the assistant panel             |
+| Double-click a connection | Connect                                |
+| Double-click a table      | Open its data                          |
+| Ctrl+Enter / F9           | Run SQL (the selection, or everything) |
+| Enter / F2 / double-click | Edit the selected cell                 |
+| Shift+Enter               | Open the selected cell in the editor   |
+| Ctrl+S                    | Save grid changes                      |
+| F5                        | Reload the table                       |
 
 ## Documentation
 

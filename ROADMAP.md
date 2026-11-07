@@ -9,7 +9,7 @@ Where Fosta Studio is heading. Plans change; open an issue to discuss an item or
 - A fast data grid: inline editing applied in one transaction, column filters, show/hide columns, a cell editor for long values and
   JSON, a record panel with foreign-key navigation.
 - Query tabs with history, an interactive ER diagram, import (CSV, JSON) and export (CSV, Excel CSV, JSON, SQL, Markdown).
-- An AI assistant with the model of your choice that writes queries and opens views but never runs anything.
+- A built-in AI agent with the model of your choice: it explores your schema, writes and explains queries, and opens views for you.
 - MariaDB vector search tools.
 
 ## Next
