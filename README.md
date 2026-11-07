@@ -25,15 +25,25 @@ A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend
     validation for JSON; binary and vector values open read-only. Saving adds a normal pending edit.
 - **Query editor**: syntax highlighting, table-name completion, several statements per run, Stop (`KILL QUERY`), and one session per tab
   (`BEGIN`/`COMMIT` can span runs).
+  - **Transactions**: an auto-commit switch and Begin / Commit / Rollback in the toolbar, with the transaction state reported by the
+    database after every run (MariaDB/MySQL, SQL Server; MongoDB tabs say transactions are not supported). Closing a tab or the app with an
+    open transaction asks first, and a reminder appears when a transaction stays open for five minutes.
   - **Query history**: every run (text, connection, database, time, duration, rows or error) is listed in the tab's History panel, with
     search; Insert or open an entry in a new tab. History stays on this machine, in `fosta-studio-history.jsonl` next to the `.exe` (newest
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
 - **Vector tools** (MariaDB 11.7+ only): embedding search, column/index health checks, ANN recall versus exact search.
+- **Safety rules per workspace**: every statement the app runs (query tabs, grid filters and edits, imports, new databases) is parsed
+  and classified as read, write, DDL, destructive or administrative, then checked against the workspace's rules: *Open*, *Guarded*
+  (confirm writes and DDL, type the table or workspace name for destructive and administrative statements), *Read-only* (reads only, with
+  read-only sessions on MariaDB/MySQL) or *Custom*. A workspace marked Production starts Read-only. Grid filters must be a single
+  condition. Relaxing rules shows what becomes possible; relaxed workspaces carry a warning badge, and blocked, confirmed and relaxed
+  operations are recorded in `fosta-studio-audit.jsonl` on this machine. Statement timeouts apply on MariaDB/MySQL and MongoDB browsing.
+  For production SQL Server databases, also connect with a read-only login.
 - **Assistant** (right panel, `Ctrl+Shift+A`): chat with a model of your choice (Fosta by default, OpenAI, Gemini, Claude, or any
   OpenAI-compatible endpoint such as Ollama) using your own key, stored in Credential Manager; requests go straight from your machine to
   the provider. The model only sees table/column metadata, the editor text, errors and logs you ask about. **It never runs queries**: every
-  code block has Insert / New tab buttons so you run it yourself.
+  code block has Insert / New tab buttons so you run it yourself, and a table filter it proposes is pre-filled for you to apply.
 - Light, dark or system theme.
 
 Configuration (workspaces, connections, tasks, LLM providers) is stored in `fosta-studio.json` next to the `.exe`, so the app is portable.
