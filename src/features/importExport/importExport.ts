@@ -5,12 +5,14 @@
  * written to Downloads by the backend; imports run as batched INSERTs, each
  * batch in one transaction.
  */
+import { capabilities } from "../../core/capabilities";
 import { api, errorText } from "../../core/api";
 import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs";
 import { formatNumber, h } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
 import { detectDelimiter, parseCsv } from "./csv";
 import { exportDelimited, exportRows } from "./exporters";
+import { ConfirmationSession } from "../safety/confirmationDialog";
 import type { BrowseRequest, Cell, ColumnMeta, RowChange, TableTarget } from "../../core/types";
 
 const FETCH_PAGE = 1000;
@@ -63,7 +65,7 @@ export function exportDialog(source: ExportSource): void {
       h("label", { class: "checkbox" }, scopeAll, h("span", {}, `All ${formatNumber(source.total)} rows${filtered}`)),
       h("label", { class: "checkbox" }, scopePage, h("span", {}, `This page only (${formatNumber(source.pageRows.length)} rows)`)),
     ),
-    field("File name", fileName, "Saved to your Downloads folder"),
+    field("File name", fileName, capabilities().browserDownloads ? "Downloaded by your browser" : "Saved to your Downloads folder"),
     progress,
   );
   openModal(
@@ -115,6 +117,11 @@ function render(format: FileFormat, columns: ColumnMeta[], rows: Cell[][], table
 
 /** Small result dialog with a "Show in folder" button. */
 export function savedDialog(title: string, path: string): void {
+  if (!capabilities().revealFile) {
+    // Web edition: the browser has the file (`path` is its name); its own download UI shows where.
+    toast(`${title}: ${path} downloaded`, "success");
+    return;
+  }
   openModal(
     title,
     h("p", { class: "confirm-text mono saved-path" }, path),
@@ -277,10 +284,20 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
           }));
           let done = 0;
           status.className = "test-status";
+          // One import run is confirmed once (when the rules ask), for all of its batches.
+          const confirmations = new ConfirmationSession();
+          const importId = crypto.randomUUID();
           for (let start = 0; start < changes.length; start += IMPORT_BATCH) {
             const batch = changes.slice(start, start + IMPORT_BATCH);
             try {
-              await api.applyChanges(target.connectionId, target.database, target.table, batch);
+              const affected = await confirmations.run((confirmation) =>
+                api.applyChanges(target.connectionId, target.database, target.table, batch, "import", confirmation, importId),
+              );
+              if (affected === null) {
+                status.textContent = `Import cancelled. ${formatNumber(done)} rows were imported before that.`;
+                if (done > 0) onDone();
+                return false;
+              }
             } catch (error) {
               status.className = "test-status error";
               status.textContent = `Rows ${formatNumber(start + 1)}–${formatNumber(start + batch.length)} failed: ${errorText(error)}. ${formatNumber(done)} rows were imported before that.`;

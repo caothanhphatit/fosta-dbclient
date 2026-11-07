@@ -1,0 +1,61 @@
+# NoSQL test engines for Fosta Studio (Redis, Elasticsearch, OpenSearch). Test-only credentials; never reuse them.
+#   docker compose -f dev/docker-compose.engines-nosql.yml up -d
+#   sh dev/seed-nosql.sh          # loads the sample data once the services are healthy
+#   cd src-tauri && cargo test live_engine_ -- --ignored --test-threads=1
+#   docker compose -f dev/docker-compose.engines-nosql.yml down -v
+#
+# Redis 8         127.0.0.1:6379   no ACL user, password studio-redis   (redis:8.2: the official Redis Open Source 8 image ships
+#                                   RedisJSON, the query engine, time series and probabilistic types, so redis-stack-server is not needed)
+# Elasticsearch   https://127.0.0.1:9200   elastic / studio-elastic   security on, HTTPS with the certificates the image generates
+#                                   on first start (CA: docker exec fosta-dev-nosql-elasticsearch-1 cat config/certs/http_ca.crt)
+# OpenSearch      http://127.0.0.1:9201    security plugin disabled (plain HTTP, no auth)
+#
+# Memory: Elasticsearch and OpenSearch run with a 512 MiB heap and a 1.5 GiB container limit each; Redis is capped at 256 MiB.
+
+name: fosta-dev-nosql
+
+services:
+  redis:
+    image: redis:8.2
+    command: ["redis-server", "--requirepass", "studio-redis", "--maxmemory", "256mb", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "studio-redis", "--no-auth-warning", "ping"]
+      interval: 3s
+      retries: 30
+
+  elasticsearch:
+    image: elasticsearch:8.19.23
+    environment:
+      ELASTIC_PASSWORD: studio-elastic
+      discovery.type: single-node
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      cluster.name: fosta-dev
+      xpack.ml.enabled: "false"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ports:
+      - "127.0.0.1:9200:9200"
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -k -u elastic:studio-elastic https://localhost:9200/_cluster/health | grep -q '\"status\":\"\\(green\\|yellow\\)\"'"]
+      interval: 5s
+      retries: 60
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.6
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      cluster.name: fosta-dev-os
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ports:
+      - "127.0.0.1:9201:9200"
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"\\(green\\|yellow\\)\"'"]
+      interval: 5s
+      retries: 60

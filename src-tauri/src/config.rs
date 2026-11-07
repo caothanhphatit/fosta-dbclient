@@ -11,6 +11,7 @@ use crate::{
     ai::{AiActive, AiConnection, AiSettings},
     embedding::EmbeddingSettings,
     error::{AppError, AppResult},
+    gateway::rules::SafetySettings,
     lock::lock,
     secrets::LEGACY_AI_CONNECTION,
     tasks::TaskDef,
@@ -42,6 +43,9 @@ pub struct ConnectionProfile {
     /// Driver-specific settings (TLS flags, a MongoDB URI, …), kept opaque here.
     #[serde(default)]
     pub options: HashMap<String, String>,
+    /// Safety rules for this connection only, replacing the workspace's (see `crate::gateway`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safety: Option<SafetySettings>,
 }
 
 fn default_driver() -> String {
@@ -58,6 +62,9 @@ pub struct WorkspaceMeta {
     pub color: String,
     #[serde(default)]
     pub icon: String,
+    /// The workspace's safety rules; `None` keeps the current ones (or the default for a new workspace).
+    #[serde(default)]
+    pub safety: Option<SafetySettings>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,6 +76,10 @@ pub struct Workspace {
     pub color: String,
     #[serde(default)]
     pub icon: String,
+    /// Statement rules (see `crate::gateway`). Always set after loading: workspaces saved before
+    /// the gateway existed get the default for their icon (Production → Read-only, else Open).
+    #[serde(default)]
+    pub safety: Option<SafetySettings>,
     #[serde(default)]
     pub connections: Vec<ConnectionProfile>,
     #[serde(default)]
@@ -77,11 +88,13 @@ pub struct Workspace {
 
 impl Workspace {
     fn new(meta: WorkspaceMeta) -> Self {
+        let safety = meta.safety.unwrap_or_else(|| SafetySettings::for_new_workspace(&meta.icon));
         Self {
             id: meta.id,
             name: meta.name,
             color: meta.color,
             icon: meta.icon,
+            safety: Some(safety),
             connections: Vec::new(),
             tasks: Vec::new(),
         }
@@ -91,6 +104,14 @@ impl Workspace {
         self.name = meta.name;
         self.color = meta.color;
         self.icon = meta.icon;
+        if let Some(safety) = meta.safety {
+            self.safety = Some(safety);
+        }
+    }
+
+    /// The rules in force for this workspace.
+    pub fn safety(&self) -> SafetySettings {
+        self.safety.clone().unwrap_or_else(|| SafetySettings::default_for_icon(&self.icon))
     }
 }
 
@@ -149,9 +170,15 @@ impl From<StoredConfig> for AppConfig {
                 name: DEFAULT_WORKSPACE_NAME.into(),
                 color: DEFAULT_WORKSPACE_COLOR.into(),
                 icon: DEFAULT_WORKSPACE_ICON.into(),
+                safety: None,
                 connections: stored.connections,
                 tasks: stored.tasks,
             }),
+        }
+        for workspace in &mut workspaces {
+            if workspace.safety.is_none() {
+                workspace.safety = Some(SafetySettings::default_for_icon(&workspace.icon));
+            }
         }
         let active_workspace = stored
             .active_workspace
@@ -201,8 +228,20 @@ impl AppConfig {
             database: None,
             save_password: false,
             options: HashMap::new(),
+            safety: None,
         });
         config
+    }
+
+    /// The workspace that holds a saved connection, with the connection.
+    pub fn connection_scope(&self, connection_id: &str) -> Option<(&Workspace, &ConnectionProfile)> {
+        self.workspaces.iter().find_map(|workspace| {
+            workspace
+                .connections
+                .iter()
+                .find(|profile| profile.id == connection_id)
+                .map(|profile| (workspace, profile))
+        })
     }
 
     pub fn active(&self) -> &Workspace {
@@ -246,8 +285,12 @@ impl AppConfig {
 
     /// Places `profile` in `workspace_id`, replacing it in place when it is
     /// already there and removing it from any other workspace first.
-    pub fn put_connection(&mut self, workspace_id: &str, profile: ConnectionProfile) -> AppResult<()> {
+    pub fn put_connection(&mut self, workspace_id: &str, mut profile: ConnectionProfile) -> AppResult<()> {
         self.workspace(workspace_id)?;
+        if profile.safety.is_none() {
+            // The connection dialog does not edit per-connection rules; saving keeps them.
+            profile.safety = self.connection(&profile.id).and_then(|existing| existing.safety.clone());
+        }
         for workspace in self.workspaces.iter_mut().filter(|workspace| workspace.id != workspace_id) {
             workspace.connections.retain(|item| item.id != profile.id);
         }
@@ -392,6 +435,11 @@ impl ConfigStore {
         self.current().clone()
     }
 
+    /// Reads from the current config without cloning all of it.
+    pub fn read<T>(&self, reader: impl FnOnce(&AppConfig) -> T) -> T {
+        reader(&self.current())
+    }
+
     pub fn connection(&self, id: &str) -> AppResult<ConnectionProfile> {
         self.current()
             .connection(id)
@@ -437,13 +485,24 @@ fn config_path() -> AppResult<PathBuf> {
     data_path_renamed(CONFIG_FILE, LEGACY_CONFIG_FILE)
 }
 
-/// A file next to the executable, where `fosta-studio.json` lives (the app is portable).
+/// A file in the data directory, where `fosta-studio.json` lives.
 pub fn data_path(name: &str) -> AppResult<PathBuf> {
+    Ok(data_dir()?.join(name))
+}
+
+/// Environment variable naming the data directory (the web server's `/data` volume).
+pub const DATA_DIR_ENV: &str = "FOSTA_STUDIO_DATA";
+
+/// `FOSTA_STUDIO_DATA` when set, otherwise the executable's folder (the desktop app is portable).
+pub fn data_dir() -> AppResult<PathBuf> {
+    if let Some(directory) = std::env::var_os(DATA_DIR_ENV).filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(directory));
+    }
     let executable = std::env::current_exe()?;
     let directory = executable
         .parent()
         .ok_or_else(|| AppError::new("Cannot resolve the application directory"))?;
-    Ok(directory.join(name))
+    Ok(directory.to_owned())
 }
 
 /// Like [`data_path`], but first moves a file left under its pre-rename name (`legacy`) to `name`.
@@ -504,6 +563,50 @@ mod tests {
         let saved = serde_json::to_value(&config).unwrap();
         assert!(saved.get("ai").is_none());
         assert_eq!(saved["aiActive"]["connectionId"], "default");
+    }
+
+    #[test]
+    fn workspaces_get_safety_defaults() {
+        use crate::gateway::rules::Preset;
+        let mut config: AppConfig = serde_json::from_str(
+            r#"{ "workspaces": [ { "id": "a", "name": "Dev", "icon": "laptop" }, { "id": "p", "name": "Prod", "icon": "shield" } ] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.workspaces[0].safety().preset,
+            Preset::Open,
+            "existing workspaces keep working as before"
+        );
+        assert_eq!(
+            config.workspaces[1].safety().preset,
+            Preset::ReadOnly,
+            "Production defaults to Read-only"
+        );
+        assert_eq!(
+            serde_json::to_value(&config).unwrap()["workspaces"][1]["safety"]["preset"],
+            "readOnly"
+        );
+        let meta = |id: &str, icon: &str| WorkspaceMeta {
+            id: id.into(),
+            name: id.into(),
+            color: String::new(),
+            icon: icon.into(),
+            safety: None,
+        };
+        config.put_workspace(meta("n", "cloud"));
+        assert_eq!(
+            config.workspace("n").unwrap().safety().preset,
+            Preset::Guarded,
+            "new workspaces start Guarded"
+        );
+        config.put_workspace(meta("p", "shield"));
+        assert_eq!(
+            config.workspace("p").unwrap().safety().preset,
+            Preset::ReadOnly,
+            "saving without safety keeps it"
+        );
+        let (workspace, _) = config.connection_scope("missing").map_or((None, None), |(w, c)| (Some(w), Some(c)));
+        assert!(workspace.is_none());
     }
 
     #[test]

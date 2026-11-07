@@ -1,3 +1,4 @@
+import { capabilities } from "../../core/capabilities";
 import { api, errorText } from "../../core/api";
 import { field, openModal, textInput } from "../../core/dialogs";
 import { h, icon, iconButton } from "../../core/dom";
@@ -140,7 +141,7 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
       hint,
       field("Name", name, "Shown in the model switcher of the chat"),
       endpointField,
-      field("API key", apiKey, "Stored in Windows Credential Manager"),
+      field("API key", apiKey, `Stored in ${capabilities().secretStore}`),
       h(
         "div",
         { class: "field" },

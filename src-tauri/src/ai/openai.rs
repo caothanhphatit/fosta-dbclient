@@ -2,12 +2,11 @@
 //! except Anthropic (Gemini through Google's compatibility endpoint).
 
 use serde_json::{json, Value};
-use tauri::ipc::Channel;
 
 use super::{
     http::{read_sse, send},
     tools::ToolSpec,
-    AiSettings, ChatEvent, ToolCall, Turn,
+    AiSettings, ChatEvent, ChatSink, ToolCall, Turn,
 };
 use crate::error::{AppError, AppResult};
 
@@ -30,7 +29,7 @@ pub(super) async fn turn(
     system: &str,
     history: &[Value],
     tools: &[ToolSpec],
-    events: &Channel<ChatEvent>,
+    events: &dyn ChatSink,
 ) -> AppResult<Turn> {
     let mut messages = vec![json!({ "role": "system", "content": system })];
     messages.extend(history.iter().cloned());

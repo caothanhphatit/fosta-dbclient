@@ -6,7 +6,6 @@ use crate::{
 };
 
 /// Saves an export into Downloads; `base64` is for binary content such as PNG.
-#[tauri::command]
 pub fn save_download(name: String, text: Option<String>, base64: Option<String>) -> AppResult<String> {
     let bytes = match (text, base64) {
         (Some(text), _) => text.into_bytes(),
@@ -16,7 +15,6 @@ pub fn save_download(name: String, text: Option<String>, base64: Option<String>)
     files::save_download(&name, &bytes)
 }
 
-#[tauri::command]
 pub fn reveal_file(path: String) -> AppResult<()> {
     files::reveal(&path)
 }

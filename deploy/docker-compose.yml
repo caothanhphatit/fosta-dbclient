@@ -1,0 +1,41 @@
+# Fosta Studio web edition, optionally with a MariaDB to try it out.
+#
+#   docker compose -f deploy/docker-compose.yml up -d                    # Fosta Studio only
+#   docker compose -f deploy/docker-compose.yml --profile demo up -d     # plus a demo MariaDB
+#   docker compose -f deploy/docker-compose.yml logs fosta-studio        # the sign-in address
+#
+# With the demo profile, add a MariaDB connection with host `mariadb`, port 3306, user `root` and the
+# password below. To build the image from this checkout instead of pulling it, run with `--build`.
+
+services:
+  fosta-studio:
+    image: ghcr.io/caothanhphatit/fosta-studio:latest
+    build:
+      context: ..
+    ports:
+      # Only this machine can reach it; publish on 0.0.0.0 (or behind an HTTPS proxy) to share it.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - fosta-studio-data:/data
+    environment:
+      # FOSTA_STUDIO_TOKEN: choose the access token instead of the generated one (16+ characters)
+      # FOSTA_STUDIO_SECRET_KEY: 64 hex characters (openssl rand -hex 32) to encrypt saved passwords
+      TZ: UTC
+    extra_hosts:
+      # Lets connections use host.docker.internal for databases on this machine (built in on Docker Desktop).
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  mariadb:
+    image: mariadb:11.8
+    profiles: [demo]
+    environment:
+      MARIADB_ROOT_PASSWORD: change-me-demo-only
+      MARIADB_DATABASE: demo
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    restart: unless-stopped
+
+volumes:
+  fosta-studio-data:
+  mariadb-data:

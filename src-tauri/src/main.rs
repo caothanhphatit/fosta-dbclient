@@ -1,104 +1,93 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod ai;
-mod commands;
-mod config;
-mod drivers;
-mod embedding;
-mod engines;
-mod error;
-mod files;
-mod history;
-mod job;
-#[cfg(test)]
-mod live_tests;
-mod lock;
-mod schema;
-mod secrets;
-mod tasks;
-mod vector;
+//! The desktop front-end: a Tauri window around the shared backend in `lib.rs`. Every command is a thin
+//! `#[tauri::command]` wrapper generated from `for_each_command!`, so names, arguments and JSON stay those
+//! of `src/core/api.ts`.
 
 use std::{sync::Arc, time::Duration};
 
-use tauri::{App, Manager, RunEvent};
+use fosta_studio::{
+    ai::{ChatEvent, ChatRequest},
+    commands,
+    error::AppResult,
+    events::EventEmitter,
+    AppState, Capabilities,
+};
+use serde_json::Value;
+use tauri::{ipc::Channel, App, AppHandle, Emitter, Manager, RunEvent, State};
 
 const SHOW_WINDOW_FALLBACK: Duration = Duration::from_secs(3);
 
-pub struct AppState {
-    pub config: config::ConfigStore,
-    pub db: drivers::DbManager,
-    pub tasks: Arc<tasks::TaskManager>,
-    pub ai: ai::AiRuns,
-    pub history: Arc<history::HistoryStore>,
+/// Task events go out as Tauri events (`listen("task-status", …)` in the UI).
+struct TauriEvents(AppHandle);
+
+impl EventEmitter for TauriEvents {
+    fn emit(&self, event: &str, payload: Value) {
+        let _ = self.0.emit(event, payload);
+    }
+}
+
+macro_rules! tauri_command {
+    ([sync] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty = $function:path) => {
+        #[allow(clippy::too_many_arguments)]
+        #[tauri::command]
+        fn $name(state: State<'_, AppState>, $($arg: $type),*) -> $output {
+            $function(&state, $($arg),*)
+        }
+    };
+    ([async] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty = $function:path) => {
+        // A wrapper has the command's arguments plus the state (apply_changes has seven).
+        #[allow(clippy::too_many_arguments)]
+        #[tauri::command]
+        async fn $name(state: State<'_, AppState>, $($arg: $type),*) -> $output {
+            $function(&state, $($arg),*).await
+        }
+    };
+}
+
+/// Defines one wrapper per shared command, then the invoke handler listing them plus the desktop-only ones.
+macro_rules! desktop_commands {
+    ($([$kind:tt] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty = $function:path;)*) => {
+        $(tauri_command!([$kind] $name ($($arg : $type),*) -> $output = $function);)*
+
+        fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
+            tauri::generate_handler![$($name,)* ai_chat, save_download, reveal_file]
+        }
+    };
+}
+
+fosta_studio::for_each_command!(desktop_commands);
+
+/// Streams one assistant reply over `on_event`; resolves with the full text.
+#[tauri::command]
+async fn ai_chat(state: State<'_, AppState>, request: ChatRequest, on_event: Channel<ChatEvent>) -> AppResult<String> {
+    let sink = move |event: ChatEvent| {
+        let _ = on_event.send(event);
+    };
+    commands::ai::ai_chat(&state, request, &sink).await
+}
+
+/// Saves an export into Downloads; `base64` is for binary content such as PNG.
+#[tauri::command]
+fn save_download(name: String, text: Option<String>, base64: Option<String>) -> AppResult<String> {
+    commands::files::save_download(name, text, base64)
+}
+
+#[tauri::command]
+fn reveal_file(path: String) -> AppResult<()> {
+    commands::files::reveal_file(path)
 }
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            let config = config::ConfigStore::load()?;
-            let tasks = Arc::new(tasks::TaskManager::new(app.handle().clone()));
-            tasks.start_auto(&config.snapshot().active().tasks);
-            app.manage(AppState {
-                config,
-                db: drivers::DbManager::default(),
-                tasks,
-                ai: ai::AiRuns::default(),
-                history: Arc::new(history::HistoryStore::open_default()?),
-            });
+            let executor = tauri::async_runtime::handle().inner().clone();
+            let events = Arc::new(TauriEvents(app.handle().clone()));
+            app.manage(AppState::new(Capabilities::desktop(), executor, events)?);
             show_window_if_frontend_stalls(app);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::get_config,
-            commands::connections::save_connection,
-            commands::connections::delete_connection,
-            commands::connections::test_connection,
-            commands::connections::connect,
-            commands::connections::disconnect,
-            commands::data::list_databases,
-            commands::data::create_database,
-            commands::data::schema_graph,
-            commands::files::save_download,
-            commands::files::reveal_file,
-            commands::data::list_tables,
-            commands::data::describe_table,
-            commands::data::browse_table,
-            commands::data::apply_changes,
-            commands::data::open_session,
-            commands::data::close_session,
-            commands::data::run_sql,
-            commands::data::cancel_sql,
-            commands::tasks::task_statuses,
-            commands::tasks::task_logs,
-            commands::tasks::start_task,
-            commands::tasks::stop_task,
-            commands::tasks::restart_task,
-            commands::tasks::save_task,
-            commands::tasks::delete_task,
-            commands::workspaces::save_workspace,
-            commands::workspaces::set_active_workspace,
-            commands::workspaces::delete_workspace,
-            commands::data::table_relations,
-            commands::vector::vector_info,
-            commands::vector::fetch_vector,
-            commands::vector::vector_search,
-            commands::vector::vector_health,
-            commands::vector::index_recall,
-            commands::vector::save_embedding_settings,
-            commands::vector::test_embedding,
-            commands::ai::save_ai_connection,
-            commands::ai::delete_ai_connection,
-            commands::ai::set_ai_active,
-            commands::ai::list_ai_models,
-            commands::ai::test_ai,
-            commands::ai::ai_chat,
-            commands::ai::ai_cancel,
-            commands::history::history_append,
-            commands::history::history_list,
-            commands::history::history_delete,
-            commands::history::history_clear,
-            commands::history::set_query_history,
-        ])
+        .invoke_handler(invoke_handler())
         .build(tauri::generate_context!())
         .expect("failed to start Fosta Studio")
         .run(|app, event| {

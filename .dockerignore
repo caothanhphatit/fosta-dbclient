@@ -1,0 +1,14 @@
+# Only package.json/lock, index.html, tsconfig.json, vite.config.ts, src/ and src-tauri/ go into the image build.
+**/node_modules
+dist
+src-tauri/target
+src-tauri/gen
+.git
+.github
+.claude
+website
+dev
+scripts
+deploy
+*.md
+**/*.test.ts
