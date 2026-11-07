@@ -1,0 +1,313 @@
+import { api, errorText } from "./api";
+import { combinedCondition, combinedJsonFilter, type ColumnFilters } from "./columnFilter";
+import { driverInfo, type DriverInfo } from "./drivers";
+import { showContextMenu, type MenuItem } from "./contextMenu";
+import { confirmDialog, toast } from "./dialogs";
+import { clamp, copyText, formatNumber, h, icon, iconButton, separator, spacer, toolButton } from "./dom";
+import { EXPORT_LABELS, type ExportFormat } from "./exporters";
+import { DataGrid, type SortState } from "./grid";
+import type { Navigator } from "./navigator";
+import { RecordPanel } from "./recordPanel";
+import { makeSplitter } from "./splitter";
+import { equalsFilter, rowKey } from "./sql";
+import type { TabContent } from "./tabs";
+import type { Cell, ColumnMeta, TableRelations, TableTarget, VectorInfo } from "./types";
+
+const PAGE_SIZES = [100, 200, 500, 1000];
+const EXPORT_FORMATS: ExportFormat[] = ["csv", "json", "markdown", "insert"];
+const DEFAULT_PANEL_WIDTH = 340;
+
+interface ReloadOptions {
+  offset?: number;
+  sort?: SortState | null;
+  force?: boolean;
+}
+
+export class TableView implements TabContent {
+  readonly element: HTMLElement;
+  private readonly target: TableTarget;
+  private readonly navigator: Navigator;
+  private readonly driver: DriverInfo;
+  private readonly grid: DataGrid;
+  private readonly record: RecordPanel;
+  private readonly filter: HTMLInputElement;
+  private readonly pageInfo = h("span", { class: "pager-info" }, "Loading…");
+  private readonly submitButton: HTMLButtonElement;
+  private readonly discardButton: HTMLButtonElement;
+  private readonly vectorTools = h("div", { class: "toolbar-group" });
+  private readonly content: HTMLElement;
+  private offset = 0;
+  private limit = 200;
+  private total = 0;
+  private sort: SortState | null = null;
+  private columns: ColumnMeta[] = [];
+  private columnFilters: ColumnFilters = {};
+  private primaryKey: string[] = [];
+  private relations: TableRelations | null = null;
+  private vectorInfo: VectorInfo | null = null;
+  private panelWidth = DEFAULT_PANEL_WIDTH;
+
+  constructor(target: TableTarget, navigator: Navigator, initialFilter = "") {
+    this.target = target;
+    this.navigator = navigator;
+    this.driver = driverInfo(target.driver);
+    this.grid = new DataGrid(() => this.refreshButtons());
+    this.record = new RecordPanel(navigator);
+    this.filter = h("input", { class: "input", placeholder: this.driver.filterPlaceholder, spellcheck: "false", value: initialFilter });
+    this.filter.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") void this.reload({ offset: 0 });
+    });
+    this.submitButton = toolButton("check", "Submit", () => void this.submit(), "Save changes (Ctrl+S)");
+    this.discardButton = toolButton("x", "Discard", () => this.grid.discard(), "Discard all changes");
+    const exportButton = toolButton("copy", "Copy as", () => undefined, "Copy this page to the clipboard");
+    exportButton.addEventListener("click", (event) => showContextMenu(event, this.exportMenu()));
+    const recordButton = toolButton("design", "Record", () => this.toggleRecord(), "Show or hide the record panel");
+
+    const editTools = this.editable
+      ? [
+          toolButton("plus", "Add", () => this.grid.addRow(), "Add row"),
+          toolButton("minus", "Delete", () => this.grid.deleteSelectedRow(), "Delete selected row"),
+          this.submitButton,
+          this.discardButton,
+          separator(),
+        ]
+      : [];
+    const toolbar = h(
+      "div",
+      { class: "toolbar" },
+      toolButton("refresh", "Refresh", () => void this.reload({}), "Reload (F5)"),
+      separator(),
+      ...editTools,
+      h("div", { class: "filter-box" }, icon("filter"), this.filter),
+      this.vectorTools,
+      spacer(),
+      exportButton,
+      recordButton,
+      this.pager(),
+    );
+    const splitter = h("div", { class: "splitter-x" });
+    makeSplitter(splitter, "x", (delta) => this.resizeRecord(-delta));
+    this.content = h("div", { class: "table-content" }, this.grid.element, splitter, this.record.element);
+    this.content.style.setProperty("--record-width", `${this.panelWidth}px`);
+    this.element = h("div", { class: "view table-view" }, toolbar, this.content);
+    this.element.addEventListener("keydown", (event) => this.handleShortcut(event));
+    void this.loadMetadata();
+    void this.reload({});
+  }
+
+  canClose(): boolean | Promise<boolean> {
+    return !this.grid.hasChanges() || confirmDialog(`Discard unsaved changes in ${this.target.table}?`, "Discard");
+  }
+
+  private get editable(): boolean {
+    return this.target.kind === "table";
+  }
+
+  private async loadMetadata(): Promise<void> {
+    const { connectionId, database, table } = this.target;
+    const [relations, vectorInfo] = await Promise.allSettled([
+      api.tableRelations(connectionId, database, table),
+      api.vectorInfo(connectionId, database, table),
+    ]);
+    this.relations = relations.status === "fulfilled" ? relations.value : null;
+    this.vectorInfo = vectorInfo.status === "fulfilled" ? vectorInfo.value : null;
+    this.renderVectorTools();
+    // The first page usually arrives before the metadata; refresh the record
+    // panel so foreign-key links show for the row that is already selected.
+    this.showRecord(this.grid.selectedRow());
+  }
+
+  private renderVectorTools(): void {
+    const columns = this.vectorInfo?.columns ?? [];
+    if (columns.length === 0) {
+      this.vectorTools.replaceChildren();
+      return;
+    }
+    const first = columns[0].name;
+    this.vectorTools.replaceChildren(
+      separator(),
+      toolButton("vector", "Vector search", () => this.navigator.openVectorSearch(this.target, first), "Similarity search on this table"),
+      toolButton("health", "Vector health", () => this.navigator.openVectorHealth(this.target, first), "Check vector data and index quality"),
+    );
+  }
+
+  private exportMenu(): MenuItem[] {
+    return EXPORT_FORMATS.map((format) => ({
+      label: EXPORT_LABELS[format],
+      run: () => {
+        void copyText(this.grid.exportPage(format)).then(() => toast(`Copied as ${EXPORT_LABELS[format]}`, "success"));
+      },
+    }));
+  }
+
+  private rowMenu(row: Cell[]): MenuItem[] {
+    const vectorItems: MenuItem[] = this.columns
+      .filter((column) => column.vectorDims != null)
+      .map((column) => ({
+        label: `Find similar by ${column.name}`,
+        icon: "vector",
+        run: () => this.navigator.openVectorSearch(this.target, column.name, rowKey(this.columns, row, this.primaryKey)),
+      }));
+    const relatedItems: MenuItem[] = (this.relations?.incoming ?? []).map((relation) => ({
+      label: `Open related ${relation.table}`,
+      icon: "table",
+      run: () =>
+        this.navigator.openTable(
+          { ...this.target, database: relation.database, table: relation.table, kind: "table" },
+          equalsFilter(
+            relation.columns.map((column, index) => ({
+              column,
+              value: row[this.columns.findIndex((meta) => meta.name === relation.referencedColumns[index])] ?? null,
+            })),
+          ),
+        ),
+    }));
+    return [...vectorItems, ...relatedItems];
+  }
+
+  private showRecord(row: Cell[] | null): void {
+    this.record.show(
+      row && {
+        target: this.target,
+        columns: this.columns,
+        row,
+        primaryKey: this.primaryKey,
+        relations: this.relations,
+      },
+    );
+  }
+
+  private toggleRecord(): void {
+    this.content.classList.toggle("record-hidden");
+  }
+
+  private resizeRecord(delta: number): void {
+    this.panelWidth = clamp(this.panelWidth + delta, 220, 900);
+    this.content.style.setProperty("--record-width", `${this.panelWidth}px`);
+  }
+
+  private pager(): HTMLElement {
+    const sizes = h(
+      "select",
+      { class: "input page-size", title: "Rows per page" },
+      ...PAGE_SIZES.map((size) => h("option", { value: String(size), selected: size === this.limit }, `${size} rows`)),
+    );
+    sizes.addEventListener("change", () => {
+      this.limit = Number(sizes.value);
+      void this.reload({ offset: 0 });
+    });
+    return h(
+      "div",
+      { class: "pager" },
+      iconButton("first", "First page", () => this.goTo(0)),
+      iconButton("prev", "Previous page", () => this.goTo(this.offset - this.limit)),
+      this.pageInfo,
+      iconButton("chevron", "Next page", () => this.goTo(this.offset + this.limit)),
+      iconButton("last", "Last page", () => this.goTo(this.lastPageOffset())),
+      sizes,
+    );
+  }
+
+  private lastPageOffset(): number {
+    return Math.floor(Math.max(this.total - 1, 0) / this.limit) * this.limit;
+  }
+
+  private goTo(offset: number): void {
+    const target = Math.min(Math.max(offset, 0), this.lastPageOffset());
+    if (target !== this.offset) void this.reload({ offset: target });
+  }
+
+  private applyColumnFilters(filters: ColumnFilters): void {
+    this.columnFilters = filters;
+    void this.reload({ offset: 0 });
+  }
+
+  private toggleSort(column: string): void {
+    const current = this.sort?.column === column ? this.sort : null;
+    const next = !current ? { column, descending: false } : current.descending ? null : { column, descending: true };
+    void this.reload({ offset: 0, sort: next });
+  }
+
+  private async reload(options: ReloadOptions): Promise<void> {
+    if (!options.force && this.grid.hasChanges() && !(await confirmDialog("Discard unsaved changes?", "Discard"))) return;
+    const offset = options.offset ?? this.offset;
+    const sort = options.sort === undefined ? this.sort : options.sort;
+    this.element.classList.add("busy");
+    try {
+      const filter =
+        this.driver.filterKind === "json"
+          ? combinedJsonFilter(this.columns, this.columnFilters, this.filter.value)
+          : combinedCondition(this.columns, this.columnFilters, this.filter.value);
+      const page = await api.browseTable({
+        connectionId: this.target.connectionId,
+        database: this.target.database,
+        table: this.target.table,
+        offset,
+        limit: this.limit,
+        orderBy: sort?.column ?? null,
+        descending: sort?.descending ?? false,
+        filter,
+      });
+      this.offset = offset;
+      this.sort = sort;
+      this.total = page.total;
+      this.columns = page.columns;
+      this.primaryKey = page.primaryKey;
+      this.grid.load({
+        columns: page.columns,
+        rows: page.rows,
+        editable: this.editable,
+        primaryKey: page.primaryKey,
+        rowOffset: offset,
+        sort,
+        onSort: (column) => this.toggleSort(column),
+        tableName: this.target.table,
+        onSelect: (row) => this.showRecord(row),
+        extraMenu: (row) => this.rowMenu(row),
+        columnFilters: this.columnFilters,
+        onColumnFilter: (filters) => this.applyColumnFilters(filters),
+        clientFilter: false,
+      });
+      this.pageInfo.textContent = describePage(offset, page.rows.length, page.total, page.elapsedMs);
+    } catch (error) {
+      toast(errorText(error), "error");
+    } finally {
+      this.element.classList.remove("busy");
+    }
+  }
+
+  private async submit(): Promise<void> {
+    const changes = this.grid.changes();
+    if (changes.length === 0) return;
+    const noKeyWarning = `${this.target.table} has no primary key. Rows will be matched by all of their original values. Continue?`;
+    if (this.primaryKey.length === 0 && !(await confirmDialog(noKeyWarning, "Continue"))) return;
+    try {
+      const affected = await api.applyChanges(this.target.connectionId, this.target.database, this.target.table, changes);
+      toast(`Saved ${changes.length} change(s), ${affected} row(s) affected`, "success");
+      await this.reload({ force: true });
+    } catch (error) {
+      toast(errorText(error), "error");
+    }
+  }
+
+  private refreshButtons(): void {
+    const dirty = this.grid.hasChanges();
+    this.submitButton.disabled = !dirty;
+    this.discardButton.disabled = !dirty;
+  }
+
+  private handleShortcut(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      void this.submit();
+    } else if (event.key === "F5") {
+      event.preventDefault();
+      void this.reload({});
+    }
+  }
+}
+
+function describePage(offset: number, count: number, total: number, elapsedMs: number): string {
+  if (count === 0) return `0 of ${formatNumber(total)}`;
+  return `${formatNumber(offset + 1)}–${formatNumber(offset + count)} of ${formatNumber(total)} · ${elapsedMs} ms`;
+}
