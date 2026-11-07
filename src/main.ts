@@ -9,8 +9,8 @@ import { assistantContext as buildAssistantContext, isQueryView, taskLogContext 
 import { AppNavigation } from "./app/navigation";
 import { welcomeScreen } from "./app/welcome";
 import { api, errorText } from "./core/api";
-import { hideUnsupported, loadCapabilities } from "./core/capabilities";
-import { isTauri } from "./core/transport";
+import { capabilities, hideUnsupported, loadCapabilities } from "./core/capabilities";
+import { isTauri, signOut } from "./core/transport";
 import { showContextMenu, type MenuItem } from "./core/contextMenu";
 import { confirmDialog, toast } from "./core/dialogs";
 import { bigButton, clamp, h, icon, iconButton, separator, spacer, type IconName } from "./core/dom";
@@ -256,7 +256,19 @@ function settingsMenu(): MenuItem[] {
       run: () => void setQueryHistory(currentConfig?.queryHistory === false),
     },
     { label: "Clear query history…", icon: "trash", run: () => void clearQueryHistory() },
+    ...(capabilities().edition === "web" ? (["separator", { label: "Sign out…", icon: "key", run: () => void confirmSignOut() }] as MenuItem[]) : []),
   ];
+}
+
+/** Web edition only: there is one access token per server, so signing out ends every browser's session. */
+async function confirmSignOut(): Promise<void> {
+  const message = "Sign out of Fosta Studio? This signs out every browser using this server; sign in again with the access token.";
+  if (!(await confirmDialog(message, "Sign out"))) return;
+  try {
+    await signOut();
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
 }
 
 /** History stays on this machine (fosta-studio-history.jsonl next to the app); turning it off keeps old entries. */

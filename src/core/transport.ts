@@ -80,6 +80,21 @@ async function post(command: string, args: Record<string, unknown>): Promise<Res
   return response;
 }
 
+/** Web edition: ends every session on the server (one token per server), then shows the sign-in page. */
+export async function signOut(): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch("/api/logout", { method: "POST", credentials: "same-origin", headers: { "X-Fosta-Studio": "1" } });
+  } catch {
+    throw "Cannot reach the Fosta Studio server. Check that it is still running.";
+  }
+  if (!response.ok && response.status !== 401) {
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw body?.error ?? `The server answered ${response.status} ${response.statusText}`;
+  }
+  window.location.assign("/");
+}
+
 type Handler = (payload: unknown) => void;
 
 const handlers = new Map<string, Set<Handler>>();
