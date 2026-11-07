@@ -84,4 +84,12 @@ Xem [CONTRIBUTING.md](CONTRIBUTING.md) (cài đặt, chạy test, quy ước cod
 
 ## Giấy phép
 
-Chưa chọn giấy phép (TODO của chủ dự án). Cho tới khi có file `LICENSE`, mọi quyền được bảo lưu.
+DB Studio là phần mềm tự do theo [GNU General Public License v3.0](LICENSE). Đóng góp được nhận theo
+[Contributor License Agreement](CLA.md), cho phép người duy trì cấp thêm license thương mại (ví dụ cho công ty muốn nhúng DB Studio
+mà không theo các nghĩa vụ của GPL) trong khi dự án vẫn giữ GPL.
+
+### Về Fosta
+
+Fosta, provider mặc định của Assistant, là dịch vụ API AI riêng do tác giả DB Studio vận hành. Nó được xếp đầu chỉ cho tiện:
+mọi provider khác (OpenAI, Gemini, Claude, hay endpoint tương thích OpenAI như Ollama chạy trên máy) đều dùng được như nhau,
+DB Studio không bắt buộc tài khoản Fosta, và request chỉ đi tới provider bạn cấu hình.
