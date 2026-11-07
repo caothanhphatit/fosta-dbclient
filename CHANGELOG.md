@@ -7,10 +7,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added
-
-- The app version is shown in the status bar.
-
 ## [0.1.0] - 2026-11-08
 
 First public release for Windows.
@@ -39,11 +35,21 @@ First public release for Windows.
 - **MongoDB**: collections open as tables, filters take a JSON query, and query tabs run database commands as JSON.
 - **Vector tools** for MariaDB 11.7 and newer: embedding search, column and index health checks, and ANN recall compared with exact
   search.
-- **AI assistant** (`Ctrl+Shift+A`) with the provider of your choice (Fosta, OpenAI, Gemini, Claude or any OpenAI-compatible endpoint
-  such as Ollama) and your own key. It sees only metadata and the text you share, and never runs queries: you insert its code and run it
-  yourself.
+- **Safety rules per workspace**: every statement the app runs is classified as read, write, DDL, destructive or administrative and
+  checked against the workspace's preset (Open, Guarded, Read-only or Custom). Risky statements ask for confirmation, destructive ones
+  ask you to type the table or workspace name, and Production workspaces start read-only. Blocked, confirmed and relaxed operations are
+  recorded in a local audit log.
+- **Transactions in query tabs**: Begin, Commit, Rollback and an auto-commit switch, with the current state shown in the toolbar and a
+  warning before closing a tab with an open transaction. Statement timeouts on MariaDB/MySQL and MongoDB.
+- **AI agent** (`Ctrl+Shift+A`) with the provider of your choice (Fosta, OpenAI, Gemini, Claude or any OpenAI-compatible endpoint such
+  as Ollama) and your own key. It looks up tables, columns and relations, writes and explains queries, fixes errors, reads task logs,
+  and opens tables, diagrams or query tabs for you. Statements run only when you run them.
+- **Web edition**: run Fosta Studio in a browser from one Docker image
+  (`docker run -p 8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio`), protected by an access token, with encrypted
+  secrets in the data volume and sign-out that ends every session.
 - Light, dark and system themes.
 - Portable configuration: settings are stored in `fosta-studio.json` next to the executable.
+- The app version is shown in the status bar.
 
 [Unreleased]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/caothanhphatit/fosta-dbclient/releases/tag/v0.1.0
