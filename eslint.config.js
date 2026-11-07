@@ -6,7 +6,7 @@ import tseslint from "typescript-eslint";
 
 export default defineConfig(
   // dev/seed holds mongosh scripts with their own globals.
-  { ignores: ["dist/", "node_modules/", "src-tauri/", "dev/"] },
+  { ignores: ["dist/", "node_modules/", "src-tauri/", "dev/", "website/"] },
   js.configs.recommended,
   tseslint.configs.recommended,
 );
