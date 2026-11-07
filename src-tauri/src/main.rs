@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod drivers;
 mod embedding;
+mod engines;
 mod error;
 mod files;
 mod history;
