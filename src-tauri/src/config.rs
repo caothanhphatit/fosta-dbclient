@@ -437,13 +437,24 @@ fn config_path() -> AppResult<PathBuf> {
     data_path_renamed(CONFIG_FILE, LEGACY_CONFIG_FILE)
 }
 
-/// A file next to the executable, where `fosta-studio.json` lives (the app is portable).
+/// A file in the data directory, where `fosta-studio.json` lives.
 pub fn data_path(name: &str) -> AppResult<PathBuf> {
+    Ok(data_dir()?.join(name))
+}
+
+/// Environment variable naming the data directory (the web server's `/data` volume).
+pub const DATA_DIR_ENV: &str = "FOSTA_STUDIO_DATA";
+
+/// `FOSTA_STUDIO_DATA` when set, otherwise the executable's folder (the desktop app is portable).
+pub fn data_dir() -> AppResult<PathBuf> {
+    if let Some(directory) = std::env::var_os(DATA_DIR_ENV).filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(directory));
+    }
     let executable = std::env::current_exe()?;
     let directory = executable
         .parent()
         .ok_or_else(|| AppError::new("Cannot resolve the application directory"))?;
-    Ok(directory.join(name))
+    Ok(directory.to_owned())
 }
 
 /// Like [`data_path`], but first moves a file left under its pre-rename name (`legacy`) to `name`.

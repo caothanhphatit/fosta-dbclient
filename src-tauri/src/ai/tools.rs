@@ -3,9 +3,8 @@
 //! or changes data.
 
 use serde_json::{json, Value};
-use tauri::ipc::Channel;
 
-use super::{prompt::truncate, ChatContext, ChatEvent, ToolCall, UiAction, Wire};
+use super::{prompt::truncate, ChatContext, ChatEvent, ChatSink, ToolCall, UiAction, Wire};
 use crate::{
     drivers::{types::TableDesign, DbManager},
     schema::{self, SchemaGraph},
@@ -106,12 +105,7 @@ pub(super) fn describe_call(call: &ToolCall, context: &ChatContext) -> String {
     }
 }
 
-pub(super) async fn run_tool(
-    db: &DbManager,
-    context: &ChatContext,
-    call: &ToolCall,
-    events: &Channel<ChatEvent>,
-) -> Result<String, String> {
+pub(super) async fn run_tool(db: &DbManager, context: &ChatContext, call: &ToolCall, events: &dyn ChatSink) -> Result<String, String> {
     let connection_id = context.connection_id.as_deref().ok_or("No connection is open")?;
     let driver = db.driver(connection_id).map_err(|error| error.to_string())?;
     let argument = |key: &str| {
@@ -264,7 +258,7 @@ pub(super) fn append_tool_results(wire: Wire, history: &mut Vec<Value>, results:
     }
 }
 
-fn show(events: &Channel<ChatEvent>, action: UiAction) {
+fn show(events: &dyn ChatSink, action: UiAction) {
     let _ = events.send(ChatEvent::Action { action });
 }
 

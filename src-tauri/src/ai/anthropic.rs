@@ -1,12 +1,11 @@
 //! Anthropic Messages API (`/v1/messages`) with streaming and tool use.
 
 use serde_json::{json, Value};
-use tauri::ipc::Channel;
 
 use super::{
     http::{read_sse, send},
     tools::ToolSpec,
-    AiSettings, ChatEvent, ToolCall, Turn, ANTHROPIC_VERSION,
+    AiSettings, ChatEvent, ChatSink, ToolCall, Turn, ANTHROPIC_VERSION,
 };
 use crate::error::{AppError, AppResult};
 
@@ -24,7 +23,7 @@ pub(super) async fn turn(
     system: &str,
     history: &[Value],
     tools: &[ToolSpec],
-    events: &Channel<ChatEvent>,
+    events: &dyn ChatSink,
 ) -> AppResult<Turn> {
     let mut body = json!({
         "model": settings.model,

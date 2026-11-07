@@ -46,6 +46,8 @@ convert_from!(
     mysql_async::Error,
     tiberius::error::Error,
     mongodb::error::Error,
-    keyring::Error,
     reqwest::Error,
 );
+
+#[cfg(feature = "desktop")]
+convert_from!(keyring::Error);

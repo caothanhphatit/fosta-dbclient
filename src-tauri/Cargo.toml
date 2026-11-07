@@ -6,32 +6,76 @@ repository = "https://github.com/caothanhphatit/fosta-dbclient"
 description = "Lightweight desktop database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces and startup tasks"
 edition = "2021"
 rust-version = "1.88"
+default-run = "fosta-studio"
+
+# The backend core (config, secrets, drivers, assistant, history, tasks and the command bodies) is a library
+# with two front-ends: the Tauri desktop app (`desktop`, the default) and the web server of the Docker image
+# (`web`). Build the server alone with `cargo build --release --no-default-features --features web`.
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:keyring"]
+web = [
+    "dep:axum",
+    "dep:tower-http",
+    "dep:chacha20poly1305",
+    "dep:hmac",
+    "dep:sha2",
+    "dep:getrandom",
+    "tokio/rt-multi-thread",
+    "tokio/signal",
+]
+
+[lib]
+name = "fosta_studio"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fosta-studio"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "fosta-studio-server"
+path = "src/server/main.rs"
+required-features = ["web"]
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = [], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["io-util", "macros", "net", "process", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 async-trait = "0.1"
 futures-util = "0.3"
 chrono = "0.4"
 mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust"] }
-tiberius = { version = "0.12", default-features = false, features = ["tds73", "native-tls", "chrono"] }
 mongodb = "3"
-keyring = { version = "3", features = ["windows-native"] }
-reqwest = { version = "0.12", features = ["json"] }
+keyring = { version = "3", features = ["windows-native"], optional = true }
+# Web server (feature `web`)
+axum = { version = "0.8", optional = true }
+tower-http = { version = "0.6", features = ["fs", "set-header"], optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
+hmac = { version = "0.13", optional = true }
+sha2 = { version = "0.11", optional = true }
+getrandom = { version = "0.3", optional = true }
 
+# TLS: Windows keeps the system stack (SChannel); elsewhere (the Linux server image) rustls, so no OpenSSL is needed.
 [target.'cfg(windows)'.dependencies]
+tiberius = { version = "0.12", default-features = false, features = ["tds73", "native-tls", "chrono"] }
+reqwest = { version = "0.12", features = ["json"] }
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
+
+[target.'cfg(not(windows))'.dependencies]
+tiberius = { version = "0.12", default-features = false, features = ["tds73", "rustls", "chrono"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "charset", "http2", "system-proxy"] }
 
 [profile.release]
 strip = true

@@ -336,19 +336,16 @@ async fn live_assistant_tools() {
     };
     let seen = Arc::new(Mutex::new(Vec::<String>::new()));
     let sink = seen.clone();
-    let channel = tauri::ipc::Channel::new(move |body| {
-        if let tauri::ipc::InvokeResponseBody::Json(json) = body {
-            sink.lock().unwrap().push(json);
-        }
-        Ok(())
-    });
+    let channel = move |event: crate::ai::ChatEvent| {
+        sink.lock().unwrap().push(serde_json::to_string(&event).unwrap());
+    };
     let request: crate::ai::ChatRequest = serde_json::from_value(serde_json::json!({
         "id": "t1",
         "messages": [{ "role": "user", "content": "Open the ER diagram of shop centred on orders, then write a query listing each customer's total paid order amount." }],
         "context": { "connectionId": "chat-maria", "connectionName": "Local MariaDB", "driverLabel": "MariaDB", "database": "shop" }
     }))
     .unwrap();
-    let reply = crate::ai::chat(&settings, Some(key), &manager, &crate::ai::AiRuns::default(), request, channel)
+    let reply = crate::ai::chat(&settings, Some(key), &manager, &crate::ai::AiRuns::default(), request, &channel)
         .await
         .expect("chat");
     let events = seen.lock().unwrap().clone();
