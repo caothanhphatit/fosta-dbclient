@@ -3,33 +3,47 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Fosta Studio: a small, fast, open-source database client</title>
+    <!--
+      English template. Translatable text is marked with data-i18n="key" (element content) and
+      data-i18n-attr="attr:key; attr:key" (attributes); the strings live in website/i18n/*.json.
+      Run `node website/build.mjs <outdir>` to render every language; see website/README.md.
+    -->
+    <title data-i18n="meta.title">Fosta Studio: a small, fast, open-source database client</title>
     <meta
       name="description"
+      data-i18n-attr="content:meta.description"
       content="Fosta Studio is a free, open-source (GPL-3.0) desktop database client for Windows: MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks, a fast data grid, ER diagrams and an AI assistant that never runs your queries."
     />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#15171b" media="(prefers-color-scheme: dark)" />
     <link rel="canonical" href="https://dbcl.fosta.app/" />
+    <!-- i18n:alternates -->
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
 
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Fosta Studio" />
-    <meta property="og:title" content="Fosta Studio: a small, fast, open-source database client" />
+    <meta property="og:title" data-i18n-attr="content:meta.title" content="Fosta Studio: a small, fast, open-source database client" />
     <meta
       property="og:description"
+      data-i18n-attr="content:meta.socialDescription"
       content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and an AI assistant that never runs your queries."
     />
     <meta property="og:url" content="https://dbcl.fosta.app/" />
+    <!-- i18n:og-locale -->
     <meta property="og:image" content="https://dbcl.fosta.app/assets/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Fosta Studio logo with the text: a small, fast, open-source database client" />
+    <meta
+      property="og:image:alt"
+      data-i18n-attr="content:meta.ogImageAlt"
+      content="Fosta Studio logo with the text: a small, fast, open-source database client"
+    />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Fosta Studio: a small, fast, open-source database client" />
+    <meta name="twitter:title" data-i18n-attr="content:meta.title" content="Fosta Studio: a small, fast, open-source database client" />
     <meta
       name="twitter:description"
+      data-i18n-attr="content:meta.socialDescription"
       content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and an AI assistant that never runs your queries."
     />
     <meta name="twitter:image" content="https://dbcl.fosta.app/assets/og-image.png" />
@@ -74,30 +88,44 @@
       <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4" /></symbol>
       <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" /></symbol>
       <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z" /><path d="M9 4v14M15 6v14" /></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z" /></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" /></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
     </svg>
 
-    <a class="skip-link" href="#main">Skip to content</a>
+    <a class="skip-link" href="#main" data-i18n="a11y.skip">Skip to content</a>
+    <!-- i18n:lang-offer -->
 
     <header class="site-header">
       <div class="container header-inner">
-        <a class="brand" href="#top" aria-label="Fosta Studio, back to top">
+        <a class="brand" href="#top" data-i18n-attr="aria-label:a11y.backToTop" aria-label="Fosta Studio, back to top">
           <img src="assets/logo.svg" alt="" width="28" height="28" />
           <span>Fosta Studio</span>
         </a>
-        <nav class="site-nav" aria-label="Primary">
+        <nav class="site-nav" data-i18n-attr="aria-label:nav.label" aria-label="Primary">
           <ul>
-            <li class="nav-optional"><a href="#features">Features</a></li>
-            <li class="nav-optional"><a href="#engines">Engines</a></li>
-            <li class="nav-optional"><a href="#privacy">Privacy</a></li>
-            <li class="nav-optional"><a href="#roadmap">Roadmap</a></li>
+            <li class="nav-optional"><a href="#features" data-i18n="nav.features">Features</a></li>
+            <li class="nav-optional"><a href="#engines" data-i18n="nav.engines">Engines</a></li>
+            <li class="nav-optional"><a href="#privacy" data-i18n="nav.privacy">Privacy</a></li>
+            <li class="nav-optional"><a href="#roadmap" data-i18n="nav.roadmap">Roadmap</a></li>
             <li>
               <a class="nav-github" href="https://github.com/caothanhphatit/fosta-dbclient">
-                <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg>GitHub
+                <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span class="nav-github-text">GitHub</span>
               </a>
             </li>
           </ul>
         </nav>
-        <button class="theme-toggle" type="button" hidden aria-label="Switch to dark theme" data-theme-toggle>
+        <!-- i18n:lang-switch -->
+        <button
+          class="theme-toggle"
+          type="button"
+          hidden
+          data-theme-toggle
+          data-i18n-attr="aria-label:theme.toDark; data-label-dark:theme.toDark; data-label-light:theme.toLight"
+          aria-label="Switch to dark theme"
+          data-label-dark="Switch to dark theme"
+          data-label-light="Switch to light theme"
+        >
           <svg class="icon icon-sun" aria-hidden="true"><use href="#i-sun" /></svg>
           <svg class="icon icon-moon" aria-hidden="true"><use href="#i-moon" /></svg>
         </button>
@@ -109,32 +137,56 @@
       <section class="hero" id="top" aria-labelledby="hero-title">
         <div class="container hero-text">
           <p class="eyebrow">
-            <span class="pill">Free &amp; open source</span>
-            <span>Windows · about 10 MB · GPL-3.0</span>
+            <span class="pill" data-i18n="hero.pill">Free &amp; open source</span>
+            <span data-i18n="hero.facts">Windows · about 10 MB · GPL-3.0</span>
           </p>
           <h1 id="hero-title">Fosta Studio</h1>
-          <p class="lede">
+          <p class="lede" data-i18n="hero.lede">
             A small, fast database client for <strong>MariaDB, MySQL, SQL Server and MongoDB</strong>, with workspaces that
             bring their own tunnels and an AI assistant that writes queries but never runs them.
           </p>
           <div class="cta-row">
             <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/releases">
-              <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>Download for Windows
+              <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg><span data-i18n="hero.download">Download for Windows</span>
             </a>
             <a class="btn btn-secondary" href="https://github.com/caothanhphatit/fosta-dbclient">
-              <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg>View on GitHub
+              <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span data-i18n="hero.github">View on GitHub</span>
             </a>
           </div>
-          <p class="cta-note">
+          <p class="cta-note" data-i18n="hero.note">
             Release builds are coming soon. Until then,
             <a href="#build">build it from source</a>.
           </p>
         </div>
 
         <div class="container hero-visual">
+          <!--
+            Carousel of app views. Without JavaScript it is a horizontally scrollable strip (slide 1 shows first);
+            main.js adds the arrows, dots, auto-advance and announcements. The mocks show the app's English interface
+            (the app itself is not translated); their descriptions, captions and the chat text are translated.
+          -->
+          <div
+            class="carousel"
+            role="region"
+            data-carousel
+            data-i18n-attr="aria-label:carousel.label; aria-roledescription:carousel.roleCarousel"
+            aria-label="Views of the app"
+            aria-roledescription="carousel"
+          >
+          <div class="carousel-viewport" data-carousel-viewport>
+          <div
+            class="carousel-slide"
+            id="view-sql"
+            role="group"
+            data-carousel-slide
+            data-i18n-attr="aria-label:carousel.slide1; aria-roledescription:carousel.roleSlide"
+            aria-label="SQL tables"
+            aria-roledescription="slide"
+          >
           <div
             class="app-mock"
             role="img"
+            data-i18n-attr="aria-label:hero.mockLabel"
             aria-label="Illustration of the Fosta Studio window: a workspace rail on the left, a tree of connections and tables, the orders table open in a data grid with column type badges and two pending changes, and the assistant panel on the right showing a suggested SQL query with Insert and New tab buttons."
           >
             <div class="am-titlebar" aria-hidden="true">
@@ -230,9 +282,9 @@
                 <div class="am-asst-head"><svg class="icon"><use href="#i-spark" /></svg><b>Assistant</b><span class="am-chip">llama3.1 · local</span></div>
                 <div class="am-asst-ctx"><svg class="icon"><use href="#i-table" /></svg>shop.orders</div>
                 <div class="am-msgs">
-                  <div class="am-msg user">Top customers by spend this month?</div>
+                  <div class="am-msg user" data-i18n="slideSql.ask">Top customers by spend this month?</div>
                   <div class="am-msg bot">
-                    <p>I checked the schema of <code>orders</code> and <code>customers</code>. Here is a query:</p>
+                    <p data-i18n="slideSql.answer">I checked the schema of <code>orders</code> and <code>customers</code>. Here is a query:</p>
                     <pre><span class="k">SELECT</span> c.name, <span class="k">SUM</span>(o.total) <span class="k">AS</span> spent
 <span class="k">FROM</span> orders o
 <span class="k">JOIN</span> customers c <span class="k">ON</span> c.id = o.customer_id
@@ -248,7 +300,302 @@
               </div>
             </div>
           </div>
-          <p class="mock-caption">Illustration of the app's layout. Screenshots will follow with the first release.</p>
+          <p class="slide-caption" data-i18n="carousel.caption1">A MariaDB table open in the grid, with pending edits and a query drafted by the assistant.</p>
+          </div>
+
+          <!-- Slide 2: MongoDB (document view and shell-syntax query bar are on the roadmap; the caption says so) -->
+          <div
+            class="carousel-slide"
+            id="view-mongo"
+            role="group"
+            data-carousel-slide
+            data-i18n-attr="aria-label:carousel.slide2; aria-roledescription:carousel.roleSlide"
+            aria-label="MongoDB documents"
+            aria-roledescription="slide"
+          >
+          <div
+            class="app-mock"
+            role="img"
+            data-i18n-attr="aria-label:slideMongo.mockLabel"
+            aria-label="Illustration of the planned MongoDB view: the events connection open in the tree with the clicks collection selected, a query bar with a shell-style filter, documents shown as an expandable list with type labels, and the assistant panel suggesting an aggregation pipeline that it has not run."
+          >
+            <div class="am-titlebar" aria-hidden="true">
+              <img src="assets/logo.svg" alt="" width="14" height="14" />
+              <span>Fosta Studio</span>
+              <span class="am-win"><i></i><i></i><i></i></span>
+            </div>
+            <div class="am-body" aria-hidden="true">
+              <div class="am-rail">
+                <div class="am-rail-heading">Workspaces</div>
+                <div class="am-ws active" style="--ws: var(--ws-blue)">
+                  <span class="am-glyph"><svg class="icon"><use href="#i-cart" /></svg><span class="am-badge"></span></span>
+                  <span class="am-ws-label">Shop</span>
+                </div>
+                <div class="am-ws" style="--ws: var(--ws-green)">
+                  <span class="am-glyph"><svg class="icon"><use href="#i-card" /></svg><span class="am-badge"></span></span>
+                  <span class="am-ws-label">Billing</span>
+                </div>
+                <div class="am-ws" style="--ws: var(--ws-red)">
+                  <span class="am-glyph"><svg class="icon"><use href="#i-shield" /></svg></span>
+                  <span class="am-ws-label">Prod</span>
+                </div>
+                <div class="am-ws" style="--ws: var(--ws-purple)">
+                  <span class="am-glyph"><svg class="icon"><use href="#i-flask" /></svg></span>
+                  <span class="am-ws-label">Lab</span>
+                </div>
+                <div class="am-rail-add"><svg class="icon"><use href="#i-plus" /></svg></div>
+              </div>
+
+              <div class="am-sidebar">
+                <div class="am-ws-header"><span class="am-ws-dot"></span><b>Shop</b><span class="am-muted">staging</span></div>
+                <div class="am-search"><svg class="icon"><use href="#i-search" /></svg><span>Search</span></div>
+                <div class="am-tree">
+                  <div class="am-row conn"><svg class="icon chev"><use href="#i-chev" /></svg><span class="am-conn-icon"><svg class="icon"><use href="#i-db" /></svg><i></i></span><b>shop-staging</b><span class="am-tag">MARIADB</span></div>
+                  <div class="am-row conn mssql"><svg class="icon chev"><use href="#i-chev" /></svg><span class="am-conn-icon"><svg class="icon"><use href="#i-db" /></svg></span><b>billing-legacy</b><span class="am-tag">MSSQL</span></div>
+                  <div class="am-row conn mongo"><svg class="icon chev open"><use href="#i-chev" /></svg><span class="am-conn-icon"><svg class="icon"><use href="#i-db" /></svg><i></i></span><b>events</b><span class="am-tag">MONGO</span></div>
+                  <div class="am-row l1"><svg class="icon chev open"><use href="#i-chev" /></svg><svg class="icon"><use href="#i-db" /></svg>analytics</div>
+                  <div class="am-row l2 selected"><svg class="icon"><use href="#i-layers" /></svg>clicks</div>
+                  <div class="am-row l2"><svg class="icon"><use href="#i-layers" /></svg>purchases</div>
+                  <div class="am-row l2"><svg class="icon"><use href="#i-layers" /></svg>sessions</div>
+                  <div class="am-row l2"><svg class="icon"><use href="#i-layers" /></svg>users</div>
+                </div>
+                <div class="am-task"><span class="am-dot ok"></span>port-forward shop-db<span class="am-muted">running</span></div>
+              </div>
+
+              <div class="am-main">
+                <div class="am-tabs">
+                  <div class="am-tab active"><svg class="icon"><use href="#i-layers" /></svg>clicks</div>
+                  <div class="am-tab"><svg class="icon"><use href="#i-table" /></svg>orders</div>
+                  <div class="am-tab"><svg class="icon"><use href="#i-code" /></svg>Query 1</div>
+                  <span class="am-seg"><span class="on">List</span><span>JSON</span><span>Table</span></span>
+                </div>
+                <div class="am-toolbar">
+                  <span class="am-filter">{ type: <span class="s">"purchase"</span>, at: { <span class="am-kw">$gte</span>: <span class="mq-fn">ISODate</span>(<span class="s">"2026-10-01"</span>) } }</span>
+                </div>
+                <div class="am-docs">
+                  <div class="md-doc open">
+                    <div class="md-line"><svg class="icon chev open"><use href="#i-chev" /></svg><span class="md-key">_id:</span> <span class="md-oid">ObjectId("6721a4f0…c9e1")</span><span class="md-hint">2026-10-30 09:14</span><span class="md-type">ObjectId</span></div>
+                    <div class="md-line l1"><span class="md-key">type:</span> <span class="s">"purchase"</span><span class="md-type">String</span></div>
+                    <div class="md-line l1"><span class="md-key">at:</span> <span class="md-date">2026-10-30T09:14:02Z</span><span class="md-type">Date</span></div>
+                    <div class="md-line l1"><span class="md-key">amount:</span> <span class="n">129</span><span class="md-type">Int32</span></div>
+                    <div class="md-line l1"><svg class="icon chev open"><use href="#i-chev" /></svg><span class="md-key">session:</span> <span class="md-dim">{ 2 fields }</span><span class="md-type">Object</span></div>
+                    <div class="md-line l2"><span class="md-key">id:</span> <span class="s">"s_81f2"</span><span class="md-type">String</span></div>
+                    <div class="md-line l2"><span class="md-key">device:</span> <span class="s">"web"</span><span class="md-type">String</span></div>
+                    <div class="md-line l1"><svg class="icon chev open"><use href="#i-chev" /></svg><span class="md-key">items:</span> <span class="md-dim">[ 2 ]</span><span class="md-type">Array</span></div>
+                    <div class="md-line l2"><span class="md-key">0:</span> <span class="s">"LK-102"</span><span class="md-type">String</span></div>
+                    <div class="md-line l2"><span class="md-key">1:</span> <span class="s">"LK-118"</span><span class="md-type">String</span></div>
+                  </div>
+                  <div class="md-doc">
+                    <div class="md-line"><svg class="icon chev"><use href="#i-chev" /></svg><span class="md-key">_id:</span> <span class="md-oid">ObjectId("6721a5b2…07f3")</span><span class="md-dim md-preview">type: "purchase", amount: 54, …</span><span class="md-type">ObjectId</span></div>
+                  </div>
+                  <div class="md-doc">
+                    <div class="md-line"><svg class="icon chev"><use href="#i-chev" /></svg><span class="md-key">_id:</span> <span class="md-oid">ObjectId("6721a7d9…5a20")</span><span class="md-dim md-preview">type: "purchase", amount: 310, …</span><span class="md-type">ObjectId</span></div>
+                  </div>
+                </div>
+                <div class="am-status"><span>MongoDB · analytics.clicks</span><span>documents 1–20 of 3,412</span></div>
+              </div>
+
+              <div class="am-assistant">
+                <div class="am-asst-head"><svg class="icon"><use href="#i-spark" /></svg><b>Assistant</b><span class="am-chip">llama3.1 · local</span></div>
+                <div class="am-asst-ctx"><svg class="icon"><use href="#i-layers" /></svg>analytics.clicks</div>
+                <div class="am-msgs">
+                  <div class="am-msg user" data-i18n="slideMongo.ask">Purchase revenue per device this month?</div>
+                  <div class="am-msg bot">
+                    <p data-i18n="slideMongo.answer">I checked the fields of <code>clicks</code>. Here is a pipeline:</p>
+                    <div class="am-code-lang">json</div>
+                    <pre class="am-pre-json">[
+  { <span class="s">"$match"</span>: {
+    <span class="s">"type"</span>: <span class="s">"purchase"</span>,
+    <span class="s">"at"</span>: { <span class="s">"$gte"</span>:
+      { <span class="s">"$date"</span>: <span class="s">"2026-10-01"</span> } } } },
+  { <span class="s">"$group"</span>: {
+    <span class="s">"_id"</span>: <span class="s">"$session.device"</span>,
+    <span class="s">"total"</span>: { <span class="s">"$sum"</span>: <span class="s">"$amount"</span> } } },
+  { <span class="s">"$sort"</span>: { <span class="s">"total"</span>: <span class="n">-1</span> } }
+]</pre>
+                    <div class="am-code-actions"><span class="am-btn small">Insert</span><span class="am-btn small">New tab</span></div>
+                    <p class="am-note"><svg class="icon"><use href="#i-ban" /></svg>Not executed. You run it.</p>
+                  </div>
+                </div>
+                <div class="am-input">Ask about this collection…</div>
+              </div>
+            </div>
+          </div>
+          <p class="slide-caption"><span data-i18n="carousel.caption2">MongoDB documents: a preview of the upcoming document view (List / JSON / Table) and shell-syntax query bar.</span> <span class="tag-coming" data-i18n="common.coming">coming</span></p>
+          </div>
+
+          <!-- Slide 3: ER diagram -->
+          <div
+            class="carousel-slide"
+            id="view-diagram"
+            role="group"
+            data-carousel-slide
+            data-i18n-attr="aria-label:carousel.slide3; aria-roledescription:carousel.roleSlide"
+            aria-label="ER diagram"
+            aria-roledescription="slide"
+          >
+          <div
+            class="app-mock"
+            role="img"
+            data-i18n-attr="aria-label:slideDiagram.mockLabel"
+            aria-label="Illustration of the ER diagram view: the shop schema with customers, orders, order_items, products and categories connected by one-to-many links, the orders table selected, and the assistant panel explaining how orders connect to products."
+          >
+            <div class="am-titlebar" aria-hidden="true">
+              <img src="assets/logo.svg" alt="" width="14" height="14" />
+              <span>Fosta Studio</span>
+              <span class="am-win"><i></i><i></i><i></i></span>
+            </div>
+            <div class="am-body" aria-hidden="true">
+              <div class="am-rail">
+                <div class="am-rail-heading">Workspaces</div>
+                <div class="am-ws active" style="--ws: var(--ws-blue)">
+                  <span class="am-glyph"><svg class="icon"><use href="#i-cart" /></svg><span class="am-badge"></span></span>
+                  <span class="am-ws-label">Shop</span>
+                </div>
+                <div class="am-ws" style="--ws: var(--ws-green)">
+                  <span class="am-glyph"><svg class="icon"><use href="#i-card" /></svg><span class="am-badge"></span></span>
+                  <span class="am-ws-label">Billing</span>
+                </div>
+                <div class="am-ws" style="--ws: var(--ws-red)">
+                  <span class="am-glyph"><svg class="icon"><use href="#i-shield" /></svg></span>
+                  <span class="am-ws-label">Prod</span>
+                </div>
+                <div class="am-ws" style="--ws: var(--ws-purple)">
+                  <span class="am-glyph"><svg class="icon"><use href="#i-flask" /></svg></span>
+                  <span class="am-ws-label">Lab</span>
+                </div>
+                <div class="am-rail-add"><svg class="icon"><use href="#i-plus" /></svg></div>
+              </div>
+
+              <div class="am-sidebar">
+                <div class="am-ws-header"><span class="am-ws-dot"></span><b>Shop</b><span class="am-muted">staging</span></div>
+                <div class="am-search"><svg class="icon"><use href="#i-search" /></svg><span>Search</span></div>
+                <div class="am-tree">
+                  <div class="am-row conn"><svg class="icon chev open"><use href="#i-chev" /></svg><span class="am-conn-icon"><svg class="icon"><use href="#i-db" /></svg><i></i></span><b>shop-staging</b><span class="am-tag">MARIADB</span></div>
+                  <div class="am-row l1 selected"><svg class="icon chev open"><use href="#i-chev" /></svg><svg class="icon"><use href="#i-db" /></svg>shop</div>
+                  <div class="am-row l2"><svg class="icon"><use href="#i-table" /></svg>categories</div>
+                  <div class="am-row l2"><svg class="icon"><use href="#i-table" /></svg>customers</div>
+                  <div class="am-row l2"><svg class="icon"><use href="#i-table" /></svg>order_items</div>
+                  <div class="am-row l2"><svg class="icon"><use href="#i-table" /></svg>orders</div>
+                  <div class="am-row l2"><svg class="icon"><use href="#i-table" /></svg>products</div>
+                  <div class="am-row conn mssql"><svg class="icon chev"><use href="#i-chev" /></svg><span class="am-conn-icon"><svg class="icon"><use href="#i-db" /></svg></span><b>billing-legacy</b><span class="am-tag">MSSQL</span></div>
+                  <div class="am-row conn mongo"><svg class="icon chev"><use href="#i-chev" /></svg><span class="am-conn-icon"><svg class="icon"><use href="#i-db" /></svg></span><b>events</b><span class="am-tag">MONGO</span></div>
+                </div>
+                <div class="am-task"><span class="am-dot ok"></span>port-forward shop-db<span class="am-muted">running</span></div>
+              </div>
+
+              <div class="am-main">
+                <div class="am-tabs">
+                  <div class="am-tab"><svg class="icon"><use href="#i-table" /></svg>orders</div>
+                  <div class="am-tab active"><svg class="icon"><use href="#i-diagram" /></svg>shop diagram</div>
+                  <div class="am-tab"><svg class="icon"><use href="#i-code" /></svg>Query 1</div>
+                </div>
+                <div class="am-toolbar">
+                  <span class="am-tool-btn">Auto layout</span>
+                  <span class="am-tool-btn">Export SVG</span>
+                  <span class="am-tool-btn">Export PNG</span>
+                  <span class="am-zoom">100%</span>
+                </div>
+                <div class="am-canvas">
+                  <svg viewBox="8 12 614 320" preserveAspectRatio="xMidYMid meet">
+                    <g class="er-links">
+                      <path d="M170 68 C 205 68, 205 78, 240 78" />
+                      <path d="M315 154 V 210" />
+                      <path d="M460 228 C 425 228, 425 288, 390 288" />
+                      <path d="M535 114 V 190" />
+                    </g>
+                    <g class="er-marks">
+                      <path d="M176 61v14M181 61v14" />
+                      <path d="M228 78l12-6M228 78h12M228 78l12 6M224 72v12" />
+                      <path d="M308 160h14M308 165h14" />
+                      <path d="M315 198l-6 12M315 198v12M315 198l6 12M309 194h12" />
+                      <path d="M454 221v14M449 221v14" />
+                      <path d="M402 288l-12-6M402 288h-12M402 288l-12 6M406 282v12" />
+                      <path d="M528 120h14M528 125h14" />
+                      <path d="M535 178l-6 12M535 178v12M535 178l6 12M529 174h12" />
+                    </g>
+                    <g class="md-table" transform="translate(20 30)">
+                      <rect width="150" height="114" rx="8" /><path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                      <text x="12" y="18" class="md-title">customers</text>
+                      <text x="12" y="46">id <tspan class="md-pk">PK</tspan></text><text x="12" y="66">name</text><text x="12" y="86">email</text><text x="12" y="106">created_at</text>
+                    </g>
+                    <g class="md-table er-selected" transform="translate(240 20)">
+                      <rect width="150" height="134" rx="8" /><path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                      <text x="12" y="18" class="md-title">orders</text>
+                      <text x="12" y="46">id <tspan class="md-pk">PK</tspan></text><text x="12" y="66">customer_id <tspan class="md-fk">FK</tspan></text><text x="12" y="86">status</text><text x="12" y="106">total</text><text x="12" y="126">created_at</text>
+                    </g>
+                    <g class="md-table" transform="translate(240 210)">
+                      <rect width="150" height="114" rx="8" /><path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                      <text x="12" y="18" class="md-title">order_items</text>
+                      <text x="12" y="46">id <tspan class="md-pk">PK</tspan></text><text x="12" y="66">order_id <tspan class="md-fk">FK</tspan></text><text x="12" y="86">product_id <tspan class="md-fk">FK</tspan></text><text x="12" y="106">qty</text>
+                    </g>
+                    <g class="md-table" transform="translate(460 190)">
+                      <rect width="150" height="134" rx="8" /><path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                      <text x="12" y="18" class="md-title">products</text>
+                      <text x="12" y="46">id <tspan class="md-pk">PK</tspan></text><text x="12" y="66">category_id <tspan class="md-fk">FK</tspan></text><text x="12" y="86">sku</text><text x="12" y="106">name</text><text x="12" y="126">price</text>
+                    </g>
+                    <g class="md-table" transform="translate(460 20)">
+                      <rect width="150" height="94" rx="8" /><path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                      <text x="12" y="18" class="md-title">categories</text>
+                      <text x="12" y="46">id <tspan class="md-pk">PK</tspan></text><text x="12" y="66">name</text><text x="12" y="86">parent_id <tspan class="md-fk">FK</tspan></text>
+                    </g>
+                  </svg>
+                </div>
+                <div class="am-status"><span>MariaDB · shop</span><span>5 tables · 4 relations</span></div>
+              </div>
+
+              <div class="am-assistant">
+                <div class="am-asst-head"><svg class="icon"><use href="#i-spark" /></svg><b>Assistant</b><span class="am-chip">llama3.1 · local</span></div>
+                <div class="am-asst-ctx"><svg class="icon"><use href="#i-db" /></svg>shop</div>
+                <div class="am-msgs">
+                  <div class="am-msg user" data-i18n="slideDiagram.ask">How do orders connect to products?</div>
+                  <div class="am-msg bot">
+                    <div class="ma-tools"><span class="ma-tool"><svg class="icon"><use href="#i-check" /></svg>Read schema overview</span><span class="ma-tool"><svg class="icon"><use href="#i-diagram" /></svg>Opened diagram</span></div>
+                    <p data-i18n="slideDiagram.answer">Through <code>order_items</code>: each row points to one order and one product. I opened the diagram with <code>orders</code> selected.</p>
+                  </div>
+                </div>
+                <div class="am-input">Ask about this schema…</div>
+              </div>
+            </div>
+          </div>
+          <p class="slide-caption" data-i18n="carousel.caption3">The ER diagram of a shop schema, laid out automatically, with one table selected.</p>
+          </div>
+          </div>
+
+          <div class="carousel-controls" data-carousel-controls hidden>
+            <button type="button" class="carousel-btn" data-carousel-prev data-i18n-attr="aria-label:carousel.prev" aria-label="Previous view">
+              <svg class="icon flip" aria-hidden="true"><use href="#i-chev" /></svg>
+            </button>
+            <div class="carousel-dots">
+              <button type="button" class="carousel-dot" data-carousel-dot aria-controls="view-sql" data-i18n-attr="aria-label:carousel.slide1" aria-label="SQL tables"></button>
+              <button type="button" class="carousel-dot" data-carousel-dot aria-controls="view-mongo" data-i18n-attr="aria-label:carousel.slide2" aria-label="MongoDB documents"></button>
+              <button type="button" class="carousel-dot" data-carousel-dot aria-controls="view-diagram" data-i18n-attr="aria-label:carousel.slide3" aria-label="ER diagram"></button>
+            </div>
+            <button type="button" class="carousel-btn" data-carousel-next data-i18n-attr="aria-label:carousel.next" aria-label="Next view">
+              <svg class="icon" aria-hidden="true"><use href="#i-chev" /></svg>
+            </button>
+            <button
+              type="button"
+              class="carousel-btn carousel-toggle"
+              data-carousel-toggle
+              data-i18n-attr="aria-label:carousel.pause; data-label-pause:carousel.pause; data-label-play:carousel.play"
+              aria-label="Pause the slideshow"
+              data-label-pause="Pause the slideshow"
+              data-label-play="Play the slideshow"
+            >
+              <svg class="icon icon-pause" aria-hidden="true"><use href="#i-pause" /></svg>
+              <svg class="icon icon-play" aria-hidden="true"><use href="#i-play" /></svg>
+            </button>
+          </div>
+          <p
+            class="sr-only"
+            aria-live="polite"
+            data-carousel-status
+            data-i18n-attr="data-template:carousel.status"
+            data-template="View {n} of {total}: {name}"
+          ></p>
+          </div>
+          <p class="mock-caption" data-i18n="hero.mockCaption">Illustration of the app's layout. Screenshots will follow with the first release.</p>
         </div>
       </section>
 
@@ -256,30 +603,30 @@
       <section class="section" id="why" aria-labelledby="why-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Why Fosta Studio</p>
-            <h2 id="why-title">A database client that stays out of your way</h2>
-            <p>Built for developers who hop between projects, customers and environments all day, on a machine that has better things to do with its memory.</p>
+            <p class="kicker" data-i18n="why.kicker">Why Fosta Studio</p>
+            <h2 id="why-title" data-i18n="why.title">A database client that stays out of your way</h2>
+            <p data-i18n="why.intro">Built for developers who hop between projects, customers and environments all day, on a machine that has better things to do with its memory.</p>
           </header>
           <ul class="why-grid">
             <li class="why-card">
               <span class="why-icon"><svg class="icon" aria-hidden="true"><use href="#i-box" /></svg></span>
-              <h3>Small</h3>
-              <p>A Tauri 2 app with a Rust core and a plain TypeScript UI. The release executable is about 10&nbsp;MB, portable, with no installer required.</p>
+              <h3 data-i18n="why.small.title">Small</h3>
+              <p data-i18n="why.small.text">A Tauri 2 app with a Rust core and a plain TypeScript UI. The release executable is about 10&nbsp;MB, portable, with no installer required.</p>
             </li>
             <li class="why-card">
               <span class="why-icon"><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg></span>
-              <h3>Fast</h3>
-              <p>No UI framework, a virtualised grid and native drivers. It uses far less memory than clients built on Electron or Java.</p>
+              <h3 data-i18n="why.fast.title">Fast</h3>
+              <p data-i18n="why.fast.text">No UI framework, a virtualised grid and native drivers. It uses far less memory than clients built on Electron or Java.</p>
             </li>
             <li class="why-card">
               <span class="why-icon"><svg class="icon" aria-hidden="true"><use href="#i-heart" /></svg></span>
-              <h3>Free &amp; open</h3>
-              <p>GPL-3.0, no account, no telemetry. Read the code, build it yourself, and send a pull request when something bugs you.</p>
+              <h3 data-i18n="why.open.title">Free &amp; open</h3>
+              <p data-i18n="why.open.text">GPL-3.0, no account, no telemetry. Read the code, build it yourself, and send a pull request when something bugs you.</p>
             </li>
             <li class="why-card">
               <span class="why-icon"><svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg></span>
-              <h3>Safe AI</h3>
-              <p>Bring your own model. The assistant reads schema metadata and writes queries, but it has no tool that runs them. You do.</p>
+              <h3 data-i18n="why.ai.title">Safe AI</h3>
+              <p data-i18n="why.ai.text">Bring your own model. The assistant reads schema metadata and writes queries, but it has no tool that runs them. You do.</p>
             </li>
           </ul>
         </div>
@@ -289,24 +636,29 @@
       <section class="section section-alt" id="features" aria-labelledby="features-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Features</p>
-            <h2 id="features-title">Everything you reach for, nothing you trip over</h2>
+            <p class="kicker" data-i18n="features.kicker">Features</p>
+            <h2 id="features-title" data-i18n="features.title">Everything you reach for, nothing you trip over</h2>
           </header>
 
           <!-- Workspaces -->
           <article class="feature" aria-labelledby="f-workspaces">
             <div class="feature-text">
               <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg></span>
-              <h3 id="f-workspaces">Workspaces and startup tasks</h3>
-              <p>Group connections, startup tasks and open tabs per project, customer or environment, then switch from the rail on the left or with <kbd>Ctrl</kbd>+<kbd>1…9</kbd>. Tabs of other workspaces stay open.</p>
+              <h3 id="f-workspaces" data-i18n="ws.title">Workspaces and startup tasks</h3>
+              <p data-i18n="ws.text">Group connections, startup tasks and open tabs per project, customer or environment, then switch from the rail on the left or with <kbd>Ctrl</kbd>+<kbd>1…9</kbd>. Tabs of other workspaces stay open.</p>
               <ul class="checks">
-                <li>Run <code>kubectl port-forward</code> or any command when a workspace opens</li>
-                <li>Automatic restart with backoff when a tunnel drops, and live logs</li>
-                <li>Child processes are cleaned up when the app exits</li>
-                <li>Production workspaces with safety rules <span class="tag-coming">coming</span></li>
+                <li data-i18n="ws.item1">Run <code>kubectl port-forward</code> or any command when a workspace opens</li>
+                <li data-i18n="ws.item2">Automatic restart with backoff when a tunnel drops, and live logs</li>
+                <li data-i18n="ws.item3">Child processes are cleaned up when the app exits</li>
+                <li><span data-i18n="ws.item4">Production workspaces with safety rules</span> <span class="tag-coming" data-i18n="common.coming">coming</span></li>
               </ul>
             </div>
-            <figure class="shot" data-shot="assets/screenshots/workspaces.png" data-shot-alt="Fosta Studio with several workspaces in the rail and the startup task log of a kubectl port-forward.">
+            <figure
+              class="shot"
+              data-shot="assets/screenshots/workspaces.png"
+              data-i18n-attr="data-shot-alt:ws.shotAlt"
+              data-shot-alt="Fosta Studio with several workspaces in the rail and the startup task log of a kubectl port-forward."
+            >
               <div class="shot-mock mock-tasks" aria-hidden="true">
                 <div class="mt-rail">
                   <span class="am-glyph active" style="--ws: var(--ws-blue)"><svg class="icon"><use href="#i-cart" /></svg></span>
@@ -327,7 +679,7 @@
                   </div>
                 </div>
               </div>
-              <figcaption>Each workspace brings its own connections, tasks and tabs.</figcaption>
+              <figcaption data-i18n="ws.caption">Each workspace brings its own connections, tasks and tabs.</figcaption>
             </figure>
           </article>
 
@@ -335,16 +687,21 @@
           <article class="feature reverse" aria-labelledby="f-grid">
             <div class="feature-text">
               <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-grid" /></svg></span>
-              <h3 id="f-grid">A data grid made for editing</h3>
-              <p>A virtualised grid that pages through large tables, with type badges under each column name so you always know what you are looking at.</p>
+              <h3 id="f-grid" data-i18n="grid.title">A data grid made for editing</h3>
+              <p data-i18n="grid.text">A virtualised grid that pages through large tables, with type badges under each column name so you always know what you are looking at.</p>
               <ul class="checks">
-                <li>Inline editing, inserts and deletes collected in a pending-changes bar</li>
-                <li>Apply everything in one transaction, or discard it</li>
-                <li><code>WHERE</code> filters and per-column filters, sorting</li>
-                <li>A record panel that follows foreign keys to related rows</li>
+                <li data-i18n="grid.item1">Inline editing, inserts and deletes collected in a pending-changes bar</li>
+                <li data-i18n="grid.item2">Apply everything in one transaction, or discard it</li>
+                <li data-i18n="grid.item3"><code>WHERE</code> filters and per-column filters, sorting</li>
+                <li data-i18n="grid.item4">A record panel that follows foreign keys to related rows</li>
               </ul>
             </div>
-            <figure class="shot" data-shot="assets/screenshots/grid.png" data-shot-alt="The Fosta Studio data grid with column filters, type badges, an edited cell and the pending changes bar.">
+            <figure
+              class="shot"
+              data-shot="assets/screenshots/grid.png"
+              data-i18n-attr="data-shot-alt:grid.shotAlt"
+              data-shot-alt="The Fosta Studio data grid with column filters, type badges, an edited cell and the pending changes bar."
+            >
               <div class="shot-mock mock-grid" aria-hidden="true">
                 <table>
                   <thead>
@@ -360,7 +717,7 @@
                 </table>
                 <div class="am-pending"><span class="am-dot warn"></span><b>2 pending changes</b><span class="am-btn ghost">Discard</span><span class="am-btn primary">Apply</span></div>
               </div>
-              <figcaption>Edits wait in the pending bar until you apply them.</figcaption>
+              <figcaption data-i18n="grid.caption">Edits wait in the pending bar until you apply them.</figcaption>
             </figure>
           </article>
 
@@ -368,15 +725,20 @@
           <article class="feature" aria-labelledby="f-diagram">
             <div class="feature-text">
               <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-diagram" /></svg></span>
-              <h3 id="f-diagram">Interactive ER diagrams</h3>
-              <p>See how a database fits together. The diagram lays itself out automatically; drag tables around, zoom in, and export the result.</p>
+              <h3 id="f-diagram" data-i18n="diagram.title">Interactive ER diagrams</h3>
+              <p data-i18n="diagram.text">See how a database fits together. The diagram lays itself out automatically; drag tables around, zoom in, and export the result.</p>
               <ul class="checks">
-                <li>Automatic layout, drag and zoom</li>
-                <li>Export to SVG or PNG</li>
-                <li>Inferred links between MongoDB collections</li>
+                <li data-i18n="diagram.item1">Automatic layout, drag and zoom</li>
+                <li data-i18n="diagram.item2">Export to SVG or PNG</li>
+                <li data-i18n="diagram.item3">Inferred links between MongoDB collections</li>
               </ul>
             </div>
-            <figure class="shot" data-shot="assets/screenshots/diagram.png" data-shot-alt="An ER diagram of a shop database in Fosta Studio, with tables connected by foreign keys.">
+            <figure
+              class="shot"
+              data-shot="assets/screenshots/diagram.png"
+              data-i18n-attr="data-shot-alt:diagram.shotAlt"
+              data-shot-alt="An ER diagram of a shop database in Fosta Studio, with tables connected by foreign keys."
+            >
               <div class="shot-mock mock-diagram" aria-hidden="true">
                 <svg viewBox="0 0 480 300" preserveAspectRatio="xMidYMid meet">
                   <g class="md-links">
@@ -406,7 +768,7 @@
                   </g>
                 </svg>
               </div>
-              <figcaption>Tables and their foreign keys, laid out for you.</figcaption>
+              <figcaption data-i18n="diagram.caption">Tables and their foreign keys, laid out for you.</figcaption>
             </figure>
           </article>
 
@@ -414,17 +776,22 @@
           <article class="feature reverse" aria-labelledby="f-assistant">
             <div class="feature-text">
               <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg></span>
-              <h3 id="f-assistant">An AI assistant that never executes</h3>
-              <p>Ask in plain words. The assistant reads table and column metadata, writes the query, and can open a diagram, a table or a new query tab for you. Every code block has <b>Insert</b> and <b>New tab</b> buttons.</p>
-              <p class="callout"><svg class="icon" aria-hidden="true"><use href="#i-ban" /></svg><span><b>It has no tool that runs queries or changes data.</b> You read what it wrote, and you decide whether to run it.</span></p>
+              <h3 id="f-assistant" data-i18n="ai.title">An AI assistant that never executes</h3>
+              <p data-i18n="ai.text">Ask in plain words. The assistant reads table and column metadata, writes the query, and can open a diagram, a table or a new query tab for you. Every code block has <b>Insert</b> and <b>New tab</b> buttons.</p>
+              <p class="callout"><svg class="icon" aria-hidden="true"><use href="#i-ban" /></svg><span data-i18n="ai.callout"><b>It has no tool that runs queries or changes data.</b> You read what it wrote, and you decide whether to run it.</span></p>
               <ul class="checks">
-                <li>Bring your own model: Fosta, OpenAI, Gemini, Claude, or any OpenAI-compatible endpoint such as a local Ollama</li>
-                <li>Your key is stored in Windows Credential Manager and requests go straight from your machine to the provider</li>
-                <li>No row data is read; it only sees metadata and what you choose to share</li>
+                <li data-i18n="ai.item1">Bring your own model: Fosta, OpenAI, Gemini, Claude, or any OpenAI-compatible endpoint such as a local Ollama</li>
+                <li data-i18n="ai.item2">Your key is stored in Windows Credential Manager and requests go straight from your machine to the provider</li>
+                <li data-i18n="ai.item3">No row data is read; it only sees metadata and what you choose to share</li>
               </ul>
-              <p class="fineprint">Disclosure: Fosta, the default provider, is a separate AI API service run by the author of Fosta Studio. It is listed first for convenience only; nothing in Fosta Studio requires a Fosta account, and requests only go to the provider you configure.</p>
+              <p class="fineprint" data-i18n="ai.disclosure">Disclosure: Fosta, the default provider, is a separate AI API service run by the author of Fosta Studio. It is listed first for convenience only; nothing in Fosta Studio requires a Fosta account, and requests only go to the provider you configure.</p>
             </div>
-            <figure class="shot" data-shot="assets/screenshots/assistant.png" data-shot-alt="The Fosta Studio assistant panel with a question, a suggested SQL query and the Insert and New tab buttons.">
+            <figure
+              class="shot"
+              data-shot="assets/screenshots/assistant.png"
+              data-i18n-attr="data-shot-alt:ai.shotAlt"
+              data-shot-alt="The Fosta Studio assistant panel with a question, a suggested SQL query and the Insert and New tab buttons."
+            >
               <div class="shot-mock mock-assistant" aria-hidden="true">
                 <div class="am-asst-head"><svg class="icon"><use href="#i-spark" /></svg><b>Assistant</b><span class="am-chip">your model</span></div>
                 <div class="am-msgs">
@@ -440,7 +807,7 @@
                   </div>
                 </div>
               </div>
-              <figcaption>Suggestions land in your editor, never on your server.</figcaption>
+              <figcaption data-i18n="ai.caption">Suggestions land in your editor, never on your server.</figcaption>
             </figure>
           </article>
 
@@ -448,23 +815,23 @@
           <ul class="mini-grid">
             <li class="mini-card">
               <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-io" /></svg></span>
-              <h3>Import &amp; export</h3>
-              <p>Import CSV, TSV or JSON with column mapping. Export to CSV, CSV for Excel, JSON, SQL <code>INSERT</code> statements or Markdown.</p>
+              <h3 data-i18n="mini.io.title">Import &amp; export</h3>
+              <p data-i18n="mini.io.text">Import CSV, TSV or JSON with column mapping. Export to CSV, CSV for Excel, JSON, SQL <code>INSERT</code> statements or Markdown.</p>
             </li>
             <li class="mini-card">
               <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-target" /></svg></span>
-              <h3>MariaDB vector tools</h3>
-              <p>For MariaDB 11.7+: embedding search, column and index health checks, and recall of the vector index measured against exact search.</p>
+              <h3 data-i18n="mini.vector.title">MariaDB vector tools</h3>
+              <p data-i18n="mini.vector.text">For MariaDB 11.7+: embedding search, column and index health checks, and recall of the vector index measured against exact search.</p>
             </li>
             <li class="mini-card">
               <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-link" /></svg></span>
-              <h3>Connection strings</h3>
-              <p>Paste a connection string for any engine, including MongoDB Atlas URIs. A password inside it is moved to Credential Manager.</p>
+              <h3 data-i18n="mini.conn.title">Connection strings</h3>
+              <p data-i18n="mini.conn.text">Paste a connection string for any engine, including MongoDB Atlas URIs. A password inside it is moved to Credential Manager.</p>
             </li>
             <li class="mini-card">
               <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-code" /></svg></span>
-              <h3>Query editor</h3>
-              <p>Syntax highlighting, table-name completion, several statements per run, and one session per tab so <code>BEGIN</code>…<code>COMMIT</code> can span runs.</p>
+              <h3 data-i18n="mini.editor.title">Query editor</h3>
+              <p data-i18n="mini.editor.text">Syntax highlighting, table-name completion, several statements per run, and one session per tab so <code>BEGIN</code>…<code>COMMIT</code> can span runs.</p>
             </li>
           </ul>
         </div>
@@ -474,17 +841,17 @@
       <section class="section" id="engines" aria-labelledby="engines-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Engines</p>
-            <h2 id="engines-title">One client for the databases you actually run</h2>
-            <p>Each engine is a native Rust driver behind one shared interface, so the grid, diagram and assistant work the same everywhere.</p>
+            <p class="kicker" data-i18n="engines.kicker">Engines</p>
+            <h2 id="engines-title" data-i18n="engines.title">One client for the databases you actually run</h2>
+            <p data-i18n="engines.intro">Each engine is a native Rust driver behind one shared interface, so the grid, diagram and assistant work the same everywhere.</p>
           </header>
           <ul class="engine-grid">
-            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>MariaDB</h3><p>Including vector tools on 11.7+</p></div><span class="status status-ok">Supported</span></li>
-            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>MySQL</h3><p>Stop a running query from the editor</p></div><span class="status status-ok">Supported</span></li>
-            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>SQL Server</h3><p>Schemas, TLS on by default</p></div><span class="status status-ok">Supported</span></li>
-            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>MongoDB</h3><p>JSON filters, Atlas URIs, inferred diagram links</p></div><span class="status status-ok">Supported</span></li>
-            <li class="engine coming"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>PostgreSQL</h3><p>On the roadmap</p></div><span class="status status-coming">Coming</span></li>
-            <li class="engine coming"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>SQLite</h3><p>On the roadmap</p></div><span class="status status-coming">Coming</span></li>
+            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>MariaDB</h3><p data-i18n="engines.mariadb">Including vector tools on 11.7+</p></div><span class="status status-ok" data-i18n="engines.supported">Supported</span></li>
+            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>MySQL</h3><p data-i18n="engines.mysql">Stop a running query from the editor</p></div><span class="status status-ok" data-i18n="engines.supported">Supported</span></li>
+            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>SQL Server</h3><p data-i18n="engines.mssql">Schemas, TLS on by default</p></div><span class="status status-ok" data-i18n="engines.supported">Supported</span></li>
+            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>MongoDB</h3><p data-i18n="engines.mongodb">JSON filters, Atlas URIs, inferred diagram links</p></div><span class="status status-ok" data-i18n="engines.supported">Supported</span></li>
+            <li class="engine coming"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>PostgreSQL</h3><p data-i18n="engines.onRoadmap">On the roadmap</p></div><span class="status status-coming" data-i18n="engines.coming">Coming</span></li>
+            <li class="engine coming"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>SQLite</h3><p data-i18n="engines.onRoadmap">On the roadmap</p></div><span class="status status-coming" data-i18n="engines.coming">Coming</span></li>
           </ul>
         </div>
       </section>
@@ -493,44 +860,44 @@
       <section class="section section-alt" id="privacy" aria-labelledby="privacy-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Privacy &amp; safety</p>
-            <h2 id="privacy-title">Your data stays yours</h2>
-            <p>Fosta Studio talks to your databases and to the AI provider you configure. Nothing else.</p>
+            <p class="kicker" data-i18n="privacy.kicker">Privacy &amp; safety</p>
+            <h2 id="privacy-title" data-i18n="privacy.title">Your data stays yours</h2>
+            <p data-i18n="privacy.intro">Fosta Studio talks to your databases and to the AI provider you configure. Nothing else.</p>
           </header>
           <ul class="privacy-grid">
             <li>
               <svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg>
               <div>
-                <h3>Local, portable config</h3>
-                <p>Workspaces, connections and tasks live in <code>fosta-studio.json</code> next to the executable. No secrets are written to it.</p>
+                <h3 data-i18n="privacy.config.title">Local, portable config</h3>
+                <p data-i18n="privacy.config.text">Workspaces, connections and tasks live in <code>fosta-studio.json</code> next to the executable. No secrets are written to it.</p>
               </div>
             </li>
             <li>
               <svg class="icon" aria-hidden="true"><use href="#i-key" /></svg>
               <div>
-                <h3>Windows Credential Manager</h3>
-                <p>Database passwords and AI keys are stored in the operating system's credential store, never in the config file.</p>
+                <h3 data-i18n="privacy.creds.title">Windows Credential Manager</h3>
+                <p data-i18n="privacy.creds.text">Database passwords and AI keys are stored in the operating system's credential store, never in the config file.</p>
               </div>
             </li>
             <li>
               <svg class="icon" aria-hidden="true"><use href="#i-eye-off" /></svg>
               <div>
-                <h3>No telemetry, no account</h3>
-                <p>The app does not phone home and does not need a sign-up. It is fully usable offline with local databases.</p>
+                <h3 data-i18n="privacy.telemetry.title">No telemetry, no account</h3>
+                <p data-i18n="privacy.telemetry.text">The app does not phone home and does not need a sign-up. It is fully usable offline with local databases.</p>
               </div>
             </li>
             <li>
               <svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg>
               <div>
-                <h3>Assistant boundaries</h3>
-                <p>The model sees table and column metadata plus the editor text, errors and logs you choose to share. It reads no rows and cannot run statements.</p>
+                <h3 data-i18n="privacy.ai.title">Assistant boundaries</h3>
+                <p data-i18n="privacy.ai.text">The model sees table and column metadata plus the editor text, errors and logs you choose to share. It reads no rows and cannot run statements.</p>
               </div>
             </li>
             <li class="wide">
               <svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg>
               <div>
-                <h3>Statement gateway <span class="tag-coming">coming</span></h3>
-                <p>Every statement will pass through one gateway with rules per workspace: Open, Guarded, Read-only or Custom. A workspace marked Production defaults to Read-only, and relaxing a rule always comes with a loud warning.</p>
+                <h3><span data-i18n="privacy.gateway.title">Statement gateway</span> <span class="tag-coming" data-i18n="common.coming">coming</span></h3>
+                <p data-i18n="privacy.gateway.text">Every statement will pass through one gateway with rules per workspace: Open, Guarded, Read-only or Custom. A workspace marked Production defaults to Read-only, and relaxing a rule always comes with a loud warning.</p>
               </div>
             </li>
           </ul>
@@ -541,20 +908,20 @@
       <section class="section" id="roadmap" aria-labelledby="roadmap-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Roadmap</p>
-            <h2 id="roadmap-title">Where it is heading</h2>
-            <p>Planned work, roughly in order. Plans change; open an issue to discuss any of it.</p>
+            <p class="kicker" data-i18n="roadmap.kicker">Roadmap</p>
+            <h2 id="roadmap-title" data-i18n="roadmap.title">Where it is heading</h2>
+            <p data-i18n="roadmap.intro">Planned work, roughly in order. Plans change; open an issue to discuss any of it.</p>
           </header>
           <ol class="roadmap">
-            <li><h3>Statement gateway &amp; transactions</h3><p>Rules per workspace, auto-commit switch, Begin / Commit / Rollback, open-transaction warnings.</p></li>
-            <li><h3>Data profiling &amp; generation</h3><p>Column statistics and histograms; rule-based test data with preview before insert.</p></li>
-            <li><h3>Backup &amp; restore</h3><p>Logical dumps built by the app, no external tools required.</p></li>
-            <li><h3>MongoDB beyond Compass</h3><p>A query bar with autocomplete, document views and an aggregation builder.</p></li>
-            <li><h3>Local database servers</h3><p>Create and run development servers without Docker or admin rights.</p></li>
-            <li><h3>Web edition &amp; encrypted sync</h3><p>A Docker image to use Fosta Studio in a browser, and end-to-end encrypted sync between machines.</p></li>
+            <li><h3 data-i18n="roadmap.gateway.title">Statement gateway &amp; transactions</h3><p data-i18n="roadmap.gateway.text">Rules per workspace, auto-commit switch, Begin / Commit / Rollback, open-transaction warnings.</p></li>
+            <li><h3 data-i18n="roadmap.profiling.title">Data profiling &amp; generation</h3><p data-i18n="roadmap.profiling.text">Column statistics and histograms; rule-based test data with preview before insert.</p></li>
+            <li><h3 data-i18n="roadmap.backup.title">Backup &amp; restore</h3><p data-i18n="roadmap.backup.text">Logical dumps built by the app, no external tools required.</p></li>
+            <li><h3 data-i18n="roadmap.mongo.title">MongoDB beyond Compass</h3><p data-i18n="roadmap.mongo.text">A query bar with autocomplete, document views and an aggregation builder.</p></li>
+            <li><h3 data-i18n="roadmap.servers.title">Local database servers</h3><p data-i18n="roadmap.servers.text">Create and run development servers without Docker or admin rights.</p></li>
+            <li><h3 data-i18n="roadmap.web.title">Web edition &amp; encrypted sync</h3><p data-i18n="roadmap.web.text">A Docker image to use Fosta Studio in a browser, and end-to-end encrypted sync between machines.</p></li>
           </ol>
           <p class="section-link">
-            <a class="link-arrow" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md">Read the full roadmap<svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg></a>
+            <a class="link-arrow" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md"><span data-i18n="roadmap.link">Read the full roadmap</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg></a>
           </p>
         </div>
       </section>
@@ -563,23 +930,23 @@
       <section class="section section-alt" id="open-source" aria-labelledby="oss-title">
         <div class="container oss">
           <div class="oss-text">
-            <p class="kicker">Open source</p>
-            <h2 id="oss-title">Free software, built in the open</h2>
-            <p>Fosta Studio is licensed under the <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE">GNU General Public License v3.0</a>. Use it, study it, change it and share it.</p>
-            <p>Contributions are welcome. On your first pull request you are asked to sign the <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CLA.md">Contributor License Agreement</a>: you keep the copyright in your work, and the maintainer may also offer commercial licenses while the project itself stays GPL.</p>
+            <p class="kicker" data-i18n="oss.kicker">Open source</p>
+            <h2 id="oss-title" data-i18n="oss.title">Free software, built in the open</h2>
+            <p data-i18n="oss.license">Fosta Studio is licensed under the <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE">GNU General Public License v3.0</a>. Use it, study it, change it and share it.</p>
+            <p data-i18n="oss.cla">Contributions are welcome. On your first pull request you are asked to sign the <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CLA.md">Contributor License Agreement</a>: you keep the copyright in your work, and the maintainer may also offer commercial licenses while the project itself stays GPL.</p>
             <div class="cta-row">
-              <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md">Contributing guide</a>
-              <a class="btn btn-secondary" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ARCHITECTURE.md">Architecture</a>
+              <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md" data-i18n="oss.contributing">Contributing guide</a>
+              <a class="btn btn-secondary" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ARCHITECTURE.md" data-i18n="oss.architecture">Architecture</a>
             </div>
           </div>
           <div class="build" id="build">
-            <h3>Build from source</h3>
-            <p>Release builds are coming. Meanwhile you can build the portable executable yourself with Node 20+, Rust 1.88+ and the MSVC or GNU toolchain (<a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md#toolchain">toolchain details</a>).</p>
-            <pre class="terminal" tabindex="0" aria-label="Build commands"><code><span class="prompt">&gt;</span> git clone https://github.com/caothanhphatit/fosta-dbclient.git
+            <h3 data-i18n="build.title">Build from source</h3>
+            <p data-i18n="build.text">Release builds are coming. Meanwhile you can build the portable executable yourself with Node 20+, Rust 1.88+ and the MSVC or GNU toolchain (<a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md#toolchain">toolchain details</a>).</p>
+            <pre class="terminal" tabindex="0" data-i18n-attr="aria-label:build.commandsLabel" aria-label="Build commands"><code><span class="prompt">&gt;</span> git clone https://github.com/caothanhphatit/fosta-dbclient.git
 <span class="prompt">&gt;</span> cd fosta-dbclient
 <span class="prompt">&gt;</span> npm install
 <span class="prompt">&gt;</span> npm run tauri build -- --no-bundle</code></pre>
-            <p class="fineprint">The result is <code>src-tauri\target\release\fosta-studio.exe</code>. Want to try the UI first? <code>npm run dev</code> previews it in a browser with sample data.</p>
+            <p class="fineprint" data-i18n="build.result">The result is <code>src-tauri\target\release\fosta-studio.exe</code>. Want to try the UI first? <code>npm run dev</code> previews it in a browser with sample data.</p>
           </div>
         </div>
       </section>
@@ -588,20 +955,21 @@
     <footer class="site-footer">
       <div class="container footer-inner">
         <div class="footer-brand">
-          <a class="brand" href="#top" aria-label="Fosta Studio, back to top"><img src="assets/logo.svg" alt="" width="24" height="24" /><span>Fosta Studio</span></a>
-          <p>Free and open-source database client. GPL-3.0.</p>
+          <a class="brand" href="#top" data-i18n-attr="aria-label:a11y.backToTop" aria-label="Fosta Studio, back to top"><img src="assets/logo.svg" alt="" width="24" height="24" /><span>Fosta Studio</span></a>
+          <p data-i18n="footer.tagline">Free and open-source database client. GPL-3.0.</p>
         </div>
-        <nav aria-label="Footer">
+        <nav data-i18n-attr="aria-label:footer.navLabel" aria-label="Footer">
           <ul class="footer-links">
             <li><a href="https://github.com/caothanhphatit/fosta-dbclient">GitHub</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/releases">Releases</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md">Contributing</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md">Roadmap</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE">License</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/issues">Issues</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/releases" data-i18n="footer.releases">Releases</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md" data-i18n="footer.contributing">Contributing</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md" data-i18n="footer.roadmap">Roadmap</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE" data-i18n="footer.license">License</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/issues" data-i18n="footer.issues">Issues</a></li>
           </ul>
         </nav>
-        <p class="footer-note">MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL and SQLite are trademarks of their respective owners. Fosta Studio is an independent project and is not affiliated with them.</p>
+        <!-- i18n:lang-footer -->
+        <p class="footer-note" data-i18n="footer.trademarks">MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL and SQLite are trademarks of their respective owners. Fosta Studio is an independent project and is not affiliated with them.</p>
       </div>
     </footer>
   </body>

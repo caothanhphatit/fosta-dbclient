@@ -310,6 +310,8 @@ kbd {
 
 .brand {
   display: inline-flex;
+  flex: none;
+  white-space: nowrap;
   align-items: center;
   gap: 10px;
   color: var(--text);
@@ -384,6 +386,127 @@ kbd {
 
 .is-dark .theme-toggle .icon-moon {
   display: inline;
+}
+
+/* Language switcher (a <details> menu; works without JavaScript) */
+.lang-switch {
+  position: relative;
+}
+
+.lang-switch summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.lang-switch summary::-webkit-details-marker {
+  display: none;
+}
+
+.lang-switch summary:hover,
+.lang-switch[open] summary {
+  color: var(--text);
+}
+
+.lang-switch summary .icon {
+  font-size: 16px;
+}
+
+.lang-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  min-width: 170px;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  list-style: none;
+}
+
+.lang-menu a {
+  display: block;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 15px;
+  text-decoration: none;
+}
+
+.lang-menu a:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.lang-menu a[aria-current],
+.footer-langs a[aria-current] {
+  color: var(--link);
+  font-weight: 600;
+}
+
+/* Language banner (English page only, shown by main.js) */
+.lang-offer {
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--link) 9%, var(--bg));
+  font-size: 14.5px;
+}
+
+.lang-offer[hidden],
+.lang-offer p[hidden] {
+  display: none;
+}
+
+.lang-offer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 42px;
+}
+
+.lang-offer-inner > .icon {
+  color: var(--link);
+}
+
+.lang-offer p {
+  margin: 0;
+}
+
+.lang-offer a {
+  font-weight: 600;
+}
+
+.lang-offer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.lang-offer-close:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
 }
 
 /* ---------------------------------------------------------------------------
@@ -528,6 +651,151 @@ kbd {
   color: var(--text-2);
   font-size: 13px;
   text-align: center;
+}
+
+/* ---------------------------------------------------------------------------
+   Hero carousel. Without JavaScript the viewport is a horizontally scrollable, snapping strip;
+   main.js hides the scrollbar and adds arrows, dots and auto-advance. The viewport reaches past the
+   container so the mock's shadow is not clipped; each slide pads it back.
+   --------------------------------------------------------------------------- */
+
+.carousel {
+  position: relative;
+}
+
+.carousel-viewport {
+  display: flex;
+  margin: -40px -64px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+}
+
+.carousel-slide {
+  flex: 0 0 100%;
+  min-width: 0;
+  padding: 40px 64px 48px;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.carousel.is-enhanced .carousel-viewport {
+  scrollbar-width: none;
+}
+
+.carousel.is-enhanced .carousel-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.slide-caption {
+  max-width: 760px;
+  margin: 16px auto 0;
+  color: var(--text-2);
+  font-size: 14px;
+  text-align: center;
+}
+
+.carousel-controls {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: -20px;
+}
+
+.carousel-controls[hidden] {
+  display: none;
+}
+
+.carousel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-2);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.carousel-btn:hover {
+  border-color: color-mix(in srgb, var(--text) 25%, var(--line));
+  color: var(--text);
+}
+
+.carousel-btn .flip {
+  transform: rotate(180deg);
+}
+
+.carousel-toggle {
+  margin-left: 8px;
+  font-size: 14px;
+}
+
+.carousel-toggle[hidden],
+.carousel-toggle .icon-play,
+.carousel-toggle.is-paused .icon-pause {
+  display: none;
+}
+
+.carousel-toggle.is-paused .icon-play {
+  display: inline;
+}
+
+.carousel-dots {
+  display: flex;
+}
+
+.carousel-dot {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.carousel-dot::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 28%, transparent);
+  transform: translate(-50%, -50%);
+  transition:
+    width 0.2s,
+    background 0.2s;
+}
+
+.carousel-dot:hover::before {
+  background: color-mix(in srgb, var(--text) 50%, transparent);
+}
+
+.carousel-dot[aria-current="true"]::before {
+  width: 22px;
+  background: var(--link);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1280,6 +1548,196 @@ kbd {
   color: var(--fg-3);
 }
 
+/* MongoDB slide: query bar, view switch and document list */
+.mq-fn {
+  color: var(--syn-number);
+}
+
+.am-seg {
+  display: inline-flex;
+  flex: none;
+  align-self: center;
+  margin: 0 10px 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.am-seg span {
+  padding: 0 9px;
+  border-left: 1px solid var(--border);
+  color: var(--fg-2);
+  font-size: 11.5px;
+  line-height: 24px;
+}
+
+.am-seg span:first-child {
+  border-left: 0;
+}
+
+.am-seg .on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.am-docs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.md-doc {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font: 11.5px/1.45 var(--font-mono);
+}
+
+.md-doc.open {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.md-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 21px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.md-line.l1 {
+  padding-left: 17px;
+}
+
+.md-line.l2 {
+  padding-left: 34px;
+}
+
+.md-line .chev {
+  width: 11px;
+  height: 11px;
+  margin-right: 2px;
+  color: var(--fg-3);
+}
+
+.md-line .chev.open {
+  transform: rotate(90deg);
+}
+
+.md-key {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.md-oid {
+  color: var(--ws-purple);
+}
+
+.md-date {
+  color: var(--ws-teal);
+}
+
+.md-hint {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ws-teal) 14%, transparent);
+  color: var(--ws-teal);
+  font-size: 10px;
+}
+
+.md-dim {
+  color: var(--fg-3);
+}
+
+.md-preview {
+  min-width: 0;
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.md-type {
+  flex: none;
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  color: var(--fg-3);
+  font: 600 9px/14px var(--font-ui);
+  letter-spacing: 0.02em;
+}
+
+.am-code-lang {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--surface-2);
+  color: var(--fg-3);
+  font: 10px/1.4 var(--font-mono);
+}
+
+.am-code-lang + pre {
+  border-radius: 0;
+}
+
+.am-msg pre.am-pre-json {
+  font-size: 10.2px;
+}
+
+/* Diagram slide */
+.am-zoom {
+  margin-left: auto;
+  color: var(--fg-3);
+  font-size: 11.5px;
+  line-height: 26px;
+}
+
+.am-canvas {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  background-color: var(--surface-2);
+  background-image: radial-gradient(color-mix(in srgb, var(--fg-3) 35%, transparent) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.am-canvas svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.er-links path,
+.er-marks path {
+  fill: none;
+  stroke: var(--fg-3);
+  stroke-width: 1.5;
+}
+
+.er-marks path {
+  stroke: var(--fg-2);
+}
+
+.md-table.er-selected rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.md-table.er-selected .md-head {
+  fill: color-mix(in srgb, var(--accent) 30%, var(--surface));
+}
+
 /* ---------------------------------------------------------------------------
    Sections
    --------------------------------------------------------------------------- */
@@ -1976,6 +2434,34 @@ kbd {
   text-decoration: underline;
 }
 
+.footer-langs {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-2);
+}
+
+.footer-langs ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.footer-langs a {
+  color: var(--text-2);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.footer-langs a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 .footer-note {
   grid-column: 1 / -1;
   margin: 12px 0 0;
@@ -1983,6 +2469,78 @@ kbd {
   border-top: 1px solid var(--line);
   color: var(--text-2);
   font-size: 13px;
+}
+
+/* Very narrow screens: the GitHub link keeps its icon; its text stays available to screen readers. */
+@media (max-width: 420px) {
+  .nav-github .nav-github-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .site-nav .nav-github {
+    padding: 6px 9px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Languages. Latin text keeps the Segoe UI stack (it covers Vietnamese); Chinese and Japanese
+   add system CJK fonts behind it, so code, numbers and product names still match the English page.
+   --------------------------------------------------------------------------- */
+
+:root:lang(zh-Hans) {
+  --font-ui:
+    "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Noto Sans CJK SC",
+    "Source Han Sans SC", system-ui, sans-serif;
+  --font-display:
+    "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Noto Sans CJK SC",
+    "Source Han Sans SC", system-ui, sans-serif;
+}
+
+:root:lang(ja) {
+  --font-ui:
+    "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo UI", Meiryo, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Noto Sans CJK JP",
+    "Source Han Sans JP", system-ui, sans-serif;
+  --font-display:
+    "Segoe UI Variable Display", "Segoe UI", "Yu Gothic UI", "Meiryo UI", Meiryo, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP",
+    "Noto Sans CJK JP", "Source Han Sans JP", system-ui, sans-serif;
+}
+
+/* CJK: no inter-word spaces, so allow breaks between characters but keep punctuation rules strict. */
+:root:lang(zh-Hans) body,
+:root:lang(ja) body {
+  line-height: 1.75;
+  line-break: strict;
+  word-break: normal;
+}
+
+:root:lang(zh-Hans) :is(h1, h2, h3),
+:root:lang(ja) :is(h1, h2, h3) {
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+:root:lang(zh-Hans) :is(h2, h3),
+:root:lang(ja) :is(h2, h3) {
+  text-wrap: balance;
+}
+
+/* Japanese: break headings, buttons and the lede between phrases (Chromium 119+; others ignore it). */
+:root:lang(ja) :is(h2, h3, .lede, .btn, .section-head p) {
+  word-break: auto-phrase;
+}
+
+:root:lang(zh-Hans) .kicker,
+:root:lang(ja) .kicker {
+  letter-spacing: 0.04em;
+}
+
+/* Vietnamese: stacked diacritics (Ữ, Ẩ, Ộ) need a little more room between heading lines. */
+:root:lang(vi) :is(h1, h2, h3) {
+  line-height: 1.3;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2042,6 +2600,21 @@ kbd {
   .container {
     padding: 0 16px;
   }
+  .header-inner {
+    gap: 8px;
+  }
+  .site-nav a {
+    padding: 6px 8px;
+  }
+  .lang-switch summary {
+    padding: 0 8px;
+  }
+  .footer-langs {
+    align-items: flex-start;
+  }
+  .footer-langs > .icon {
+    margin-top: 4px;
+  }
   .hero {
     padding-top: 48px;
   }
@@ -2060,8 +2633,15 @@ kbd {
   }
   .am-rail-heading,
   .am-tool-btn,
+  .am-seg,
   .am-tab:nth-child(3) {
     display: none;
+  }
+  .carousel-viewport {
+    margin-inline: -16px;
+  }
+  .carousel-slide {
+    padding-inline: 16px;
   }
   .am-body {
     height: 380px;

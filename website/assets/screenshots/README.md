@@ -23,6 +23,6 @@ Guidelines:
 - Crop to the relevant part of the window, about 16:10 (for example 1600×1000), at 2× scale for sharp text.
 - Light theme fits both page themes best; keep all four in the same theme.
 - Optimise the files (e.g. `oxipng` or `pngquant`); aim for under 300 KB each.
-- The alt text lives in `index.html` (`data-shot-alt` on each `<figure>`); update it if a screenshot shows something different.
+- The alt text lives in `index.html` (`data-shot-alt` on each `<figure>`) and, translated, in `website/i18n/*.json` (keys `*.shotAlt`); update both if a screenshot shows something different.
 
 The hero image at the top of the page is an HTML mock of the whole window and stays as is.

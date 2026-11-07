@@ -8,3 +8,6 @@ src-tauri/gen/
 
 # Local Claude Code settings
 .claude/
+
+# Rendered website (node website/build.mjs .site)
+.site/
