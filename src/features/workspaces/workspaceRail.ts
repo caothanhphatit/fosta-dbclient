@@ -2,6 +2,7 @@ import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { h, icon, iconButton, setIcon, type IconName } from "../../core/dom";
 import { describeToggle, resolvedTheme } from "../../core/theme";
 import type { AppConfig, Workspace, WorkspaceMeta } from "../../core/types";
+import { relaxedFromBaseline, safetyLabel, safetyOf } from "../safety/safety";
 
 export const WORKSPACE_COLORS = ["blue", "green", "orange", "red", "purple", "teal", "pink", "slate"] as const;
 
@@ -106,8 +107,10 @@ export class WorkspaceRail {
   private entry(workspace: Workspace, index: number, active: boolean, count: number): HTMLElement {
     const activity = this.activity.get(workspace.id) ?? { connected: 0, running: 0 };
     const shortcut = index < MAX_SHORTCUTS ? `Ctrl+${index + 1}` : "";
+    const relaxed = relaxedFromBaseline(workspace);
     const lines = [
       workspace.name,
+      `Safety: ${safetyLabel(safetyOf(workspace))}${relaxed.length ? ` (relaxed: ${relaxed.map((change) => change.text).join("; ")})` : ""}`,
       `${workspace.connections.length} connection(s), ${activity.connected} open`,
       `${workspace.tasks.length} task(s), ${activity.running} running`,
       shortcut,
@@ -118,12 +121,14 @@ export class WorkspaceRail {
       active ? "active" : "",
       activity.connected ? "online" : "",
       activity.running ? "busy" : "",
+      relaxed.length ? "relaxed" : "",
     ];
     const badge = h(
       "span",
       { class: "ws-badges" },
       activity.connected ? h("span", { class: "ws-badge online", title: `${activity.connected} connection(s) open` }) : null,
       activity.running ? h("span", { class: "ws-badge busy", title: `${activity.running} task(s) running` }) : null,
+      relaxed.length ? h("span", { class: "ws-badge relaxed", title: "Safety rules relaxed", "aria-label": "Safety rules relaxed" }, "!") : null,
     );
     const button = h(
       "button",

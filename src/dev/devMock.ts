@@ -7,17 +7,24 @@ import type { Channel } from "@tauri-apps/api/core";
 import { errorText } from "../core/api";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { baseUrlOf, connectionSettings, endpointProblem, providerPreset } from "../features/assistant/aiProviders";
+import { effectiveRules, presetSettings, PRODUCTION_ICON, relaxations, safetyOf } from "../features/safety/safety";
 import type {
   AiConnection,
   AiSettings,
   AppConfig,
   ChatEvent,
   ChatRequest,
+  Confirmation,
   ConnectionProfile,
+  GatewayProblem,
   HistoryEntry,
   HistoryQuery,
   QueryOutcome,
+  SafetyAction,
+  StatementCategory,
+  StatementInfo,
   TablePage,
+  TransactionState,
   Workspace,
 } from "../core/types";
 
@@ -29,6 +36,7 @@ const workspaces: Workspace[] = [
     name: "Local",
     color: "blue",
     icon: "laptop",
+    safety: presetSettings("open"),
     connections: [
       {
         id: "c-local",
@@ -60,6 +68,8 @@ const workspaces: Workspace[] = [
     name: "Client A staging",
     color: "orange",
     icon: "cloud",
+    // Guarded: run an UPDATE or DELETE in a query tab to see the confirmation dialog.
+    safety: presetSettings("guarded"),
     connections: [
       {
         id: "c-a-1",
@@ -118,7 +128,27 @@ const workspaces: Workspace[] = [
       },
     ],
   },
-  { id: "prod", name: "Production", color: "red", icon: "shield", connections: [], tasks: [] },
+  {
+    id: "prod",
+    name: "Production",
+    color: "red",
+    icon: "shield",
+    safety: presetSettings("readOnly"),
+    connections: [
+      {
+        id: "c-prod",
+        name: "Shop primary",
+        driver: "mariadb",
+        host: "db.prod.internal",
+        port: 3306,
+        user: "app",
+        database: "shop",
+        savePassword: true,
+        options: {},
+      },
+    ],
+    tasks: [],
+  },
 ];
 
 let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null, aiConnections: [], aiActive: null, queryHistory: true };
@@ -322,12 +352,24 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "save_workspace": {
       const meta = payload.workspace as Workspace;
       const existing = config.workspaces.find((item) => item.id === meta.id);
+      const before = existing ? safetyOf(existing) : presetSettings(meta.icon === PRODUCTION_ICON ? "readOnly" : "guarded");
+      const after = meta.safety ?? before;
+      const production = existing?.icon === PRODUCTION_ICON || meta.icon === PRODUCTION_ICON;
+      const name = existing?.name ?? meta.name;
+      if (production && relaxations(before, after).length > 0 && String(payload.relaxConfirmation ?? "").trim() !== name.trim()) {
+        throw Object.assign(new Error(`Relaxing the rules of the Production workspace needs its name typed: "${name}".`), {
+          code: "RELAX_CONFIRMATION_REQUIRED",
+          expected: name,
+        });
+      }
       config = existing
         ? {
             ...config,
-            workspaces: config.workspaces.map((item) => (item.id === meta.id ? { ...item, name: meta.name, color: meta.color, icon: meta.icon } : item)),
+            workspaces: config.workspaces.map((item) =>
+              item.id === meta.id ? { ...item, name: meta.name, color: meta.color, icon: meta.icon, safety: after } : item,
+            ),
           }
-        : { ...config, workspaces: [...config.workspaces, { ...meta, connections: [], tasks: [] }] };
+        : { ...config, workspaces: [...config.workspaces, { ...meta, safety: after, connections: [], tasks: [] }] };
       return config;
     }
     case "delete_workspace":
@@ -362,8 +404,12 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const versions: Record<string, string> = { mariadb: "11.8.2-MariaDB", mysql: "8.4.3", mssql: "16.0.1000.6 (Developer Edition)", mongodb: "8.0.4" };
       return versions[profile?.driver ?? "mariadb"];
     }
-    case "disconnect":
     case "open_session":
+      sessions.set(String(payload.sessionId), { connectionId: String(payload.connectionId), open: false, autoCommit: true });
+      return null;
+    case "sql_transaction":
+      return transactionControl(String(payload.sessionId), String(payload.op));
+    case "disconnect":
     case "close_session":
     case "cancel_sql":
     case "start_task":
@@ -375,6 +421,7 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "reveal_file":
       return null;
     case "create_database":
+      gate(String(payload.connectionId), "createDatabase", [statement("ddl", "CREATE DATABASE", [], `CREATE DATABASE ${String(payload.name)}`)], payload);
       return null;
     case "schema_graph":
       return SHOP_GRAPH;
@@ -407,7 +454,7 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
         ddl: "CREATE TABLE `products` (\n  `id` int(11) NOT NULL AUTO_INCREMENT,\n  `sku` varchar(32) NOT NULL,\n  `name` varchar(120) NOT NULL,\n  `price` decimal(10,2) NOT NULL,\n  `stock` int(11) DEFAULT NULL,\n  `category_id` int(11) NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `attributes` longtext DEFAULT NULL CHECK (json_valid(`attributes`)),\n  `embedding` vector(4) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB",
       };
     case "run_sql":
-      return runSql(String(payload.sql ?? ""));
+      return runSql(String(payload.sessionId ?? ""), String(payload.sql ?? ""), payload);
     case "history_append":
       return appendHistory(payload.entry as HistoryEntry);
     case "history_list":
@@ -424,8 +471,17 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "set_query_history":
       config = { ...config, queryHistory: Boolean(payload.enabled) };
       return config;
-    case "apply_changes":
-      return 1;
+    case "apply_changes": {
+      const changes = payload.changes as { kind: string }[];
+      const table = String(payload.table);
+      gate(
+        String(payload.connectionId),
+        payload.caller === "import" ? "import" : "gridSave",
+        [statement("write", "CHANGES", [table], `${changes.length} change(s) to ${table}, each matched by its key`)],
+        payload,
+      );
+      return changes.length;
+    }
     case "task_statuses":
       return [{ id: "t-a-1", state: "running", pid: 4242, restarts: 0, message: null }];
     case "task_logs":
@@ -519,12 +575,96 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
 
 // --- Query tab and history ---------------------------------------------------
 
+// --- Statement gateway (a rough stand-in for gateway/ in the backend) ---------
+
+interface MockSession {
+  connectionId: string;
+  open: boolean;
+  autoCommit: boolean;
+}
+
+const sessions = new Map<string, MockSession>();
+const STRICTNESS: Record<SafetyAction, number> = { allow: 0, confirm: 1, typed: 2, block: 3 };
+
+function statement(category: StatementCategory, kind: string, tables: string[], excerpt: string, reason: string | null = null): StatementInfo {
+  return { category, kind, tables, excerpt, reason };
+}
+
+/** Keyword classification, enough to show the dialogs in the preview (the backend parses SQL properly). */
+function classify(text: string): StatementInfo {
+  const sql = text.trim();
+  const table = /(?:from|into|update|table)\s+[`"[]?([\w.]+)/i.exec(sql)?.[1] ?? "";
+  const tables = table ? [table] : [];
+  if (/^(begin|start|commit|rollback|savepoint)\b/i.test(sql)) return statement("transaction", sql.split(/\s+/)[0].toUpperCase(), [], sql);
+  if (/^(grant|revoke|kill|create\s+user|set\s+global)\b/i.test(sql)) return statement("admin", sql.split(/\s+/)[0].toUpperCase(), tables, sql);
+  if (/^(drop|truncate)\b/i.test(sql)) return statement("destructive", sql.split(/\s+/)[0].toUpperCase(), tables, sql, "Removes the object and its data");
+  if (/^(delete|update)\b/i.test(sql) && !/\bwhere\b/i.test(sql))
+    return statement("destructive", sql.split(/\s+/)[0].toUpperCase(), tables, sql, `${sql.split(/\s+/)[0].toUpperCase()} without WHERE affects every row`);
+  if (/^(insert|update|delete|replace|merge)\b/i.test(sql)) return statement("write", sql.split(/\s+/)[0].toUpperCase(), tables, sql);
+  if (/^(create|alter|rename)\b/i.test(sql)) return statement("ddl", sql.split(/\s+/)[0].toUpperCase(), tables, sql);
+  return statement("read", sql.split(/\s+/)[0].toUpperCase(), tables, sql);
+}
+
+/** Applies the workspace's rules like the backend: throws BLOCKED or CONFIRMATION_REQUIRED (any token is accepted back). */
+function gate(connectionId: string, caller: GatewayProblem["caller"], statements: StatementInfo[], payload: Record<string, unknown>): void {
+  const workspace = config.workspaces.find((item) => item.connections.some((profile) => profile.id === connectionId));
+  if (!workspace) return;
+  const settings = safetyOf(workspace);
+  const rules = effectiveRules(settings).rules;
+  const actionOf = (category: StatementCategory): SafetyAction =>
+    category === "transaction" ? "allow" : category === "unknown" ? rules.write : rules[category as keyof typeof rules];
+  const level = statements
+    .map((item) => actionOf(item.category))
+    .reduce<SafetyAction>((worst, next) => (STRICTNESS[next] > STRICTNESS[worst] ? next : worst), "allow");
+  if (level === "allow") return;
+  const confirmation = payload.confirmation as Confirmation | null | undefined;
+  if (level !== "block" && confirmation) return;
+  const tables = [...new Set(statements.flatMap((item) => item.tables))];
+  const categories = [...new Set(statements.map((item) => item.category))];
+  const expected = level === "typed" ? (tables.length === 1 ? (tables[0].split(".").pop() ?? workspace.name) : workspace.name) : null;
+  const message =
+    level === "block"
+      ? `Blocked: these statements are not allowed by the rules of workspace ${workspace.name}.`
+      : `These statements need a ${level === "typed" ? "typed " : ""}confirmation in workspace ${workspace.name}.`;
+  const problem: GatewayProblem = {
+    code: level === "block" ? "BLOCKED" : "CONFIRMATION_REQUIRED",
+    message,
+    caller,
+    workspace: workspace.name,
+    connection: workspace.connections.find((profile) => profile.id === connectionId)?.name ?? connectionId,
+    preset: settings.preset,
+    level,
+    token: level === "block" ? null : `mock-${Date.now().toString(16)}`,
+    expected,
+    categories,
+    tables,
+    statements,
+  };
+  throw Object.assign(new Error(message), problem);
+}
+
+function transactionState(session: MockSession | undefined): TransactionState {
+  return { supported: true, open: session?.open ?? false, autoCommit: session?.autoCommit ?? true };
+}
+
+function transactionControl(sessionId: string, op: string): TransactionState {
+  const session = sessions.get(sessionId);
+  if (!session) throw new Error("This query tab lost its session. Close it and open a new query.");
+  if (op === "begin") session.open = true;
+  if (op === "commit" || op === "rollback" || op === "autoCommitOn") session.open = false;
+  if (op === "autoCommitOn") session.autoCommit = true;
+  if (op === "autoCommitOff") session.autoCommit = false;
+  return transactionState(session);
+}
+
 /** Statements the preview pretends to understand; anything else fails like a syntax error. */
-async function runSql(sql: string): Promise<QueryOutcome> {
+async function runSql(sessionId: string, sql: string, payload: Record<string, unknown>): Promise<QueryOutcome> {
   const statements = sql
     .split(";")
     .map((statement) => statement.trim())
     .filter(Boolean);
+  const session = sessions.get(sessionId);
+  if (session && !statements[0]?.startsWith("{")) gate(session.connectionId, "queryTab", statements.map(classify), payload);
   await new Promise((resolve) => setTimeout(resolve, 120));
   const sets = statements.map((statement) => {
     if (/^(update|delete|insert|replace|create|drop|alter|set|begin|commit|rollback|use)\b/i.test(statement)) {
@@ -539,7 +679,15 @@ async function runSql(sql: string): Promise<QueryOutcome> {
       `You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near '${near}' at line 1`,
     );
   });
-  return { sets, elapsedMs: 8 };
+  if (session) {
+    for (const text of statements) {
+      if (/^(begin|start)\b/i.test(text)) session.open = true;
+      else if (/^(commit|rollback)\b/i.test(text)) session.open = false;
+      else if (!session.autoCommit && !/^(select|show)\b/i.test(text)) session.open = true;
+    }
+  }
+  const mongo = session && config.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === session.connectionId)?.driver === "mongodb";
+  return { sets, elapsedMs: 8, transaction: mongo ? { supported: false, open: false, autoCommit: true } : transactionState(session) };
 }
 
 function appendHistory(entry: HistoryEntry): HistoryEntry | null {
