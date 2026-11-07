@@ -11,7 +11,7 @@ CREATE TABLE dbo.Warehouses (
   Name NVARCHAR(60) NOT NULL,
   City NVARCHAR(60) NOT NULL
 );
-INSERT INTO dbo.Warehouses VALUES (1, N'Kho Long Phu', N'Soc Trang'), (2, N'Kho Binh Duong', N'Thu Dau Mot'), (3, N'Kho Ha Noi', N'Ha Noi');
+INSERT INTO dbo.Warehouses VALUES (1, N'North Depot', N'Hanoi'), (2, N'South Depot', N'Ho Chi Minh City'), (3, N'Delta Depot', N'Can Tho');
 
 CREATE TABLE dbo.Items (
   ItemId INT IDENTITY(1, 1) PRIMARY KEY,
@@ -27,8 +27,8 @@ WITH n AS (SELECT TOP (600) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS i FROM
 INSERT INTO dbo.Items (Code, Name, Unit, UnitPrice, IsActive, CreatedAt)
 SELECT
   CONCAT('IT', RIGHT(CONCAT('0000', i), 4)),
-  CONCAT(CHOOSE(1 + i % 6, N'Thép tấm', N'Ống nhựa', N'Xi măng', N'Sơn chống gỉ', N'Bu lông', N'Dây cáp'), N' loại ', 1 + i % 9),
-  CHOOSE(1 + i % 4, N'kg', N'm', N'bao', N'cái'),
+  CONCAT(CHOOSE(1 + i % 6, N'Steel plate', N'PVC pipe', N'Cement', N'Anti-rust paint', N'Bolt', N'Cable'), N' grade ', 1 + i % 9),
+  CHOOSE(1 + i % 4, N'kg', N'm', N'bag', N'pcs'),
   CAST(12000 + (i * 7919) % 480000 AS DECIMAL(12, 2)),
   CASE WHEN i % 17 = 0 THEN 0 ELSE 1 END,
   DATEADD(MINUTE, i * 413, '2025-01-01')
@@ -57,9 +57,9 @@ CREATE TABLE sales.Customers (
 WITH n AS (SELECT TOP (300) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS i FROM sys.all_objects)
 INSERT INTO sales.Customers (Name, TaxCode, Province)
 SELECT
-  CONCAT(N'Công ty ', CHOOSE(1 + i % 5, N'TNHH', N'CP', N'XD', N'TM', N'DV'), N' ', CHOOSE(1 + i % 7, N'An Phát', N'Hoà Bình', N'Minh Long', N'Tân Tiến', N'Đại Việt', N'Phú Thịnh', N'Sao Mai'), N' ', i),
+  CONCAT(CHOOSE(1 + i % 7, N'Northwind', N'Bluewater', N'Silverline', N'Redwood', N'Greenfield', N'Brightstar', N'Ironbridge'), N' ', CHOOSE(1 + i % 5, N'Trading', N'Construction', N'Logistics', N'Supply', N'Services'), N' ', i),
   CASE WHEN i % 6 = 0 THEN NULL ELSE CONCAT('03', RIGHT(CONCAT('00000000', i * 7717), 8)) END,
-  CHOOSE(1 + i % 5, N'Sóc Trăng', N'Cần Thơ', N'TP HCM', N'Bình Dương', N'Hà Nội')
+  CHOOSE(1 + i % 5, N'Hanoi', N'Ho Chi Minh City', N'Da Nang', N'Can Tho', N'Hai Phong')
 FROM n;
 
 CREATE TABLE sales.Invoices (

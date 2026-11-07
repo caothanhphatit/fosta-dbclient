@@ -1,6 +1,5 @@
 # DB Studio
 
-**English** · [Tiếng Việt](README.vi.md)
 
 A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend) for **MariaDB, MySQL, SQL Server and MongoDB**, with
 **workspaces** and **startup tasks**: it can run `kubectl port-forward` when a workspace opens and reconnect when the tunnel drops.
@@ -76,6 +75,7 @@ Test databases (MariaDB, SQL Server and MongoDB with sample data) run in Docker;
 
 - [CONTRIBUTING.md](CONTRIBUTING.md): setup, toolchain, tests, code style, adding a driver.
 - [ARCHITECTURE.md](ARCHITECTURE.md): layers, data flow, the assistant's safety model, config and secrets.
+- [ROADMAP.md](ROADMAP.md): what is planned next, including local database servers and a Docker web edition.
 
 ## License
 

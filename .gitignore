@@ -5,3 +5,6 @@ src-tauri/gen/
 
 # Machine-specific npm settings (e.g. a cache on another drive) belong in your user ~/.npmrc
 .npmrc
+
+# Local Claude Code settings
+.claude/
