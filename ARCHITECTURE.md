@@ -44,15 +44,15 @@ backend and UI also ship as a web edition in a Docker image (see [Two front-ends
 `src-tauri` is one crate: a library with the whole backend (`lib.rs`: config, secrets, drivers, assistant, history, tasks, schema,
 vector tools and the command bodies) and two binaries.
 
-| | Desktop (`fosta-studio`, feature `desktop`, default) | Web (`fosta-studio-server`, feature `web`) |
-| --- | --- | --- |
-| Entry | `main.rs`: Tauri window | `server/main.rs`: axum + tokio, the Docker image |
-| Commands | `#[tauri::command]` wrappers | `POST /api/invoke/<command>` (`server/api.rs`) |
-| Assistant stream | Tauri `Channel` | NDJSON lines in the `ai_chat` response |
-| Task events | Tauri events (`listen`) | Server-Sent Events, `GET /api/events` |
-| Secrets | Windows Credential Manager (`KeyringStore`) | `secrets/file.rs`: XChaCha20-Poly1305 file in `/data` |
-| Data directory | next to the `.exe` | `FOSTA_STUDIO_DATA` (`/data` in the image) |
-| Exports | written to ~/Downloads, "Show in folder" | downloaded by the browser |
+|                  | Desktop (`fosta-studio`, feature `desktop`, default) | Web (`fosta-studio-server`, feature `web`)            |
+| ---------------- | ---------------------------------------------------- | ----------------------------------------------------- |
+| Entry            | `main.rs`: Tauri window                              | `server/main.rs`: axum + tokio, the Docker image      |
+| Commands         | `#[tauri::command]` wrappers                         | `POST /api/invoke/<command>` (`server/api.rs`)        |
+| Assistant stream | Tauri `Channel`                                      | NDJSON lines in the `ai_chat` response                |
+| Task events      | Tauri events (`listen`)                              | Server-Sent Events, `GET /api/events`                 |
+| Secrets          | Windows Credential Manager (`KeyringStore`)          | `secrets/file.rs`: XChaCha20-Poly1305 file in `/data` |
+| Data directory   | next to the `.exe`                                   | `FOSTA_STUDIO_DATA` (`/data` in the image)            |
+| Exports          | written to ~/Downloads, "Show in folder"             | downloaded by the browser                             |
 
 Both front-ends are generated from `for_each_command!`, so a command added there is reachable from both with the same name, arguments
 and JSON; `ai_chat` (it streams) and the desktop-only `save_download` / `reveal_file` are written by hand. What differs sits behind

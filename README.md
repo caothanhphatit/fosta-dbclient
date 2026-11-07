@@ -82,18 +82,18 @@ Until then, build it from this repository with `docker build -t fosta-studio .` 
 `deploy/docker-compose.yml` runs the same container, optionally with a MariaDB to try it out
 (`docker compose -f deploy/docker-compose.yml --profile demo up -d`).
 
-| Variable                       | Default                     | Meaning                                                                                                        |
-| ------------------------------ | --------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `FOSTA_STUDIO_TOKEN`           | generated, in `/data`       | Access token to sign in with (at least 16 characters).                                                         |
-| `FOSTA_STUDIO_AUTH`            | `token`                     | `off` disables sign-in. Only for a trusted machine or behind your own authenticating proxy; logs a warning.   |
-| `FOSTA_STUDIO_SECRET_KEY`      | generated, in `/data`       | 64 hex characters (`openssl rand -hex 32`) that encrypt saved passwords and API keys.                         |
-| `FOSTA_STUDIO_DATA`            | `/data`                     | Data directory.                                                                                                |
-| `FOSTA_STUDIO_LISTEN`          | `0.0.0.0:8080` in the image | Address and port to listen on.                                                                                 |
-| `FOSTA_STUDIO_PUBLIC_URL`      | `http://localhost:<port>`   | Base of the sign-in address printed in the log.                                                                |
-| `FOSTA_STUDIO_ALLOWED_ORIGINS` | none                        | Extra origins allowed to call the API, comma-separated (e.g. `https://studio.example.com` behind a proxy).     |
-| `FOSTA_STUDIO_ALLOWED_HOSTS`   | any (loopback if auth off)  | Host names requests may use, comma-separated.                                                                  |
-| `FOSTA_STUDIO_SECURE_COOKIE`   | off                         | `on` marks the session cookie `Secure`; set it when an HTTPS proxy is in front.                               |
-| `FOSTA_STUDIO_TASKS`           | off                         | `on` allows startup tasks. They run inside the container, which ships no extra programs (no `kubectl`).       |
+| Variable                       | Default                     | Meaning                                                                                                     |
+| ------------------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `FOSTA_STUDIO_TOKEN`           | generated, in `/data`       | Access token to sign in with (at least 16 characters).                                                      |
+| `FOSTA_STUDIO_AUTH`            | `token`                     | `off` disables sign-in. Only for a trusted machine or behind your own authenticating proxy; logs a warning. |
+| `FOSTA_STUDIO_SECRET_KEY`      | generated, in `/data`       | 64 hex characters (`openssl rand -hex 32`) that encrypt saved passwords and API keys.                       |
+| `FOSTA_STUDIO_DATA`            | `/data`                     | Data directory.                                                                                             |
+| `FOSTA_STUDIO_LISTEN`          | `0.0.0.0:8080` in the image | Address and port to listen on.                                                                              |
+| `FOSTA_STUDIO_PUBLIC_URL`      | `http://localhost:<port>`   | Base of the sign-in address printed in the log.                                                             |
+| `FOSTA_STUDIO_ALLOWED_ORIGINS` | none                        | Extra origins allowed to call the API, comma-separated (e.g. `https://studio.example.com` behind a proxy).  |
+| `FOSTA_STUDIO_ALLOWED_HOSTS`   | any (loopback if auth off)  | Host names requests may use, comma-separated.                                                               |
+| `FOSTA_STUDIO_SECURE_COOKIE`   | off                         | `on` marks the session cookie `Secure`; set it when an HTTPS proxy is in front.                             |
+| `FOSTA_STUDIO_TASKS`           | off                         | `on` allows startup tasks. They run inside the container, which ships no extra programs (no `kubectl`).     |
 
 Differences from the desktop app: exports and diagram images are downloaded by the browser, there is no "Show in folder", startup
 tasks are off unless `FOSTA_STUDIO_TASKS=on`, saved passwords are in the encrypted file instead of Windows Credential Manager, and
