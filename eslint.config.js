@@ -6,7 +6,9 @@ import tseslint from "typescript-eslint";
 
 export default defineConfig(
   // dev/seed holds mongosh scripts with their own globals.
-  { ignores: ["dist/", "node_modules/", "src-tauri/", "dev/", "website/"] },
+  { ignores: ["dist/", "node_modules/", "src-tauri/", "dev/", "website/", ".claude/", ".site/"] },
   js.configs.recommended,
   tseslint.configs.recommended,
+  // Node scripts (scripts/*.mjs) run outside the browser.
+  { files: ["scripts/**/*.mjs"], languageOptions: { globals: { process: "readonly", console: "readonly" } } },
 );

@@ -3,3 +3,5 @@ node_modules/
 src-tauri/
 package-lock.json
 website/index.html
+.claude/
+.site/

@@ -29,7 +29,7 @@ src-tauri/src/           Rust backend
   tasks.rs job.rs        startup tasks and their child processes
   schema.rs vector.rs    ER diagram data, MariaDB vector tools
 dev/                     docker-compose.yml and seed data for the test databases
-scripts/                 toolchain installer and icon generator (PowerShell)
+scripts/                 toolchain installer and icon generator (PowerShell), version.mjs (version bump and check)
 deploy/                  docker-compose.yml for the web edition (Dockerfile at the root)
 ```
 
@@ -70,6 +70,7 @@ roughly in step with the real commands when you change their shapes.
 CI (`.github/workflows/ci.yml`, Windows) runs all of these; run them before opening a pull request:
 
 ```sh
+npm run version:check   # package.json, tauri.conf.json and Cargo.toml carry the same version
 npx tsc                 # type check
 npm run lint            # ESLint (typescript-eslint recommended rules)
 npm test                # Vitest unit tests (src/**/*.test.ts)
@@ -127,3 +128,25 @@ The checklist is in [ARCHITECTURE.md](ARCHITECTURE.md#how-to-add-a-database-driv
 ## Pull requests
 
 Keep changes focused, describe what changed and how you tested it (which engines, which checks), and include screenshots for UI changes.
+Add a line for user-facing changes under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+
+## Releasing
+
+Fosta Studio follows [Semantic Versioning](https://semver.org/). `package.json` is the source of truth; `scripts/version.mjs` keeps
+`package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `src-tauri/Cargo.lock` in step, and CI fails when they disagree.
+
+1. Bump the version: `npm run version:set -- 0.2.0` (or `patch`, `minor`, `major`).
+2. In `CHANGELOG.md`, move the `## [Unreleased]` notes under a new `## [0.2.0] - YYYY-MM-DD` heading, leave an empty `Unreleased`
+   section, and update the compare links at the bottom.
+3. Commit (`Release 0.2.0`), then tag and push the tag:
+
+   ```sh
+   git tag v0.2.0
+   git push origin main v0.2.0
+   ```
+
+4. The tag starts `.github/workflows/release.yml`: it checks that the tag matches the version files and that `CHANGELOG.md` has a section
+   for it, builds the NSIS installer and the portable exe, and creates a **draft** GitHub Release with that section as its notes. When a
+   `Dockerfile` exists, it also pushes `ghcr.io/caothanhphatit/fosta-studio` tagged `X.Y.Z`, `X.Y` and `latest`.
+5. Review the draft release (notes, assets), then publish it. A tag with a suffix such as `v0.2.0-rc.1` becomes a pre-release and does not
+   move the `X.Y` or `latest` image tags.

@@ -29,12 +29,15 @@ impl EventEmitter for TauriEvents {
 
 macro_rules! tauri_command {
     ([sync] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty = $function:path) => {
+        #[allow(clippy::too_many_arguments)]
         #[tauri::command]
         fn $name(state: State<'_, AppState>, $($arg: $type),*) -> $output {
             $function(&state, $($arg),*)
         }
     };
     ([async] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty = $function:path) => {
+        // A wrapper has the command's arguments plus the state (apply_changes has seven).
+        #[allow(clippy::too_many_arguments)]
         #[tauri::command]
         async fn $name(state: State<'_, AppState>, $($arg: $type),*) -> $output {
             $function(&state, $($arg),*).await
