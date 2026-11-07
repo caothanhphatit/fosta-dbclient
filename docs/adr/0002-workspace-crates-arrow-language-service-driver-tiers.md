@@ -1,6 +1,6 @@
 # ADR 0002: Crate workspace, Arrow results, one language service, two driver tiers
 
-- Status: proposed (2026-11-08), pending the owner's approval; refines [ADR 0001](0001-hexagonal-core-and-engine-modules.md)
+- Status: accepted (2026-11-08); refines [ADR 0001](0001-hexagonal-core-and-engine-modules.md)
 - Evidence: [research notes](../research/2026-11-architecture-research.md) with sources
 
 ## Context
