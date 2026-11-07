@@ -57,6 +57,8 @@
     initLanguages();
     initCarousel();
     initEffects();
+    initHeroNet();
+    initMotion();
 
     // Screenshot slots: each <figure data-shot="..."> shows its HTML mock until its PNG is listed in
     // assets/screenshots/shots.json (a JSON array of file names). Listing them avoids 404s for missing files.
@@ -164,146 +166,85 @@
     banner.hidden = false;
   }
 
-  // Hero carousel. The markup is a scroll-snapping strip that works on its own (swipe or scroll); this adds arrows,
-  // dots, a pause button and auto-advance every 6 s. Auto-advance pauses on hover, on keyboard focus inside the
-  // carousel and in hidden tabs, and is off for prefers-reduced-motion (which also switches slides instantly).
-  // Slide changes are announced (politely) only when the visitor caused them.
+  // Hero carousel. Without JavaScript the views form a horizontally scrollable, snapping strip. With JavaScript
+  // they are stacked and cross-fade every 5 s, with no buttons or dots; a horizontal swipe or the arrow keys
+  // (when the carousel has focus) move between views. Auto-advance pauses on hover, on keyboard focus and in
+  // hidden tabs, and is off for prefers-reduced-motion. "#slide=N" in the URL opens view N and holds it.
   function initCarousel() {
     var root = document.querySelector("[data-carousel]");
     if (!root) return;
     var viewport = root.querySelector("[data-carousel-viewport]");
     var slides = root.querySelectorAll("[data-carousel-slide]");
-    var controls = root.querySelector("[data-carousel-controls]");
-    if (!viewport || !controls || slides.length < 2) return;
-    var dots = root.querySelectorAll("[data-carousel-dot]");
-    var toggle = root.querySelector("[data-carousel-toggle]");
+    if (!viewport || slides.length < 2) return;
     var status = root.querySelector("[data-carousel-status]");
     var reduced = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
     var index = 0;
-    var userPaused = false;
+    var held = false;
     var hovered = false;
     var focused = false;
     var timer = null;
-    var settle = null;
-    var programmatic = false;
-    var target = 0;
+    var touchX = null;
+    var touchY = null;
 
-    function setActive(i, announce) {
-      index = i;
+    function show(i, announce) {
+      index = (i + slides.length) % slides.length;
       Array.prototype.forEach.call(slides, function (slide, j) {
-        if (j === i) slide.removeAttribute("aria-hidden");
+        var active = j === index;
+        slide.classList.toggle("is-active", active);
+        if (active) slide.removeAttribute("aria-hidden");
         else slide.setAttribute("aria-hidden", "true");
-      });
-      Array.prototype.forEach.call(dots, function (dot, j) {
-        if (j === i) dot.setAttribute("aria-current", "true");
-        else dot.removeAttribute("aria-current");
       });
       if (announce && status) {
         status.textContent = (status.getAttribute("data-template") || "{n} / {total}")
-          .replace("{n}", String(i + 1))
+          .replace("{n}", String(index + 1))
           .replace("{total}", String(slides.length))
-          .replace("{name}", slides[i].getAttribute("aria-label") || "");
+          .replace("{name}", slides[index].getAttribute("aria-label") || "");
       }
-    }
-
-    // Element.scrollTo with options is missing in older Safari; fall back to setting scrollLeft (no animation).
-    function scrollToSlide(i, smooth) {
-      var left = i * viewport.clientWidth;
-      if (typeof viewport.scrollTo === "function") {
-        try {
-          viewport.scrollTo({ left: left, behavior: smooth && !reduced ? "smooth" : "auto" });
-          return;
-        } catch (e) {
-          /* fall through */
-        }
-      }
-      viewport.scrollLeft = left;
-    }
-
-    function go(i, announce) {
-      i = (i + slides.length) % slides.length;
-      setActive(i, announce);
-      programmatic = true;
-      target = i;
-      scrollToSlide(i, true);
     }
 
     function running() {
-      return !reduced && !userPaused && !hovered && !focused && !document.hidden;
+      return !reduced && !held && !hovered && !focused && !document.hidden;
     }
 
     function schedule() {
       window.clearTimeout(timer);
       if (running()) {
         timer = window.setTimeout(function () {
-          go(index + 1, false);
+          show(index + 1, false);
           schedule();
-        }, 6000);
+        }, 5000);
       }
     }
 
-    // Swipes and scrolls by the visitor: pick up the slide the strip settled on.
     viewport.addEventListener(
-      "scroll",
-      function () {
-        window.clearTimeout(settle);
-        settle = window.setTimeout(function () {
-          var i = Math.round(viewport.scrollLeft / Math.max(1, viewport.clientWidth));
-          if (programmatic && i !== target) return; // our own smooth scroll is still on its way
-          if (i !== index && i >= 0 && i < slides.length) {
-            setActive(i, !programmatic);
-            schedule();
-          }
-          programmatic = false;
-        }, 120);
+      "touchstart",
+      function (event) {
+        touchX = event.touches[0].clientX;
+        touchY = event.touches[0].clientY;
+      },
+      { passive: true },
+    );
+    viewport.addEventListener(
+      "touchend",
+      function (event) {
+        if (touchX === null) return;
+        var dx = event.changedTouches[0].clientX - touchX;
+        var dy = event.changedTouches[0].clientY - touchY;
+        touchX = null;
+        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+          show(index + (dx < 0 ? 1 : -1), true);
+          schedule();
+        }
       },
       { passive: true },
     );
 
-    // A swipe, wheel or drag by the visitor takes over from a scroll we started.
-    ["pointerdown", "wheel", "touchstart"].forEach(function (type) {
-      viewport.addEventListener(
-        type,
-        function () {
-          programmatic = false;
-        },
-        { passive: true },
-      );
-    });
-
-    root.querySelector("[data-carousel-prev]").addEventListener("click", function () {
-      go(index - 1, true);
-      schedule();
-    });
-    root.querySelector("[data-carousel-next]").addEventListener("click", function () {
-      go(index + 1, true);
-      schedule();
-    });
-    Array.prototype.forEach.call(dots, function (dot, j) {
-      dot.addEventListener("click", function () {
-        go(j, true);
-        schedule();
-      });
-    });
-    controls.addEventListener("keydown", function (event) {
+    viewport.tabIndex = 0;
+    viewport.addEventListener("keydown", function (event) {
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
-      go(index + (event.key === "ArrowRight" ? 1 : -1), true);
+      show(index + (event.key === "ArrowRight" ? 1 : -1), true);
     });
-
-    if (toggle) {
-      if (reduced) {
-        toggle.hidden = true;
-      } else {
-        toggle.addEventListener("click", function () {
-          userPaused = !userPaused;
-          toggle.classList.toggle("is-paused", userPaused);
-          var label = toggle.getAttribute(userPaused ? "data-label-play" : "data-label-pause");
-          if (label) toggle.setAttribute("aria-label", label);
-          schedule();
-        });
-      }
-    }
 
     root.addEventListener("mouseenter", function () {
       hovered = true;
@@ -323,27 +264,303 @@
       schedule();
     });
     document.addEventListener("visibilitychange", schedule);
-    window.addEventListener("resize", function () {
-      scrollToSlide(index, false);
-    });
 
-    root.classList.add("is-enhanced");
-    controls.hidden = false;
-
-    // "#slide=2" in the URL opens that view (handy for links and screenshots); it pauses auto-advance.
     var start = /(?:^#|&)slide=(\d+)/.exec(window.location.hash || "");
     var first = start ? Math.min(Math.max(parseInt(start[1], 10) - 1, 0), slides.length - 1) : 0;
-    setActive(first, false);
-    if (first) {
-      userPaused = true;
-      if (toggle) {
-        toggle.classList.add("is-paused");
-        var playLabel = toggle.getAttribute("data-label-play");
-        if (playLabel) toggle.setAttribute("aria-label", playLabel);
-      }
-      scrollToSlide(first, false);
-    }
+    held = !!start;
+    root.classList.add("is-enhanced");
+    show(first, false);
     schedule();
+  }
+
+  // Hero background: a slowly drifting network of tables (nodes) with rows (packets) travelling along the
+  // relations between them. Canvas only, about 2% CPU: it stops when the hero is off screen or the tab is hidden,
+  // caps the pixel ratio at 2, and draws a single still frame for prefers-reduced-motion.
+  function initHeroNet() {
+    var canvas = document.querySelector("[data-hero-net]");
+    if (!canvas || !canvas.getContext) return;
+    var ctx = canvas.getContext("2d");
+    var hero = canvas.parentElement;
+    var reduced = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    var nodes = [];
+    var packets = [];
+    var width = 0;
+    var height = 0;
+    var dpr = 1;
+    var link = 150;
+    var colors = { node: "#2f6fed", line: "#8a93a3", packet: "#2f6fed" };
+    var visible = true;
+    var frame = 0;
+    var last = 0;
+    var pointer = { x: -9999, y: -9999 };
+
+    function readColors() {
+      var style = window.getComputedStyle(document.documentElement);
+      var accent = style.getPropertyValue("--accent").trim() || "#2f6fed";
+      var muted = style.getPropertyValue("--text-2").trim() || "#8a93a3";
+      colors = { node: accent, line: muted, packet: accent };
+    }
+
+    function resize() {
+      var rect = canvas.getBoundingClientRect();
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      width = Math.max(1, rect.width);
+      height = Math.max(1, rect.height);
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      link = width < 600 ? 110 : 150;
+      var want = Math.round(Math.min(width < 600 ? 34 : 78, (width * height) / 16000));
+      while (nodes.length < want) nodes.push(makeNode());
+      nodes.length = want;
+      nodes.forEach(function (n) {
+        n.x = Math.min(n.x, width);
+        n.y = Math.min(n.y, height);
+      });
+      packets = [];
+      if (reduced) draw(0);
+    }
+
+    function makeNode() {
+      var table = Math.random() < 0.22;
+      return {
+        x: Math.random() * (width || 1200),
+        y: Math.random() * (height || 800),
+        vx: (Math.random() - 0.5) * 0.18,
+        vy: (Math.random() - 0.5) * 0.18,
+        r: table ? 3.2 : 1.2 + Math.random() * 1.2,
+        table: table,
+        pulse: Math.random() * Math.PI * 2,
+      };
+    }
+
+    function rgba(color, alpha) {
+      ctx.globalAlpha = alpha;
+      return color;
+    }
+
+    function spawnPacket() {
+      if (nodes.length < 2) return;
+      var a = nodes[(Math.random() * nodes.length) | 0];
+      var best = null;
+      var bestD = link * link;
+      nodes.forEach(function (b) {
+        if (b === a) return;
+        var dx = b.x - a.x;
+        var dy = b.y - a.y;
+        var d = dx * dx + dy * dy;
+        if (d < bestD && Math.random() < 0.6) {
+          best = b;
+          bestD = d;
+        }
+      });
+      if (best) packets.push({ a: a, b: best, t: 0, speed: 0.006 + Math.random() * 0.01 });
+    }
+
+    function draw(dt) {
+      ctx.clearRect(0, 0, width, height);
+      var i;
+      var j;
+      for (i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        if (dt) {
+          n.x += n.vx * dt;
+          n.y += n.vy * dt;
+          if (n.x < -20) n.x = width + 20;
+          if (n.x > width + 20) n.x = -20;
+          if (n.y < -20) n.y = height + 20;
+          if (n.y > height + 20) n.y = -20;
+          n.pulse += 0.002 * dt;
+        }
+      }
+      ctx.lineWidth = 1;
+      for (i = 0; i < nodes.length; i++) {
+        for (j = i + 1; j < nodes.length; j++) {
+          var dx = nodes[i].x - nodes[j].x;
+          var dy = nodes[i].y - nodes[j].y;
+          var d2 = dx * dx + dy * dy;
+          if (d2 < link * link) {
+            var strength = 1 - Math.sqrt(d2) / link;
+            ctx.strokeStyle = rgba(colors.line, strength * 0.22);
+            ctx.beginPath();
+            ctx.moveTo(nodes[i].x, nodes[i].y);
+            ctx.lineTo(nodes[j].x, nodes[j].y);
+            ctx.stroke();
+          }
+        }
+        var px = nodes[i].x - pointer.x;
+        var py = nodes[i].y - pointer.y;
+        var p2 = px * px + py * py;
+        if (p2 < link * link * 1.4) {
+          ctx.strokeStyle = rgba(colors.node, (1 - Math.sqrt(p2) / (link * 1.18)) * 0.35);
+          ctx.beginPath();
+          ctx.moveTo(nodes[i].x, nodes[i].y);
+          ctx.lineTo(pointer.x, pointer.y);
+          ctx.stroke();
+        }
+      }
+      for (i = 0; i < nodes.length; i++) {
+        var node = nodes[i];
+        if (node.table) {
+          var glow = 0.35 + 0.25 * Math.sin(node.pulse);
+          ctx.fillStyle = rgba(colors.node, glow * 0.25);
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, node.r * 3.2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = rgba(colors.node, 0.75);
+          ctx.fillRect(node.x - node.r, node.y - node.r, node.r * 2, node.r * 2);
+        } else {
+          ctx.fillStyle = rgba(colors.line, 0.45);
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, node.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      if (dt) {
+        if (packets.length < (width < 600 ? 6 : 14) && Math.random() < 0.08) spawnPacket();
+        for (i = packets.length - 1; i >= 0; i--) {
+          var p = packets[i];
+          p.t += p.speed * dt * 0.06;
+          if (p.t >= 1) {
+            packets.splice(i, 1);
+            continue;
+          }
+          var x = p.a.x + (p.b.x - p.a.x) * p.t;
+          var y = p.a.y + (p.b.y - p.a.y) * p.t;
+          var tx = p.a.x + (p.b.x - p.a.x) * Math.max(0, p.t - 0.12);
+          var ty = p.a.y + (p.b.y - p.a.y) * Math.max(0, p.t - 0.12);
+          var fade = Math.sin(p.t * Math.PI);
+          var grad = ctx.createLinearGradient(tx, ty, x, y);
+          grad.addColorStop(0, "rgba(0,0,0,0)");
+          grad.addColorStop(1, colors.packet);
+          ctx.globalAlpha = fade * 0.9;
+          ctx.strokeStyle = grad;
+          ctx.lineWidth = 1.6;
+          ctx.beginPath();
+          ctx.moveTo(tx, ty);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+          ctx.fillStyle = colors.packet;
+          ctx.beginPath();
+          ctx.arc(x, y, 1.9, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.lineWidth = 1;
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function loop(now) {
+      frame = 0;
+      if (!visible || document.hidden) return;
+      var dt = last ? Math.min(now - last, 50) : 16;
+      last = now;
+      draw(dt);
+      frame = window.requestAnimationFrame(loop);
+    }
+
+    function start() {
+      if (reduced || frame || !visible || document.hidden) return;
+      last = 0;
+      frame = window.requestAnimationFrame(loop);
+    }
+
+    readColors();
+    resize();
+    window.addEventListener("resize", function () {
+      resize();
+    });
+    if (window.MutationObserver) {
+      new MutationObserver(function () {
+        readColors();
+        if (reduced) draw(0);
+      }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    }
+    if (window.matchMedia) {
+      var scheme = window.matchMedia("(prefers-color-scheme: dark)");
+      var onScheme = function () {
+        readColors();
+        if (reduced) draw(0);
+      };
+      if (scheme.addEventListener) scheme.addEventListener("change", onScheme);
+      else if (scheme.addListener) scheme.addListener(onScheme);
+    }
+    if (reduced) return;
+    hero.addEventListener("pointermove", function (event) {
+      var rect = canvas.getBoundingClientRect();
+      pointer.x = event.clientX - rect.left;
+      pointer.y = event.clientY - rect.top;
+    });
+    hero.addEventListener("pointerleave", function () {
+      pointer.x = -9999;
+      pointer.y = -9999;
+    });
+    document.addEventListener("visibilitychange", start);
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (entries) {
+        visible = entries[0].isIntersecting;
+        start();
+      }).observe(hero);
+    }
+    start();
+  }
+
+  // Motion layer: the app window tilts back to flat as the hero scrolls away, cards get a spotlight that follows
+  // the pointer, and a thin bar at the top shows reading progress. Off for prefers-reduced-motion.
+  function initMotion() {
+    var reduced = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    if (reduced) return;
+
+    var bar = document.createElement("div");
+    bar.className = "scroll-progress";
+    bar.setAttribute("aria-hidden", "true");
+    document.body.appendChild(bar);
+
+    var visual = document.querySelector(".hero-visual");
+    var ticking = false;
+    if (visual) {
+      visual.addEventListener("animationend", function (event) {
+        if (event.target !== visual) return;
+        visual.classList.add("is-tilting");
+        update();
+      });
+    }
+
+    function update() {
+      ticking = false;
+      var doc = document.documentElement;
+      var max = Math.max(1, doc.scrollHeight - window.innerHeight);
+      bar.style.setProperty("--progress", String(Math.min(1, Math.max(0, window.scrollY / max))));
+      if (visual) {
+        var rect = visual.getBoundingClientRect();
+        // 10deg while the window sits low in the viewport, flat once its top reaches the upper quarter.
+        var t = Math.min(1, Math.max(0, (rect.top - window.innerHeight * 0.2) / (window.innerHeight * 0.6)));
+        visual.style.setProperty("--tilt", (t * 10).toFixed(2) + "deg");
+        visual.style.setProperty("--tilt-scale", (1 - t * 0.04).toFixed(3));
+      }
+    }
+
+    window.addEventListener(
+      "scroll",
+      function () {
+        if (!ticking) {
+          ticking = true;
+          window.requestAnimationFrame(update);
+        }
+      },
+      { passive: true },
+    );
+    window.addEventListener("resize", update);
+    update();
+
+    var cards = document.querySelectorAll(".why-card, .mini-card, .engine, .privacy-grid > li");
+    Array.prototype.forEach.call(cards, function (card) {
+      card.addEventListener("pointermove", function (event) {
+        var rect = card.getBoundingClientRect();
+        card.style.setProperty("--mx", event.clientX - rect.left + "px");
+        card.style.setProperty("--my", event.clientY - rect.top + "px");
+      });
+    });
   }
 
   // Effects: scroll reveal, number count-up and the query demo. All of them start from the finished page and only

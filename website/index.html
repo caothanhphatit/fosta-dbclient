@@ -220,6 +220,7 @@
     <main id="main">
       <!-- Hero ----------------------------------------------------------- -->
       <section class="hero" id="top" aria-labelledby="hero-title">
+        <canvas class="hero-net" data-hero-net aria-hidden="true"></canvas>
         <div class="container hero-text">
           <p class="eyebrow">
             <span class="pill" data-i18n="hero.pill">Free &amp; open source</span>
@@ -1065,52 +1066,6 @@
               </div>
             </div>
 
-            <div class="carousel-controls" data-carousel-controls hidden>
-              <button type="button" class="carousel-btn" data-carousel-prev data-i18n-attr="aria-label:carousel.prev" aria-label="Previous view">
-                <svg class="icon flip" aria-hidden="true"><use href="#i-chev" /></svg>
-              </button>
-              <div class="carousel-dots">
-                <button
-                  type="button"
-                  class="carousel-dot"
-                  data-carousel-dot
-                  aria-controls="view-sql"
-                  data-i18n-attr="aria-label:carousel.slide1"
-                  aria-label="SQL tables"
-                ></button>
-                <button
-                  type="button"
-                  class="carousel-dot"
-                  data-carousel-dot
-                  aria-controls="view-mongo"
-                  data-i18n-attr="aria-label:carousel.slide2"
-                  aria-label="MongoDB documents"
-                ></button>
-                <button
-                  type="button"
-                  class="carousel-dot"
-                  data-carousel-dot
-                  aria-controls="view-diagram"
-                  data-i18n-attr="aria-label:carousel.slide3"
-                  aria-label="ER diagram"
-                ></button>
-              </div>
-              <button type="button" class="carousel-btn" data-carousel-next data-i18n-attr="aria-label:carousel.next" aria-label="Next view">
-                <svg class="icon" aria-hidden="true"><use href="#i-chev" /></svg>
-              </button>
-              <button
-                type="button"
-                class="carousel-btn carousel-toggle"
-                data-carousel-toggle
-                data-i18n-attr="aria-label:carousel.pause; data-label-pause:carousel.pause; data-label-play:carousel.play"
-                aria-label="Pause the slideshow"
-                data-label-pause="Pause the slideshow"
-                data-label-play="Play the slideshow"
-              >
-                <svg class="icon icon-pause" aria-hidden="true"><use href="#i-pause" /></svg>
-                <svg class="icon icon-play" aria-hidden="true"><use href="#i-play" /></svg>
-              </button>
-            </div>
             <p
               class="sr-only"
               aria-live="polite"
