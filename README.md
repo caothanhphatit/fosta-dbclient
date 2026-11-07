@@ -83,7 +83,7 @@ Test databases (MariaDB, SQL Server and MongoDB with sample data) run in Docker;
 
 - [CONTRIBUTING.md](CONTRIBUTING.md): setup, toolchain, tests, code style, adding a driver.
 - [ARCHITECTURE.md](ARCHITECTURE.md): layers, data flow, the assistant's safety model, config and secrets.
-- [ROADMAP.md](ROADMAP.md): what is planned next, including local database servers and a Docker web edition.
+- [ROADMAP.md](ROADMAP.md): what is available today and what comes next.
 
 ## License
 

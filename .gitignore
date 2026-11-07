@@ -11,3 +11,6 @@ src-tauri/gen/
 
 # Rendered website (node website/build.mjs .site)
 .site/
+
+# Local planning notes (plans, research, ADR drafts, tech debt): never pushed
+/notes/
