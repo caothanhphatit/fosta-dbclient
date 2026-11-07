@@ -12,6 +12,7 @@ use std::fmt;
 use std::time::Duration;
 
 pub use classify::{classify, Classification, StatementKind};
+#[allow(unused_imports)] // part of the API; the app uses it once edits are wired in
 pub use value::{parse_input, Value, ValueKind};
 
 // ---------------------------------------------------------------------------------------------------------------------------

@@ -291,7 +291,7 @@ pub(crate) fn is_decimal_text(t: &str) -> bool {
     let frac = parts.next().unwrap_or("");
     let digits_ok =
         (!int.is_empty() || !frac.is_empty()) && int.bytes().all(|b| b.is_ascii_digit()) && frac.bytes().all(|b| b.is_ascii_digit());
-    let exp_ok = exp.is_none_or(|e| is_integer_text(e));
+    let exp_ok = exp.is_none_or(is_integer_text);
     digits_ok && exp_ok
 }
 

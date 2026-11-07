@@ -12,5 +12,6 @@
 
 pub mod clickhouse;
 pub mod common;
+pub mod oracle;
 pub mod postgres;
 pub mod sqlite;

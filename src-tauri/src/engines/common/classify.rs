@@ -73,7 +73,7 @@ fn classify_one(dialect: Dialect, s: split::Statement) -> ClassifiedStatement {
     let keyword = leading_keyword(&words);
     let (kind, reason, parsed) = match parse(dialect, &s.text) {
         Some(ast) => {
-            let (k, r) = from_ast(dialect, &ast, &s.text);
+            let (k, r) = from_ast(&ast, &s.text);
             // The AST can miss vendor details the keywords catch (ClickHouse ALTER ... DELETE, data-modifying CTEs).
             let (kk, kr) = from_keywords(dialect, &s.text, &words);
             if kk > k && kk != StatementKind::Unknown {
@@ -147,7 +147,7 @@ fn leading_keyword(words: &[String]) -> String {
     }
 }
 
-fn from_ast(dialect: Dialect, ast: &Ast, text: &str) -> (StatementKind, Option<String>) {
+fn from_ast(ast: &Ast, text: &str) -> (StatementKind, Option<String>) {
     use StatementKind::*;
     match ast {
         Ast::Query(q) => {
@@ -222,7 +222,7 @@ fn from_ast(dialect: Dialect, ast: &Ast, text: &str) -> (StatementKind, Option<S
         }
         Ast::Explain { analyze, statement, .. } => {
             if *analyze {
-                let (k, r) = from_ast(dialect, statement, text);
+                let (k, r) = from_ast(statement, text);
                 (k.max(Read), r.map(|r| format!("EXPLAIN ANALYZE runs the statement: {r}")))
             } else {
                 (Read, None)
