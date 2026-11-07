@@ -2783,3 +2783,39 @@ pre.field-value.text {
   pointer-events: none;
   opacity: 0.5;
 }
+
+.provider-cards {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.provider-icon {
+  color: var(--accent);
+}
+
+.provider-hint {
+  margin-top: -4px;
+}
+
+.model-row {
+  display: flex;
+  gap: 6px;
+}
+
+.model-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.btn.model-load {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.btn.model-load .icon {
+  width: 13px;
+  height: 13px;
+}

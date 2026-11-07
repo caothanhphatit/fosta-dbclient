@@ -338,6 +338,22 @@ pub fn save_ai_settings(
     })
 }
 
+/// Lists the models of `settings` as typed in the dialog (not yet saved);
+/// an empty key falls back to the saved one.
+#[tauri::command]
+pub async fn list_ai_models(
+    state: State<'_, AppState>,
+    settings: AiSettings,
+    api_key: Option<String>,
+) -> AppResult<Vec<String>> {
+    let api_key = match api_key.filter(|key| !key.is_empty()) {
+        Some(key) => Some(key),
+        None => secrets::load_password(secrets::AI_ACCOUNT)?,
+    };
+    let _ = &state;
+    ai::list_models(&settings, api_key).await
+}
+
 #[tauri::command]
 pub async fn test_ai(state: State<'_, AppState>) -> AppResult<String> {
     let (settings, api_key) = ai_settings(&state)?;

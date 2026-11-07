@@ -77,6 +77,7 @@ export const api = {
   testEmbedding: () => invoke<number>("test_embedding"),
   saveAiSettings: (settings: AiSettings | null, apiKey: string | null) =>
     invoke<AppConfig>("save_ai_settings", { settings, apiKey }),
+  listAiModels: (settings: AiSettings, apiKey: string | null) => invoke<string[]>("list_ai_models", { settings, apiKey }),
   testAi: () => invoke<string>("test_ai"),
   /** Streams the reply through `onEvent`; resolves with the full text. */
   aiChat: (request: ChatRequest, onEvent: (event: ChatEvent) => void) => {

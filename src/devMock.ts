@@ -5,7 +5,8 @@
  */
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { AppConfig, ChatEvent, ChatRequest, ConnectionProfile, TablePage, Workspace } from "./types";
+import { baseUrlOf, providerPreset } from "./aiProviders";
+import type { AiSettings, AppConfig, ChatEvent, ChatRequest, ConnectionProfile, TablePage, Workspace } from "./types";
 
 const DIMS = 4;
 
@@ -39,7 +40,7 @@ const workspaces: Workspace[] = [
   { id: "prod", name: "Production", color: "red", icon: "shield", connections: [], tasks: [] },
 ];
 
-let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null, ai: { provider: "anthropic", baseUrl: "", model: "claude-opus-5-5" } };
+let config: AppConfig = { workspaces, activeWorkspace: "client-a", embedding: null, ai: null };
 
 const columns = [
   { name: "id", typeName: "int(11)", numeric: true, binary: false, primary: true, vectorDims: null },
@@ -146,12 +147,17 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       return config;
     case "save_ai_settings":
       config = { ...config, ai: (payload.settings as AppConfig["ai"]) ?? null };
+      if (typeof payload.apiKey === "string" && payload.apiKey) browserApiKey = payload.apiKey;
+      if (!config.ai) browserApiKey = "";
       return config;
     case "test_ai":
-      return "OK";
+      return probeChat();
+    case "list_ai_models":
+      return fetchModels(payload.settings as AiSettings, (payload.apiKey as string | null) ?? null);
     case "ai_chat":
-      return mockChat(payload.request as ChatRequest, payload.onEvent as Channel<ChatEvent>);
+      return streamChat(payload.request as ChatRequest, payload.onEvent as Channel<ChatEvent>);
     case "ai_cancel":
+      chatRuns.get(String(payload.id))?.abort();
       return null;
     case "test_connection":
     case "connect": {
@@ -211,58 +217,132 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
   }
 }
 
-const SQL_REPLY = `Dựa trên bảng \`products\` (đã xem cấu trúc), đây là query:
+// --- Assistant: real provider calls from the browser ------------------------
+// The preview has no Rust backend, so the dialog's key is kept in memory for
+// this page load and requests go straight to the provider from the browser.
+// Schema lookups (tools) are desktop-only; here the model gets the table list.
 
-\`\`\`sql
-SELECT p.id, p.name, p.price, p.stock, c.name AS category
-FROM products p
-JOIN categories c ON c.id = p.category_id
-WHERE p.stock < 20
-ORDER BY p.stock ASC
-LIMIT 50;
-\`\`\`
+let browserApiKey = "";
+const chatRuns = new Map<string, AbortController>();
 
-- \`stock\` có thể NULL với vài dòng; nếu muốn tính cả những dòng đó, thêm \`OR p.stock IS NULL\`.
-- Có index trên \`category_id\` nên JOIN rẻ.`;
-
-const MONGO_REPLY = `Pipeline theo category, tính tồn kho và giá trung bình:
-
-\`\`\`json
-{
-  "aggregate": "products",
-  "pipeline": [
-    { "$match": { "stock": { "$gt": 0 } } },
-    { "$group": { "_id": "$category_id", "items": { "$sum": 1 }, "avgPrice": { "$avg": "$price" } } },
-    { "$sort": { "items": -1 } }
-  ],
-  "cursor": {}
+function providerHeaders(settings: AiSettings, apiKey: string): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (providerPreset(settings.provider).wire === "anthropic") {
+    headers["x-api-key"] = apiKey;
+    headers["anthropic-version"] = "2026-10-21";
+    headers["anthropic-dangerous-direct-browser-access"] = "true";
+  } else if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+  return headers;
 }
-\`\`\`
 
-Chạy trực tiếp trong tab Query, hoặc chèn vào editor rồi sửa \`$match\`.`;
+async function failureText(response: Response): Promise<string> {
+  const body = await response.text();
+  try {
+    const parsed = JSON.parse(body) as { error?: { message?: string } | string; message?: string };
+    const message = typeof parsed.error === "string" ? parsed.error : parsed.error?.message ?? parsed.message;
+    if (message) return `${response.status}: ${message}`;
+  } catch {
+    // Not JSON; fall through to the raw preview.
+  }
+  return `${response.status}: ${body.slice(0, 300)}`;
+}
 
-/** Streams a canned reply through the channel the UI passed, like the backend would. */
-function mockChat(request: ChatRequest, channel: Channel<ChatEvent>): Promise<string> {
+async function fetchModels(settings: AiSettings, apiKey: string | null): Promise<string[]> {
+  const key = apiKey || browserApiKey;
+  const anthropic = providerPreset(settings.provider).wire === "anthropic";
+  const url = `${baseUrlOf(settings)}${anthropic ? "/v1/models?limit=1000" : "/models"}`;
+  const response = await fetch(url, { headers: providerHeaders(settings, key) });
+  if (!response.ok) throw new Error(`${providerPreset(settings.provider).label} API returned ${await failureText(response)}`);
+  const payload = (await response.json()) as { data?: { id?: string; name?: string }[] };
+  const ids = (payload.data ?? []).map((item) => (item.id ?? item.name ?? "").replace(/^models\//, "")).filter(Boolean);
+  return [...new Set(ids)].sort();
+}
+
+function systemPrompt(context: ChatRequest["context"]): string {
+  const lines = [
+    "You are the assistant built into DB Studio, a desktop database client. You cannot run anything: put every runnable query in a fenced code block (```sql, or ```json for MongoDB commands) for the user to run from the editor. Answer in the user's language and keep prose short.",
+    "Context:",
+    context.connectionId ? `- Connection: ${context.connectionName ?? "connection"} (${context.driverLabel ?? "unknown"} ${context.serverVersion ?? ""})` : "- No connection is open; write generic SQL and say which engine you assumed.",
+  ];
+  if (context.database) lines.push(`- Database: ${context.database}`, "- Tables: products (~1240 rows), categories (12), orders (48210), order_items (153900), customers (9031), v_daily_sales (view)");
+  if (context.table) lines.push(`- Table the user is looking at: ${context.table}`);
+  if (context.editorText) lines.push("- Current editor text:", "```", context.editorText, "```");
+  if (context.lastError) lines.push(`- Last error from the server: ${context.lastError}`);
+  if (context.extra) lines.push(`- ${context.extra}`);
+  return lines.join("\n");
+}
+
+/** Streams the provider's reply through the channel the UI passed, like the backend does. */
+async function streamChat(request: ChatRequest, channel: Channel<ChatEvent>): Promise<string> {
+  const settings = config.ai;
+  if (!settings) throw new Error("Set up the assistant first (toolbar → Assistant → settings)");
   const internals = (window as unknown as { __TAURI_INTERNALS__: { runCallback(id: number, data: unknown): void } }).__TAURI_INTERNALS__;
   let index = 0;
   const emit = (message: ChatEvent) => internals.runCallback(channel.id, { index: index++, message });
-  const reply = request.context.driverLabel === "MongoDB" ? MONGO_REPLY : SQL_REPLY;
-  const pieces = reply.match(/[\s\S]{1,14}/g) ?? [];
-  return new Promise((resolve) => {
-    emit({ type: "tool", label: `Looked at ${request.context.table ?? "products"}` });
-    let position = 0;
-    const tick = () => {
-      if (position >= pieces.length) {
-        emit({ type: "done" });
-        resolve(reply);
-        return;
+  const preset = providerPreset(settings.provider);
+  const anthropic = preset.wire === "anthropic";
+  const system = systemPrompt(request.context);
+  const messages = request.messages.map((message) => ({ role: message.role, content: message.content }));
+  const body = anthropic
+    ? { model: settings.model, max_tokens: 8192, stream: true, system, messages }
+    : { model: settings.model, stream: true, messages: [{ role: "system", content: system }, ...messages] };
+  const controller = new AbortController();
+  chatRuns.set(request.id, controller);
+  let text = "";
+  try {
+    const response = await fetch(`${baseUrlOf(settings)}${anthropic ? "/v1/messages" : "/chat/completions"}`, {
+      method: "POST",
+      headers: providerHeaders(settings, browserApiKey),
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok || !response.body) throw new Error(`${preset.label} API returned ${await failureText(response)}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const payload = line.replace(/\r$/, "").replace(/^data:\s*/, "");
+        if (!line.startsWith("data:") || !payload || payload === "[DONE]") continue;
+        const event = JSON.parse(payload) as { type?: string; delta?: { type?: string; text?: string }; choices?: { delta?: { content?: string } }[]; error?: { message?: string } };
+        if (event.error?.message) throw new Error(`${preset.label} API: ${event.error.message}`);
+        const piece = anthropic ? (event.type === "content_block_delta" && event.delta?.type === "text_delta" ? event.delta.text : undefined) : event.choices?.[0]?.delta?.content;
+        if (piece) {
+          text += piece;
+          emit({ type: "text", text: piece });
+        }
       }
-      emit({ type: "text", text: pieces[position] });
-      position += 1;
-      setTimeout(tick, 18);
-    };
-    setTimeout(tick, 350);
-  });
+    }
+    return text;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("Stopped");
+    throw error;
+  } finally {
+    chatRuns.delete(request.id);
+    emit({ type: "done" });
+  }
+}
+
+
+/** "Save & test": one short exchange without streaming. */
+async function probeChat(): Promise<string> {
+  const settings = config.ai;
+  if (!settings) throw new Error("Set up the assistant first");
+  const preset = providerPreset(settings.provider);
+  const anthropic = preset.wire === "anthropic";
+  const prompt = { role: "user", content: "Reply with the single word OK." };
+  const body = anthropic ? { model: settings.model, max_tokens: 64, messages: [prompt] } : { model: settings.model, messages: [prompt] };
+  const response = await fetch(`${baseUrlOf(settings)}${anthropic ? "/v1/messages" : "/chat/completions"}`, { method: "POST", headers: providerHeaders(settings, browserApiKey), body: JSON.stringify(body) });
+  if (!response.ok) throw new Error(`${preset.label} API returned ${await failureText(response)}`);
+  const payload = (await response.json()) as { content?: { text?: string }[]; choices?: { message?: { content?: string } }[] };
+  return (anthropic ? payload.content?.map((block) => block.text ?? "").join("") : payload.choices?.[0]?.message?.content)?.trim() || "(empty reply)";
 }
 
 export function installDevMock(): void {

@@ -1,9 +1,10 @@
-import { api } from "./api";
+import { api, errorText } from "./api";
 import { checkbox, field, openModal, textInput, toast } from "./dialogs";
-import { h, icon } from "./dom";
+import { h, icon, iconButton } from "./dom";
+import { AI_PROVIDERS, providerPreset, type ProviderPreset } from "./aiProviders";
 import { describeServer, driverInfo, DRIVERS, type DriverInfo } from "./drivers";
 import { formatArgs, parseArgs } from "./shell";
-import type { AiProvider, AiSettings, AppConfig, ConnectionProfile, EmbeddingAuth, EmbeddingSettings, TaskDef, WorkspaceMeta } from "./types";
+import type { AiSettings, AppConfig, ConnectionProfile, EmbeddingAuth, EmbeddingSettings, TaskDef, WorkspaceMeta } from "./types";
 import { WORKSPACE_COLORS, WORKSPACE_ICONS, workspaceColor, workspaceIcon } from "./workspaces";
 
 const AUTH_OPTIONS: { value: EmbeddingAuth; label: string }[] = [
@@ -293,41 +294,104 @@ export function taskDialog(existing: TaskDef | null, workspaceName: string): Pro
   });
 }
 
-interface ProviderPreset {
-  value: AiProvider;
-  label: string;
-  url: string;
-  model: string;
-  hint: string;
-}
-
-const AI_PROVIDERS: ProviderPreset[] = [
-  { value: "anthropic", label: "Anthropic (Claude)", url: "https://api.anthropic.com", model: "claude-opus-5-5", hint: "Key from console.anthropic.com" },
-  { value: "openai", label: "OpenAI-compatible (OpenAI, Ollama, OpenRouter, DeepSeek…)", url: "https://api.openai.com/v1", model: "", hint: "Ollama: http://localhost:11434/v1 with any model you pulled, no key needed" },
-];
+const CUSTOM_MODEL = "__custom__";
 
 export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null> {
   return new Promise((resolve) => {
     let saved: AppConfig | null = null;
-    const presetOf = (value: string) => AI_PROVIDERS.find((preset) => preset.value === value) ?? AI_PROVIDERS[0];
-    let preset = presetOf(existing?.provider ?? "anthropic");
-    const provider = h("select", { class: "input" }, ...AI_PROVIDERS.map((item) => h("option", { value: item.value, selected: item.value === preset.value }, item.label)));
-    const baseUrl = textInput(existing?.baseUrl ?? "", { class: "input mono", placeholder: preset.url });
-    const model = textInput(existing?.model ?? "", { class: "input mono", placeholder: preset.model || "e.g. gpt-5, llama3.1, deepseek-chat" });
+    let preset = providerPreset(existing?.provider ?? "fosta");
+    const baseUrl = textInput(existing?.baseUrl ?? "", { class: "input mono" });
     const apiKey = textInput("", { type: "password", placeholder: existing ? "Saved, leave empty to keep" : "" });
-    const hint = h("span", { class: "field-hint" }, preset.hint);
-    provider.addEventListener("change", () => {
-      const previous = preset;
-      preset = presetOf(provider.value);
-      baseUrl.placeholder = preset.url;
-      model.placeholder = preset.model || "e.g. gpt-5, llama3.1, deepseek-chat";
-      if (!model.value || model.value === previous.model) model.value = preset.model;
-      hint.textContent = preset.hint;
+    const hint = h("p", { class: "form-intro provider-hint" });
+    const endpointField = field("Endpoint", baseUrl, "Leave empty for the provider's public endpoint");
+    const modelSelect = h("select", { class: "input mono" });
+    const customModel = textInput("", { class: "input mono", placeholder: "model name as the provider expects it" });
+    const modelStatus = h("span", { class: "field-hint" });
+    const reloadButton = iconButton("refresh", "Reload the model list", () => void loadModels());
+    let models: string[] = [];
+    let loading = 0;
+
+    /** Fills the dropdown: provider models (or the preset default) plus "Custom…". */
+    const renderModels = (selected: string) => {
+      const known = models.length ? models : preset.model ? [preset.model] : [];
+      const custom = selected && !known.includes(selected);
+      modelSelect.replaceChildren(
+        ...known.map((name) => h("option", { value: name, selected: name === selected }, name)),
+        h("option", { value: CUSTOM_MODEL, selected: custom }, "Custom…"),
+      );
+      if (custom) customModel.value = selected;
+      customModel.hidden = !custom;
+    };
+    const currentModel = () => (modelSelect.value === CUSTOM_MODEL ? customModel.value.trim() : modelSelect.value);
+    modelSelect.addEventListener("change", () => {
+      customModel.hidden = modelSelect.value !== CUSTOM_MODEL;
+      if (!customModel.hidden) customModel.focus();
     });
 
+    /** The list is only fetched once there is a key to send (typed, or saved earlier). Custom endpoints may need none. */
+    const loadModels = async () => {
+      const wanted = currentModel() || preset.model;
+      const draft: AiSettings = { provider: preset.value, baseUrl: baseUrl.value.trim(), model: wanted || "-" };
+      const hasKey = Boolean(apiKey.value.trim()) || (existing !== null && existing.provider === preset.value);
+      if (preset.value === "custom" && !draft.baseUrl) {
+        models = [];
+        renderModels(wanted);
+        modelStatus.textContent = "Enter the endpoint to list its models";
+        return;
+      }
+      if (!hasKey && preset.value !== "custom") {
+        models = [];
+        renderModels(wanted);
+        modelStatus.textContent = `Enter your ${preset.label} key to load its models; ${wanted} is the default`;
+        return;
+      }
+      const ticket = ++loading;
+      modelStatus.textContent = "Loading the provider's models…";
+      try {
+        const loaded = await api.listAiModels(draft, apiKey.value || null);
+        if (ticket !== loading) return;
+        models = loaded;
+        renderModels(wanted);
+        modelStatus.textContent = loaded.length ? `${loaded.length} models from ${preset.label}` : `${preset.label} returned no models; pick Custom… and type one`;
+      } catch (error) {
+        if (ticket !== loading) return;
+        models = [];
+        renderModels(wanted);
+        modelStatus.textContent = `Could not list models (${errorText(error)}). Using the default; pick Custom… to type one.`;
+      }
+    };
+
+    const cards = AI_PROVIDERS.map((item) => {
+      const card = h("button", { class: "driver-card", type: "button", "data-provider": item.value, title: item.label }, icon(item.icon, "driver-icon provider-icon"), h("span", { class: "driver-label" }, item.label));
+      card.addEventListener("click", () => select(item));
+      return card;
+    });
+    const select = (next: ProviderPreset) => {
+      preset = next;
+      models = [];
+      for (const card of cards) card.classList.toggle("active", card.dataset.provider === next.value);
+      baseUrl.value = "";
+      baseUrl.placeholder = next.url || "http://localhost:11434/v1";
+      hint.textContent = next.hint;
+      endpointField.querySelector(".field-hint")!.textContent = next.value === "custom" ? "Required: the base URL that has /chat/completions under it" : "Leave empty for the provider's public endpoint";
+      renderModels(next.model);
+      void loadModels();
+    };
+    for (const card of cards) {
+      if (card.dataset.provider === preset.value) card.classList.add("active");
+    }
+    baseUrl.placeholder = preset.url || "http://localhost:11434/v1";
+    hint.textContent = preset.hint;
+    renderModels(existing?.model ?? preset.model);
+    void loadModels();
+    apiKey.addEventListener("change", () => void loadModels());
+    baseUrl.addEventListener("change", () => void loadModels());
+
     const readSettings = (): AiSettings => {
-      if (!model.value.trim()) throw new Error("Model is required");
-      return { provider: preset.value, baseUrl: baseUrl.value.trim(), model: model.value.trim() };
+      const model = currentModel();
+      if (!model) throw new Error("Model is required");
+      if (preset.value === "custom" && !baseUrl.value.trim()) throw new Error("Endpoint is required for a custom provider");
+      return { provider: preset.value, baseUrl: baseUrl.value.trim(), model };
     };
     const save = async () => {
       saved = await api.saveAiSettings(readSettings(), apiKey.value || null);
@@ -337,10 +401,11 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
       "div",
       { class: "form-grid" },
       h("p", { class: "form-intro" }, "The assistant calls the provider directly from this computer with your key. It only sees table and column names, your editor text and the errors you ask about; it never runs queries."),
-      field("Provider", provider),
-      field("Endpoint", baseUrl, "Leave empty for the provider's public endpoint"),
-      field("Model", model),
-      h("label", { class: "field" }, h("span", { class: "field-label" }, "API key"), apiKey, h("span", { class: "field-hint" }, "Stored in Windows Credential Manager"), hint),
+      field("Provider", h("div", { class: "driver-cards provider-cards" }, ...cards)),
+      hint,
+      endpointField,
+      field("API key", apiKey, "Stored in Windows Credential Manager"),
+      h("div", { class: "field" }, h("span", { class: "field-label" }, "Model"), h("div", { class: "model-row" }, modelSelect, reloadButton), customModel, modelStatus),
     );
     openModal("Assistant", body, [
       { label: "Remove", alignLeft: true, danger: true, run: async () => void (saved = await api.saveAiSettings(null, null)) },
@@ -353,6 +418,6 @@ export function aiDialog(existing: AiSettings | null): Promise<AppConfig | null>
         },
       },
       { label: "Save", primary: true, run: save },
-    ], { width: 560, onClose: () => resolve(saved) });
+    ], { width: 580, onClose: () => resolve(saved) });
   });
 }

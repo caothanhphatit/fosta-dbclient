@@ -30,18 +30,55 @@ const MAX_DDL_CHARS: usize = 8000;
 const MAX_EDITOR_CHARS: usize = 6000;
 const ERROR_PREVIEW: usize = 500;
 const ANTHROPIC_VERSION: &str = "2026-10-21";
-pub const DEFAULT_ANTHROPIC_URL: &str = "https://api.anthropic.com";
-pub const DEFAULT_OPENAI_URL: &str = "https://api.openai.com/v1";
 const STOPPED: &str = "Stopped";
 
+/// Where requests go. Every provider except Anthropic speaks the OpenAI
+/// `chat/completions` wire format (Gemini through Google's compatibility endpoint).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiProvider {
-    /// Anthropic Messages API.
     #[default]
-    Anthropic,
-    /// Any OpenAI-compatible `chat/completions` endpoint (OpenAI, Ollama, OpenRouter, …).
+    Fosta,
     Openai,
+    Gemini,
+    Anthropic,
+    /// Any OpenAI-compatible endpoint the user names (Ollama, LM Studio, OpenRouter, …).
+    Custom,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Wire {
+    Anthropic,
+    OpenAi,
+}
+
+impl AiProvider {
+    fn wire(self) -> Wire {
+        match self {
+            AiProvider::Anthropic => Wire::Anthropic,
+            _ => Wire::OpenAi,
+        }
+    }
+
+    fn default_url(self) -> &'static str {
+        match self {
+            AiProvider::Fosta => "https://admin.fosta.app/v1",
+            AiProvider::Openai => "https://api.openai.com/v1",
+            AiProvider::Gemini => "https://generativelanguage.googleapis.com/v1beta/openai",
+            AiProvider::Anthropic => "https://api.anthropic.com",
+            AiProvider::Custom => "",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            AiProvider::Fosta => "Fosta",
+            AiProvider::Openai => "OpenAI",
+            AiProvider::Gemini => "Gemini",
+            AiProvider::Anthropic => "Anthropic",
+            AiProvider::Custom => "Model",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -56,23 +93,20 @@ pub struct AiSettings {
 }
 
 impl AiSettings {
-    fn base_url(&self) -> String {
+    fn base_url(&self) -> AppResult<String> {
         let trimmed = self.base_url.trim().trim_end_matches('/');
         if !trimmed.is_empty() {
-            return trimmed.to_owned();
+            return Ok(trimmed.to_owned());
         }
-        match self.provider {
-            AiProvider::Anthropic => DEFAULT_ANTHROPIC_URL,
-            AiProvider::Openai => DEFAULT_OPENAI_URL,
+        let default = self.provider.default_url();
+        if default.is_empty() {
+            return Err(AppError::new("Enter the endpoint URL of your OpenAI-compatible server (assistant settings)"));
         }
-        .to_owned()
+        Ok(default.to_owned())
     }
 
     fn label(&self) -> &'static str {
-        match self.provider {
-            AiProvider::Anthropic => "Anthropic",
-            AiProvider::Openai => "Chat completions",
-        }
+        self.provider.label()
     }
 }
 
@@ -184,6 +218,39 @@ pub async fn chat(
     result
 }
 
+/// Models the provider offers, from its `/models` listing (same shape on
+/// every wire: `data[].id`). Gemini prefixes ids with `models/`, dropped here.
+pub async fn list_models(settings: &AiSettings, api_key: Option<String>) -> AppResult<Vec<String>> {
+    let client = http_client()?;
+    let base = settings.base_url()?;
+    let key = api_key.as_deref().unwrap_or_default();
+    let request = match settings.provider.wire() {
+        Wire::Anthropic => client
+            .get(format!("{base}/v1/models?limit=1000"))
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("x-api-key", key),
+        Wire::OpenAi => {
+            let request = client.get(format!("{base}/models"));
+            if key.is_empty() { request } else { request.bearer_auth(key) }
+        }
+    };
+    let response = send(request, settings.label()).await?;
+    let payload: Value = response.json().await?;
+    let items = payload["data"]
+        .as_array()
+        .or_else(|| payload["models"].as_array())
+        .or_else(|| payload.as_array())
+        .ok_or_else(|| AppError::new(format!("{} returned no model list", settings.label())))?;
+    let mut models: Vec<String> = items
+        .iter()
+        .filter_map(|item| item["id"].as_str().or_else(|| item["name"].as_str()))
+        .map(|id| id.strip_prefix("models/").unwrap_or(id).to_owned())
+        .collect();
+    models.sort_unstable();
+    models.dedup();
+    Ok(models)
+}
+
 /// "Save & test": one short exchange, no tools.
 pub async fn probe(settings: &AiSettings, api_key: Option<String>) -> AppResult<String> {
     let client = http_client()?;
@@ -227,7 +294,7 @@ async fn run(
             let outcome = run_tool(db, &context, call).await;
             results.push((call, outcome));
         }
-        append_tool_results(settings.provider, &mut history, &results);
+        append_tool_results(settings.provider.wire(), &mut history, &results);
         transcript.push('\n');
     }
     Err(AppError::new("The model kept looking things up without answering. Try a more specific question."))
@@ -413,9 +480,9 @@ fn format_design(table: &str, design: &TableDesign) -> String {
     text
 }
 
-fn append_tool_results(provider: AiProvider, history: &mut Vec<Value>, results: &[(&ToolCall, Result<String, String>)]) {
-    match provider {
-        AiProvider::Anthropic => {
+fn append_tool_results(wire: Wire, history: &mut Vec<Value>, results: &[(&ToolCall, Result<String, String>)]) {
+    match wire {
+        Wire::Anthropic => {
             let blocks: Vec<Value> = results
                 .iter()
                 .map(|(call, outcome)| match outcome {
@@ -425,7 +492,7 @@ fn append_tool_results(provider: AiProvider, history: &mut Vec<Value>, results: 
                 .collect();
             history.push(json!({ "role": "user", "content": blocks }));
         }
-        AiProvider::Openai => {
+        Wire::OpenAi => {
             for (call, outcome) in results {
                 let content = match outcome {
                     Ok(text) => text.clone(),
@@ -448,9 +515,9 @@ async fn stream_turn(
     tools: &[ToolSpec],
     events: &Channel<ChatEvent>,
 ) -> AppResult<Turn> {
-    match settings.provider {
-        AiProvider::Anthropic => anthropic_turn(client, settings, api_key, system, history, tools, events).await,
-        AiProvider::Openai => {
+    match settings.provider.wire() {
+        Wire::Anthropic => anthropic_turn(client, settings, api_key, system, history, tools, events).await,
+        Wire::OpenAi => {
             match openai_turn(client, settings, api_key, system, history, tools, events).await {
                 // Local models often reject tool definitions; answer without lookups then.
                 Err(error) if !tools.is_empty() && mentions_tools(&error) => {
@@ -540,7 +607,7 @@ async fn anthropic_turn(
             .collect();
     }
     let request = client
-        .post(format!("{}/v1/messages", settings.base_url()))
+        .post(format!("{}/v1/messages", settings.base_url()?))
         .header("anthropic-version", ANTHROPIC_VERSION)
         .header("x-api-key", api_key.unwrap_or_default())
         .json(&body);
@@ -631,7 +698,7 @@ async fn openai_turn(
             .map(|tool| json!({ "type": "function", "function": { "name": tool.name, "description": tool.description, "parameters": tool.schema } }))
             .collect();
     }
-    let mut request = client.post(format!("{}/chat/completions", settings.base_url())).json(&body);
+    let mut request = client.post(format!("{}/chat/completions", settings.base_url()?)).json(&body);
     if let Some(key) = api_key.filter(|key| !key.is_empty()) {
         request = request.bearer_auth(key);
     }

@@ -49,7 +49,7 @@ export interface Workspace extends WorkspaceMeta {
   tasks: TaskDef[];
 }
 
-export type AiProvider = "anthropic" | "openai";
+export type AiProvider = "fosta" | "openai" | "gemini" | "anthropic" | "custom";
 
 export interface AiSettings {
   provider: AiProvider;

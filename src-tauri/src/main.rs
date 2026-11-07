@@ -79,6 +79,7 @@ fn main() {
             commands::save_embedding_settings,
             commands::test_embedding,
             commands::save_ai_settings,
+            commands::list_ai_models,
             commands::test_ai,
             commands::ai_chat,
             commands::ai_cancel,
