@@ -10,6 +10,7 @@
 //! the UI. Until then only the tests use them.
 #![allow(dead_code)]
 
+pub mod clickhouse;
 pub mod common;
 pub mod postgres;
 pub mod sqlite;
