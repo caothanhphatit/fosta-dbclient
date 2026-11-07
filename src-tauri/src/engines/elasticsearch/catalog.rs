@@ -319,8 +319,14 @@ impl EsEngine {
     }
 
     pub async fn list_data_streams(&self, include_hidden: bool) -> AppResult<Vec<DataStreamInfo>> {
-        let wildcards = if include_hidden { "all" } else { "open,closed" };
-        let body = self.client.get(&format!("/_data_stream?expand_wildcards={wildcards}")).await?;
+        // OpenSearch rejects `expand_wildcards` here (and has no hidden data streams).
+        let path = if self.info.is_opensearch() {
+            "/_data_stream".to_string()
+        } else {
+            let wildcards = if include_hidden { "all" } else { "open,closed" };
+            format!("/_data_stream?expand_wildcards={wildcards}")
+        };
+        let body = self.client.get(&path).await?;
         Ok(body["data_streams"]
             .as_array()
             .map(|streams| {

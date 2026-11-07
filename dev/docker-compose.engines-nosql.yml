@@ -44,7 +44,7 @@ services:
       retries: 60
 
   opensearch:
-    image: opensearchproject/opensearch:2.19.7
+    image: opensearchproject/opensearch:2.19.6
     environment:
       discovery.type: single-node
       DISABLE_SECURITY_PLUGIN: "true"
