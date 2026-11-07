@@ -19,9 +19,9 @@ use mongodb::{
 use super::{
     types::{
         elapsed_millis, BrowseRequest, Cell, CellValue, ColumnDesign, ColumnMeta, QueryOutcome, ResultSet, RowChange, TableDesign,
-        TableInfo, TablePage,
+        TableInfo, TablePage, TransactionState,
     },
-    Driver,
+    Driver, Engine, Limits,
 };
 use crate::{
     config::ConnectionProfile,
@@ -32,7 +32,6 @@ use crate::{
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SAMPLE_SIZE: i64 = 100;
 const MAX_PAGE_SIZE: u64 = 5000;
-const MAX_QUERY_ROWS: usize = 1000;
 const ID_FIELD: &str = "_id";
 
 pub struct MongoConnection {
@@ -63,6 +62,10 @@ impl MongoConnection {
 
 #[async_trait]
 impl Driver for MongoConnection {
+    fn engine(&self) -> Engine {
+        Engine::MongoDb
+    }
+
     async fn list_databases(&self) -> AppResult<Vec<String>> {
         Ok(self.client.list_database_names().await?)
     }
@@ -137,18 +140,26 @@ impl Driver for MongoConnection {
         })
     }
 
-    async fn browse_table(&self, request: &BrowseRequest) -> AppResult<TablePage> {
+    async fn browse_table(&self, request: &BrowseRequest, limits: &Limits) -> AppResult<TablePage> {
         let collection = self.collection(&request.database, &request.table);
         let filter = parse_filter(request.filter.as_deref())?;
         let limit = i64::try_from(request.limit.clamp(1, MAX_PAGE_SIZE)).unwrap_or(i64::MAX);
+        let max_time = (limits.timeout_secs > 0).then(|| Duration::from_secs(u64::from(limits.timeout_secs)));
         let mut find = collection.find(filter.clone()).skip(request.offset).limit(limit);
         if let Some(column) = request.order_by.as_deref() {
             find = find.sort(doc! { column: if request.descending { -1 } else { 1 } });
         }
+        if let Some(max_time) = max_time {
+            find = find.max_time(max_time);
+        }
         let started = Instant::now();
         let documents: Vec<Document> = find.await?.try_collect().await?;
         let elapsed_ms = elapsed_millis(started);
-        let total = collection.count_documents(filter).await?;
+        let mut count = collection.count_documents(filter);
+        if let Some(max_time) = max_time {
+            count = count.max_time(max_time);
+        }
+        let total = count.await?;
         let set = documents_to_set(&documents);
         Ok(TablePage {
             columns: set.columns,
@@ -197,7 +208,8 @@ impl Driver for MongoConnection {
         lock(&self.sessions).remove(session_id);
     }
 
-    async fn run_query(&self, _session_id: &str, database: Option<String>, text: String) -> AppResult<QueryOutcome> {
+    /// Commands run without a server session, so there is no transaction to report.
+    async fn run_query(&self, _session_id: &str, database: Option<String>, text: String, limits: &Limits) -> AppResult<QueryOutcome> {
         let database = database
             .filter(|name| !name.is_empty())
             .ok_or_else(|| AppError::new("Pick a database first: MongoDB commands run against one database."))?;
@@ -218,8 +230,8 @@ impl Driver for MongoConnection {
             Some(batch) => {
                 let documents: Vec<Document> = batch.iter().filter_map(|item| item.as_document().cloned()).collect();
                 let mut set = documents_to_set(&documents);
-                set.truncated = documents.len() > MAX_QUERY_ROWS;
-                set.rows.truncate(MAX_QUERY_ROWS);
+                set.truncated = documents.len() > limits.max_rows;
+                set.rows.truncate(limits.max_rows);
                 set
             }
             None => documents_to_set(std::slice::from_ref(&reply)),
@@ -227,6 +239,7 @@ impl Driver for MongoConnection {
         Ok(QueryOutcome {
             sets: vec![set],
             elapsed_ms,
+            transaction: TransactionState::unsupported(),
         })
     }
 

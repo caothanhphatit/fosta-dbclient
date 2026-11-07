@@ -74,7 +74,8 @@ async function post(command: string, args: Record<string, unknown>): Promise<Res
     throw "Signed out. Sign in again with the access token.";
   }
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    // A string, or a structured error object (`code`, `message`, …) exactly as Tauri rejects with.
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
     throw body?.error ?? `The server answered ${response.status} ${response.statusText}`;
   }
   return response;

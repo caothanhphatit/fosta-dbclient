@@ -24,6 +24,7 @@ import { connectionDialog } from "./features/connections/connectionDialog";
 import { ConnectionTree } from "./features/connections/tree";
 import { TasksPanel } from "./features/tasks/tasksPanel";
 import { embeddingDialog } from "./features/vector/embeddingDialog";
+import { relaxedFromBaseline, safetyLabel, safetyOf } from "./features/safety/safety";
 import { workspaceDialog } from "./features/workspaces/workspaceDialog";
 import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./features/workspaces/workspaceRail";
 
@@ -41,6 +42,8 @@ const ASSISTANT_STORAGE_KEY = "db-studio.assistant";
 
 const statusText = h("span", { class: "status-text" }, "Ready");
 const taskSummary = h("span", { class: "status-tasks" });
+/** The active workspace's safety preset; a warning while its rules are relaxed. */
+const safetyStatus = h("span", { class: "status-safety" });
 const welcomeName = h("span", { class: "welcome-workspace" });
 const workspaceHeader = h("div", { class: "ws-header" });
 const welcome = welcomeScreen(welcomeName, {
@@ -146,7 +149,8 @@ function performAssistantAction(action: UiAction): void {
     case "openTable":
       navigation.openTable(
         { connectionId: profile.id, driver: profile.driver, database: action.database, table: action.table, kind: "table" },
-        action.filter ?? "",
+        action.suggestedFilter ?? "",
+        true,
       );
       break;
     case "openQuery":
@@ -219,10 +223,33 @@ function applyConfig(config: AppConfig): void {
   assistant.setConfigured(config.aiConnections, config.aiActive);
   assistant.setScope(workspace.id);
   welcomeName.textContent = workspace.name;
+  renderSafetyStatus(workspace);
   refreshActivity();
   const title = `${workspace.name} — Fosta Studio`;
   if (isTauri()) void getCurrentWindow().setTitle(title);
   else document.title = title;
+}
+
+function renderSafetyStatus(current: Workspace): void {
+  const relaxed = relaxedFromBaseline(current);
+  const label = safetyLabel(safetyOf(current));
+  safetyStatus.classList.toggle("relaxed", relaxed.length > 0);
+  safetyStatus.replaceChildren(icon("shield"), h("span", {}, relaxed.length ? `${label} · rules relaxed` : label));
+  safetyStatus.title = relaxed.length
+    ? `Safety rules of ${current.name} are looser than its default:\n${relaxed.map((change) => change.text).join("\n")}`
+    : `Safety rules of ${current.name}: ${label}`;
+}
+
+/** Closing the window rolls back open transactions; ask first. */
+function guardWindowClose(): void {
+  // The browser preview (dev mock) has no window to guard.
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  void getCurrentWindow().onCloseRequested(async (event) => {
+    const open = tabs.contents().filter((content) => isQueryView(content) && content.hasOpenTransaction()).length;
+    if (open === 0) return;
+    const message = `${open} query tab(s) have an open transaction. Closing Fosta Studio rolls them back, so uncommitted changes are lost. Close anyway?`;
+    if (!(await confirmDialog(message, "Close"))) event.preventDefault();
+  });
 }
 
 function renderWorkspaceHeader(current: Workspace): void {
@@ -441,7 +468,7 @@ function buildLayout(): void {
     // Fall through: closed by default.
   }
   area.classList.toggle("with-assistant", remembered === "open");
-  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), taskSummary);
+  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), safetyStatus, taskSummary);
   const main = h("div", { class: "app-main" }, toolbar, area, statusBar);
   (document.getElementById("app") ?? document.body).append(rail.element, main);
 }
@@ -495,6 +522,7 @@ async function bootstrap(): Promise<void> {
   hideUnsupported(welcome);
   installShortcuts();
   suppressBrowserContextMenu();
+  guardWindowClose();
   revealWindowAfterFirstPaint();
   try {
     applyConfig(await api.getConfig());

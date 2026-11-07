@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use mysql_async::{
     consts::{ColumnFlags, ColumnType},
     prelude::*,
-    Column, Conn, Opts, OptsBuilder, Params, Pool, PoolConstraints, PoolOpts, QueryResult, Row, TextProtocol, TxOpts, Value,
+    Column, Conn, Opts, OptsBuilder, Params, Pool, PoolConstraints, PoolOpts, QueryResult, Row, TxOpts, Value,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -23,9 +23,9 @@ use super::{
     relations::{self, TableRelations},
     types::{
         elapsed_millis, encode_hex, BrowseRequest, Cell, CellValue, ColumnDesign, ColumnMeta, QueryOutcome, ResultSet, RowChange,
-        TableDesign, TableInfo, TablePage, TextRow,
+        TableDesign, TableInfo, TablePage, TextRow, TransactionOp, TransactionState,
     },
-    Driver,
+    Driver, Engine, Limits,
 };
 use crate::{
     config::ConnectionProfile,
@@ -36,7 +36,6 @@ use crate::{
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_QUERY_ROWS: usize = 1000;
 const MAX_PAGE_SIZE: u64 = 5000;
 const POOL_SIZE: usize = 4;
 const BINARY_CHARSET: u16 = 63;
@@ -75,21 +74,38 @@ impl CellFormat {
     }
 }
 
+/// A query tab's dedicated connection and the session settings already applied to it.
+struct SessionConn {
+    conn: Conn,
+    /// `SET SESSION TRANSACTION READ ONLY/WRITE` last applied; `None` = not yet.
+    read_only: Option<bool>,
+    /// Statement timeout (seconds) last applied.
+    timeout_secs: Option<u32>,
+    /// What the user chose with the auto-commit switch; re-applied after a reconnect.
+    auto_commit: bool,
+}
+
 struct QuerySession {
     opts: Opts,
     thread_id: AtomicU32,
-    conn: AsyncMutex<Conn>,
+    conn: AsyncMutex<SessionConn>,
 }
 
 impl QuerySession {
-    async fn revive(&self, conn: &mut Conn) -> AppResult<()> {
-        if conn.ping().await.is_ok() {
-            return Ok(());
+    /// Reconnects a dead session. Returns true when it had to (an open transaction is then gone).
+    async fn revive(&self, state: &mut SessionConn) -> AppResult<bool> {
+        if state.conn.ping().await.is_ok() {
+            return Ok(false);
         }
-        let fresh = within_timeout(Conn::new(self.opts.clone())).await?;
+        let mut fresh = within_timeout(Conn::new(self.opts.clone())).await?;
+        if !state.auto_commit {
+            fresh.query_drop("SET autocommit = 0").await?;
+        }
         self.thread_id.store(fresh.id(), Ordering::Relaxed);
-        *conn = fresh;
-        Ok(())
+        state.conn = fresh;
+        state.read_only = None;
+        state.timeout_secs = None;
+        Ok(true)
     }
 }
 
@@ -99,6 +115,8 @@ pub struct MysqlConnection {
     opts: Opts,
     pool: Pool,
     sessions: Mutex<HashMap<String, Arc<QuerySession>>>,
+    /// MariaDB and MySQL differ in timeouts and in how they report transactions.
+    mariadb: bool,
 }
 
 impl MysqlConnection {
@@ -113,9 +131,63 @@ impl MysqlConnection {
                 opts,
                 pool,
                 sessions: Mutex::default(),
+                mariadb: version.to_lowercase().contains("mariadb"),
             },
             version,
         ))
+    }
+
+    /// Wraps an app-built SELECT so the server stops it after `seconds` (0 = no limit).
+    fn with_timeout(&self, select: String, seconds: u32) -> String {
+        if seconds == 0 {
+            select
+        } else if self.mariadb {
+            format!("SET STATEMENT max_statement_time = {seconds} FOR {select}")
+        } else {
+            let millis = u64::from(seconds) * 1000;
+            match select.strip_prefix("SELECT ") {
+                Some(rest) => format!("SELECT /*+ MAX_EXECUTION_TIME({millis}) */ {rest}"),
+                None => select,
+            }
+        }
+    }
+
+    /// Applies the read-only mode and the statement timeout of the rules to a session.
+    async fn apply_limits(&self, state: &mut SessionConn, limits: &Limits) -> AppResult<()> {
+        if state.read_only != Some(limits.read_only) {
+            let mode = if limits.read_only { "READ ONLY" } else { "READ WRITE" };
+            state.conn.query_drop(format!("SET SESSION TRANSACTION {mode}")).await?;
+            state.read_only = Some(limits.read_only);
+        }
+        if state.timeout_secs != Some(limits.timeout_secs) {
+            let sql = if self.mariadb {
+                format!("SET SESSION max_statement_time = {}", limits.timeout_secs)
+            } else {
+                // MySQL only limits SELECT statements.
+                format!("SET SESSION max_execution_time = {}", u64::from(limits.timeout_secs) * 1000)
+            };
+            state.conn.query_drop(sql).await?;
+            state.timeout_secs = Some(limits.timeout_secs);
+        }
+        Ok(())
+    }
+
+    /// The session's transaction state as the server reports it.
+    async fn transaction_state(&self, conn: &mut Conn) -> TransactionState {
+        let sql = if self.mariadb {
+            "SELECT @@in_transaction, @@autocommit"
+        } else {
+            "SELECT (SELECT COUNT(*) FROM performance_schema.events_transactions_current \
+             WHERE THREAD_ID = PS_CURRENT_THREAD_ID() AND STATE = 'ACTIVE'), @@autocommit"
+        };
+        match conn.query_first::<(i64, i64), _>(sql).await {
+            Ok(Some((open, auto_commit))) => TransactionState {
+                supported: true,
+                open: open > 0,
+                auto_commit: auto_commit != 0,
+            },
+            _ => TransactionState::unsupported(),
+        }
     }
 
     pub(crate) async fn pooled(&self) -> AppResult<Conn> {
@@ -132,6 +204,14 @@ impl MysqlConnection {
 
 #[async_trait]
 impl Driver for MysqlConnection {
+    fn engine(&self) -> Engine {
+        if self.mariadb {
+            Engine::MariaDb
+        } else {
+            Engine::MySql
+        }
+    }
+
     async fn list_databases(&self) -> AppResult<Vec<String>> {
         let mut conn = self.pooled().await?;
         Ok(conn.query("SHOW DATABASES").await?)
@@ -192,7 +272,9 @@ impl Driver for MysqlConnection {
         Ok(TableDesign { columns, ddl })
     }
 
-    async fn browse_table(&self, request: &BrowseRequest) -> AppResult<TablePage> {
+    /// Runs as prepared statements (`exec`), so even a filter that slipped past the gateway
+    /// could not stack a second statement: the server prepares exactly one.
+    async fn browse_table(&self, request: &BrowseRequest, limits: &Limits) -> AppResult<TablePage> {
         let mut conn = self.pooled().await?;
         let vectors = vector::vector_columns(&mut conn, &request.database, &request.table).await?;
         let source = qualified(&request.database, &request.table);
@@ -207,19 +289,22 @@ impl Driver for MysqlConnection {
             .unwrap_or_default();
         let limit = request.limit.clamp(1, MAX_PAGE_SIZE);
         let started = Instant::now();
-        let result = conn
-            .query_iter(format!(
+        let page_sql = self.with_timeout(
+            format!(
                 "SELECT * FROM {source}{condition}{ordering} LIMIT {limit} OFFSET {}",
                 request.offset
-            ))
-            .await?;
+            ),
+            limits.timeout_secs,
+        );
+        let result = conn.exec_iter(page_sql, ()).await?;
         let page = read_result_sets(result, usize::MAX, &VectorHint::Known(&vectors))
             .await?
             .into_iter()
             .next()
             .unwrap_or_default();
         let elapsed_ms = elapsed_millis(started);
-        let total: Option<u64> = conn.query_first(format!("SELECT COUNT(*) FROM {source}{condition}")).await?;
+        let count_sql = self.with_timeout(format!("SELECT COUNT(*) FROM {source}{condition}"), limits.timeout_secs);
+        let total: Option<u64> = conn.exec_first(count_sql, ()).await?;
         let primary_key = primary_key(&mut conn, &request.database, &request.table).await?;
         Ok(TablePage {
             columns: page.columns,
@@ -254,7 +339,12 @@ impl Driver for MysqlConnection {
         let session = QuerySession {
             opts: self.opts.clone(),
             thread_id: AtomicU32::new(conn.id()),
-            conn: AsyncMutex::new(conn),
+            conn: AsyncMutex::new(SessionConn {
+                conn,
+                read_only: None,
+                timeout_secs: None,
+                auto_commit: true,
+            }),
         };
         lock(&self.sessions).insert(session_id.to_owned(), Arc::new(session));
         Ok(())
@@ -264,20 +354,54 @@ impl Driver for MysqlConnection {
         lock(&self.sessions).remove(session_id);
     }
 
-    async fn run_query(&self, session_id: &str, database: Option<String>, sql: String) -> AppResult<QueryOutcome> {
+    async fn run_query(&self, session_id: &str, database: Option<String>, sql: String, limits: &Limits) -> AppResult<QueryOutcome> {
         let session = self.session(session_id)?;
-        let mut conn = session.conn.lock().await;
-        session.revive(&mut conn).await?;
+        let mut state = session.conn.lock().await;
+        session.revive(&mut state).await?;
+        self.apply_limits(&mut state, limits).await?;
         if let Some(database) = database.filter(|name| !name.is_empty()) {
-            conn.query_drop(format!("USE {}", quote_ident(&database))).await?;
+            state.conn.query_drop(format!("USE {}", quote_ident(&database))).await?;
         }
         let started = Instant::now();
-        let result = conn.query_iter(sql).await?;
-        let sets = read_result_sets(result, MAX_QUERY_ROWS, &VectorHint::Guess).await?;
+        let result = state.conn.query_iter(sql).await?;
+        let sets = read_result_sets(result, limits.max_rows, &VectorHint::Guess).await?;
+        let elapsed_ms = elapsed_millis(started);
+        let transaction = self.transaction_state(&mut state.conn).await;
         Ok(QueryOutcome {
             sets,
-            elapsed_ms: elapsed_millis(started),
+            elapsed_ms,
+            transaction,
         })
+    }
+
+    async fn transaction(&self, session_id: &str, op: TransactionOp, limits: &Limits) -> AppResult<TransactionState> {
+        let session = self.session(session_id)?;
+        let mut state = session.conn.lock().await;
+        if session.revive(&mut state).await? && matches!(op, TransactionOp::Commit | TransactionOp::Rollback) {
+            return Err(AppError::new(
+                "The connection of this tab was lost and has been reopened; the server rolled back the open transaction.",
+            ));
+        }
+        match op {
+            TransactionOp::Begin => {
+                self.apply_limits(&mut state, limits).await?;
+                let sql = if limits.read_only {
+                    "START TRANSACTION READ ONLY"
+                } else {
+                    "START TRANSACTION"
+                };
+                state.conn.query_drop(sql).await?;
+            }
+            TransactionOp::Commit => state.conn.query_drop("COMMIT").await?,
+            TransactionOp::Rollback => state.conn.query_drop("ROLLBACK").await?,
+            TransactionOp::AutoCommitOn | TransactionOp::AutoCommitOff => {
+                let on = op == TransactionOp::AutoCommitOn;
+                state.conn.query_drop(format!("SET autocommit = {}", u8::from(on))).await?;
+                state.auto_commit = on;
+            }
+            TransactionOp::Status => {}
+        }
+        Ok(self.transaction_state(&mut state.conn).await)
     }
 
     async fn cancel_query(&self, session_id: &str) -> AppResult<()> {
@@ -392,8 +516,8 @@ pub(crate) async fn binary_columns(conn: &mut Conn, database: &str, table: &str)
     Ok(rows.iter().map(|row| row.text(0)).collect())
 }
 
-pub(crate) async fn read_result_sets(
-    mut result: QueryResult<'_, 'static, TextProtocol>,
+pub(crate) async fn read_result_sets<P: Protocol>(
+    mut result: QueryResult<'_, 'static, P>,
     max_rows: usize,
     hint: &VectorHint<'_>,
 ) -> AppResult<Vec<ResultSet>> {

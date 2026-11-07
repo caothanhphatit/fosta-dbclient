@@ -55,7 +55,8 @@ macro_rules! for_each_command {
             [async] disconnect(id: String) -> $crate::error::AppResult<()> = $crate::commands::connections::disconnect;
 
             [async] list_databases(connection_id: String) -> $crate::error::AppResult<Vec<String>> = $crate::commands::data::list_databases;
-            [async] create_database(connection_id: String, name: String, first_collection: Option<String>)
+            [async] create_database(connection_id: String, name: String, first_collection: Option<String>,
+                confirmation: Option<$crate::gateway::Confirmation>)
                 -> $crate::error::AppResult<()> = $crate::commands::data::create_database;
             [async] schema_graph(connection_id: String, database: String)
                 -> $crate::error::AppResult<$crate::schema::SchemaGraph> = $crate::commands::data::schema_graph;
@@ -65,15 +66,18 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<$crate::drivers::types::TableDesign> = $crate::commands::data::describe_table;
             [async] browse_table(request: $crate::drivers::types::BrowseRequest)
                 -> $crate::error::AppResult<$crate::drivers::types::TablePage> = $crate::commands::data::browse_table;
-            [async] apply_changes(connection_id: String, database: String, table: String, changes: Vec<$crate::drivers::types::RowChange>)
+            [async] apply_changes(connection_id: String, database: String, table: String, changes: Vec<$crate::drivers::types::RowChange>,
+                caller: Option<$crate::gateway::Caller>, import_id: Option<String>, confirmation: Option<$crate::gateway::Confirmation>)
                 -> $crate::error::AppResult<u64> = $crate::commands::data::apply_changes;
             [async] table_relations(connection_id: String, database: String, table: String)
                 -> $crate::error::AppResult<$crate::drivers::relations::TableRelations> = $crate::commands::data::table_relations;
             [async] open_session(connection_id: String, session_id: String) -> $crate::error::AppResult<()> = $crate::commands::data::open_session;
             [sync] close_session(session_id: String) -> () = $crate::commands::data::close_session;
-            [async] run_sql(session_id: String, database: Option<String>, sql: String)
+            [async] run_sql(session_id: String, database: Option<String>, sql: String, confirmation: Option<$crate::gateway::Confirmation>)
                 -> $crate::error::AppResult<$crate::drivers::types::QueryOutcome> = $crate::commands::data::run_sql;
             [async] cancel_sql(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::data::cancel_sql;
+            [async] sql_transaction(session_id: String, op: $crate::drivers::types::TransactionOp)
+                -> $crate::error::AppResult<$crate::drivers::types::TransactionState> = $crate::commands::data::sql_transaction;
 
             [sync] task_statuses() -> Vec<$crate::tasks::TaskStatus> = $crate::commands::tasks::task_statuses;
             [sync] task_logs(id: String) -> Vec<String> = $crate::commands::tasks::task_logs;
@@ -84,7 +88,7 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::tasks::save_task;
             [sync] delete_task(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::tasks::delete_task;
 
-            [sync] save_workspace(workspace: $crate::config::WorkspaceMeta)
+            [sync] save_workspace(workspace: $crate::config::WorkspaceMeta, relax_confirmation: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::save_workspace;
             [sync] set_active_workspace(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::set_active_workspace;
             [async] delete_workspace(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::delete_workspace;

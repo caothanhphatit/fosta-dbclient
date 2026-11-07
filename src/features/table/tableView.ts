@@ -11,6 +11,7 @@ import { openColumnsPopover } from "../grid/columnsPopover";
 import { columnStorageKey, loadHiddenColumns, saveHiddenColumns } from "../grid/columnVisibility";
 import type { Navigator } from "../../core/navigator";
 import { RecordPanel } from "./recordPanel";
+import { withConfirmation } from "../safety/confirmationDialog";
 import { makeSplitter } from "../../core/splitter";
 import { equalsFilter, rowKey } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
@@ -54,7 +55,14 @@ export class TableView implements TabContent {
   private readonly columnsKey: string;
   private hiddenColumns: string[];
 
-  constructor(target: TableTarget, navigator: Navigator, initialFilter = "") {
+  /** Shown while a filter suggested by the assistant waits for the user; nothing has run yet. */
+  private suggestionBar: HTMLElement | null = null;
+
+  /**
+   * `suggested`: the filter comes from the assistant. It is only pre-filled and marked as such;
+   * the table does not load until the user applies it (or opens the table without it).
+   */
+  constructor(target: TableTarget, navigator: Navigator, initialFilter = "", suggested = false) {
     this.target = target;
     this.navigator = navigator;
     this.columnsKey = columnStorageKey(target.connectionId, target.database, target.table);
@@ -64,7 +72,7 @@ export class TableView implements TabContent {
     this.record = new RecordPanel(navigator);
     this.filter = h("input", { class: "input", placeholder: this.driver.filterPlaceholder, spellcheck: "false", value: initialFilter });
     this.filter.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") void this.reload({ offset: 0 });
+      if (event.key === "Enter") this.applyFilter();
     });
     this.submitButton = toolButton("check", "Submit", () => void this.submit(), "Save changes (Ctrl+S)");
     this.discardButton = toolButton("x", "Discard", () => this.grid.discard(), "Discard all changes");
@@ -118,10 +126,43 @@ export class TableView implements TabContent {
     discardPending.addEventListener("click", () => this.grid.discard());
     this.pendingBar = h("div", { class: "pending-bar" }, icon("edit"), this.pendingText, spacer(), discardPending, applyButton);
     this.pendingBar.hidden = true;
-    this.element = h("div", { class: "view table-view" }, toolbar, this.content, this.pendingBar);
+    this.suggestionBar = suggested && initialFilter ? this.suggestion(initialFilter) : null;
+    this.element = h("div", { class: "view table-view" }, toolbar, this.suggestionBar, this.content, this.pendingBar);
     this.element.addEventListener("keydown", (event) => this.handleShortcut(event));
     void this.loadMetadata();
-    void this.reload({});
+    if (this.suggestionBar) this.pageInfo.textContent = "Not loaded";
+    else void this.reload({});
+  }
+
+  private suggestion(filter: string): HTMLElement {
+    const apply = h("button", { class: "btn primary", type: "button" }, "Apply filter");
+    apply.addEventListener("click", () => this.applyFilter());
+    const without = h("button", { class: "btn", type: "button" }, "Open without filter");
+    without.addEventListener("click", () => {
+      this.filter.value = "";
+      this.applyFilter();
+    });
+    this.filter.classList.add("suggested");
+    return h(
+      "div",
+      { class: "suggestion-bar", role: "status" },
+      icon("sparkle"),
+      h("span", {}, "Filter suggested by the assistant. It has not run; review it, edit it if needed, then apply it."),
+      h("code", { class: "suggestion-filter" }, filter),
+      spacer(),
+      without,
+      apply,
+    );
+  }
+
+  /** Runs the filter in the box; also accepts (and clears) an assistant suggestion. */
+  private applyFilter(): void {
+    if (this.suggestionBar) {
+      this.suggestionBar.remove();
+      this.suggestionBar = null;
+      this.filter.classList.remove("suggested");
+    }
+    void this.reload({ offset: 0 });
   }
 
   canClose(): boolean | Promise<boolean> {
@@ -161,6 +202,10 @@ export class TableView implements TabContent {
   }
 
   private exportFile(): void {
+    if (this.suggestionBar) {
+      toast("Apply the suggested filter (or open the table without it) first");
+      return;
+    }
     exportDialog({
       target: this.target,
       columns: this.columns,
@@ -282,6 +327,11 @@ export class TableView implements TabContent {
   }
 
   private async reload(options: ReloadOptions): Promise<void> {
+    // An assistant suggestion runs only through applyFilter(), never by a refresh, sort or page change.
+    if (this.suggestionBar) {
+      toast("Apply the suggested filter (or open the table without it) first");
+      return;
+    }
     if (!options.force && this.grid.hasChanges() && !(await confirmDialog("Discard unsaved changes?", "Discard"))) return;
     const offset = options.offset ?? this.offset;
     const sort = options.sort === undefined ? this.sort : options.sort;
@@ -344,7 +394,10 @@ export class TableView implements TabContent {
     const noKeyWarning = `${this.target.table} has no primary key. Rows will be matched by all of their original values. Continue?`;
     if (this.primaryKey.length === 0 && !(await confirmDialog(noKeyWarning, "Continue"))) return;
     try {
-      const affected = await api.applyChanges(this.target.connectionId, this.target.database, this.target.table, changes);
+      const affected = await withConfirmation((confirmation) =>
+        api.applyChanges(this.target.connectionId, this.target.database, this.target.table, changes, "gridSave", confirmation),
+      );
+      if (affected === null) return;
       toast(`Saved ${changes.length} change(s), ${affected} row(s) affected`, "success");
       await this.reload({ force: true });
     } catch (error) {

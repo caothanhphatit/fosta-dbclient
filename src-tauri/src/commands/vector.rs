@@ -5,7 +5,7 @@ use crate::{
     drivers::types::CellValue,
     embedding::{self, EmbeddingSettings},
     error::{AppError, AppResult},
-    secrets,
+    gateway, secrets,
     vector::{self, HealthCheck, QueryVector, RecallReport, VectorInfo, VectorSearchRequest, VectorSearchResult},
     AppState,
 };
@@ -37,6 +37,10 @@ pub async fn fetch_vector(
 }
 
 pub async fn vector_search(state: &AppState, request: VectorSearchRequest) -> AppResult<VectorSearchResult> {
+    // The optional filter is spliced into the search query: it must be one condition, like a grid filter.
+    let context = super::data::gateway_context(state, &request.connection_id)?;
+    let engine = state.db.driver(&request.connection_id)?.engine();
+    gateway::check_filter(&state.db, &context, engine, request.filter.as_deref())?;
     let mut conn = state.db.mysql_conn(&request.connection_id).await?;
     let query = match &request.query {
         QueryVector::Row { key } => vector::fetch_vector(&mut conn, &request.database, &request.table, &request.column, key).await?,

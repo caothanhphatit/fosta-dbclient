@@ -9,6 +9,7 @@
 //! [`ai::ChatSink`]) and what the edition supports ([`Capabilities`]).
 
 pub mod ai;
+pub mod audit;
 pub mod commands;
 pub mod config;
 pub mod drivers;
@@ -16,6 +17,7 @@ pub mod embedding;
 pub mod error;
 pub mod events;
 pub mod files;
+pub mod gateway;
 pub mod history;
 mod job;
 #[cfg(test)]

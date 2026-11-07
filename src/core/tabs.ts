@@ -73,6 +73,11 @@ export class TabManager {
     this.activate(spec.key);
   }
 
+  /** Every open tab's content, in all workspaces. */
+  contents(): TabContent[] {
+    return this.tabs.map((tab) => tab.content);
+  }
+
   contentOf(key: string): TabContent | undefined {
     return this.tabs.find((tab) => tab.key === key)?.content;
   }

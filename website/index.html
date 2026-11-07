@@ -3,34 +3,48 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Fosta Studio: a small, fast, open-source database client</title>
+    <!--
+      English template. Translatable text is marked with data-i18n="key" (element content) and
+      data-i18n-attr="attr:key; attr:key" (attributes); the strings live in website/i18n/*.json.
+      Run `node website/build.mjs <outdir>` to render every language; see website/README.md.
+    -->
+    <title data-i18n="meta.title">Fosta Studio: a small, fast, open-source database client</title>
     <meta
       name="description"
-      content="Fosta Studio is a free, open-source (GPL-3.0) desktop database client for Windows: MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks, a fast data grid, ER diagrams and an AI assistant that never runs your queries."
+      data-i18n-attr="content:meta.description"
+      content="Fosta Studio is a free, open-source (GPL-3.0) desktop database client for Windows: MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks, a fast data grid, ER diagrams and a built-in AI agent that knows your schema."
     />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#15171b" media="(prefers-color-scheme: dark)" />
     <link rel="canonical" href="https://dbcl.fosta.app/" />
+    <!-- i18n:alternates -->
     <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
 
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Fosta Studio" />
-    <meta property="og:title" content="Fosta Studio: a small, fast, open-source database client" />
+    <meta property="og:title" data-i18n-attr="content:meta.title" content="Fosta Studio: a small, fast, open-source database client" />
     <meta
       property="og:description"
-      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and an AI assistant that never runs your queries."
+      data-i18n-attr="content:meta.socialDescription"
+      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and a built-in AI agent that knows your schema."
     />
     <meta property="og:url" content="https://dbcl.fosta.app/" />
+    <!-- i18n:og-locale -->
     <meta property="og:image" content="https://dbcl.fosta.app/assets/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Fosta Studio logo with the text: a small, fast, open-source database client" />
+    <meta
+      property="og:image:alt"
+      data-i18n-attr="content:meta.ogImageAlt"
+      content="Fosta Studio logo with the text: a small, fast, open-source database client"
+    />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Fosta Studio: a small, fast, open-source database client" />
+    <meta name="twitter:title" data-i18n-attr="content:meta.title" content="Fosta Studio: a small, fast, open-source database client" />
     <meta
       name="twitter:description"
-      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and an AI assistant that never runs your queries."
+      data-i18n-attr="content:meta.socialDescription"
+      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and a built-in AI agent that knows your schema."
     />
     <meta name="twitter:image" content="https://dbcl.fosta.app/assets/og-image.png" />
 
@@ -40,64 +54,163 @@
   <body>
     <!-- Icon sprite: simple stroke icons drawn for this site. -->
     <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" focusable="false">
-      <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" /></symbol>
-      <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 10h18M9 10v10" /></symbol>
+      <symbol id="i-db" viewBox="0 0 24 24">
+        <ellipse cx="12" cy="5" rx="8" ry="3" />
+        <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+        <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+      </symbol>
+      <symbol id="i-table" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M3 10h18M9 10v10" />
+      </symbol>
       <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></symbol>
-      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></symbol>
-      <symbol id="i-spark" viewBox="0 0 24 24"><path d="M11 3l1.8 5.2L18 10l-5.2 1.8L11 17l-1.8-5.2L4 10l5.2-1.8z" /><path d="M19 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" /></symbol>
-      <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 9l3 3-3 3M13 15h4" /></symbol>
-      <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z" /><path d="M3 13l9 5 9-5" /></symbol>
-      <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 3v18" /></symbol>
-      <symbol id="i-diagram" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="6" rx="1" /><rect x="14" y="3" width="7" height="6" rx="1" /><rect x="14" y="15" width="7" height="6" rx="1" /><path d="M10 6h4M17.5 9v6" /></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="7" />
+        <path d="M20 20l-3.5-3.5" />
+      </symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24">
+        <path d="M11 3l1.8 5.2L18 10l-5.2 1.8L11 17l-1.8-5.2L4 10l5.2-1.8z" />
+        <path d="M19 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" />
+      </symbol>
+      <symbol id="i-term" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <path d="M7 9l3 3-3 3M13 15h4" />
+      </symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24">
+        <path d="M12 3l9 5-9 5-9-5z" />
+        <path d="M3 13l9 5 9-5" />
+      </symbol>
+      <symbol id="i-grid" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <path d="M3 9h18M3 15h18M9 3v18" />
+      </symbol>
+      <symbol id="i-diagram" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="7" height="6" rx="1" />
+        <rect x="14" y="3" width="7" height="6" rx="1" />
+        <rect x="14" y="15" width="7" height="6" rx="1" />
+        <path d="M10 6h4M17.5 9v6" />
+      </symbol>
       <symbol id="i-io" viewBox="0 0 24 24"><path d="M7 4v12M3 8l4-4 4 4M17 20V8M13 16l4 4 4-4" /></symbol>
-      <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1" /></symbol>
-      <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></symbol>
-      <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4" /><path d="M11 12l9-9M16 7l3 3" /></symbol>
-      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" /><path d="M9 12l2 2 4-4" /></symbol>
-      <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M3 3l18 18" /><path d="M10.6 6.1A9.6 9.6 0 0 1 12 6c5 0 9 6 9 6a16 16 0 0 1-2.4 3" /><path d="M6.6 6.6C4.2 8.1 3 12 3 12s4 6 9 6c1.6 0 3-.4 4.3-1.1" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></symbol>
+      <symbol id="i-target" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <circle cx="12" cy="12" r="5" />
+        <circle cx="12" cy="12" r="1" />
+      </symbol>
+      <symbol id="i-link" viewBox="0 0 24 24">
+        <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+        <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+      </symbol>
+      <symbol id="i-key" viewBox="0 0 24 24">
+        <circle cx="8" cy="15" r="4" />
+        <path d="M11 12l9-9M16 7l3 3" />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />
+        <path d="M9 12l2 2 4-4" />
+      </symbol>
+      <symbol id="i-eye-off" viewBox="0 0 24 24">
+        <path d="M3 3l18 18" />
+        <path d="M10.6 6.1A9.6 9.6 0 0 1 12 6c5 0 9 6 9 6a16 16 0 0 1-2.4 3" />
+        <path d="M6.6 6.6C4.2 8.1 3 12 3 12s4 6 9 6c1.6 0 3-.4 4.3-1.1" />
+        <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+      </symbol>
       <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></symbol>
       <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z" /></symbol>
-      <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5v8l9 5 9-5z" /><path d="M3 8l9 5 9-5M12 13v8" /></symbol>
+      <symbol id="i-box" viewBox="0 0 24 24">
+        <path d="M21 8l-9-5-9 5v8l9 5 9-5z" />
+        <path d="M3 8l9 5 9-5M12 13v8" />
+      </symbol>
       <symbol id="i-code" viewBox="0 0 24 24"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6" /></symbol>
       <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14" /></symbol>
-      <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M5.6 5.6l12.8 12.8" /></symbol>
+      <symbol id="i-ban" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M5.6 5.6l12.8 12.8" />
+      </symbol>
       <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" /></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10" /></symbol>
-      <symbol id="i-cart" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1" /><circle cx="18" cy="20" r="1" /><path d="M3 4h2l2.4 11h11l2-8H6.2" /></symbol>
-      <symbol id="i-card" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 10h18" /></symbol>
+      <symbol id="i-cart" viewBox="0 0 24 24">
+        <circle cx="9" cy="20" r="1" />
+        <circle cx="18" cy="20" r="1" />
+        <path d="M3 4h2l2.4 11h11l2-8H6.2" />
+      </symbol>
+      <symbol id="i-card" viewBox="0 0 24 24">
+        <rect x="3" y="5" width="18" height="14" rx="2" />
+        <path d="M3 10h18" />
+      </symbol>
       <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3" /></symbol>
-      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+      </symbol>
       <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z" /></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
-      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7" /><path d="M20 4v6h-6" /></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24">
+        <path d="M20 12a8 8 0 1 1-2.3-5.7" />
+        <path d="M20 4v6h-6" />
+      </symbol>
       <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4" /></symbol>
       <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" /></symbol>
-      <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z" /><path d="M9 4v14M15 6v14" /></symbol>
+      <symbol id="i-map" viewBox="0 0 24 24">
+        <path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z" />
+        <path d="M9 4v14M15 6v14" />
+      </symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18" />
+        <path d="M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z" />
+      </symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" /></symbol>
+      <symbol id="i-edit" viewBox="0 0 24 24">
+        <path d="M4 20h4L19 9l-4-4L4 16z" />
+        <path d="M13.5 6.5l4 4" />
+      </symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24">
+        <rect x="9" y="9" width="11" height="11" rx="2" />
+        <path d="M5 15V6a2 2 0 0 1 2-2h8" />
+      </symbol>
+      <symbol id="i-clone" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="13" height="13" rx="2" />
+        <path d="M20 8v10a2 2 0 0 1-2 2H8" />
+        <path d="M9.5 6.5v6M6.5 9.5h6" />
+      </symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13" /></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
     </svg>
 
-    <a class="skip-link" href="#main">Skip to content</a>
+    <a class="skip-link" href="#main" data-i18n="a11y.skip">Skip to content</a>
+    <!-- i18n:lang-offer -->
 
     <header class="site-header">
       <div class="container header-inner">
-        <a class="brand" href="#top" aria-label="Fosta Studio, back to top">
+        <a class="brand" href="#top" data-i18n-attr="aria-label:a11y.backToTop" aria-label="Fosta Studio, back to top">
           <img src="assets/logo.svg" alt="" width="28" height="28" />
           <span>Fosta Studio</span>
         </a>
-        <nav class="site-nav" aria-label="Primary">
+        <nav class="site-nav" data-i18n-attr="aria-label:nav.label" aria-label="Primary">
           <ul>
-            <li class="nav-optional"><a href="#features">Features</a></li>
-            <li class="nav-optional"><a href="#engines">Engines</a></li>
-            <li class="nav-optional"><a href="#privacy">Privacy</a></li>
-            <li class="nav-optional"><a href="#roadmap">Roadmap</a></li>
+            <li class="nav-optional"><a href="#features" data-i18n="nav.features">Features</a></li>
+            <li class="nav-optional"><a href="#engines" data-i18n="nav.engines">Engines</a></li>
+            <li class="nav-optional"><a href="#privacy" data-i18n="nav.privacy">Privacy</a></li>
+            <li class="nav-optional"><a href="#roadmap" data-i18n="nav.roadmap">Roadmap</a></li>
             <li>
               <a class="nav-github" href="https://github.com/caothanhphatit/fosta-dbclient">
-                <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg>GitHub
+                <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span class="nav-github-text">GitHub</span>
               </a>
             </li>
           </ul>
         </nav>
-        <button class="theme-toggle" type="button" hidden aria-label="Switch to dark theme" data-theme-toggle>
+        <!-- i18n:lang-switch -->
+        <button
+          class="theme-toggle"
+          type="button"
+          hidden
+          data-theme-toggle
+          data-i18n-attr="aria-label:theme.toDark; data-label-dark:theme.toDark; data-label-light:theme.toLight"
+          aria-label="Switch to dark theme"
+          data-label-dark="Switch to dark theme"
+          data-label-light="Switch to light theme"
+        >
           <svg class="icon icon-sun" aria-hidden="true"><use href="#i-sun" /></svg>
           <svg class="icon icon-moon" aria-hidden="true"><use href="#i-moon" /></svg>
         </button>
@@ -107,148 +220,858 @@
     <main id="main">
       <!-- Hero ----------------------------------------------------------- -->
       <section class="hero" id="top" aria-labelledby="hero-title">
+        <canvas class="hero-net" data-hero-net aria-hidden="true"></canvas>
         <div class="container hero-text">
           <p class="eyebrow">
-            <span class="pill">Free &amp; open source</span>
-            <span>Windows · about 10 MB · GPL-3.0</span>
+            <span class="pill" data-i18n="hero.pill">Free &amp; open source</span>
+            <span data-i18n="hero.facts">Windows · about 10 MB · GPL-3.0</span>
           </p>
           <h1 id="hero-title">Fosta Studio</h1>
-          <p class="lede">
-            A small, fast database client for <strong>MariaDB, MySQL, SQL Server and MongoDB</strong>, with workspaces that
-            bring their own tunnels and an AI assistant that writes queries but never runs them.
-          </p>
+          <p class="lede" data-i18n="hero.lede">A small, fast database client for <strong>MariaDB, MySQL, SQL Server and MongoDB</strong>, with workspaces that bring their own tunnels and a built-in AI agent that knows your schema.</p>
           <div class="cta-row">
             <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/releases">
-              <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>Download for Windows
+              <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg><span data-i18n="hero.download">Download for Windows</span>
             </a>
             <a class="btn btn-secondary" href="https://github.com/caothanhphatit/fosta-dbclient">
-              <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg>View on GitHub
+              <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span data-i18n="hero.github">View on GitHub</span>
             </a>
           </div>
-          <p class="cta-note">
+          <p class="cta-note" data-i18n="hero.note">
             Release builds are coming soon. Until then,
             <a href="#build">build it from source</a>.
           </p>
         </div>
 
         <div class="container hero-visual">
+          <!--
+            Carousel of app views. Without JavaScript it is a horizontally scrollable strip (slide 1 shows first);
+            main.js adds the arrows, dots, auto-advance and announcements. The mocks show the app's English interface
+            (the app itself is not translated); their descriptions, captions and the chat text are translated.
+          -->
           <div
-            class="app-mock"
-            role="img"
-            aria-label="Illustration of the Fosta Studio window: a workspace rail on the left, a tree of connections and tables, the orders table open in a data grid with column type badges and two pending changes, and the assistant panel on the right showing a suggested SQL query with Insert and New tab buttons."
+            class="carousel"
+            role="region"
+            data-carousel
+            data-i18n-attr="aria-label:carousel.label; aria-roledescription:carousel.roleCarousel"
+            aria-label="Views of the app"
+            aria-roledescription="carousel"
           >
-            <div class="am-titlebar" aria-hidden="true">
-              <img src="assets/logo.svg" alt="" width="14" height="14" />
-              <span>Fosta Studio</span>
-              <span class="am-win"><i></i><i></i><i></i></span>
-            </div>
-            <div class="am-body" aria-hidden="true">
-              <div class="am-rail">
-                <div class="am-rail-heading">Workspaces</div>
-                <div class="am-ws active" style="--ws: var(--ws-blue)">
-                  <span class="am-glyph"><svg class="icon"><use href="#i-cart" /></svg><span class="am-badge"></span></span>
-                  <span class="am-ws-label">Shop</span>
-                </div>
-                <div class="am-ws" style="--ws: var(--ws-green)">
-                  <span class="am-glyph"><svg class="icon"><use href="#i-card" /></svg><span class="am-badge"></span></span>
-                  <span class="am-ws-label">Billing</span>
-                </div>
-                <div class="am-ws" style="--ws: var(--ws-red)">
-                  <span class="am-glyph"><svg class="icon"><use href="#i-shield" /></svg></span>
-                  <span class="am-ws-label">Prod</span>
-                </div>
-                <div class="am-ws" style="--ws: var(--ws-purple)">
-                  <span class="am-glyph"><svg class="icon"><use href="#i-flask" /></svg></span>
-                  <span class="am-ws-label">Lab</span>
-                </div>
-                <div class="am-rail-add"><svg class="icon"><use href="#i-plus" /></svg></div>
-              </div>
+            <div class="carousel-viewport" data-carousel-viewport>
+              <div
+                class="carousel-slide"
+                id="view-sql"
+                role="group"
+                data-carousel-slide
+                data-i18n-attr="aria-label:carousel.slide1; aria-roledescription:carousel.roleSlide"
+                aria-label="SQL tables"
+                aria-roledescription="slide"
+              >
+                <div
+                  class="app-mock"
+                  role="img"
+                  data-i18n-attr="aria-label:hero.mockLabel"
+                  aria-label="Illustration of the Fosta Studio window: a workspace rail on the left, a tree of connections and tables, the orders table open in a data grid with column type badges and two pending changes, and the assistant panel on the right showing a suggested SQL query with Insert and New tab buttons."
+                >
+                  <div class="am-titlebar" aria-hidden="true">
+                    <img src="assets/logo.svg" alt="" width="14" height="14" />
+                    <span>Fosta Studio</span>
+                    <span class="am-win"><i></i><i></i><i></i></span>
+                  </div>
+                  <div class="am-body" aria-hidden="true">
+                    <div class="am-rail">
+                      <div class="am-rail-heading">Workspaces</div>
+                      <div class="am-ws active" style="--ws: var(--ws-blue)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-cart" /></svg><span class="am-badge"></span
+                        ></span>
+                        <span class="am-ws-label">Shop</span>
+                      </div>
+                      <div class="am-ws" style="--ws: var(--ws-green)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-card" /></svg><span class="am-badge"></span
+                        ></span>
+                        <span class="am-ws-label">Billing</span>
+                      </div>
+                      <div class="am-ws" style="--ws: var(--ws-red)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-shield" /></svg
+                        ></span>
+                        <span class="am-ws-label">Prod</span>
+                      </div>
+                      <div class="am-ws" style="--ws: var(--ws-purple)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-flask" /></svg
+                        ></span>
+                        <span class="am-ws-label">Lab</span>
+                      </div>
+                      <div class="am-rail-add">
+                        <svg class="icon"><use href="#i-plus" /></svg>
+                      </div>
+                    </div>
 
-              <div class="am-sidebar">
-                <div class="am-ws-header"><span class="am-ws-dot"></span><b>Shop</b><span class="am-muted">staging</span></div>
-                <div class="am-search"><svg class="icon"><use href="#i-search" /></svg><span>Search</span></div>
-                <div class="am-tree">
-                  <div class="am-row conn"><svg class="icon chev open"><use href="#i-chev" /></svg><span class="am-conn-icon"><svg class="icon"><use href="#i-db" /></svg><i></i></span><b>shop-staging</b><span class="am-tag">MARIADB</span></div>
-                  <div class="am-row l1"><svg class="icon chev open"><use href="#i-chev" /></svg><svg class="icon"><use href="#i-db" /></svg>shop</div>
-                  <div class="am-row l2"><svg class="icon"><use href="#i-table" /></svg>customers</div>
-                  <div class="am-row l2"><svg class="icon"><use href="#i-table" /></svg>order_items</div>
-                  <div class="am-row l2 selected"><svg class="icon"><use href="#i-table" /></svg>orders</div>
-                  <div class="am-row l2"><svg class="icon"><use href="#i-table" /></svg>payments</div>
-                  <div class="am-row l2"><svg class="icon"><use href="#i-table" /></svg>products</div>
-                  <div class="am-row conn mssql"><svg class="icon chev"><use href="#i-chev" /></svg><span class="am-conn-icon"><svg class="icon"><use href="#i-db" /></svg></span><b>billing-legacy</b><span class="am-tag">MSSQL</span></div>
-                  <div class="am-row conn mongo"><svg class="icon chev"><use href="#i-chev" /></svg><span class="am-conn-icon"><svg class="icon"><use href="#i-db" /></svg></span><b>events</b><span class="am-tag">MONGO</span></div>
-                </div>
-                <div class="am-task"><span class="am-dot ok"></span>port-forward shop-db<span class="am-muted">running</span></div>
-              </div>
+                    <div class="am-sidebar">
+                      <div class="am-ws-header"><span class="am-ws-dot"></span><b>Shop</b><span class="am-muted">staging</span></div>
+                      <div class="am-search">
+                        <svg class="icon"><use href="#i-search" /></svg><span>Search</span>
+                      </div>
+                      <div class="am-tree">
+                        <div class="am-row conn">
+                          <svg class="icon chev open"><use href="#i-chev" /></svg
+                          ><span class="am-conn-icon"
+                            ><svg class="icon"><use href="#i-db" /></svg><i></i></span
+                          ><b>shop-staging</b><span class="am-tag">MARIADB</span>
+                        </div>
+                        <div class="am-row l1">
+                          <svg class="icon chev open"><use href="#i-chev" /></svg><svg class="icon"><use href="#i-db" /></svg>shop
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-table" /></svg>customers
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-table" /></svg>order_items
+                        </div>
+                        <div class="am-row l2 selected">
+                          <svg class="icon"><use href="#i-table" /></svg>orders
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-table" /></svg>payments
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-table" /></svg>products
+                        </div>
+                        <div class="am-row conn mssql">
+                          <svg class="icon chev"><use href="#i-chev" /></svg
+                          ><span class="am-conn-icon"
+                            ><svg class="icon"><use href="#i-db" /></svg></span
+                          ><b>billing-legacy</b><span class="am-tag">MSSQL</span>
+                        </div>
+                        <div class="am-row conn mongo">
+                          <svg class="icon chev"><use href="#i-chev" /></svg
+                          ><span class="am-conn-icon"
+                            ><svg class="icon"><use href="#i-db" /></svg></span
+                          ><b>events</b><span class="am-tag">MONGO</span>
+                        </div>
+                      </div>
+                      <div class="am-task"><span class="am-dot ok"></span>port-forward shop-db<span class="am-muted">running</span></div>
+                    </div>
 
-              <div class="am-main">
-                <div class="am-tabs">
-                  <div class="am-tab active"><svg class="icon"><use href="#i-table" /></svg>orders</div>
-                  <div class="am-tab"><svg class="icon"><use href="#i-code" /></svg>Query 1</div>
-                  <div class="am-tab"><svg class="icon"><use href="#i-diagram" /></svg>shop diagram</div>
-                </div>
-                <div class="am-toolbar">
-                  <span class="am-filter"><span class="am-kw">WHERE</span> status &lt;&gt; 'cancelled'</span>
-                  <span class="am-tool-btn">Import</span>
-                  <span class="am-tool-btn">Export</span>
-                </div>
-                <div class="am-grid">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th class="rn"></th>
-                        <th>id<span class="th-type"><span class="type-badge type-number">123</span>int</span></th>
-                        <th>customer<span class="th-type"><span class="type-badge type-text">abc</span>varchar(80)</span></th>
-                        <th class="num">total<span class="th-type"><span class="type-badge type-number">123</span>decimal(10,2)</span></th>
-                        <th>status<span class="th-type"><span class="type-badge type-text">abc</span>varchar(16)</span></th>
-                        <th>paid<span class="th-type"><span class="type-badge type-bool">bool</span>tinyint(1)</span></th>
-                        <th>created_at<span class="th-type"><span class="type-badge type-date">date</span>datetime</span></th>
-                        <th>meta<span class="th-type"><span class="type-badge type-json">json</span>json</span></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr><td class="rn">1</td><td class="num">10241</td><td>Mai Tran</td><td class="num">129.90</td><td>shipped</td><td>1</td><td>2026-10-02 09:14</td><td class="mono">{"channel":"web"}</td></tr>
-                      <tr class="modified"><td class="rn">2</td><td class="num">10242</td><td>Jonas Berg</td><td class="num">54.00</td><td class="cell-mod">shipped</td><td>1</td><td>2026-10-02 10:41</td><td class="mono">{"channel":"app"}</td></tr>
-                      <tr class="current"><td class="rn">3</td><td class="num">10243</td><td>Priya Nair</td><td class="num">310.25</td><td>paid</td><td>1</td><td>2026-10-03 08:05</td><td class="null">NULL</td></tr>
-                      <tr><td class="rn">4</td><td class="num">10244</td><td>Lucas Moreau</td><td class="num">18.50</td><td>pending</td><td>0</td><td>2026-10-03 13:22</td><td class="mono">{"coupon":"FALL"}</td></tr>
-                      <tr><td class="rn">5</td><td class="num">10245</td><td>Sofia Rossi</td><td class="num">72.10</td><td>paid</td><td>1</td><td>2026-10-04 16:47</td><td class="null">NULL</td></tr>
-                      <tr><td class="rn">6</td><td class="num">10246</td><td>Kenji Sato</td><td class="num">245.00</td><td>shipped</td><td>1</td><td>2026-10-05 11:03</td><td class="mono">{"channel":"web"}</td></tr>
-                      <tr><td class="rn">7</td><td class="num">10247</td><td>Amara Okafor</td><td class="num">9.99</td><td>paid</td><td>1</td><td>2026-10-05 19:30</td><td class="mono">{"gift":true}</td></tr>
-                      <tr class="new"><td class="rn">+</td><td class="null">auto</td><td>Elena Petrova</td><td class="num">64.00</td><td>pending</td><td>0</td><td class="null">NULL</td><td class="null">NULL</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div class="am-pending">
-                  <span class="am-dot warn"></span><b>2 pending changes</b>
-                  <span class="am-muted am-pending-hint">applied in one transaction</span>
-                  <span class="am-btn ghost">Discard</span><span class="am-btn primary">Apply</span>
-                </div>
-                <div class="am-status"><span>MariaDB · shop</span><span>rows 1–50 of 1,284</span></div>
-              </div>
+                    <div class="am-main">
+                      <div class="am-tabs">
+                        <div class="am-tab active">
+                          <svg class="icon"><use href="#i-table" /></svg>orders
+                        </div>
+                        <div class="am-tab">
+                          <svg class="icon"><use href="#i-code" /></svg>Query 1
+                        </div>
+                        <div class="am-tab">
+                          <svg class="icon"><use href="#i-diagram" /></svg>shop diagram
+                        </div>
+                      </div>
+                      <div class="am-toolbar">
+                        <span class="am-filter"><span class="am-kw">WHERE</span> status &lt;&gt; 'cancelled'</span>
+                        <span class="am-tool-btn">Import</span>
+                        <span class="am-tool-btn">Export</span>
+                      </div>
+                      <div class="am-grid">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th class="rn"></th>
+                              <th>
+                                id<span class="th-type"><span class="type-badge type-number">123</span>int</span>
+                              </th>
+                              <th>
+                                customer<span class="th-type"><span class="type-badge type-text">abc</span>varchar(80)</span>
+                              </th>
+                              <th class="num">
+                                total<span class="th-type"><span class="type-badge type-number">123</span>decimal(10,2)</span>
+                              </th>
+                              <th>
+                                status<span class="th-type"><span class="type-badge type-text">abc</span>varchar(16)</span>
+                              </th>
+                              <th>
+                                paid<span class="th-type"><span class="type-badge type-bool">bool</span>tinyint(1)</span>
+                              </th>
+                              <th>
+                                created_at<span class="th-type"><span class="type-badge type-date">date</span>datetime</span>
+                              </th>
+                              <th>
+                                meta<span class="th-type"><span class="type-badge type-json">json</span>json</span>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td class="rn">1</td>
+                              <td class="num">10241</td>
+                              <td>Mai Tran</td>
+                              <td class="num">129.90</td>
+                              <td>shipped</td>
+                              <td>1</td>
+                              <td>2026-10-02 09:14</td>
+                              <td class="mono">{"channel":"web"}</td>
+                            </tr>
+                            <tr class="modified">
+                              <td class="rn">2</td>
+                              <td class="num">10242</td>
+                              <td>Jonas Berg</td>
+                              <td class="num">54.00</td>
+                              <td class="cell-mod">shipped</td>
+                              <td>1</td>
+                              <td>2026-10-02 10:41</td>
+                              <td class="mono">{"channel":"app"}</td>
+                            </tr>
+                            <tr class="current">
+                              <td class="rn">3</td>
+                              <td class="num">10243</td>
+                              <td>Priya Nair</td>
+                              <td class="num">310.25</td>
+                              <td>paid</td>
+                              <td>1</td>
+                              <td>2026-10-03 08:05</td>
+                              <td class="null">NULL</td>
+                            </tr>
+                            <tr>
+                              <td class="rn">4</td>
+                              <td class="num">10244</td>
+                              <td>Lucas Moreau</td>
+                              <td class="num">18.50</td>
+                              <td>pending</td>
+                              <td>0</td>
+                              <td>2026-10-03 13:22</td>
+                              <td class="mono">{"coupon":"FALL"}</td>
+                            </tr>
+                            <tr>
+                              <td class="rn">5</td>
+                              <td class="num">10245</td>
+                              <td>Sofia Rossi</td>
+                              <td class="num">72.10</td>
+                              <td>paid</td>
+                              <td>1</td>
+                              <td>2026-10-04 16:47</td>
+                              <td class="null">NULL</td>
+                            </tr>
+                            <tr>
+                              <td class="rn">6</td>
+                              <td class="num">10246</td>
+                              <td>Kenji Sato</td>
+                              <td class="num">245.00</td>
+                              <td>shipped</td>
+                              <td>1</td>
+                              <td>2026-10-05 11:03</td>
+                              <td class="mono">{"channel":"web"}</td>
+                            </tr>
+                            <tr>
+                              <td class="rn">7</td>
+                              <td class="num">10247</td>
+                              <td>Amara Okafor</td>
+                              <td class="num">9.99</td>
+                              <td>paid</td>
+                              <td>1</td>
+                              <td>2026-10-05 19:30</td>
+                              <td class="mono">{"gift":true}</td>
+                            </tr>
+                            <tr class="new">
+                              <td class="rn">+</td>
+                              <td class="null">auto</td>
+                              <td>Elena Petrova</td>
+                              <td class="num">64.00</td>
+                              <td>pending</td>
+                              <td>0</td>
+                              <td class="null">NULL</td>
+                              <td class="null">NULL</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div class="am-pending">
+                        <span class="am-dot warn"></span><b>2 pending changes</b>
+                        <span class="am-muted am-pending-hint">applied in one transaction</span>
+                        <span class="am-btn ghost">Discard</span><span class="am-btn primary">Apply</span>
+                      </div>
+                      <div class="am-status"><span>MariaDB · shop</span><span>rows 1–50 of 1,284</span></div>
+                    </div>
 
-              <div class="am-assistant">
-                <div class="am-asst-head"><svg class="icon"><use href="#i-spark" /></svg><b>Assistant</b><span class="am-chip">llama3.1 · local</span></div>
-                <div class="am-asst-ctx"><svg class="icon"><use href="#i-table" /></svg>shop.orders</div>
-                <div class="am-msgs">
-                  <div class="am-msg user">Top customers by spend this month?</div>
-                  <div class="am-msg bot">
-                    <p>I checked the schema of <code>orders</code> and <code>customers</code>. Here is a query:</p>
-                    <pre><span class="k">SELECT</span> c.name, <span class="k">SUM</span>(o.total) <span class="k">AS</span> spent
+                    <div class="am-assistant">
+                      <div class="am-asst-head">
+                        <svg class="icon"><use href="#i-spark" /></svg><b>Assistant</b><span class="am-chip">llama3.1 · local</span>
+                      </div>
+                      <div class="am-asst-ctx">
+                        <svg class="icon"><use href="#i-table" /></svg>shop.orders
+                      </div>
+                      <div class="am-msgs">
+                        <div class="am-msg user" data-i18n="slideSql.ask">Top customers by spend this month?</div>
+                        <div class="am-msg bot">
+                          <p data-i18n="slideSql.answer">I checked the schema of <code>orders</code> and <code>customers</code>. Here is a query:</p>
+                          <pre><span class="k">SELECT</span> c.name, <span class="k">SUM</span>(o.total) <span class="k">AS</span> spent
 <span class="k">FROM</span> orders o
 <span class="k">JOIN</span> customers c <span class="k">ON</span> c.id = o.customer_id
 <span class="k">WHERE</span> o.created_at &gt;= <span class="s">'2026-10-01'</span>
 <span class="k">GROUP BY</span> c.name
 <span class="k">ORDER BY</span> spent <span class="k">DESC</span>
 <span class="k">LIMIT</span> <span class="n">10</span>;</pre>
-                    <div class="am-code-actions"><span class="am-btn small">Insert</span><span class="am-btn small">New tab</span></div>
-                    <p class="am-note"><svg class="icon"><use href="#i-ban" /></svg>Not executed. You run it.</p>
+                          <div class="am-code-actions"><span class="am-btn small">Insert</span><span class="am-btn small">New tab</span></div>
+                          <p class="am-note">
+                            <svg class="icon"><use href="#i-ban" /></svg>Not executed. You run it.
+                          </p>
+                        </div>
+                      </div>
+                      <div class="am-input">Ask about this schema…</div>
+                    </div>
                   </div>
                 </div>
-                <div class="am-input">Ask about this schema…</div>
+                <p class="slide-caption" data-i18n="carousel.caption1">
+                  A MariaDB table open in the grid, with pending edits and a query drafted by the assistant.
+                </p>
+              </div>
+
+              <!-- Slide 2: MongoDB (document view and shell-syntax query bar are on the roadmap; the caption says so) -->
+              <div
+                class="carousel-slide"
+                id="view-mongo"
+                role="group"
+                data-carousel-slide
+                data-i18n-attr="aria-label:carousel.slide2; aria-roledescription:carousel.roleSlide"
+                aria-label="MongoDB documents"
+                aria-roledescription="slide"
+              >
+                <div
+                  class="app-mock am-mongo"
+                  role="img"
+                  data-i18n-attr="aria-label:slideMongo.mockLabel"
+                  aria-label="Illustration of the planned MongoDB view: the clicks collection of the events connection, with 3.4k documents and 4 indexes, a filter in shell syntax with Explain and Find buttons, and the documents shown as separate cards, one of them expanded to show its nested session object."
+                >
+                  <div class="am-titlebar" aria-hidden="true">
+                    <img src="assets/logo.svg" alt="" width="14" height="14" />
+                    <span>Fosta Studio</span>
+                    <span class="am-win"><i></i><i></i><i></i></span>
+                  </div>
+                  <div class="am-body" aria-hidden="true">
+                    <div class="am-rail">
+                      <div class="am-rail-heading">Workspaces</div>
+                      <div class="am-ws active" style="--ws: var(--ws-blue)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-cart" /></svg><span class="am-badge"></span
+                        ></span>
+                        <span class="am-ws-label">Shop</span>
+                      </div>
+                      <div class="am-ws" style="--ws: var(--ws-green)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-card" /></svg><span class="am-badge"></span
+                        ></span>
+                        <span class="am-ws-label">Billing</span>
+                      </div>
+                      <div class="am-ws" style="--ws: var(--ws-red)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-shield" /></svg
+                        ></span>
+                        <span class="am-ws-label">Prod</span>
+                      </div>
+                      <div class="am-ws" style="--ws: var(--ws-purple)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-flask" /></svg
+                        ></span>
+                        <span class="am-ws-label">Lab</span>
+                      </div>
+                      <div class="am-rail-add">
+                        <svg class="icon"><use href="#i-plus" /></svg>
+                      </div>
+                    </div>
+
+                    <div class="am-sidebar">
+                      <div class="am-ws-header"><span class="am-ws-dot"></span><b>Shop</b><span class="am-muted">staging</span></div>
+                      <div class="am-search">
+                        <svg class="icon"><use href="#i-search" /></svg><span>Search</span>
+                      </div>
+                      <div class="am-tree">
+                        <div class="am-row conn">
+                          <svg class="icon chev"><use href="#i-chev" /></svg
+                          ><span class="am-conn-icon"
+                            ><svg class="icon"><use href="#i-db" /></svg><i></i></span
+                          ><b>shop-staging</b><span class="am-tag">MARIADB</span>
+                        </div>
+                        <div class="am-row conn mssql">
+                          <svg class="icon chev"><use href="#i-chev" /></svg
+                          ><span class="am-conn-icon"
+                            ><svg class="icon"><use href="#i-db" /></svg></span
+                          ><b>billing-legacy</b><span class="am-tag">MSSQL</span>
+                        </div>
+                        <div class="am-row conn mongo">
+                          <svg class="icon chev open"><use href="#i-chev" /></svg
+                          ><span class="am-conn-icon"
+                            ><svg class="icon"><use href="#i-db" /></svg><i></i></span
+                          ><b>events</b><span class="am-tag">MONGO</span>
+                        </div>
+                        <div class="am-row l1">
+                          <svg class="icon chev open"><use href="#i-chev" /></svg><svg class="icon"><use href="#i-db" /></svg>analytics
+                        </div>
+                        <div class="am-row l2 selected">
+                          <svg class="icon"><use href="#i-layers" /></svg>clicks
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-layers" /></svg>purchases
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-layers" /></svg>sessions
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-layers" /></svg>users
+                        </div>
+                      </div>
+                      <div class="am-task"><span class="am-dot ok"></span>port-forward shop-db<span class="am-muted">running</span></div>
+                    </div>
+
+                    <div class="am-main">
+                      <div class="am-tabs">
+                        <div class="am-tab active">
+                          <svg class="icon"><use href="#i-layers" /></svg>clicks
+                        </div>
+                        <div class="am-tab">
+                          <svg class="icon"><use href="#i-table" /></svg>orders
+                        </div>
+                        <div class="am-tab">
+                          <svg class="icon"><use href="#i-code" /></svg>Query 1
+                        </div>
+                      </div>
+                      <div class="mg-head">
+                        <div class="mg-title"><span class="mg-db">analytics.</span>clicks</div>
+                        <div class="mg-stats">
+                          <div class="mg-stat"><b>3.4k</b><span>Documents</span></div>
+                          <div class="mg-stat"><b>4</b><span>Indexes</span></div>
+                        </div>
+                      </div>
+                      <div class="mg-subtabs">
+                        <span class="on">Documents</span><span>Aggregations</span><span>Schema</span><span>Indexes</span><span>Validation</span>
+                      </div>
+                      <div class="mg-query">
+                        <span class="mg-qlabel">Filter</span>
+                        <span class="mg-qinput">
+                          <span class="mg-qcode"
+                            >{ type: <span class="s">"purchase"</span>, at: { <span class="am-kw">$gte</span>: <span class="mq-fn">ISODate</span>(<span
+                              class="s"
+                              >"2026-10-01"</span
+                            >) } }</span
+                          >
+                          <span class="mg-ask"
+                            ><svg class="icon"><use href="#i-spark" /></svg>Ask the assistant</span
+                          >
+                        </span>
+                        <span class="am-btn ghost mg-opt">Explain</span>
+                        <span class="am-btn mg-opt">Reset</span>
+                        <span class="am-btn primary">Find</span>
+                        <span class="am-btn ghost mg-opt">Options</span>
+                      </div>
+                      <div class="mg-actions">
+                        <span class="am-btn mg-add"
+                          ><svg class="icon"><use href="#i-plus" /></svg>Add data</span
+                        >
+                        <span class="am-btn mg-opt">Export data</span>
+                        <span class="am-btn mg-opt">Update</span>
+                        <span class="am-btn mg-opt mg-danger">Delete</span>
+                        <span class="mg-count">1 – 20 of 3,412</span>
+                        <span class="mg-pager"
+                          ><span
+                            ><svg class="icon flip"><use href="#i-chev" /></svg></span
+                          ><span
+                            ><svg class="icon"><use href="#i-chev" /></svg></span
+                        ></span>
+                        <span class="mg-seg"><span class="on">List</span><span>JSON</span><span>Table</span></span>
+                      </div>
+                      <div class="mg-docs">
+                        <div class="mg-doc is-hover">
+                          <div class="mg-doc-tools">
+                            <svg class="icon"><use href="#i-edit" /></svg><svg class="icon"><use href="#i-copy" /></svg
+                            ><svg class="icon"><use href="#i-clone" /></svg><svg class="icon"><use href="#i-trash" /></svg>
+                          </div>
+                          <div class="mg-f"><span class="mg-k">_id</span><span class="mg-v oid">ObjectId('6721a4f0e3b1c9e1d2a7f001')</span></div>
+                          <div class="mg-f"><span class="mg-k">type</span><span class="mg-v str">"purchase"</span></div>
+                          <div class="mg-f"><span class="mg-k">at</span><span class="mg-v date">2026-10-30T09:14:02.000Z</span></div>
+                          <div class="mg-f"><span class="mg-k">amount</span><span class="mg-v num">129</span></div>
+                          <div class="mg-f"><span class="mg-k">currency</span><span class="mg-v str">"EUR"</span></div>
+                          <div class="mg-f nest open">
+                            <svg class="icon chev"><use href="#i-chev" /></svg><span class="mg-k">session</span><span class="mg-v obj">Object</span>
+                          </div>
+                          <div class="mg-f l1"><span class="mg-k">id</span><span class="mg-v str">"s_81f2"</span></div>
+                          <div class="mg-f l1"><span class="mg-k">device</span><span class="mg-v str">"web"</span></div>
+                          <div class="mg-f l1"><span class="mg-k">country</span><span class="mg-v str">"VN"</span></div>
+                          <div class="mg-f nest">
+                            <svg class="icon chev"><use href="#i-chev" /></svg><span class="mg-k">items</span><span class="mg-v obj">Array (2)</span>
+                          </div>
+                        </div>
+                        <div class="mg-doc">
+                          <div class="mg-doc-tools">
+                            <svg class="icon"><use href="#i-edit" /></svg><svg class="icon"><use href="#i-copy" /></svg
+                            ><svg class="icon"><use href="#i-clone" /></svg><svg class="icon"><use href="#i-trash" /></svg>
+                          </div>
+                          <div class="mg-f"><span class="mg-k">_id</span><span class="mg-v oid">ObjectId('6721a5b2f19d4c0a8e3b07f3')</span></div>
+                          <div class="mg-f"><span class="mg-k">type</span><span class="mg-v str">"purchase"</span></div>
+                          <div class="mg-f"><span class="mg-k">at</span><span class="mg-v date">2026-10-30T10:02:47.000Z</span></div>
+                          <div class="mg-f"><span class="mg-k">amount</span><span class="mg-v num">54</span></div>
+                          <div class="mg-f"><span class="mg-k">currency</span><span class="mg-v str">"EUR"</span></div>
+                          <div class="mg-f nest">
+                            <svg class="icon chev"><use href="#i-chev" /></svg><span class="mg-k">session</span><span class="mg-v obj">Object</span>
+                          </div>
+                          <div class="mg-f nest">
+                            <svg class="icon chev"><use href="#i-chev" /></svg><span class="mg-k">items</span><span class="mg-v obj">Array (1)</span>
+                          </div>
+                        </div>
+                        <div class="mg-doc">
+                          <div class="mg-doc-tools">
+                            <svg class="icon"><use href="#i-edit" /></svg><svg class="icon"><use href="#i-copy" /></svg
+                            ><svg class="icon"><use href="#i-clone" /></svg><svg class="icon"><use href="#i-trash" /></svg>
+                          </div>
+                          <div class="mg-f"><span class="mg-k">_id</span><span class="mg-v oid">ObjectId('6721a7d93a05e8b2c4f15a20')</span></div>
+                          <div class="mg-f"><span class="mg-k">type</span><span class="mg-v str">"purchase"</span></div>
+                          <div class="mg-f"><span class="mg-k">at</span><span class="mg-v date">2026-10-30T11:27:15.000Z</span></div>
+                          <div class="mg-f"><span class="mg-k">amount</span><span class="mg-v num">310</span></div>
+                        </div>
+                      </div>
+                      <div class="am-status"><span>MongoDB · events</span><span>3,412 documents · 4 indexes</span></div>
+                    </div>
+                  </div>
+                </div>
+                <p class="slide-caption">
+                  <span data-i18n="carousel.caption2"
+                    >MongoDB documents: a preview of the upcoming document view (List / JSON / Table) and shell-syntax query bar.</span
+                  >
+                  <span class="tag-coming" data-i18n="common.coming">coming</span>
+                </p>
+              </div>
+
+              <!-- Slide 3: ER diagram -->
+              <div
+                class="carousel-slide"
+                id="view-diagram"
+                role="group"
+                data-carousel-slide
+                data-i18n-attr="aria-label:carousel.slide3; aria-roledescription:carousel.roleSlide"
+                aria-label="ER diagram"
+                aria-roledescription="slide"
+              >
+                <div
+                  class="app-mock"
+                  role="img"
+                  data-i18n-attr="aria-label:slideDiagram.mockLabel"
+                  aria-label="Illustration of the ER diagram view: the shop schema with customers, orders, order_items, products and categories connected by one-to-many links, the orders table selected, and the assistant panel explaining how orders connect to products."
+                >
+                  <div class="am-titlebar" aria-hidden="true">
+                    <img src="assets/logo.svg" alt="" width="14" height="14" />
+                    <span>Fosta Studio</span>
+                    <span class="am-win"><i></i><i></i><i></i></span>
+                  </div>
+                  <div class="am-body" aria-hidden="true">
+                    <div class="am-rail">
+                      <div class="am-rail-heading">Workspaces</div>
+                      <div class="am-ws active" style="--ws: var(--ws-blue)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-cart" /></svg><span class="am-badge"></span
+                        ></span>
+                        <span class="am-ws-label">Shop</span>
+                      </div>
+                      <div class="am-ws" style="--ws: var(--ws-green)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-card" /></svg><span class="am-badge"></span
+                        ></span>
+                        <span class="am-ws-label">Billing</span>
+                      </div>
+                      <div class="am-ws" style="--ws: var(--ws-red)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-shield" /></svg
+                        ></span>
+                        <span class="am-ws-label">Prod</span>
+                      </div>
+                      <div class="am-ws" style="--ws: var(--ws-purple)">
+                        <span class="am-glyph"
+                          ><svg class="icon"><use href="#i-flask" /></svg
+                        ></span>
+                        <span class="am-ws-label">Lab</span>
+                      </div>
+                      <div class="am-rail-add">
+                        <svg class="icon"><use href="#i-plus" /></svg>
+                      </div>
+                    </div>
+
+                    <div class="am-sidebar">
+                      <div class="am-ws-header"><span class="am-ws-dot"></span><b>Shop</b><span class="am-muted">staging</span></div>
+                      <div class="am-search">
+                        <svg class="icon"><use href="#i-search" /></svg><span>Search</span>
+                      </div>
+                      <div class="am-tree">
+                        <div class="am-row conn">
+                          <svg class="icon chev open"><use href="#i-chev" /></svg
+                          ><span class="am-conn-icon"
+                            ><svg class="icon"><use href="#i-db" /></svg><i></i></span
+                          ><b>shop-staging</b><span class="am-tag">MARIADB</span>
+                        </div>
+                        <div class="am-row l1 selected">
+                          <svg class="icon chev open"><use href="#i-chev" /></svg><svg class="icon"><use href="#i-db" /></svg>shop
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-table" /></svg>categories
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-table" /></svg>customers
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-table" /></svg>order_items
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-table" /></svg>orders
+                        </div>
+                        <div class="am-row l2">
+                          <svg class="icon"><use href="#i-table" /></svg>products
+                        </div>
+                        <div class="am-row conn mssql">
+                          <svg class="icon chev"><use href="#i-chev" /></svg
+                          ><span class="am-conn-icon"
+                            ><svg class="icon"><use href="#i-db" /></svg></span
+                          ><b>billing-legacy</b><span class="am-tag">MSSQL</span>
+                        </div>
+                        <div class="am-row conn mongo">
+                          <svg class="icon chev"><use href="#i-chev" /></svg
+                          ><span class="am-conn-icon"
+                            ><svg class="icon"><use href="#i-db" /></svg></span
+                          ><b>events</b><span class="am-tag">MONGO</span>
+                        </div>
+                      </div>
+                      <div class="am-task"><span class="am-dot ok"></span>port-forward shop-db<span class="am-muted">running</span></div>
+                    </div>
+
+                    <div class="am-main">
+                      <div class="am-tabs">
+                        <div class="am-tab">
+                          <svg class="icon"><use href="#i-table" /></svg>orders
+                        </div>
+                        <div class="am-tab active">
+                          <svg class="icon"><use href="#i-diagram" /></svg>shop diagram
+                        </div>
+                        <div class="am-tab">
+                          <svg class="icon"><use href="#i-code" /></svg>Query 1
+                        </div>
+                      </div>
+                      <div class="am-toolbar">
+                        <span class="am-tool-btn">Auto layout</span>
+                        <span class="am-tool-btn">Export SVG</span>
+                        <span class="am-tool-btn">Export PNG</span>
+                        <span class="am-zoom">100%</span>
+                      </div>
+                      <div class="am-canvas">
+                        <svg class="er-full" viewBox="8 12 614 320" preserveAspectRatio="xMidYMid meet">
+                          <g class="er-links">
+                            <path d="M170 68 C 205 68, 205 78, 240 78" />
+                            <path d="M315 154 V 210" />
+                            <path d="M460 228 C 425 228, 425 288, 390 288" />
+                            <path d="M535 114 V 190" />
+                          </g>
+                          <g class="er-marks">
+                            <path d="M176 61v14M181 61v14" />
+                            <path d="M228 78l12-6M228 78h12M228 78l12 6M224 72v12" />
+                            <path d="M308 160h14M308 165h14" />
+                            <path d="M315 198l-6 12M315 198v12M315 198l6 12M309 194h12" />
+                            <path d="M454 221v14M449 221v14" />
+                            <path d="M402 288l-12-6M402 288h-12M402 288l-12 6M406 282v12" />
+                            <path d="M528 120h14M528 125h14" />
+                            <path d="M535 178l-6 12M535 178v12M535 178l6 12M529 174h12" />
+                          </g>
+                          <g class="md-table" transform="translate(20 30)">
+                            <rect width="150" height="114" rx="8" />
+                            <path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                            <text x="12" y="18" class="md-title">customers</text>
+                            <text x="12" y="46">
+                              id
+                              <tspan class="md-pk">PK</tspan>
+                            </text>
+                            <text x="12" y="66">name</text>
+                            <text x="12" y="86">email</text>
+                            <text x="12" y="106">created_at</text>
+                          </g>
+                          <g class="md-table er-selected" transform="translate(240 20)">
+                            <rect width="150" height="134" rx="8" />
+                            <path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                            <text x="12" y="18" class="md-title">orders</text>
+                            <text x="12" y="46">
+                              id
+                              <tspan class="md-pk">PK</tspan>
+                            </text>
+                            <text x="12" y="66">
+                              customer_id
+                              <tspan class="md-fk">FK</tspan>
+                            </text>
+                            <text x="12" y="86">status</text>
+                            <text x="12" y="106">total</text>
+                            <text x="12" y="126">created_at</text>
+                          </g>
+                          <g class="md-table" transform="translate(240 210)">
+                            <rect width="150" height="114" rx="8" />
+                            <path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                            <text x="12" y="18" class="md-title">order_items</text>
+                            <text x="12" y="46">
+                              id
+                              <tspan class="md-pk">PK</tspan>
+                            </text>
+                            <text x="12" y="66">
+                              order_id
+                              <tspan class="md-fk">FK</tspan>
+                            </text>
+                            <text x="12" y="86">
+                              product_id
+                              <tspan class="md-fk">FK</tspan>
+                            </text>
+                            <text x="12" y="106">qty</text>
+                          </g>
+                          <g class="md-table" transform="translate(460 190)">
+                            <rect width="150" height="134" rx="8" />
+                            <path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                            <text x="12" y="18" class="md-title">products</text>
+                            <text x="12" y="46">
+                              id
+                              <tspan class="md-pk">PK</tspan>
+                            </text>
+                            <text x="12" y="66">
+                              category_id
+                              <tspan class="md-fk">FK</tspan>
+                            </text>
+                            <text x="12" y="86">sku</text>
+                            <text x="12" y="106">name</text>
+                            <text x="12" y="126">price</text>
+                          </g>
+                          <g class="md-table" transform="translate(460 20)">
+                            <rect width="150" height="94" rx="8" />
+                            <path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                            <text x="12" y="18" class="md-title">categories</text>
+                            <text x="12" y="46">
+                              id
+                              <tspan class="md-pk">PK</tspan>
+                            </text>
+                            <text x="12" y="66">name</text>
+                            <text x="12" y="86">
+                              parent_id
+                              <tspan class="md-fk">FK</tspan>
+                            </text>
+                          </g>
+                        </svg>
+                        <!-- Phones: the same schema in two columns (four tables), so the text stays readable. -->
+                        <svg class="er-compact" viewBox="0 10 360 340" preserveAspectRatio="xMidYMin meet">
+                          <g class="er-links">
+                            <path d="M160 58 C 180 58, 180 78, 200 78" />
+                            <path d="M275 154 V 210" />
+                            <path d="M160 248 C 180 248, 180 288, 200 288" />
+                          </g>
+                          <g class="er-marks">
+                            <path d="M166 51v14M171 51v14" />
+                            <path d="M188 78l12-6M188 78h12M188 78l12 6M184 72v12" />
+                            <path d="M268 160h14M268 165h14" />
+                            <path d="M275 198l-6 12M275 198v12M275 198l6 12M269 194h12" />
+                            <path d="M166 241v14M171 241v14" />
+                            <path d="M188 288l12-6M188 288h12M188 288l12 6M184 282v12" />
+                          </g>
+                          <g class="md-table" transform="translate(10 20)">
+                            <rect width="150" height="114" rx="8" />
+                            <path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                            <text x="12" y="18" class="md-title">customers</text>
+                            <text x="12" y="46">
+                              id
+                              <tspan class="md-pk">PK</tspan>
+                            </text>
+                            <text x="12" y="66">name</text>
+                            <text x="12" y="86">email</text>
+                            <text x="12" y="106">created_at</text>
+                          </g>
+                          <g class="md-table er-selected" transform="translate(200 20)">
+                            <rect width="150" height="134" rx="8" />
+                            <path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                            <text x="12" y="18" class="md-title">orders</text>
+                            <text x="12" y="46">
+                              id
+                              <tspan class="md-pk">PK</tspan>
+                            </text>
+                            <text x="12" y="66">
+                              customer_id
+                              <tspan class="md-fk">FK</tspan>
+                            </text>
+                            <text x="12" y="86">status</text>
+                            <text x="12" y="106">total</text>
+                            <text x="12" y="126">created_at</text>
+                          </g>
+                          <g class="md-table" transform="translate(10 210)">
+                            <rect width="150" height="134" rx="8" />
+                            <path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                            <text x="12" y="18" class="md-title">products</text>
+                            <text x="12" y="46">
+                              id
+                              <tspan class="md-pk">PK</tspan>
+                            </text>
+                            <text x="12" y="66">
+                              category_id
+                              <tspan class="md-fk">FK</tspan>
+                            </text>
+                            <text x="12" y="86">sku</text>
+                            <text x="12" y="106">name</text>
+                            <text x="12" y="126">price</text>
+                          </g>
+                          <g class="md-table" transform="translate(200 210)">
+                            <rect width="150" height="114" rx="8" />
+                            <path class="md-head" d="M0 8a8 8 0 0 1 8-8h134a8 8 0 0 1 8 8v18H0z" />
+                            <text x="12" y="18" class="md-title">order_items</text>
+                            <text x="12" y="46">
+                              id
+                              <tspan class="md-pk">PK</tspan>
+                            </text>
+                            <text x="12" y="66">
+                              order_id
+                              <tspan class="md-fk">FK</tspan>
+                            </text>
+                            <text x="12" y="86">
+                              product_id
+                              <tspan class="md-fk">FK</tspan>
+                            </text>
+                            <text x="12" y="106">qty</text>
+                          </g>
+                        </svg>
+                      </div>
+                      <div class="am-status"><span>MariaDB · shop</span><span>5 tables · 4 relations</span></div>
+                    </div>
+
+                    <div class="am-assistant">
+                      <div class="am-asst-head">
+                        <svg class="icon"><use href="#i-spark" /></svg><b>Assistant</b><span class="am-chip">llama3.1 · local</span>
+                      </div>
+                      <div class="am-asst-ctx">
+                        <svg class="icon"><use href="#i-db" /></svg>shop
+                      </div>
+                      <div class="am-msgs">
+                        <div class="am-msg user" data-i18n="slideDiagram.ask">How do orders connect to products?</div>
+                        <div class="am-msg bot">
+                          <div class="ma-tools">
+                            <span class="ma-tool"
+                              ><svg class="icon"><use href="#i-check" /></svg>Read schema overview</span
+                            ><span class="ma-tool"
+                              ><svg class="icon"><use href="#i-diagram" /></svg>Opened diagram</span
+                            >
+                          </div>
+                          <p data-i18n="slideDiagram.answer">
+                            Through <code>order_items</code>: each row points to one order and one product. I opened the diagram with
+                            <code>orders</code> selected.
+                          </p>
+                        </div>
+                      </div>
+                      <div class="am-input">Ask about this schema…</div>
+                    </div>
+                  </div>
+                </div>
+                <p class="slide-caption" data-i18n="carousel.caption3">The ER diagram of a shop schema, laid out automatically, with one table selected.</p>
               </div>
             </div>
+
+            <p
+              class="sr-only"
+              aria-live="polite"
+              data-carousel-status
+              data-i18n-attr="data-template:carousel.status"
+              data-template="View {n} of {total}: {name}"
+            ></p>
           </div>
-          <p class="mock-caption">Illustration of the app's layout. Screenshots will follow with the first release.</p>
+          <p class="mock-caption" data-i18n="hero.mockCaption">Illustration of the app's layout. Screenshots will follow with the first release.</p>
         </div>
       </section>
 
@@ -256,30 +1079,91 @@
       <section class="section" id="why" aria-labelledby="why-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Why Fosta Studio</p>
-            <h2 id="why-title">A database client that stays out of your way</h2>
-            <p>Built for developers who hop between projects, customers and environments all day, on a machine that has better things to do with its memory.</p>
+            <p class="kicker" data-i18n="why.kicker">Why Fosta Studio</p>
+            <h2 id="why-title" data-i18n="why.title">Fast where it counts, careful where it matters</h2>
+            <p data-i18n="why.intro">
+              A native client for developers who move between projects, engines and environments all day, and would rather not break production on the way.
+            </p>
           </header>
+          <!-- Key numbers; main.js counts them up once when they scroll into view (not with reduced motion). -->
+          <ul class="stats" data-i18n-attr="aria-label:stats.label" aria-label="Fosta Studio in numbers">
+            <li>
+              <b class="stat-num">~<span data-count-to="10">10</span>&nbsp;MB</b><span data-i18n="stats.size">portable executable, no installer</span>
+            </li>
+            <li>
+              <b class="stat-num"><span data-count-to="4">4</span></b
+              ><span data-i18n="stats.engines">engines supported today</span>
+            </li>
+            <li>
+              <b class="stat-num">+<span data-count-to="6">6</span></b
+              ><span data-i18n="stats.roadmap">more engines on the roadmap</span>
+            </li>
+            <li><b class="stat-num"><span data-count-to="5">5</span>+</b><span data-i18n="stats.ai">AI providers, from Claude and GPT to local models</span></li>
+          </ul>
           <ul class="why-grid">
             <li class="why-card">
-              <span class="why-icon"><svg class="icon" aria-hidden="true"><use href="#i-box" /></svg></span>
-              <h3>Small</h3>
-              <p>A Tauri 2 app with a Rust core and a plain TypeScript UI. The release executable is about 10&nbsp;MB, portable, with no installer required.</p>
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg
+              ></span>
+              <h3 data-i18n="why.native.title">Native, small and quick</h3>
+              <p data-i18n="why.native.text">
+                A Rust core in a Tauri 2 shell with a plain TypeScript UI and a virtualised grid. The portable executable is about 10&nbsp;MB and leaves your
+                memory to the databases.
+              </p>
             </li>
             <li class="why-card">
-              <span class="why-icon"><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg></span>
-              <h3>Fast</h3>
-              <p>No UI framework, a virtualised grid and native drivers. It uses far less memory than clients built on Electron or Java.</p>
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+              ></span>
+              <h3 data-i18n="why.engines.title">A view that fits each engine</h3>
+              <p>
+                <span data-i18n="why.engines.text"
+                  >SQL tables open in an editable grid. MongoDB documents, Redis keys and Elasticsearch search are getting views of their own instead of being
+                  squeezed into rows.</span
+                >
+                <span class="tag-coming" data-i18n="common.coming">coming</span>
+              </p>
             </li>
             <li class="why-card">
-              <span class="why-icon"><svg class="icon" aria-hidden="true"><use href="#i-heart" /></svg></span>
-              <h3>Free &amp; open</h3>
-              <p>GPL-3.0, no account, no telemetry. Read the code, build it yourself, and send a pull request when something bugs you.</p>
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg
+              ></span>
+              <h3 data-i18n="why.workspaces.title">Workspaces that open their own tunnels</h3>
+              <p data-i18n="why.workspaces.text">
+                Each project or environment keeps its connections, tabs and startup tasks. Open it and <code>kubectl port-forward</code> starts, restarts when
+                it drops, and stops when you quit.
+              </p>
             </li>
             <li class="why-card">
-              <span class="why-icon"><svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg></span>
-              <h3>Safe AI</h3>
-              <p>Bring your own model. The assistant reads schema metadata and writes queries, but it has no tool that runs them. You do.</p>
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg
+              ></span>
+              <h3><span data-i18n="why.gateway.title">Production stays read-only</span> <span class="tag-coming" data-i18n="common.coming">coming</span></h3>
+              <p data-i18n="why.gateway.text">
+                Every statement passes one gateway with rules per workspace. A Production workspace defaults to read-only, and risky statements ask for
+                confirmation first.
+              </p>
+            </li>
+            <li class="why-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg
+              ></span>
+              <h3 data-i18n="why.ai.title">An AI agent that knows your schema</h3>
+              <p data-i18n="why.ai.text">
+                Ask in plain words. The agent explores tables and relations, writes and explains queries, opens the right view and reads task logs to help you debug. Use Claude, GPT, Gemini, Fosta or a local Ollama model.
+              </p>
+            </li>
+            <li class="why-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-heart" /></svg
+              ></span>
+              <h3 data-i18n="why.open.title">Open source, desktop or Docker</h3>
+              <p>
+                <span data-i18n="why.open.text"
+                  >GPL-3.0, no account, no telemetry. A Windows app today; a web edition that starts with one <code>docker run</code> is on the way.</span
+                >
+                <span class="tag-coming" data-i18n="common.coming">coming</span>
+              </p>
             </li>
           </ul>
         </div>
@@ -289,35 +1173,149 @@
       <section class="section section-alt" id="features" aria-labelledby="features-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Features</p>
-            <h2 id="features-title">Everything you reach for, nothing you trip over</h2>
+            <p class="kicker" data-i18n="features.kicker">Features</p>
+            <h2 id="features-title" data-i18n="features.title">Built for the way you work with data</h2>
+            <p data-i18n="features.intro">
+              From the first query of the day to the last migration check, the everyday work stays quick, visible and under your control.
+            </p>
           </header>
 
-          <!-- Workspaces -->
-          <article class="feature" aria-labelledby="f-workspaces">
+          <!-- Query editor. main.js replays the query being typed and run while it is on screen; the markup is the final state. -->
+          <article class="feature" aria-labelledby="f-query">
             <div class="feature-text">
-              <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg></span>
-              <h3 id="f-workspaces">Workspaces and startup tasks</h3>
-              <p>Group connections, startup tasks and open tabs per project, customer or environment, then switch from the rail on the left or with <kbd>Ctrl</kbd>+<kbd>1…9</kbd>. Tabs of other workspaces stay open.</p>
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-code" /></svg
+              ></span>
+              <h3 id="f-query" data-i18n="query.title">A query editor that keeps up</h3>
+              <p data-i18n="query.text">
+                Syntax highlighting, table-name completion and several statements per run. Each tab keeps its own session, so <code>BEGIN</code>…<code>COMMIT</code> can span runs, and Stop cancels a query that takes too long.
+              </p>
               <ul class="checks">
-                <li>Run <code>kubectl port-forward</code> or any command when a workspace opens</li>
-                <li>Automatic restart with backoff when a tunnel drops, and live logs</li>
-                <li>Child processes are cleaned up when the app exits</li>
-                <li>Production workspaces with safety rules <span class="tag-coming">coming</span></li>
+                <li data-i18n="query.item1">Every run lands in a searchable history that stays on your machine</li>
+                <li data-i18n="query.item2">Results open in the same grid as tables, ready to filter and export</li>
+                <li>
+                  <span data-i18n="query.item3">Streaming results that show the first rows at once</span>
+                  <span class="tag-coming" data-i18n="common.coming">coming</span>
+                </li>
               </ul>
             </div>
-            <figure class="shot" data-shot="assets/screenshots/workspaces.png" data-shot-alt="Fosta Studio with several workspaces in the rail and the startup task log of a kubectl port-forward.">
+            <figure class="shot">
+              <div class="shot-mock mock-query" data-query-demo aria-hidden="true">
+                <div class="qd-tabs">
+                  <span class="qd-tab"
+                    ><svg class="icon"><use href="#i-code" /></svg>Query 1</span
+                  ><span class="qd-conn"><span class="am-dot ok"></span>shop-staging</span>
+                </div>
+                <div class="qd-editor">
+                  <div class="qd-gutter"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span></div>
+                  <pre class="qd-code" data-qd-code><span class="k">SELECT</span> c.name, <span class="k">SUM</span>(o.total) <span class="k">AS</span> spent
+<span class="k">FROM</span> orders o
+<span class="k">JOIN</span> customers c <span class="k">ON</span> c.id = o.customer_id
+<span class="k">GROUP BY</span> c.name
+<span class="k">ORDER BY</span> spent <span class="k">DESC</span> <span class="k">LIMIT</span> <span class="n">6</span>;</pre>
+                </div>
+                <div class="qd-bar">
+                  <span class="am-btn primary small qd-run" data-qd-run
+                    ><svg class="icon"><use href="#i-play" /></svg>Run</span
+                  ><span class="qd-status" data-qd-status data-done="6 rows · 18 ms">6 rows · 18 ms</span>
+                </div>
+                <table class="qd-grid">
+                  <thead>
+                    <tr>
+                      <th class="rn"></th>
+                      <th>name</th>
+                      <th class="num">spent</th>
+                    </tr>
+                  </thead>
+                  <tbody data-qd-rows>
+                    <tr>
+                      <td class="rn">1</td>
+                      <td>Priya Nair</td>
+                      <td class="num">1,842.25</td>
+                    </tr>
+                    <tr>
+                      <td class="rn">2</td>
+                      <td>Kenji Sato</td>
+                      <td class="num">1,377.00</td>
+                    </tr>
+                    <tr>
+                      <td class="rn">3</td>
+                      <td>Mai Tran</td>
+                      <td class="num">1,129.90</td>
+                    </tr>
+                    <tr>
+                      <td class="rn">4</td>
+                      <td>Sofia Rossi</td>
+                      <td class="num">972.10</td>
+                    </tr>
+                    <tr>
+                      <td class="rn">5</td>
+                      <td>Jonas Berg</td>
+                      <td class="num">654.00</td>
+                    </tr>
+                    <tr>
+                      <td class="rn">6</td>
+                      <td>Amara Okafor</td>
+                      <td class="num">409.99</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <figcaption data-i18n="query.caption">A query typed, run and answered in the grid (illustration).</figcaption>
+            </figure>
+          </article>
+
+          <!-- Workspaces -->
+          <article class="feature reverse" aria-labelledby="f-workspaces">
+            <div class="feature-text">
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg
+              ></span>
+              <h3 id="f-workspaces" data-i18n="ws.title">Workspaces and startup tasks</h3>
+              <p data-i18n="ws.text">
+                Group connections, startup tasks and open tabs per project, customer or environment, then switch from the rail on the left or with
+                <kbd>Ctrl</kbd>+<kbd>1…9</kbd>. Tabs of other workspaces stay open.
+              </p>
+              <ul class="checks">
+                <li data-i18n="ws.item1">Run <code>kubectl port-forward</code> or any command when a workspace opens</li>
+                <li data-i18n="ws.item2">Automatic restart with backoff when a tunnel drops, and live logs</li>
+                <li data-i18n="ws.item3">Child processes are cleaned up when the app exits</li>
+                <li>
+                  <span data-i18n="ws.item4">Production workspaces with safety rules</span> <span class="tag-coming" data-i18n="common.coming">coming</span>
+                </li>
+              </ul>
+            </div>
+            <figure
+              class="shot"
+              data-shot="assets/screenshots/workspaces.png"
+              data-i18n-attr="data-shot-alt:ws.shotAlt"
+              data-shot-alt="Fosta Studio with several workspaces in the rail and the startup task log of a kubectl port-forward."
+            >
               <div class="shot-mock mock-tasks" aria-hidden="true">
                 <div class="mt-rail">
-                  <span class="am-glyph active" style="--ws: var(--ws-blue)"><svg class="icon"><use href="#i-cart" /></svg></span>
-                  <span class="am-glyph" style="--ws: var(--ws-green)"><svg class="icon"><use href="#i-card" /></svg></span>
-                  <span class="am-glyph" style="--ws: var(--ws-red)"><svg class="icon"><use href="#i-shield" /></svg></span>
-                  <span class="am-glyph" style="--ws: var(--ws-purple)"><svg class="icon"><use href="#i-flask" /></svg></span>
+                  <span class="am-glyph active" style="--ws: var(--ws-blue)"
+                    ><svg class="icon"><use href="#i-cart" /></svg
+                  ></span>
+                  <span class="am-glyph" style="--ws: var(--ws-green)"
+                    ><svg class="icon"><use href="#i-card" /></svg
+                  ></span>
+                  <span class="am-glyph" style="--ws: var(--ws-red)"
+                    ><svg class="icon"><use href="#i-shield" /></svg
+                  ></span>
+                  <span class="am-glyph" style="--ws: var(--ws-purple)"
+                    ><svg class="icon"><use href="#i-flask" /></svg
+                  ></span>
                 </div>
                 <div class="mt-body">
-                  <div class="mt-head"><svg class="icon"><use href="#i-term" /></svg><b>Startup tasks</b><span class="am-muted">Shop</span></div>
-                  <div class="mt-task"><span class="am-dot ok"></span><span class="mt-name">port-forward shop-db</span><span class="mt-state ok">running</span></div>
-                  <div class="mt-task"><span class="am-dot warn"></span><span class="mt-name">port-forward search</span><span class="mt-state warn">restarting</span></div>
+                  <div class="mt-head">
+                    <svg class="icon"><use href="#i-term" /></svg><b>Startup tasks</b><span class="am-muted">Shop</span>
+                  </div>
+                  <div class="mt-task">
+                    <span class="am-dot ok"></span><span class="mt-name">port-forward shop-db</span><span class="mt-state ok">running</span>
+                  </div>
+                  <div class="mt-task">
+                    <span class="am-dot warn"></span><span class="mt-name">port-forward search</span><span class="mt-state warn">restarting</span>
+                  </div>
                   <div class="mt-cmd">$ kubectl port-forward svc/mariadb 13306:3306 -n shop</div>
                   <div class="mt-log">
                     <div>Forwarding from 127.0.0.1:13306 -&gt; 3306</div>
@@ -327,56 +1325,114 @@
                   </div>
                 </div>
               </div>
-              <figcaption>Each workspace brings its own connections, tasks and tabs.</figcaption>
+              <figcaption data-i18n="ws.caption">Each workspace brings its own connections, tasks and tabs.</figcaption>
             </figure>
           </article>
 
           <!-- Grid -->
-          <article class="feature reverse" aria-labelledby="f-grid">
+          <article class="feature" aria-labelledby="f-grid">
             <div class="feature-text">
-              <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-grid" /></svg></span>
-              <h3 id="f-grid">A data grid made for editing</h3>
-              <p>A virtualised grid that pages through large tables, with type badges under each column name so you always know what you are looking at.</p>
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-grid" /></svg
+              ></span>
+              <h3 id="f-grid" data-i18n="grid.title">A data grid made for editing</h3>
+              <p data-i18n="grid.text">
+                A virtualised grid that pages through large tables, with type badges under each column name so you always know what you are looking at.
+              </p>
               <ul class="checks">
-                <li>Inline editing, inserts and deletes collected in a pending-changes bar</li>
-                <li>Apply everything in one transaction, or discard it</li>
-                <li><code>WHERE</code> filters and per-column filters, sorting</li>
-                <li>A record panel that follows foreign keys to related rows</li>
+                <li data-i18n="grid.item1">Inline editing, inserts and deletes collected in a pending-changes bar</li>
+                <li data-i18n="grid.item2">Apply everything in one transaction, or discard it</li>
+                <li data-i18n="grid.item3"><code>WHERE</code> filters and per-column filters, sorting</li>
+                <li data-i18n="grid.item4">A record panel that follows foreign keys to related rows</li>
               </ul>
             </div>
-            <figure class="shot" data-shot="assets/screenshots/grid.png" data-shot-alt="The Fosta Studio data grid with column filters, type badges, an edited cell and the pending changes bar.">
+            <figure
+              class="shot"
+              data-shot="assets/screenshots/grid.png"
+              data-i18n-attr="data-shot-alt:grid.shotAlt"
+              data-shot-alt="The Fosta Studio data grid with column filters, type badges, an edited cell and the pending changes bar."
+            >
               <div class="shot-mock mock-grid" aria-hidden="true">
                 <table>
                   <thead>
-                    <tr><th>sku<span class="th-type"><span class="type-badge type-text">abc</span></span></th><th>name<span class="th-type"><span class="type-badge type-text">abc</span></span></th><th class="num">price<span class="th-type"><span class="type-badge type-number">123</span></span></th><th>stock<span class="th-type"><span class="type-badge type-number">123</span></span></th></tr>
-                    <tr class="filters"><th><span>LK-%</span></th><th><span></span></th><th><span>&gt; 20</span></th><th><span></span></th></tr>
+                    <tr>
+                      <th>
+                        sku<span class="th-type"><span class="type-badge type-text">abc</span></span>
+                      </th>
+                      <th>
+                        name<span class="th-type"><span class="type-badge type-text">abc</span></span>
+                      </th>
+                      <th class="num">
+                        price<span class="th-type"><span class="type-badge type-number">123</span></span>
+                      </th>
+                      <th>
+                        stock<span class="th-type"><span class="type-badge type-number">123</span></span>
+                      </th>
+                    </tr>
+                    <tr class="filters">
+                      <th><span>LK-%</span></th>
+                      <th><span></span></th>
+                      <th><span>&gt; 20</span></th>
+                      <th><span></span></th>
+                    </tr>
                   </thead>
                   <tbody>
-                    <tr><td>LK-102</td><td>Desk lamp</td><td class="num">39.00</td><td class="num">120</td></tr>
-                    <tr class="modified"><td>LK-118</td><td>Floor lamp</td><td class="num cell-mod">84.00</td><td class="num">35</td></tr>
-                    <tr><td>LK-121</td><td>Wall light</td><td class="num">27.50</td><td class="num">64</td></tr>
-                    <tr class="deleted"><td>LK-130</td><td>Pendant (old)</td><td class="num">45.00</td><td class="num">0</td></tr>
+                    <tr>
+                      <td>LK-102</td>
+                      <td>Desk lamp</td>
+                      <td class="num">39.00</td>
+                      <td class="num">120</td>
+                    </tr>
+                    <tr class="modified">
+                      <td>LK-118</td>
+                      <td>Floor lamp</td>
+                      <td class="num cell-mod">84.00</td>
+                      <td class="num">35</td>
+                    </tr>
+                    <tr>
+                      <td>LK-121</td>
+                      <td>Wall light</td>
+                      <td class="num">27.50</td>
+                      <td class="num">64</td>
+                    </tr>
+                    <tr class="deleted">
+                      <td>LK-130</td>
+                      <td>Pendant (old)</td>
+                      <td class="num">45.00</td>
+                      <td class="num">0</td>
+                    </tr>
                   </tbody>
                 </table>
-                <div class="am-pending"><span class="am-dot warn"></span><b>2 pending changes</b><span class="am-btn ghost">Discard</span><span class="am-btn primary">Apply</span></div>
+                <div class="am-pending">
+                  <span class="am-dot warn"></span><b>2 pending changes</b><span class="am-btn ghost">Discard</span><span class="am-btn primary">Apply</span>
+                </div>
               </div>
-              <figcaption>Edits wait in the pending bar until you apply them.</figcaption>
+              <figcaption data-i18n="grid.caption">Edits wait in the pending bar until you apply them.</figcaption>
             </figure>
           </article>
 
           <!-- Diagram -->
-          <article class="feature" aria-labelledby="f-diagram">
+          <article class="feature reverse" aria-labelledby="f-diagram">
             <div class="feature-text">
-              <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-diagram" /></svg></span>
-              <h3 id="f-diagram">Interactive ER diagrams</h3>
-              <p>See how a database fits together. The diagram lays itself out automatically; drag tables around, zoom in, and export the result.</p>
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-diagram" /></svg
+              ></span>
+              <h3 id="f-diagram" data-i18n="diagram.title">Interactive ER diagrams</h3>
+              <p data-i18n="diagram.text">
+                See how a database fits together. The diagram lays itself out automatically; drag tables around, zoom in, and export the result.
+              </p>
               <ul class="checks">
-                <li>Automatic layout, drag and zoom</li>
-                <li>Export to SVG or PNG</li>
-                <li>Inferred links between MongoDB collections</li>
+                <li data-i18n="diagram.item1">Automatic layout, drag and zoom</li>
+                <li data-i18n="diagram.item2">Export to SVG or PNG</li>
+                <li data-i18n="diagram.item3">Inferred links between MongoDB collections</li>
               </ul>
             </div>
-            <figure class="shot" data-shot="assets/screenshots/diagram.png" data-shot-alt="An ER diagram of a shop database in Fosta Studio, with tables connected by foreign keys.">
+            <figure
+              class="shot"
+              data-shot="assets/screenshots/diagram.png"
+              data-i18n-attr="data-shot-alt:diagram.shotAlt"
+              data-shot-alt="An ER diagram of a shop database in Fosta Studio, with tables connected by foreign keys."
+            >
               <div class="shot-mock mock-diagram" aria-hidden="true">
                 <svg viewBox="0 0 480 300" preserveAspectRatio="xMidYMid meet">
                   <g class="md-links">
@@ -385,52 +1441,104 @@
                     <path d="M390 160 C 420 160, 420 90, 390 90" class="dash" />
                   </g>
                   <g class="md-table" transform="translate(20 30)">
-                    <rect width="130" height="96" rx="8" /><path class="md-head" d="M0 8a8 8 0 0 1 8-8h114a8 8 0 0 1 8 8v18H0z" />
+                    <rect width="130" height="96" rx="8" />
+                    <path class="md-head" d="M0 8a8 8 0 0 1 8-8h114a8 8 0 0 1 8 8v18H0z" />
                     <text x="12" y="18" class="md-title">customers</text>
-                    <text x="12" y="46">id <tspan class="md-pk">PK</tspan></text><text x="12" y="66">name</text><text x="12" y="86">email</text>
+                    <text x="12" y="46">
+                      id
+                      <tspan class="md-pk">PK</tspan>
+                    </text>
+                    <text x="12" y="66">name</text>
+                    <text x="12" y="86">email</text>
                   </g>
                   <g class="md-table" transform="translate(20 172)">
-                    <rect width="130" height="96" rx="8" /><path class="md-head" d="M0 8a8 8 0 0 1 8-8h114a8 8 0 0 1 8 8v18H0z" />
+                    <rect width="130" height="96" rx="8" />
+                    <path class="md-head" d="M0 8a8 8 0 0 1 8-8h114a8 8 0 0 1 8 8v18H0z" />
                     <text x="12" y="18" class="md-title">products</text>
-                    <text x="12" y="46">id <tspan class="md-pk">PK</tspan></text><text x="12" y="66">sku</text><text x="12" y="86">price</text>
+                    <text x="12" y="46">
+                      id
+                      <tspan class="md-pk">PK</tspan>
+                    </text>
+                    <text x="12" y="66">sku</text>
+                    <text x="12" y="86">price</text>
                   </g>
                   <g class="md-table" transform="translate(250 100)">
-                    <rect width="140" height="116" rx="8" /><path class="md-head" d="M0 8a8 8 0 0 1 8-8h124a8 8 0 0 1 8 8v18H0z" />
+                    <rect width="140" height="116" rx="8" />
+                    <path class="md-head" d="M0 8a8 8 0 0 1 8-8h124a8 8 0 0 1 8 8v18H0z" />
                     <text x="12" y="18" class="md-title">orders</text>
-                    <text x="12" y="46">id <tspan class="md-pk">PK</tspan></text><text x="12" y="66">customer_id <tspan class="md-fk">FK</tspan></text><text x="12" y="86">product_id <tspan class="md-fk">FK</tspan></text><text x="12" y="106">total</text>
+                    <text x="12" y="46">
+                      id
+                      <tspan class="md-pk">PK</tspan>
+                    </text>
+                    <text x="12" y="66">
+                      customer_id
+                      <tspan class="md-fk">FK</tspan>
+                    </text>
+                    <text x="12" y="86">
+                      product_id
+                      <tspan class="md-fk">FK</tspan>
+                    </text>
+                    <text x="12" y="106">total</text>
                   </g>
                   <g class="md-table" transform="translate(250 20)">
-                    <rect width="140" height="56" rx="8" /><path class="md-head" d="M0 8a8 8 0 0 1 8-8h124a8 8 0 0 1 8 8v18H0z" />
+                    <rect width="140" height="56" rx="8" />
+                    <path class="md-head" d="M0 8a8 8 0 0 1 8-8h124a8 8 0 0 1 8 8v18H0z" />
                     <text x="12" y="18" class="md-title">payments</text>
-                    <text x="12" y="46">order_id <tspan class="md-fk">FK</tspan></text>
+                    <text x="12" y="46">
+                      order_id
+                      <tspan class="md-fk">FK</tspan>
+                    </text>
                   </g>
                 </svg>
               </div>
-              <figcaption>Tables and their foreign keys, laid out for you.</figcaption>
+              <figcaption data-i18n="diagram.caption">Tables and their foreign keys, laid out for you.</figcaption>
             </figure>
           </article>
 
           <!-- Assistant -->
-          <article class="feature reverse" aria-labelledby="f-assistant">
+          <article class="feature" aria-labelledby="f-assistant">
             <div class="feature-text">
-              <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg></span>
-              <h3 id="f-assistant">An AI assistant that never executes</h3>
-              <p>Ask in plain words. The assistant reads table and column metadata, writes the query, and can open a diagram, a table or a new query tab for you. Every code block has <b>Insert</b> and <b>New tab</b> buttons.</p>
-              <p class="callout"><svg class="icon" aria-hidden="true"><use href="#i-ban" /></svg><span><b>It has no tool that runs queries or changes data.</b> You read what it wrote, and you decide whether to run it.</span></p>
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg
+              ></span>
+              <h3 id="f-assistant" data-i18n="ai.title">A built-in AI agent for your databases</h3>
+              <p data-i18n="ai.text">Ask in plain words. The agent looks up tables, columns and relations, writes and explains queries, fixes errors, and opens a table, a diagram or a new query tab for you. Every code block has <b>Insert</b> and <b>New tab</b> buttons.</p>
+              <p class="callout">
+                <svg class="icon" aria-hidden="true"><use href="#i-ban" /></svg
+                ><span data-i18n="ai.callout"
+                  ><b>You stay in control.</b> The agent prepares the work; anything that touches your data runs only when you run it.</span
+                >
+              </p>
               <ul class="checks">
-                <li>Bring your own model: Fosta, OpenAI, Gemini, Claude, or any OpenAI-compatible endpoint such as a local Ollama</li>
-                <li>Your key is stored in Windows Credential Manager and requests go straight from your machine to the provider</li>
-                <li>No row data is read; it only sees metadata and what you choose to share</li>
+                <li data-i18n="ai.item1">Bring your own model: Fosta, OpenAI, Gemini, Claude, or any OpenAI-compatible endpoint such as a local Ollama</li>
+                <li data-i18n="ai.item2">Your key is stored in Windows Credential Manager and requests go straight from your machine to the provider</li>
+                <li data-i18n="ai.item3">No row data is read; it only sees metadata and what you choose to share</li>
               </ul>
-              <p class="fineprint">Disclosure: Fosta, the default provider, is a separate AI API service run by the author of Fosta Studio. It is listed first for convenience only; nothing in Fosta Studio requires a Fosta account, and requests only go to the provider you configure.</p>
+              <p class="fineprint" data-i18n="ai.disclosure">
+                Disclosure: Fosta, the default provider, is a separate AI API service run by the author of Fosta Studio. It is listed first for convenience
+                only; nothing in Fosta Studio requires a Fosta account, and requests only go to the provider you configure.
+              </p>
             </div>
-            <figure class="shot" data-shot="assets/screenshots/assistant.png" data-shot-alt="The Fosta Studio assistant panel with a question, a suggested SQL query and the Insert and New tab buttons.">
+            <figure
+              class="shot"
+              data-shot="assets/screenshots/assistant.png"
+              data-i18n-attr="data-shot-alt:ai.shotAlt"
+              data-shot-alt="The Fosta Studio assistant panel with a question, a suggested SQL query and the Insert and New tab buttons."
+            >
               <div class="shot-mock mock-assistant" aria-hidden="true">
-                <div class="am-asst-head"><svg class="icon"><use href="#i-spark" /></svg><b>Assistant</b><span class="am-chip">your model</span></div>
+                <div class="am-asst-head">
+                  <svg class="icon"><use href="#i-spark" /></svg><b>Assistant</b><span class="am-chip">your model</span>
+                </div>
                 <div class="am-msgs">
                   <div class="am-msg user">Show me how orders relate to payments.</div>
                   <div class="am-msg bot">
-                    <div class="ma-tools"><span class="ma-tool"><svg class="icon"><use href="#i-check" /></svg>Read schema overview</span><span class="ma-tool"><svg class="icon"><use href="#i-diagram" /></svg>Opened diagram</span></div>
+                    <div class="ma-tools">
+                      <span class="ma-tool"
+                        ><svg class="icon"><use href="#i-check" /></svg>Read schema overview</span
+                      ><span class="ma-tool"
+                        ><svg class="icon"><use href="#i-diagram" /></svg>Opened diagram</span
+                      >
+                    </div>
                     <p><code>payments.order_id</code> points to <code>orders.id</code>. To find unpaid orders:</p>
                     <pre><span class="k">SELECT</span> o.id, o.total
 <span class="k">FROM</span> orders o
@@ -440,31 +1548,47 @@
                   </div>
                 </div>
               </div>
-              <figcaption>Suggestions land in your editor, never on your server.</figcaption>
+              <figcaption data-i18n="ai.caption">From question to a ready-to-run query in seconds.</figcaption>
             </figure>
           </article>
 
           <!-- Smaller features -->
           <ul class="mini-grid">
             <li class="mini-card">
-              <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-io" /></svg></span>
-              <h3>Import &amp; export</h3>
-              <p>Import CSV, TSV or JSON with column mapping. Export to CSV, CSV for Excel, JSON, SQL <code>INSERT</code> statements or Markdown.</p>
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-io" /></svg
+              ></span>
+              <h3 data-i18n="mini.io.title">Import &amp; export</h3>
+              <p data-i18n="mini.io.text">
+                Import CSV, TSV or JSON with column mapping. Export to CSV, CSV for Excel, JSON, SQL <code>INSERT</code> statements or Markdown.
+              </p>
             </li>
             <li class="mini-card">
-              <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-target" /></svg></span>
-              <h3>MariaDB vector tools</h3>
-              <p>For MariaDB 11.7+: embedding search, column and index health checks, and recall of the vector index measured against exact search.</p>
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-target" /></svg
+              ></span>
+              <h3 data-i18n="mini.vector.title">MariaDB vector tools</h3>
+              <p data-i18n="mini.vector.text">
+                For MariaDB 11.7+: embedding search, column and index health checks, and recall of the vector index measured against exact search.
+              </p>
             </li>
             <li class="mini-card">
-              <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-link" /></svg></span>
-              <h3>Connection strings</h3>
-              <p>Paste a connection string for any engine, including MongoDB Atlas URIs. A password inside it is moved to Credential Manager.</p>
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-link" /></svg
+              ></span>
+              <h3 data-i18n="mini.conn.title">Connection strings</h3>
+              <p data-i18n="mini.conn.text">
+                Paste a connection string for any engine, including MongoDB Atlas URIs. A password inside it is moved to Credential Manager.
+              </p>
             </li>
             <li class="mini-card">
-              <span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#i-code" /></svg></span>
-              <h3>Query editor</h3>
-              <p>Syntax highlighting, table-name completion, several statements per run, and one session per tab so <code>BEGIN</code>…<code>COMMIT</code> can span runs.</p>
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-edit" /></svg
+              ></span>
+              <h3 data-i18n="mini.cell.title">Cell editor</h3>
+              <p data-i18n="mini.cell.text">
+                Press <kbd>Shift</kbd>+<kbd>Enter</kbd> on a long value for a large editor with NULL, word wrap, and Format / Minify with validation for JSON.
+              </p>
             </li>
           </ul>
         </div>
@@ -474,17 +1598,94 @@
       <section class="section" id="engines" aria-labelledby="engines-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Engines</p>
-            <h2 id="engines-title">One client for the databases you actually run</h2>
-            <p>Each engine is a native Rust driver behind one shared interface, so the grid, diagram and assistant work the same everywhere.</p>
+            <p class="kicker" data-i18n="engines.kicker">Engines</p>
+            <h2 id="engines-title" data-i18n="engines.title">One client for the databases you actually run</h2>
+            <p data-i18n="engines.intro">
+              Each engine is a native Rust driver behind one shared interface, so workspaces, safety rules and the assistant work the same everywhere, while
+              each engine gets a view that fits its data.
+            </p>
           </header>
           <ul class="engine-grid">
-            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>MariaDB</h3><p>Including vector tools on 11.7+</p></div><span class="status status-ok">Supported</span></li>
-            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>MySQL</h3><p>Stop a running query from the editor</p></div><span class="status status-ok">Supported</span></li>
-            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>SQL Server</h3><p>Schemas, TLS on by default</p></div><span class="status status-ok">Supported</span></li>
-            <li class="engine"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>MongoDB</h3><p>JSON filters, Atlas URIs, inferred diagram links</p></div><span class="status status-ok">Supported</span></li>
-            <li class="engine coming"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>PostgreSQL</h3><p>On the roadmap</p></div><span class="status status-coming">Coming</span></li>
-            <li class="engine coming"><span class="engine-glyph"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg></span><div><h3>SQLite</h3><p>On the roadmap</p></div><span class="status status-coming">Coming</span></li>
+            <li class="engine">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+              ></span>
+              <div>
+                <h3>MariaDB</h3>
+                <p data-i18n="engines.mariadb">Including vector tools on 11.7+</p>
+              </div>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
+            </li>
+            <li class="engine">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+              ></span>
+              <div>
+                <h3>MySQL</h3>
+                <p data-i18n="engines.mysql">Stop a running query from the editor</p>
+              </div>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
+            </li>
+            <li class="engine">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+              ></span>
+              <div>
+                <h3>SQL Server</h3>
+                <p data-i18n="engines.mssql">Schemas, TLS on by default</p>
+              </div>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
+            </li>
+            <li class="engine">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+              ></span>
+              <div>
+                <h3>MongoDB</h3>
+                <p data-i18n="engines.mongodb">JSON filters, Atlas URIs, inferred diagram links; a document view is coming</p>
+              </div>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
+            </li>
+            <li class="engine coming">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+              ></span>
+              <div>
+                <h3>PostgreSQL</h3>
+                <p data-i18n="engines.onRoadmap">On the roadmap</p>
+              </div>
+              <span class="status status-coming" data-i18n="engines.coming">Coming</span>
+            </li>
+            <li class="engine coming">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+              ></span>
+              <div>
+                <h3>SQLite</h3>
+                <p data-i18n="engines.onRoadmap">On the roadmap</p>
+              </div>
+              <span class="status status-coming" data-i18n="engines.coming">Coming</span>
+            </li>
+            <li class="engine coming">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-key" /></svg
+              ></span>
+              <div>
+                <h3>Redis</h3>
+                <p data-i18n="engines.redis">A key browser with a view for each data type</p>
+              </div>
+              <span class="status status-coming" data-i18n="engines.coming">Coming</span>
+            </li>
+            <li class="engine coming">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg
+              ></span>
+              <div>
+                <h3>Elasticsearch</h3>
+                <p data-i18n="engines.elastic">Search, ES|QL, mappings and aggregations</p>
+              </div>
+              <span class="status status-coming" data-i18n="engines.coming">Coming</span>
+            </li>
           </ul>
         </div>
       </section>
@@ -493,44 +1694,53 @@
       <section class="section section-alt" id="privacy" aria-labelledby="privacy-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Privacy &amp; safety</p>
-            <h2 id="privacy-title">Your data stays yours</h2>
-            <p>Fosta Studio talks to your databases and to the AI provider you configure. Nothing else.</p>
+            <p class="kicker" data-i18n="privacy.kicker">Privacy &amp; safety</p>
+            <h2 id="privacy-title" data-i18n="privacy.title">Your data stays yours</h2>
+            <p data-i18n="privacy.intro">Fosta Studio talks to your databases and to the AI provider you configure. Nothing else.</p>
           </header>
           <ul class="privacy-grid">
             <li>
               <svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg>
               <div>
-                <h3>Local, portable config</h3>
-                <p>Workspaces, connections and tasks live in <code>fosta-studio.json</code> next to the executable. No secrets are written to it.</p>
+                <h3 data-i18n="privacy.config.title">Local, portable config</h3>
+                <p data-i18n="privacy.config.text">
+                  Workspaces, connections and tasks live in <code>fosta-studio.json</code> next to the executable. No secrets are written to it.
+                </p>
               </div>
             </li>
             <li>
               <svg class="icon" aria-hidden="true"><use href="#i-key" /></svg>
               <div>
-                <h3>Windows Credential Manager</h3>
-                <p>Database passwords and AI keys are stored in the operating system's credential store, never in the config file.</p>
+                <h3 data-i18n="privacy.creds.title">Windows Credential Manager</h3>
+                <p data-i18n="privacy.creds.text">
+                  Database passwords and AI keys are stored in the operating system's credential store, never in the config file.
+                </p>
               </div>
             </li>
             <li>
               <svg class="icon" aria-hidden="true"><use href="#i-eye-off" /></svg>
               <div>
-                <h3>No telemetry, no account</h3>
-                <p>The app does not phone home and does not need a sign-up. It is fully usable offline with local databases.</p>
+                <h3 data-i18n="privacy.telemetry.title">No telemetry, no account</h3>
+                <p data-i18n="privacy.telemetry.text">
+                  The app does not phone home and does not need a sign-up. It is fully usable offline with local databases.
+                </p>
               </div>
             </li>
             <li>
               <svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg>
               <div>
-                <h3>Assistant boundaries</h3>
-                <p>The model sees table and column metadata plus the editor text, errors and logs you choose to share. It reads no rows and cannot run statements.</p>
+                <h3 data-i18n="privacy.ai.title">What the agent sees</h3>
+                <p data-i18n="privacy.ai.text">The model sees table and column metadata plus the editor text, errors and logs you choose to share. It reads no rows, and statements run only when you run them.</p>
               </div>
             </li>
             <li class="wide">
               <svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg>
               <div>
-                <h3>Statement gateway <span class="tag-coming">coming</span></h3>
-                <p>Every statement will pass through one gateway with rules per workspace: Open, Guarded, Read-only or Custom. A workspace marked Production defaults to Read-only, and relaxing a rule always comes with a loud warning.</p>
+                <h3><span data-i18n="privacy.gateway.title">Statement gateway</span> <span class="tag-coming" data-i18n="common.coming">coming</span></h3>
+                <p data-i18n="privacy.gateway.text">
+                  Every statement will pass through one gateway with rules per workspace: Open, Guarded, Read-only or Custom. A workspace marked Production
+                  defaults to Read-only, and relaxing a rule always comes with a loud warning.
+                </p>
               </div>
             </li>
           </ul>
@@ -541,20 +1751,40 @@
       <section class="section" id="roadmap" aria-labelledby="roadmap-title">
         <div class="container">
           <header class="section-head">
-            <p class="kicker">Roadmap</p>
-            <h2 id="roadmap-title">Where it is heading</h2>
-            <p>Planned work, roughly in order. Plans change; open an issue to discuss any of it.</p>
+            <p class="kicker" data-i18n="roadmap.kicker">Roadmap</p>
+            <h2 id="roadmap-title" data-i18n="roadmap.title">Where it is heading</h2>
+            <p data-i18n="roadmap.intro">Planned work, roughly in order. Plans change; open an issue to discuss any of it.</p>
           </header>
           <ol class="roadmap">
-            <li><h3>Statement gateway &amp; transactions</h3><p>Rules per workspace, auto-commit switch, Begin / Commit / Rollback, open-transaction warnings.</p></li>
-            <li><h3>Data profiling &amp; generation</h3><p>Column statistics and histograms; rule-based test data with preview before insert.</p></li>
-            <li><h3>Backup &amp; restore</h3><p>Logical dumps built by the app, no external tools required.</p></li>
-            <li><h3>MongoDB beyond Compass</h3><p>A query bar with autocomplete, document views and an aggregation builder.</p></li>
-            <li><h3>Local database servers</h3><p>Create and run development servers without Docker or admin rights.</p></li>
-            <li><h3>Web edition &amp; encrypted sync</h3><p>A Docker image to use Fosta Studio in a browser, and end-to-end encrypted sync between machines.</p></li>
+            <li>
+              <h3 data-i18n="roadmap.gateway.title">Statement gateway &amp; transactions</h3>
+              <p data-i18n="roadmap.gateway.text">Rules per workspace, auto-commit switch, Begin / Commit / Rollback, open-transaction warnings.</p>
+            </li>
+            <li>
+              <h3 data-i18n="roadmap.profiling.title">Data profiling &amp; generation</h3>
+              <p data-i18n="roadmap.profiling.text">Column statistics and histograms; rule-based test data with preview before insert.</p>
+            </li>
+            <li>
+              <h3 data-i18n="roadmap.backup.title">Backup &amp; restore</h3>
+              <p data-i18n="roadmap.backup.text">Logical dumps built by the app, no external tools required.</p>
+            </li>
+            <li>
+              <h3 data-i18n="roadmap.mongo.title">MongoDB beyond Compass</h3>
+              <p data-i18n="roadmap.mongo.text">A query bar with autocomplete, document views and an aggregation builder.</p>
+            </li>
+            <li>
+              <h3 data-i18n="roadmap.servers.title">Local database servers</h3>
+              <p data-i18n="roadmap.servers.text">Create and run development servers without Docker or admin rights.</p>
+            </li>
+            <li>
+              <h3 data-i18n="roadmap.web.title">Web edition &amp; encrypted sync</h3>
+              <p data-i18n="roadmap.web.text">A Docker image to use Fosta Studio in a browser, and end-to-end encrypted sync between machines.</p>
+            </li>
           </ol>
           <p class="section-link">
-            <a class="link-arrow" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md">Read the full roadmap<svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg></a>
+            <a class="link-arrow" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md"
+              ><span data-i18n="roadmap.link">Read the full roadmap</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+            ></a>
           </p>
         </div>
       </section>
@@ -563,23 +1793,45 @@
       <section class="section section-alt" id="open-source" aria-labelledby="oss-title">
         <div class="container oss">
           <div class="oss-text">
-            <p class="kicker">Open source</p>
-            <h2 id="oss-title">Free software, built in the open</h2>
-            <p>Fosta Studio is licensed under the <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE">GNU General Public License v3.0</a>. Use it, study it, change it and share it.</p>
-            <p>Contributions are welcome. On your first pull request you are asked to sign the <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CLA.md">Contributor License Agreement</a>: you keep the copyright in your work, and the maintainer may also offer commercial licenses while the project itself stays GPL.</p>
+            <p class="kicker" data-i18n="oss.kicker">Open source</p>
+            <h2 id="oss-title" data-i18n="oss.title">Free software, built in the open</h2>
+            <p data-i18n="oss.license">
+              Fosta Studio is licensed under the
+              <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE">GNU General Public License v3.0</a>. Use it, study it, change it and
+              share it.
+            </p>
+            <p data-i18n="oss.cla">
+              Contributions are welcome. On your first pull request you are asked to sign the
+              <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CLA.md">Contributor License Agreement</a>: you keep the copyright in your
+              work, and the maintainer may also offer commercial licenses while the project itself stays GPL.
+            </p>
             <div class="cta-row">
-              <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md">Contributing guide</a>
-              <a class="btn btn-secondary" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ARCHITECTURE.md">Architecture</a>
+              <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md" data-i18n="oss.contributing"
+                >Contributing guide</a
+              >
+              <a class="btn btn-secondary" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ARCHITECTURE.md" data-i18n="oss.architecture"
+                >Architecture</a
+              >
             </div>
           </div>
           <div class="build" id="build">
-            <h3>Build from source</h3>
-            <p>Release builds are coming. Meanwhile you can build the portable executable yourself with Node 20+, Rust 1.88+ and the MSVC or GNU toolchain (<a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md#toolchain">toolchain details</a>).</p>
-            <pre class="terminal" tabindex="0" aria-label="Build commands"><code><span class="prompt">&gt;</span> git clone https://github.com/caothanhphatit/fosta-dbclient.git
+            <h3 data-i18n="build.title">Build from source</h3>
+            <p data-i18n="build.text">
+              Release builds are coming. Meanwhile you can build the portable executable yourself with Node 20+, Rust 1.88+ and the MSVC or GNU toolchain (<a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md#toolchain">toolchain details</a>).
+            </p>
+            <pre
+              class="terminal"
+              tabindex="0"
+              data-i18n-attr="aria-label:build.commandsLabel"
+              aria-label="Build commands"
+            ><code><span class="prompt">&gt;</span> git clone https://github.com/caothanhphatit/fosta-dbclient.git
 <span class="prompt">&gt;</span> cd fosta-dbclient
 <span class="prompt">&gt;</span> npm install
 <span class="prompt">&gt;</span> npm run tauri build -- --no-bundle</code></pre>
-            <p class="fineprint">The result is <code>src-tauri\target\release\fosta-studio.exe</code>. Want to try the UI first? <code>npm run dev</code> previews it in a browser with sample data.</p>
+            <p class="fineprint" data-i18n="build.result">
+              The result is <code>src-tauri\target\release\fosta-studio.exe</code>. Want to try the UI first? <code>npm run dev</code> previews it in a browser
+              with sample data.
+            </p>
           </div>
         </div>
       </section>
@@ -588,20 +1840,26 @@
     <footer class="site-footer">
       <div class="container footer-inner">
         <div class="footer-brand">
-          <a class="brand" href="#top" aria-label="Fosta Studio, back to top"><img src="assets/logo.svg" alt="" width="24" height="24" /><span>Fosta Studio</span></a>
-          <p>Free and open-source database client. GPL-3.0.</p>
+          <a class="brand" href="#top" data-i18n-attr="aria-label:a11y.backToTop" aria-label="Fosta Studio, back to top"
+            ><img src="assets/logo.svg" alt="" width="24" height="24" /><span>Fosta Studio</span></a
+          >
+          <p data-i18n="footer.tagline">Free and open-source database client. GPL-3.0.</p>
         </div>
-        <nav aria-label="Footer">
+        <nav data-i18n-attr="aria-label:footer.navLabel" aria-label="Footer">
           <ul class="footer-links">
             <li><a href="https://github.com/caothanhphatit/fosta-dbclient">GitHub</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/releases">Releases</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md">Contributing</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md">Roadmap</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE">License</a></li>
-            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/issues">Issues</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/releases" data-i18n="footer.releases">Releases</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md" data-i18n="footer.contributing">Contributing</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md" data-i18n="footer.roadmap">Roadmap</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE" data-i18n="footer.license">License</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/issues" data-i18n="footer.issues">Issues</a></li>
           </ul>
         </nav>
-        <p class="footer-note">MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL and SQLite are trademarks of their respective owners. Fosta Studio is an independent project and is not affiliated with them.</p>
+        <!-- i18n:lang-footer -->
+        <p class="footer-note" data-i18n="footer.trademarks">
+          MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis and Elasticsearch are trademarks of their respective owners. Fosta Studio is an
+          independent project and is not affiliated with them.
+        </p>
       </div>
     </footer>
   </body>

@@ -2,7 +2,8 @@
 //!
 //! The request body holds the same arguments as `invoke(command, args)` (camelCase keys) and a successful
 //! response the same JSON the Tauri command returns. Errors are `{ "error": "<message>" }`: 404 for an
-//! unknown command, 400 for arguments that do not parse, 422 when the command itself fails.
+//! unknown command, 400 for arguments that do not parse, 422 when the command itself fails. A structured
+//! command error (e.g. the gateway's `CONFIRMATION_REQUIRED`) is `{ "error": { "code", "message", … } }`.
 //!
 //! `ai_chat` answers with NDJSON instead: one `{ "event": ChatEvent }` line per streamed event, then
 //! `{ "result": "<reply>" }` or `{ "error": "<message>" }`. Closing the response stops the run.
@@ -57,7 +58,8 @@ impl IntoResponse for InvokeError {
         let (status, message) = match self {
             Self::Unknown(command) => (StatusCode::NOT_FOUND, format!("Unknown command '{command}'")),
             Self::Arguments(message) => (StatusCode::BAD_REQUEST, message),
-            Self::Command(error) => (StatusCode::UNPROCESSABLE_ENTITY, error.to_string()),
+            // Serialised like Tauri does: a string, or the structured payload (`code`, `message`, …).
+            Self::Command(error) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": error }))).into_response(),
         };
         error_response(status, &message)
     }

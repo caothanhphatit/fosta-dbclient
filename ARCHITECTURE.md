@@ -13,10 +13,11 @@ backend and UI also ship as a web edition in a Docker image (see [Two front-ends
         │                      workspaces.rs   ai.rs    vector.rs  files.rs     ├─ mysql.rs   MariaDB / MySQL (mysql_async)
         │                      history.rs                                       │
         ▼                               │                                       ├─ mssql.rs   SQL Server (tiberius)
- core/api.ts ── invoke() ─────────────► │ ── DbManager ──────────────────────►  └─ mongo.rs   MongoDB (mongodb)
+ core/api.ts ── invoke() ─────────────► │ ── gateway/ ── DbManager ──────────►  └─ mongo.rs   MongoDB (mongodb)
              ◄─ events / Channel ────── │                                       types.rs     shared data shapes
                                         ├─ ConfigStore (config.rs) → fosta-studio.json
                                         ├─ HistoryStore (history.rs) → fosta-studio-history.jsonl
+                                        ├─ AuditLog (audit.rs) → fosta-studio-audit.jsonl
                                         ├─ secrets.rs → Windows Credential Manager
                                         ├─ TaskManager (tasks.rs, job.rs) → child processes
                                         └─ ai/ → LLM provider HTTP APIs
@@ -27,6 +28,9 @@ backend and UI also ship as a web edition in a Docker image (see [Two front-ends
   Rust types; `transport.ts` carries the calls). Each `features/<area>/` folder owns its views and dialogs.
 - **Commands** (`src-tauri/src/commands/`). Plain functions that take `&AppState`, check arguments and delegate. Their names, argument
   names and JSON shapes are the contract with `core/api.ts`; `for_each_command!` in `commands/mod.rs` lists them for both front-ends.
+- **Statement gateway** (`src-tauri/src/gateway/`). Every statement the app runs on a caller's behalf passes through it before it reaches
+  a driver, in both editions; see [Statement gateway and safety rules](#statement-gateway-and-safety-rules). Its structured errors
+  (`CONFIRMATION_REQUIRED`, `BLOCKED`, …) reach the UI as the same object over Tauri and over HTTP.
 - **Drivers** (`src-tauri/src/drivers/`). `DbManager` keeps one `Arc<dyn Driver>` per open connection and maps query-tab sessions to
   their connection. A driver turns engine results into the shared shapes in `drivers/types.rs` (`ColumnMeta`, `ResultSet`,
   `TablePage`, `TableDesign`, `RowChange`, …), so the UI never sees engine-specific types. Cells travel as text (`Option<String>`);
@@ -94,7 +98,7 @@ mock installs it), otherwise HTTP. `api.ts` is unchanged apart from that.
 1. The tree (`features/connections/tree.ts`) calls `api.connect(id)`. The backend loads the profile, takes the password from the dialog
    or Credential Manager (`PASSWORD_REQUIRED` makes the UI ask), opens the driver and returns the server version.
 2. Opening a table creates a `TableView` (`features/table/tableView.ts`). It sends a `BrowseRequest` (offset, limit, order, filter) to
-   `browse_table`. SQL drivers build `SELECT … WHERE <filter> ORDER BY … LIMIT/OFFSET` (or `OFFSET/FETCH`), plus a `COUNT(*)` and the
+   `browse_table`. The gateway checks the filter first (a single condition; a MongoDB query document). SQL drivers build `SELECT … WHERE <filter> ORDER BY … LIMIT/OFFSET` (or `OFFSET/FETCH`), plus a `COUNT(*)` and the
    primary key; MongoDB runs `find` with the JSON filter and `count_documents`.
 3. The page is rendered by the virtualised `DataGrid` (`features/grid/grid.ts`). Per-column filters are turned into a SQL condition
    or a MongoDB query by `features/grid/columnFilter.ts`. Hidden columns (`features/grid/columnVisibility.ts`, the Columns popover in
@@ -108,20 +112,75 @@ mock installs it), otherwise HTTP. `api.ts` is unchanged apart from that.
    the main bundle.
 2. Saving sends them as one `apply_changes` call: a list of `RowChange` (`insert`, `update`, `delete`) where `key` holds the primary-key
    cells of the row (all non-vector columns when the table has no key).
-3. SQL drivers run all statements in one transaction with bound parameters (`UPDATE … WHERE key LIMIT 1`, `TOP (1)` on SQL Server);
+3. `apply_changes` goes through the gateway as a write (caller `gridSave`, or `import` for imports, whose batches share one
+   confirmation). SQL drivers run all statements in one transaction with bound parameters (`UPDATE … WHERE key LIMIT 1`, `TOP (1)` on SQL Server);
    binary columns accept `0x…` hex. MongoDB applies `insert_one` / `update_one($set)` / `delete_one` per change.
 
 ### Query
 
 1. A query tab (`features/query/queryView.ts`, loaded lazily with CodeMirror) calls `open_session`: MariaDB/MySQL and SQL Server open a
    dedicated connection per tab, so `BEGIN … COMMIT` can span several runs.
-2. `run_sql` sends the editor text (or the selection) to that session and returns every result set (up to 1000 rows each, flagged as
+2. `run_sql` is classified and checked by the gateway, then sends the editor text (or the selection) to that session and returns every result set (up to 1000 rows each, flagged as
    truncated). MongoDB takes a database command as JSON.
 3. `cancel_sql` issues `KILL QUERY <thread id>` on MariaDB/MySQL; the other drivers report that cancelling is not supported.
 4. After each run the tab sends a `HistoryEntry` (text, connection id and name, driver, database, start time, duration, rows or
    affected rows per set, or the error, and whether Stop was pressed) to `history_append` without waiting for it. The History panel
    (`features/query/historyPanel.ts`) reads it back with `history_list` (newest first, filtered by connection and search text, paged
    with `before`), and can `history_delete` entries or `history_clear` everything.
+
+5. **Transactions**: the toolbar's auto-commit switch and Begin / Commit / Rollback call `sql_transaction` (always allowed, also in
+   Read-only workspaces). Every run returns the session's `TransactionState` as the engine reports it (`@@in_transaction` on MariaDB, the
+   performance schema on MySQL, `@@TRANCOUNT` and `@@OPTIONS` on SQL Server); MongoDB commands run without server sessions, so the tab
+   says transactions are not supported. Closing a tab or the window with an open transaction asks first (the server rolls it back), and a
+   reminder appears when a transaction has been open for five minutes.
+
+## Statement gateway and safety rules
+
+Code: `src-tauri/src/gateway/` (backend), `src/features/safety/` (dialogs, the Safety section, pure helpers).
+
+- **Callers**: query tabs (`run_sql`), grid filters (`browse_table`, also the vector-search filter), grid saves and imports
+  (`apply_changes`), `create_database`, transaction controls and the assistant. The gateway knows which one is calling.
+- **Classification** (`gateway/classify.rs`): SQL is parsed with `sqlparser` in the engine's dialect (MySQL for MariaDB/MySQL, MsSql for
+  SQL Server, Generic as a fallback). Every statement, including statements nested in CTEs, `EXPLAIN ANALYZE` and control flow, gets a
+  category: *read*, *transaction*, *write* (INSERT/UPDATE/DELETE/MERGE/REPLACE, procedure calls), *DDL*, *destructive* (DROP, TRUNCATE,
+  UPDATE/DELETE without WHERE, ALTER … DROP) or *administrative* (users, grants, KILL, SET GLOBAL, settings that switch off the app's own
+  backstops). MySQL's `/*! … */` comments are classified as the code the server runs. SQL the parser does not understand is *unknown*
+  and treated like a write. MongoDB commands are classified by name (`aggregate` with `$out`/`$merge` is a write, an empty
+  delete filter is destructive).
+- **Filters** (`gateway/filter.rs`): a SQL filter must parse as exactly `SELECT 1 WHERE <condition>` — one statement, no comments, no
+  `;`, no extra clauses, no functions that sleep, lock or read files. MariaDB/MySQL browse queries also run as prepared statements. A
+  MongoDB filter must be a JSON query document without server-side JavaScript operators.
+- **Rules** (`gateway/rules.rs`), stored per workspace as `safety` in `fosta-studio.json` (and optionally per connection):
+
+  | Preset | Read | Write | DDL | Destructive | Administrative | Timeout |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | Open | allow | allow | allow | allow | allow | none |
+  | Guarded | allow | confirm | confirm | typed confirm | typed confirm | 60 s |
+  | Read-only | allow | block | block | block | block | 60 s |
+  | Custom | any of allow / confirm / typed confirm / block per category, plus multi-statement runs, timeout and row limit | | | | | |
+
+  Workspaces saved before the gateway keep working as before (Open); a workspace marked Production (shield icon) defaults to Read-only;
+  new workspaces start Guarded.
+- **Confirmations**: a call that needs one fails with a structured error `{ code: "CONFIRMATION_REQUIRED", level, token, expected,
+  categories, tables, statements, … }`; `BLOCKED` has the same shape without a token. The UI shows what will run and why, asks for the
+  table or workspace name for a typed confirmation, and repeats the call with `confirmation: { token, typed }`. Tokens are random,
+  single-use, valid for five minutes and bound to the caller, connection, session and exact statement text (an import run's token covers
+  its batches).
+- **Engine backstops**: Read-only sessions use `SET SESSION TRANSACTION READ ONLY` (and `START TRANSACTION READ ONLY`) on
+  MariaDB/MySQL; statement timeouts use `max_statement_time` on MariaDB, `max_execution_time` on MySQL (SELECT only) and `maxTimeMS` for
+  MongoDB browsing. SQL Server has no per-statement timeout or read-only session the app can switch on: there the gateway enforces the
+  rules, and a read-only login is recommended for production. The row limit applies to query results on every engine.
+- **The assistant never executes**: each tool is registered as metadata-only or view-opening (`assistant_tool_effect`). A filter from
+  `open_table` is checked like a grid filter, then only pre-filled and marked as suggested; the table loads when the user applies it.
+- **Relaxing rules**: the workspace dialog lists what becomes possible and an example of what could go wrong; relaxing a Production
+  workspace needs its name typed (checked again by `save_workspace`). A workspace looser than its baseline shows a badge on the rail and
+  in the status bar.
+
+## Audit log
+
+`audit.rs` appends one JSON object per blocked, confirmed or relaxed operation to `fosta-studio-audit.jsonl` next to `fosta-studio.json`
+(time, caller, workspace, connection, category, statement excerpt, outcome, detail), with the same append-and-compact scheme as the query
+history (newest 20,000 entries). It stays on this machine and never holds passwords.
 
 ## Query history
 
@@ -140,8 +199,8 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
 - **Tools** (`ai/tools.rs`), offered only when a connection is open:
   - `list_databases`, `list_tables`, `describe_table` (columns and DDL), `schema_overview` (all tables, columns and foreign keys): read
     catalog metadata through the same `Driver` calls the UI uses. No row data is read.
-  - `open_diagram`, `open_table` (optionally filtered), `open_query` (a new tab with the text in the editor): emit a `UiAction` event; the
-    UI opens the view, nothing runs.
+  - `open_diagram`, `open_table` (with an optional filter that is only pre-filled as a suggestion), `open_query` (a new tab with the
+    text in the editor): emit a `UiAction` event; the UI opens the view, nothing runs.
 - **Context** (`ai/prompt.rs`): the system prompt lists the engine, database, table names, and what the user shares from the active tab
   (editor text, last error, the tail of a task log), with size limits.
 - **Transport**: the user's own key goes straight from this machine to the provider. `ai/anthropic.rs` speaks the Messages API, and
@@ -160,6 +219,7 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
   to start rather than overwrite a store it cannot decrypt. The access token is in `fosta-studio-token`, the cookie signing key in
   `fosta-studio-session-key` and the last sign-out time in `fosta-studio-sessions-since`.
 - **`fosta-studio-history.jsonl`** next to the executable: the query history (see above). No secrets.
+- **`fosta-studio-audit.jsonl`** next to the executable: the safety audit log (see above). No secrets.
 - **localStorage** (`db-studio.*`): UI preferences only (theme, assistant panel open/closed, diagram node positions, hidden columns per
   table, the history panel and cell-editor wrap toggles).
 
@@ -181,8 +241,10 @@ imports it dynamically behind `import.meta.env.DEV`, so it is not part of the pr
 1. **Backend driver**: add `src-tauri/src/drivers/<engine>.rs` with a connection type and `impl Driver for …`. Return the shared types
    from `drivers/types.rs`; render cells as text. Implement at least `list_databases`, `create_database`, `list_tables`,
    `describe_table`, `browse_table`, `apply_changes` (one transaction where the engine allows), `open_session` / `close_session` /
-   `run_query` / `cancel_query`. Override `table_relations` and `schema_bulk` when the engine has foreign keys, and `close` to release
-   pools.
+   `run_query` / `cancel_query`, and `engine` (it picks the gateway's SQL dialect). Honour the `Limits` the gateway passes (row limit,
+   timeout, read-only session) where the engine allows, and override `transaction` when it has transactions. Override `table_relations`
+   and `schema_bulk` when the engine has foreign keys, and `close` to release pools. Drivers only execute: classification and rules
+   live in the gateway.
 2. **Register it**: `pub mod <engine>;` in `drivers/mod.rs` and a match arm on the profile's `driver` id in `drivers::open`. Add the
    crate to `Cargo.toml` and, if it has its own error type, a `From` conversion in `error.rs`.
 3. **Frontend description**: add the id to `DriverId` in `src/core/types.ts` and an entry to `DRIVERS` in `src/core/drivers.ts`

@@ -269,11 +269,13 @@ impl<F: Fn(ChatEvent) + Send + Sync> ChatSink for F {
 pub enum UiAction {
     #[serde(rename_all = "camelCase")]
     OpenDiagram { database: String, focus_table: Option<String> },
+    /// The filter is only pre-filled, marked as suggested by the assistant: nothing runs until
+    /// the user applies it (the table view does not even load before that).
     #[serde(rename_all = "camelCase")]
     OpenTable {
         database: String,
         table: String,
-        filter: Option<String>,
+        suggested_filter: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     OpenQuery { database: Option<String>, sql: String },
