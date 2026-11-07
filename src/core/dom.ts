@@ -36,7 +36,8 @@ const ICONS = {
   vector: '<circle cx="3.5" cy="12.5" r="1.5"/><circle cx="12.5" cy="3.5" r="1.5"/><circle cx="11" cy="11" r="1.5"/><path d="M4.6 11.4l6.8-6.8M5 12.4h4.5"/>',
   health: '<path d="M8 13.5S2 10 2 5.8A3 3 0 0 1 8 4.5a3 3 0 0 1 6 1.3C14 10 8 13.5 8 13.5z"/><path d="M4.5 8h2l1-1.5 1.5 3 1-1.5h1.5"/>',
   sparkle: '<path d="M8 1.5l1.4 4.1 4.1 1.4-4.1 1.4L8 12.5 6.6 8.4 2.5 7l4.1-1.4z"/><path d="M13 11.5v3M11.5 13h3"/>',
-  settings: '<path d="M2 4.5h12M2 8h12M2 11.5h12"/><circle cx="6" cy="4.5" r="1.6" fill="var(--rail, #fff)"/><circle cx="10.5" cy="8" r="1.6" fill="var(--rail, #fff)"/><circle cx="5" cy="11.5" r="1.6" fill="var(--rail, #fff)"/>',
+  settings:
+    '<path d="M2 4.5h12M2 8h12M2 11.5h12"/><circle cx="6" cy="4.5" r="1.6" fill="var(--rail, #fff)"/><circle cx="10.5" cy="8" r="1.6" fill="var(--rail, #fff)"/><circle cx="5" cy="11.5" r="1.6" fill="var(--rail, #fff)"/>',
   sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M3.4 12.6l1.3-1.3M11.3 4.7l1.3-1.3"/>',
   moon: '<path d="M13.5 9.8A5.8 5.8 0 0 1 6.2 2.5a5.8 5.8 0 1 0 7.3 7.3z"/>',
   search: '<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>',
@@ -53,20 +54,19 @@ const ICONS = {
   briefcase: '<rect x="1.5" y="4.5" width="13" height="9" rx="1.5"/><path d="M5.5 4.5v-2h5v2M1.5 8.5h13"/>',
   rocket: '<path d="M8 1.5c2.5 1.5 3.5 4.5 3 8l-3 3-3-3c-.5-3.5.5-6.5 3-8z"/><circle cx="8" cy="6.5" r="1.2"/><path d="M5 9.5l-2 1 1 2M11 9.5l2 1-1 2"/>',
   globe: '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>',
-  mariadb: '<path d="M14.5 2.5c-2 0-2.6 1.2-3.6 2.6S8.8 7 7 7.3 3.6 8.2 2.5 10c.8-.3 1.6-.4 2.3-.3-.6.9-1.3 2-1.3 3.3 1.5-.6 2.2-1.9 3.4-2.6s2.9-.4 4.4-1.5c1.4-1 1.6-3 2.1-4.3.3-.9.9-1.4 1.1-2.1z"/>',
-  mysql: '<path d="M2 12.5c.3-3.3 1.4-6 4-7.5 1.3-.8 2.4-.4 3.3.5l1.4 1.5c.8.9 2 1 3.3.6-.4 1.2-1.4 1.9-2.6 1.9l1.1 2.2c-1.6-.3-2.6-1.3-3.4-2.6-.9.7-1.9 1-3.1 1.1-1.2 1-2.3 1.6-4 2.3z"/>',
-  mssql: '<rect x="2" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="2" y="8.8" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="8.8" width="5.2" height="5.2" rx="0.8"/>',
+  mariadb:
+    '<path d="M14.5 2.5c-2 0-2.6 1.2-3.6 2.6S8.8 7 7 7.3 3.6 8.2 2.5 10c.8-.3 1.6-.4 2.3-.3-.6.9-1.3 2-1.3 3.3 1.5-.6 2.2-1.9 3.4-2.6s2.9-.4 4.4-1.5c1.4-1 1.6-3 2.1-4.3.3-.9.9-1.4 1.1-2.1z"/>',
+  mysql:
+    '<path d="M2 12.5c.3-3.3 1.4-6 4-7.5 1.3-.8 2.4-.4 3.3.5l1.4 1.5c.8.9 2 1 3.3.6-.4 1.2-1.4 1.9-2.6 1.9l1.1 2.2c-1.6-.3-2.6-1.3-3.4-2.6-.9.7-1.9 1-3.1 1.1-1.2 1-2.3 1.6-4 2.3z"/>',
+  mssql:
+    '<rect x="2" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="2" y="8.8" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="8.8" width="5.2" height="5.2" rx="0.8"/>',
   mongodb: '<path d="M8 1.5c3.3 2.6 4.8 5.4 4.3 8.4-.4 2.4-2.1 4-4.3 4.6-2.2-.6-3.9-2.2-4.3-4.6C3.2 6.9 4.7 4.1 8 1.5z"/><path d="M8 4.5v10"/>',
   send: '<path d="M2.5 8L13.5 2.5 10 13.5 7.5 9z"/><path d="M7.5 9l6-6.5"/>',
 } as const;
 
 export type IconName = keyof typeof ICONS;
 
-export function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  attributes: Record<string, unknown> = {},
-  ...children: Child[]
-): HTMLElementTagNameMap[K] {
+export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attributes: Record<string, unknown> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
   const element = document.createElement(tag);
   for (const [name, value] of Object.entries(attributes)) setAttribute(element, name, value);
   for (const child of children) {

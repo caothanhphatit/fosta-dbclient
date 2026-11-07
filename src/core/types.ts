@@ -116,11 +116,7 @@ export type UiAction =
   | { kind: "openTable"; database: string; table: string; filter: string | null }
   | { kind: "openQuery"; database: string | null; sql: string };
 
-export type ChatEvent =
-  | { type: "text"; text: string }
-  | { type: "tool"; label: string }
-  | { type: "action"; action: UiAction }
-  | { type: "done" };
+export type ChatEvent = { type: "text"; text: string } | { type: "tool"; label: string } | { type: "action"; action: UiAction } | { type: "done" };
 
 export type TaskState = "stopped" | "starting" | "running" | "restarting" | "failed";
 
@@ -264,10 +260,7 @@ export interface VectorInfo {
 
 export type Metric = "auto" | "cosine" | "euclidean";
 
-export type QueryVector =
-  | { kind: "row"; key: CellValue[] }
-  | { kind: "literal"; text: string }
-  | { kind: "text"; text: string };
+export type QueryVector = { kind: "row"; key: CellValue[] } | { kind: "literal"; text: string } | { kind: "text"; text: string };
 
 export interface VectorSearchRequest {
   connectionId: string;
@@ -312,6 +305,4 @@ export interface RecallReport {
 }
 
 export type RowChange =
-  | { kind: "insert"; values: CellValue[] }
-  | { kind: "update"; key: CellValue[]; values: CellValue[] }
-  | { kind: "delete"; key: CellValue[] };
+  { kind: "insert"; values: CellValue[] } | { kind: "update"; key: CellValue[]; values: CellValue[] } | { kind: "delete"; key: CellValue[] };

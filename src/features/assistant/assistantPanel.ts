@@ -66,7 +66,12 @@ export class AssistantPanel {
   private readonly contextRow = h("div", { class: "assistant-context" });
   private readonly logHost = h("div", { class: "chat-log-host" });
   private readonly actions = h("div", { class: "chat-actions" });
-  private readonly composer = h("textarea", { class: "chat-input", rows: "1", placeholder: "Ask about your data, or describe the query you need…", spellcheck: "false" });
+  private readonly composer = h("textarea", {
+    class: "chat-input",
+    rows: "1",
+    placeholder: "Ask about your data, or describe the query you need…",
+    spellcheck: "false",
+  });
   private readonly sendButton: HTMLButtonElement;
   private readonly stopButton: HTMLButtonElement;
   private readonly setup: HTMLElement;
@@ -115,7 +120,11 @@ export class AssistantPanel {
       { class: "assistant-setup" },
       icon("sparkle", "assistant-setup-icon"),
       h("h3", {}, "Bring your own model"),
-      h("p", {}, "Connect Anthropic, OpenAI, Ollama or any OpenAI-compatible endpoint with your key. The key stays in Windows Credential Manager; requests go straight from this computer to the provider."),
+      h(
+        "p",
+        {},
+        "Connect Anthropic, OpenAI, Ollama or any OpenAI-compatible endpoint with your key. The key stays in Windows Credential Manager; requests go straight from this computer to the provider.",
+      ),
       h("p", {}, "The assistant sees table and column names, your editor text and errors. It writes queries; you run them."),
       configureButton,
     );
@@ -269,10 +278,20 @@ export class AssistantPanel {
       case "query": {
         const actions: QuickAction[] = [
           { label: "Explain", icon: "view", mode: "send", prompt: () => `Explain what this does, step by step:\n${sql()}` },
-          { label: "Optimize", icon: "bolt", mode: "send", prompt: () => `Suggest how to make this faster (indexes, rewrites) and show the improved version:\n${sql()}` },
+          {
+            label: "Optimize",
+            icon: "bolt",
+            mode: "send",
+            prompt: () => `Suggest how to make this faster (indexes, rewrites) and show the improved version:\n${sql()}`,
+          },
         ];
         if (context.lastError?.()) {
-          actions.unshift({ label: "Fix error", icon: "health", mode: "send", prompt: () => `This failed with:\n${context.lastError?.()}\n\n${sql()}\nFix it and explain the cause in one sentence.` });
+          actions.unshift({
+            label: "Fix error",
+            icon: "health",
+            mode: "send",
+            prompt: () => `This failed with:\n${context.lastError?.()}\n\n${sql()}\nFix it and explain the cause in one sentence.`,
+          });
         }
         if (context.driver === "mongodb") {
           actions.push({ label: "Aggregation pipeline", icon: "layers", mode: "prefill", prompt: () => "Write an aggregation pipeline that " });
@@ -283,19 +302,36 @@ export class AssistantPanel {
       }
       case "table":
         return [
-          { label: "Describe", icon: "design", mode: "send", prompt: () => `Describe ${table}: what each column is for, the keys, and how it relates to other tables.` },
-          { label: "Test data", icon: "table", mode: "send", prompt: () => `Generate 20 rows of realistic test data for ${table} as ${info.id === "mongodb" ? "an insertMany command" : "INSERT statements"}.` },
+          {
+            label: "Describe",
+            icon: "design",
+            mode: "send",
+            prompt: () => `Describe ${table}: what each column is for, the keys, and how it relates to other tables.`,
+          },
+          {
+            label: "Test data",
+            icon: "table",
+            mode: "send",
+            prompt: () => `Generate 20 rows of realistic test data for ${table} as ${info.id === "mongodb" ? "an insertMany command" : "INSERT statements"}.`,
+          },
           { label: "Query this table", icon: "query", mode: "prefill", prompt: () => `Write a query on ${table} that ` },
         ];
       case "task":
         return [
-          { label: "Why does it fail?", icon: "health", mode: "send", prompt: () => "This startup task is not working. Read the log, explain what is wrong and how to fix it." },
+          {
+            label: "Why does it fail?",
+            icon: "health",
+            mode: "send",
+            prompt: () => "This startup task is not working. Read the log, explain what is wrong and how to fix it.",
+          },
           { label: "Explain the log", icon: "logs", mode: "send", prompt: () => "Explain what this log says, briefly." },
         ];
       case "connection":
         return [
           { label: "Write a query", icon: "query", mode: "prefill", prompt: () => "Write a query that " },
-          ...(context.driver === "mongodb" ? [{ label: "Aggregation pipeline", icon: "layers" as IconName, mode: "prefill" as const, prompt: () => "Write an aggregation pipeline that " }] : []),
+          ...(context.driver === "mongodb"
+            ? [{ label: "Aggregation pipeline", icon: "layers" as IconName, mode: "prefill" as const, prompt: () => "Write an aggregation pipeline that " }]
+            : []),
         ];
       default:
         return [];

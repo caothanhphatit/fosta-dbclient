@@ -3,7 +3,14 @@ import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs
 import { h, icon } from "../../core/dom";
 import { describeServer, driverInfo, DRIVERS, type DriverInfo } from "../../core/drivers";
 import type { AppConfig, ConnectionProfile } from "../../core/types";
-import { CONNECTION_STRING_EXAMPLES, formatConnectionString, MODE_OPTION, parseConnectionString, type ConnectionFields, type ParsedConnection } from "./connectionString";
+import {
+  CONNECTION_STRING_EXAMPLES,
+  formatConnectionString,
+  MODE_OPTION,
+  parseConnectionString,
+  type ConnectionFields,
+  type ParsedConnection,
+} from "./connectionString";
 
 export function connectionDialog(existing: ConnectionProfile | null, workspaceName: string): Promise<AppConfig | null> {
   return new Promise((resolve) => {
@@ -93,7 +100,9 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       });
       optionsHost.replaceChildren(...controls);
       optionsHost.hidden = controls.length === 0;
-      availability.textContent = driver.available ? "" : `${driver.label} support is in progress: the profile can be saved now, connecting comes in a later build.`;
+      availability.textContent = driver.available
+        ? ""
+        : `${driver.label} support is in progress: the profile can be saved now, connecting comes in a later build.`;
       availability.hidden = driver.available;
     };
 
@@ -195,19 +204,24 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       stringField,
       remember.element,
     );
-    openModal(existing ? "Edit connection" : "New connection", body, [
-      {
-        label: "Test connection",
-        alignLeft: true,
-        run: async () => {
-          const profile = readProfile();
-          const version = await api.testConnection(profile, readPassword());
-          toast(`Connection OK · ${describeServer(profile, version)}`, "success");
-          return false;
+    openModal(
+      existing ? "Edit connection" : "New connection",
+      body,
+      [
+        {
+          label: "Test connection",
+          alignLeft: true,
+          run: async () => {
+            const profile = readProfile();
+            const version = await api.testConnection(profile, readPassword());
+            toast(`Connection OK · ${describeServer(profile, version)}`, "success");
+            return false;
+          },
         },
-      },
-      { label: "Cancel", run: () => undefined },
-      { label: "Save", primary: true, run: async () => void (saved = await api.saveConnection(readProfile(), readPassword())) },
-    ], { width: 520, onClose: () => resolve(saved) });
+        { label: "Cancel", run: () => undefined },
+        { label: "Save", primary: true, run: async () => void (saved = await api.saveConnection(readProfile(), readPassword())) },
+      ],
+      { width: 520, onClose: () => resolve(saved) },
+    );
   });
 }

@@ -181,7 +181,9 @@ export class DiagramView implements TabContent {
   }
 
   private applyPendingFocus(): void {
-    const box = this.pendingFocus ? this.boxes.get(this.pendingFocus) ?? [...this.boxes.values()].find((item) => item.table.name.toLowerCase() === this.pendingFocus?.toLowerCase()) : undefined;
+    const box = this.pendingFocus
+      ? (this.boxes.get(this.pendingFocus) ?? [...this.boxes.values()].find((item) => item.table.name.toLowerCase() === this.pendingFocus?.toLowerCase()))
+      : undefined;
     if (!box || this.svg.getBoundingClientRect().width === 0) return;
     this.pendingFocus = null;
     this.fitted = true;
@@ -299,7 +301,7 @@ export class DiagramView implements TabContent {
         if (!column) continue;
         const score = (name: string) => {
           const around = [...(neighbours.get(name) ?? [])].map((other) => order.get(other) ?? 0);
-          return around.length ? around.reduce((sum, value) => sum + value, 0) / around.length : order.get(name) ?? 0;
+          return around.length ? around.reduce((sum, value) => sum + value, 0) / around.length : (order.get(name) ?? 0);
         };
         column.sort((a, b) => score(a) - score(b));
       }
@@ -445,7 +447,8 @@ export class DiagramView implements TabContent {
       tip.textContent = `${column.name} ${column.columnType} ${column.nullable ? "NULL" : "NOT NULL"}${column.primary ? " · primary key" : ""}${isForeign ? " · foreign key" : ""}`;
       name.append(tip);
       body.append(name);
-      if (this.showTypes) body.append(text(truncate(column.columnType, 28), box.width - PAD_X, y, { fill: palette.fg3, "text-anchor": "end", "font-size": "11" }));
+      if (this.showTypes)
+        body.append(text(truncate(column.columnType, 28), box.width - PAD_X, y, { fill: palette.fg3, "text-anchor": "end", "font-size": "11" }));
     });
     group.addEventListener("dblclick", () => this.openData(table));
     group.addEventListener("contextmenu", (event) => {
@@ -560,11 +563,15 @@ export class DiagramView implements TabContent {
   // --- Pan, zoom, drag ------------------------------------------------------
 
   private installPanZoom(): void {
-    this.svg.addEventListener("wheel", (event) => {
-      event.preventDefault();
-      const rect = this.svg.getBoundingClientRect();
-      this.zoomAt(event.deltaY < 0 ? 1.1 : 1 / 1.1, event.clientX - rect.left, event.clientY - rect.top);
-    }, { passive: false });
+    this.svg.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        const rect = this.svg.getBoundingClientRect();
+        this.zoomAt(event.deltaY < 0 ? 1.1 : 1 / 1.1, event.clientX - rect.left, event.clientY - rect.top);
+      },
+      { passive: false },
+    );
     this.svg.addEventListener("mousedown", (start) => {
       if (start.button !== 0) return;
       const target = (start.target as Element).closest<SVGGElement>(".diagram-box");

@@ -73,7 +73,9 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
         if (ticket !== loading) return;
         models = loaded;
         renderModels(wanted);
-        modelStatus.textContent = loaded.length ? `${loaded.length} models from ${preset.label}` : `${preset.label} returned no models; pick Custom… and type one`;
+        modelStatus.textContent = loaded.length
+          ? `${loaded.length} models from ${preset.label}`
+          : `${preset.label} returned no models; pick Custom… and type one`;
       } catch (error) {
         if (ticket !== loading) return;
         models = [];
@@ -83,7 +85,12 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
     };
 
     const cards = AI_PROVIDERS.map((item) => {
-      const card = h("button", { class: "driver-card", type: "button", "data-provider": item.value, title: item.label }, icon(item.icon, "driver-icon provider-icon"), h("span", { class: "driver-label" }, item.label));
+      const card = h(
+        "button",
+        { class: "driver-card", type: "button", "data-provider": item.value, title: item.label },
+        icon(item.icon, "driver-icon provider-icon"),
+        h("span", { class: "driver-label" }, item.label),
+      );
       card.addEventListener("click", () => select(item));
       return card;
     });
@@ -124,13 +131,24 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
     const body = h(
       "div",
       { class: "form-grid" },
-      h("p", { class: "form-intro" }, "The assistant calls the provider directly from this computer with your key. It only sees table and column names, your editor text and the errors you ask about; it never runs queries."),
+      h(
+        "p",
+        { class: "form-intro" },
+        "The assistant calls the provider directly from this computer with your key. It only sees table and column names, your editor text and the errors you ask about; it never runs queries.",
+      ),
       field("Provider", h("div", { class: "driver-cards provider-cards" }, ...cards)),
       hint,
       field("Name", name, "Shown in the model switcher of the chat"),
       endpointField,
       field("API key", apiKey, "Stored in Windows Credential Manager"),
-      h("div", { class: "field" }, h("span", { class: "field-label" }, "Default model"), h("div", { class: "model-row" }, modelSelect, reloadButton), customModel, modelStatus),
+      h(
+        "div",
+        { class: "field" },
+        h("span", { class: "field-label" }, "Default model"),
+        h("div", { class: "model-row" }, modelSelect, reloadButton),
+        customModel,
+        modelStatus,
+      ),
     );
     const testStatus = h("p", { class: "test-status" });
     body.append(testStatus);
@@ -150,12 +168,19 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
       }
       return false;
     };
-    const remove = existing ? [{ label: "Remove", alignLeft: true, danger: true, run: async () => void (saved = await api.deleteAiConnection(existing.id)) }] : [];
-    openModal(existing ? "Edit LLM provider" : "Add LLM provider", body, [
-      ...remove,
-      { label: "Test connection", alignLeft: true, run: test },
-      { label: "Cancel", run: () => undefined },
-      { label: "Save", primary: true, run: save },
-    ], { width: 580, onClose: () => resolve(saved) });
+    const remove = existing
+      ? [{ label: "Remove", alignLeft: true, danger: true, run: async () => void (saved = await api.deleteAiConnection(existing.id)) }]
+      : [];
+    openModal(
+      existing ? "Edit LLM provider" : "Add LLM provider",
+      body,
+      [
+        ...remove,
+        { label: "Test connection", alignLeft: true, run: test },
+        { label: "Cancel", run: () => undefined },
+        { label: "Save", primary: true, run: save },
+      ],
+      { width: 580, onClose: () => resolve(saved) },
+    );
   });
 }

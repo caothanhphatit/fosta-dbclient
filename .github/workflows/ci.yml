@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   frontend:
-    name: Frontend (tsc, eslint, vitest, build)
+    name: Frontend (tsc, eslint, prettier, vitest, build)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +22,7 @@ jobs:
       - run: npm ci
       - run: npx tsc
       - run: npm run lint
+      - run: npm run format:check
       - run: npm test
       - run: npm run build
 

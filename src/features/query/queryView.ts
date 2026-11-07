@@ -90,7 +90,10 @@ export class QueryView implements TabContent {
     const from = empty ? state.doc.length : range.from;
     const to = empty ? state.doc.length : range.to;
     const prefix = empty && state.doc.length > 0 && !state.doc.toString().endsWith("\n") ? "\n\n" : empty && state.doc.length > 0 ? "\n" : "";
-    this.editor.dispatch({ changes: { from, to, insert: prefix + text }, selection: { anchor: from + prefix.length, head: from + prefix.length + text.length } });
+    this.editor.dispatch({
+      changes: { from, to, insert: prefix + text },
+      selection: { anchor: from + prefix.length, head: from + prefix.length + text.length },
+    });
     this.editor.focus();
   }
 
@@ -117,7 +120,10 @@ export class QueryView implements TabContent {
     const database = this.databaseSelect.value;
     try {
       const tables = database ? await api.listTables(this.connectionId, database) : [];
-      setSchemaTables(this.editor, tables.map((table) => table.name));
+      setSchemaTables(
+        this.editor,
+        tables.map((table) => table.name),
+      );
     } catch (error) {
       toast(errorText(error), "error");
     }

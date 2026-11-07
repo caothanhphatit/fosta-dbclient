@@ -140,7 +140,10 @@ function performAssistantAction(action: UiAction): void {
       navigation.openDiagram(profile, action.database, action.focusTable ?? undefined);
       break;
     case "openTable":
-      navigation.openTable({ connectionId: profile.id, driver: profile.driver, database: action.database, table: action.table, kind: "table" }, action.filter ?? "");
+      navigation.openTable(
+        { connectionId: profile.id, driver: profile.driver, database: action.database, table: action.table, kind: "table" },
+        action.filter ?? "",
+      );
       break;
     case "openQuery":
       navigation.openQuery(profile.id, action.database ?? context.database ?? null, action.sql);
@@ -360,7 +363,12 @@ function buildLayout(): void {
     "aside",
     { class: "sidebar" },
     workspaceHeader,
-    h("div", { class: "panel-header" }, h("span", {}, "Connections"), iconButton("plus", "New connection", () => void editConnection(null))),
+    h(
+      "div",
+      { class: "panel-header" },
+      h("span", {}, "Connections"),
+      iconButton("plus", "New connection", () => void editConnection(null)),
+    ),
     tree.element,
     tasksPanel.element,
   );

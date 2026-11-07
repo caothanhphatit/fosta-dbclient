@@ -43,7 +43,15 @@ export class VectorHealthView implements TabContent {
       "div",
       { class: "view vector-health" },
       toolbar,
-      h("div", { class: "health-body" }, h("div", { class: "section-title" }, "Data checks"), this.checks, h("div", { class: "section-title" }, "Index recall"), recallIntro, this.recall),
+      h(
+        "div",
+        { class: "health-body" },
+        h("div", { class: "section-title" }, "Data checks"),
+        this.checks,
+        h("div", { class: "section-title" }, "Index recall"),
+        recallIntro,
+        this.recall,
+      ),
     );
     void this.loadColumns(column);
   }
@@ -99,7 +107,12 @@ function checkCard(check: HealthCheck): HTMLElement {
     "div",
     { class: `health-card ${check.status}` },
     h("span", { class: "health-mark" }, STATUS_MARK[check.status]),
-    h("div", { class: "health-text" }, h("div", { class: "health-label" }, check.label), check.detail ? h("div", { class: "health-detail" }, check.detail) : null),
+    h(
+      "div",
+      { class: "health-text" },
+      h("div", { class: "health-label" }, check.label),
+      check.detail ? h("div", { class: "health-detail" }, check.detail) : null,
+    ),
     h("div", { class: "health-value mono" }, check.value),
   );
 }
@@ -121,7 +134,9 @@ function recallSummary(report: RecallReport): HTMLElement {
       metric("Speed-up", speedup ? `×${speedup.toFixed(1)}` : "n/a"),
       metric("Index", `${report.index} · ${report.metric}`),
     ),
-    status === "ok" ? null : h("p", { class: "muted-text" }, "Low recall: consider a larger M when creating the vector index, or raise mhnsw_ef_search for the session."),
+    status === "ok"
+      ? null
+      : h("p", { class: "muted-text" }, "Low recall: consider a larger M when creating the vector index, or raise mhnsw_ef_search for the session."),
   );
 }
 

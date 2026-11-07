@@ -57,9 +57,14 @@ export function taskDialog(existing: TaskDef | null, workspaceName: string): Pro
       autoStart.element,
       autoRestart.element,
     );
-    openModal(existing ? "Edit startup task" : "New startup task", body, [
-      { label: "Cancel", run: () => undefined },
-      { label: "Save", primary: true, run: async () => void (saved = await api.saveTask(readTask())) },
-    ], { width: 520, onClose: () => resolve(saved) });
+    openModal(
+      existing ? "Edit startup task" : "New startup task",
+      body,
+      [
+        { label: "Cancel", run: () => undefined },
+        { label: "Save", primary: true, run: async () => void (saved = await api.saveTask(readTask())) },
+      ],
+      { width: 520, onClose: () => resolve(saved) },
+    );
   });
 }

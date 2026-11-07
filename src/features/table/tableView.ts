@@ -64,7 +64,12 @@ export class TableView implements TabContent {
     this.discardButton = toolButton("x", "Discard", () => this.grid.discard(), "Discard all changes");
     const exportButton = toolButton("copy", "Copy as", () => undefined, "Copy this page to the clipboard");
     const exportFileButton = toolButton("download", "Export", () => this.exportFile(), "Export rows to a file in Downloads");
-    const importButton = toolButton("upload", "Import", () => importDialog(this.target, this.columns, () => void this.reload({ force: true })), "Import rows from CSV or JSON");
+    const importButton = toolButton(
+      "upload",
+      "Import",
+      () => importDialog(this.target, this.columns, () => void this.reload({ force: true })),
+      "Import rows from CSV or JSON",
+    );
     importButton.hidden = !this.editable;
     exportButton.addEventListener("click", (event) => showContextMenu(event, this.exportMenu()));
     const recordButton = toolButton("design", "Record", () => this.toggleRecord(), "Show or hide the record panel");

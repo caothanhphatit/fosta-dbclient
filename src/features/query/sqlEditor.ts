@@ -39,7 +39,12 @@ export function createSqlEditor(parent: HTMLElement, doc: string, onRun: () => v
     parent,
     doc,
     extensions: [
-      Prec.highest(keymap.of([{ key: "Mod-Enter", run }, { key: "F9", run }])),
+      Prec.highest(
+        keymap.of([
+          { key: "Mod-Enter", run },
+          { key: "F9", run },
+        ]),
+      ),
       basicSetup,
       language.of(sqlLanguage([])),
       syntaxHighlighting(highlightStyle),

@@ -112,7 +112,13 @@ export class WorkspaceRail {
       `${workspace.tasks.length} task(s), ${activity.running} running`,
       shortcut,
     ].filter(Boolean);
-    const classes = ["ws-entry", `color-${workspaceColor(workspace.color)}`, active ? "active" : "", activity.connected ? "online" : "", activity.running ? "busy" : ""];
+    const classes = [
+      "ws-entry",
+      `color-${workspaceColor(workspace.color)}`,
+      active ? "active" : "",
+      activity.connected ? "online" : "",
+      activity.running ? "busy" : "",
+    ];
     const badge = h(
       "span",
       { class: "ws-badges" },

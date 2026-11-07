@@ -66,20 +66,27 @@ export function exportDialog(source: ExportSource): void {
     field("File name", fileName, "Saved to your Downloads folder"),
     progress,
   );
-  openModal(`Export ${source.target.table}`, body, [
-    { label: "Cancel", run: () => undefined },
-    {
-      label: "Export",
-      primary: true,
-      run: async () => {
-        const rows = scopePage.checked ? source.pageRows : await fetchAll(source, (done) => (progress.textContent = `Reading rows… ${formatNumber(done)} / ${formatNumber(source.total)}`));
-        progress.textContent = "Writing file…";
-        const text = render(format.value as FileFormat, source.columns, rows, source.target.table);
-        const path = await api.saveDownload(fileName.value.trim() || `${source.target.table}.csv`, text, null);
-        savedDialog(`Exported ${formatNumber(rows.length)} rows`, path);
+  openModal(
+    `Export ${source.target.table}`,
+    body,
+    [
+      { label: "Cancel", run: () => undefined },
+      {
+        label: "Export",
+        primary: true,
+        run: async () => {
+          const rows = scopePage.checked
+            ? source.pageRows
+            : await fetchAll(source, (done) => (progress.textContent = `Reading rows… ${formatNumber(done)} / ${formatNumber(source.total)}`));
+          progress.textContent = "Writing file…";
+          const text = render(format.value as FileFormat, source.columns, rows, source.target.table);
+          const path = await api.saveDownload(fileName.value.trim() || `${source.target.table}.csv`, text, null);
+          savedDialog(`Exported ${formatNumber(rows.length)} rows`, path);
+        },
       },
-    },
-  ], { width: 480 });
+    ],
+    { width: 480 },
+  );
 }
 
 async function fetchAll(source: ExportSource, onProgress: (done: number) => void): Promise<Cell[][]> {
@@ -108,10 +115,15 @@ function render(format: FileFormat, columns: ColumnMeta[], rows: Cell[][], table
 
 /** Small result dialog with a "Show in folder" button. */
 export function savedDialog(title: string, path: string): void {
-  openModal(title, h("p", { class: "confirm-text mono saved-path" }, path), [
-    { label: "Show in folder", alignLeft: true, run: async () => void (await api.revealFile(path)) },
-    { label: "Close", primary: true, run: () => undefined },
-  ], { width: 520 });
+  openModal(
+    title,
+    h("p", { class: "confirm-text mono saved-path" }, path),
+    [
+      { label: "Show in folder", alignLeft: true, run: async () => void (await api.revealFile(path)) },
+      { label: "Close", primary: true, run: () => undefined },
+    ],
+    { width: 520 },
+  );
 }
 
 // --- Import ------------------------------------------------------------------
@@ -123,7 +135,17 @@ interface ParsedFile {
 
 export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone: () => void): void {
   const fileInput = h("input", { type: "file", accept: ".csv,.tsv,.txt,.json,.ndjson", class: "file-input" });
-  const delimiter = h("select", { class: "input" }, ...[["auto", "Detect"], [",", "Comma ,"], [";", "Semicolon ;"], ["\t", "Tab"], ["|", "Pipe |"]].map(([value, label]) => h("option", { value }, label)));
+  const delimiter = h(
+    "select",
+    { class: "input" },
+    ...[
+      ["auto", "Detect"],
+      [",", "Comma ,"],
+      [";", "Semicolon ;"],
+      ["\t", "Tab"],
+      ["|", "Pipe |"],
+    ].map(([value, label]) => h("option", { value }, label)),
+  );
   const header = checkbox("First row is the header", true);
   const emptyAsNull = checkbox("Empty values become NULL", true);
   const mappingHost = h("div", { class: "import-mapping" });
@@ -158,16 +180,35 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
     if (!parsed) return;
     const current = parsed;
     const rows = current.headers.map((name, index) => {
-      const select = h("select", { class: "input mono" }, h("option", { value: SKIP }, "(skip)"), ...insertable.map((column) => h("option", { value: column.name, selected: mapping[index] === column.name }, `${column.name}  ${column.typeName}`)));
+      const select = h(
+        "select",
+        { class: "input mono" },
+        h("option", { value: SKIP }, "(skip)"),
+        ...insertable.map((column) => h("option", { value: column.name, selected: mapping[index] === column.name }, `${column.name}  ${column.typeName}`)),
+      );
       if (mapping[index] === SKIP) select.value = SKIP;
       select.addEventListener("change", () => {
         mapping[index] = select.value;
         renderPreview();
       });
       const sample = current.rows.find((row) => row[index] !== null && row[index] !== "")?.[index] ?? "";
-      return h("tr", {}, h("td", { class: "mono" }, name), h("td", {}, "→"), h("td", {}, select), h("td", { class: "import-sample", title: sample ?? "" }, sample ?? ""));
+      return h(
+        "tr",
+        {},
+        h("td", { class: "mono" }, name),
+        h("td", {}, "→"),
+        h("td", {}, select),
+        h("td", { class: "import-sample", title: sample ?? "" }, sample ?? ""),
+      );
     });
-    mappingHost.replaceChildren(h("table", { class: "import-table" }, h("thead", {}, h("tr", {}, h("th", {}, "File column"), h("th", {}), h("th", {}, "Table column"), h("th", {}, "Sample"))), h("tbody", {}, ...rows)));
+    mappingHost.replaceChildren(
+      h(
+        "table",
+        { class: "import-table" },
+        h("thead", {}, h("tr", {}, h("th", {}, "File column"), h("th", {}), h("th", {}, "Table column"), h("th", {}, "Sample"))),
+        h("tbody", {}, ...rows),
+      ),
+    );
     renderPreview();
   };
 
@@ -179,7 +220,9 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
       return;
     }
     const head = h("tr", {}, ...used.map((item) => h("th", {}, item.name)));
-    const body = parsed.rows.slice(0, PREVIEW_ROWS).map((row) => h("tr", {}, ...used.map((item) => h("td", {}, cellText(normalize(row[item.index], emptyAsNull.input.checked))))));
+    const body = parsed.rows
+      .slice(0, PREVIEW_ROWS)
+      .map((row) => h("tr", {}, ...used.map((item) => h("td", {}, cellText(normalize(row[item.index], emptyAsNull.input.checked))))));
     preview.replaceChildren(h("table", { class: "import-table compact" }, h("thead", {}, head), h("tbody", {}, ...body)));
   };
 
@@ -198,46 +241,62 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
   const body = h(
     "div",
     { class: "form-grid" },
-    h("p", { class: "form-intro" }, "Rows are inserted into ", h("strong", {}, `${target.database}.${target.table}`), ` (${info.label}) in batches of ${IMPORT_BATCH}; each batch is one transaction, so a failed batch leaves the earlier ones in place.`),
+    h(
+      "p",
+      { class: "form-intro" },
+      "Rows are inserted into ",
+      h("strong", {}, `${target.database}.${target.table}`),
+      ` (${info.label}) in batches of ${IMPORT_BATCH}; each batch is one transaction, so a failed batch leaves the earlier ones in place.`,
+    ),
     field("File", fileInput),
-    h("div", { class: "field-row even" }, field("Delimiter (CSV)", delimiter), h("div", { class: "field import-options" }, header.element, emptyAsNull.element)),
+    h(
+      "div",
+      { class: "field-row even" },
+      field("Delimiter (CSV)", delimiter),
+      h("div", { class: "field import-options" }, header.element, emptyAsNull.element),
+    ),
     mappingHost,
     preview,
     status,
   );
-  openModal(`Import into ${target.table}`, body, [
-    { label: "Cancel", run: () => undefined },
-    {
-      label: "Import",
-      primary: true,
-      run: async () => {
-        if (!parsed) throw new Error("Choose a file first");
-        const used = mapping.map((name, index) => ({ name, index })).filter((item) => item.name !== SKIP);
-        if (used.length === 0) throw new Error("Map at least one column");
-        const changes: RowChange[] = parsed.rows.map((row) => ({
-          kind: "insert",
-          values: used.map((item) => ({ column: item.name, value: normalize(row[item.index], emptyAsNull.input.checked) })),
-        }));
-        let done = 0;
-        status.className = "test-status";
-        for (let start = 0; start < changes.length; start += IMPORT_BATCH) {
-          const batch = changes.slice(start, start + IMPORT_BATCH);
-          try {
-            await api.applyChanges(target.connectionId, target.database, target.table, batch);
-          } catch (error) {
-            status.className = "test-status error";
-            status.textContent = `Rows ${formatNumber(start + 1)}–${formatNumber(start + batch.length)} failed: ${errorText(error)}. ${formatNumber(done)} rows were imported before that.`;
-            if (done > 0) onDone();
-            return false;
+  openModal(
+    `Import into ${target.table}`,
+    body,
+    [
+      { label: "Cancel", run: () => undefined },
+      {
+        label: "Import",
+        primary: true,
+        run: async () => {
+          if (!parsed) throw new Error("Choose a file first");
+          const used = mapping.map((name, index) => ({ name, index })).filter((item) => item.name !== SKIP);
+          if (used.length === 0) throw new Error("Map at least one column");
+          const changes: RowChange[] = parsed.rows.map((row) => ({
+            kind: "insert",
+            values: used.map((item) => ({ column: item.name, value: normalize(row[item.index], emptyAsNull.input.checked) })),
+          }));
+          let done = 0;
+          status.className = "test-status";
+          for (let start = 0; start < changes.length; start += IMPORT_BATCH) {
+            const batch = changes.slice(start, start + IMPORT_BATCH);
+            try {
+              await api.applyChanges(target.connectionId, target.database, target.table, batch);
+            } catch (error) {
+              status.className = "test-status error";
+              status.textContent = `Rows ${formatNumber(start + 1)}–${formatNumber(start + batch.length)} failed: ${errorText(error)}. ${formatNumber(done)} rows were imported before that.`;
+              if (done > 0) onDone();
+              return false;
+            }
+            done += batch.length;
+            status.textContent = `Imported ${formatNumber(done)} / ${formatNumber(changes.length)} rows…`;
           }
-          done += batch.length;
-          status.textContent = `Imported ${formatNumber(done)} / ${formatNumber(changes.length)} rows…`;
-        }
-        toast(`Imported ${formatNumber(done)} rows into ${target.table}`, "success");
-        onDone();
+          toast(`Imported ${formatNumber(done)} rows into ${target.table}`, "success");
+          onDone();
+        },
       },
-    },
-  ], { width: 720 });
+    ],
+    { width: 720 },
+  );
 }
 
 function normalize(value: Cell, emptyAsNull: boolean): Cell {
@@ -256,7 +315,9 @@ function parseFile(text: string, name: string, delimiter: string, hasHeader: boo
   const records = parseCsv(trimmed, separator).filter((record) => record.some((value) => value !== ""));
   if (records.length === 0) throw new Error("The file has no rows");
   const width = Math.max(...records.map((record) => record.length));
-  const headers = hasHeader ? records[0].map((value, index) => value.trim() || `column_${index + 1}`) : Array.from({ length: width }, (_, index) => `column_${index + 1}`);
+  const headers = hasHeader
+    ? records[0].map((value, index) => value.trim() || `column_${index + 1}`)
+    : Array.from({ length: width }, (_, index) => `column_${index + 1}`);
   const rows = (hasHeader ? records.slice(1) : records).map((record) => headers.map((_, index) => record[index] ?? null));
   return { headers, rows };
 }
@@ -264,7 +325,11 @@ function parseFile(text: string, name: string, delimiter: string, hasHeader: boo
 function parseJson(text: string): ParsedFile {
   let items: unknown[];
   if (text.startsWith("[")) items = JSON.parse(text) as unknown[];
-  else if (text.includes("\n") && !text.startsWith("{\n") && text.split("\n").every((line) => !line.trim() || line.trim().startsWith("{"))) items = text.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as unknown);
+  else if (text.includes("\n") && !text.startsWith("{\n") && text.split("\n").every((line) => !line.trim() || line.trim().startsWith("{")))
+    items = text
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line) as unknown);
   else {
     const value = JSON.parse(text) as Record<string, unknown>;
     const list = Object.values(value).find(Array.isArray);

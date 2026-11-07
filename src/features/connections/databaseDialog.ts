@@ -25,18 +25,23 @@ export function databaseDialog(profile: ConnectionProfile): Promise<string | nul
       field("Database name", name),
       mongo ? field("First collection", collection) : null,
     );
-    openModal("New database", body, [
-      { label: "Cancel", run: () => undefined },
-      {
-        label: "Create",
-        primary: true,
-        run: async () => {
-          const value = name.value.trim();
-          if (!value) throw new Error("Database name is required");
-          await api.createDatabase(profile.id, value, mongo ? collection.value.trim() : null);
-          created = value;
+    openModal(
+      "New database",
+      body,
+      [
+        { label: "Cancel", run: () => undefined },
+        {
+          label: "Create",
+          primary: true,
+          run: async () => {
+            const value = name.value.trim();
+            if (!value) throw new Error("Database name is required");
+            await api.createDatabase(profile.id, value, mongo ? collection.value.trim() : null);
+            created = value;
+          },
         },
-      },
-    ], { width: 440, onClose: () => resolve(created) });
+      ],
+      { width: 440, onClose: () => resolve(created) },
+    );
   });
 }

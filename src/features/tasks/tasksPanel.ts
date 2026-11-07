@@ -116,7 +116,12 @@ export class TasksPanel {
       { class: `task-row state-${state}`, title: `${task.program} ${formatArgs(task.args)}` },
       h("span", { class: "status-dot" }),
       h("div", { class: "task-text" }, h("div", { class: "task-name" }, task.name), h("div", { class: "task-state" }, describeStatus(state, status))),
-      h("div", { class: "task-actions" }, iconButton(active ? "stop" : "play", active ? "Stop" : "Start", () => void this.toggle(task, active)), iconButton("logs", "Show logs", () => this.host.openLogs(task))),
+      h(
+        "div",
+        { class: "task-actions" },
+        iconButton(active ? "stop" : "play", active ? "Stop" : "Start", () => void this.toggle(task, active)),
+        iconButton("logs", "Show logs", () => this.host.openLogs(task)),
+      ),
     );
     row.addEventListener("dblclick", () => this.host.openLogs(task));
     row.addEventListener("contextmenu", (event) => showContextMenu(event, this.menu(task, active)));

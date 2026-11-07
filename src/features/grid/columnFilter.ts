@@ -40,10 +40,9 @@ export function columnCondition(column: ColumnMeta, text: string): string | null
 }
 
 export function combinedCondition(columns: ColumnMeta[], filters: ColumnFilters, extra: string): string | null {
-  const conditions = [
-    extra.trim(),
-    ...columns.map((column) => columnCondition(column, filters[column.name] ?? "")),
-  ].filter((condition): condition is string => Boolean(condition));
+  const conditions = [extra.trim(), ...columns.map((column) => columnCondition(column, filters[column.name] ?? ""))].filter((condition): condition is string =>
+    Boolean(condition),
+  );
   if (conditions.length === 0) return null;
   return conditions.length === 1 ? conditions[0] : conditions.map((condition) => `(${condition})`).join(" AND ");
 }

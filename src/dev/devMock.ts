@@ -18,8 +18,28 @@ const workspaces: Workspace[] = [
     color: "blue",
     icon: "laptop",
     connections: [
-      { id: "c-local", name: "Local MariaDB", driver: "mariadb", host: "127.0.0.1", port: 3306, user: "root", database: "shop", savePassword: true, options: {} },
-      { id: "c-local-mongo", name: "Local Mongo", driver: "mongodb", host: "127.0.0.1", port: 27017, user: "", database: "admin", savePassword: false, options: {} },
+      {
+        id: "c-local",
+        name: "Local MariaDB",
+        driver: "mariadb",
+        host: "127.0.0.1",
+        port: 3306,
+        user: "root",
+        database: "shop",
+        savePassword: true,
+        options: {},
+      },
+      {
+        id: "c-local-mongo",
+        name: "Local Mongo",
+        driver: "mongodb",
+        host: "127.0.0.1",
+        port: 27017,
+        user: "",
+        database: "admin",
+        savePassword: false,
+        options: {},
+      },
     ],
     tasks: [],
   },
@@ -29,13 +49,61 @@ const workspaces: Workspace[] = [
     color: "orange",
     icon: "cloud",
     connections: [
-      { id: "c-a-1", name: "Staging (port-forward)", driver: "mariadb", host: "127.0.0.1", port: 13306, user: "app", database: "shop", savePassword: true, options: {} },
-      { id: "c-a-2", name: "Analytics replica", driver: "mysql", host: "127.0.0.1", port: 13307, user: "readonly", database: null, savePassword: false, options: {} },
-      { id: "c-a-3", name: "ERP (SQL Server)", driver: "mssql", host: "erp.client-a.local", port: 1433, user: "sa", database: "ERP", savePassword: true, options: { encrypt: "true" } },
-      { id: "c-a-4", name: "Events (Mongo Atlas)", driver: "mongodb", host: "cluster0.example.net", port: 27017, user: "app", database: "admin", savePassword: true, options: {} },
+      {
+        id: "c-a-1",
+        name: "Staging (port-forward)",
+        driver: "mariadb",
+        host: "127.0.0.1",
+        port: 13306,
+        user: "app",
+        database: "shop",
+        savePassword: true,
+        options: {},
+      },
+      {
+        id: "c-a-2",
+        name: "Analytics replica",
+        driver: "mysql",
+        host: "127.0.0.1",
+        port: 13307,
+        user: "readonly",
+        database: null,
+        savePassword: false,
+        options: {},
+      },
+      {
+        id: "c-a-3",
+        name: "ERP (SQL Server)",
+        driver: "mssql",
+        host: "erp.client-a.local",
+        port: 1433,
+        user: "sa",
+        database: "ERP",
+        savePassword: true,
+        options: { encrypt: "true" },
+      },
+      {
+        id: "c-a-4",
+        name: "Events (Mongo Atlas)",
+        driver: "mongodb",
+        host: "cluster0.example.net",
+        port: 27017,
+        user: "app",
+        database: "admin",
+        savePassword: true,
+        options: {},
+      },
     ],
     tasks: [
-      { id: "t-a-1", name: "MariaDB port-forward", program: "kubectl", args: ["port-forward", "-n", "shop", "svc/mariadb", "13306:3306"], autoStart: true, autoRestart: true, readyPattern: "Forwarding from" },
+      {
+        id: "t-a-1",
+        name: "MariaDB port-forward",
+        program: "kubectl",
+        args: ["port-forward", "-n", "shop", "svc/mariadb", "13306:3306"],
+        autoStart: true,
+        autoRestart: true,
+        readyPattern: "Forwarding from",
+      },
     ],
   },
   { id: "prod", name: "Production", color: "red", icon: "shield", connections: [], tasks: [] },
@@ -106,12 +174,19 @@ function compareCell(value: string | null, operator: string, operand: string): b
   const numeric = !Number.isNaN(Number(value)) && !Number.isNaN(Number(operand));
   const order = numeric ? Number(value) - Number(operand) : value.localeCompare(operand);
   switch (operator) {
-    case "=": return order === 0;
-    case "<>": case "!=": return order !== 0;
-    case ">": return order > 0;
-    case "<": return order < 0;
-    case ">=": return order >= 0;
-    default: return order <= 0;
+    case "=":
+      return order === 0;
+    case "<>":
+    case "!=":
+      return order !== 0;
+    case ">":
+      return order > 0;
+    case "<":
+      return order < 0;
+    case ">=":
+      return order >= 0;
+    default:
+      return order <= 0;
   }
 }
 
@@ -120,18 +195,84 @@ const SHOP_GRAPH = {
   totalTables: 6,
   tables: [
     { name: "categories", kind: "table", rows: 8, comment: "", columns: [col("id", "int(11)", true), col("name", "varchar(60)"), col("slug", "varchar(60)")] },
-    { name: "customers", kind: "table", rows: 2000, comment: "", columns: [col("id", "int(11)", true), col("full_name", "varchar(120)"), col("email", "varchar(160)"), col("city", "varchar(60)"), col("tier", "enum('bronze','silver','gold')"), col("created_at", "datetime")] },
-    { name: "products", kind: "table", rows: 1240, comment: "", columns: [col("id", "int(11)", true), col("sku", "varchar(32)"), col("name", "varchar(120)"), col("category_id", "int(11)"), col("price", "decimal(10,2)"), col("stock", "int(11)", false, true), col("updated_at", "datetime"), col("embedding", "vector(4)")] },
-    { name: "orders", kind: "table", rows: 8000, comment: "", columns: [col("id", "int(11)", true), col("customer_id", "int(11)"), col("status", "enum('pending','paid','shipped','cancelled')"), col("ordered_at", "datetime"), col("total", "decimal(12,2)")] },
-    { name: "order_items", kind: "table", rows: 16001, comment: "", columns: [col("id", "int(11)", true), col("order_id", "int(11)"), col("product_id", "int(11)"), col("quantity", "int(11)"), col("unit_price", "decimal(10,2)")] },
-    { name: "v_daily_sales", kind: "view", rows: null, comment: "", columns: [col("day", "date", false, true), col("orders", "bigint(21)"), col("revenue", "decimal(34,2)", false, true)] },
+    {
+      name: "customers",
+      kind: "table",
+      rows: 2000,
+      comment: "",
+      columns: [
+        col("id", "int(11)", true),
+        col("full_name", "varchar(120)"),
+        col("email", "varchar(160)"),
+        col("city", "varchar(60)"),
+        col("tier", "enum('bronze','silver','gold')"),
+        col("created_at", "datetime"),
+      ],
+    },
+    {
+      name: "products",
+      kind: "table",
+      rows: 1240,
+      comment: "",
+      columns: [
+        col("id", "int(11)", true),
+        col("sku", "varchar(32)"),
+        col("name", "varchar(120)"),
+        col("category_id", "int(11)"),
+        col("price", "decimal(10,2)"),
+        col("stock", "int(11)", false, true),
+        col("updated_at", "datetime"),
+        col("embedding", "vector(4)"),
+      ],
+    },
+    {
+      name: "orders",
+      kind: "table",
+      rows: 8000,
+      comment: "",
+      columns: [
+        col("id", "int(11)", true),
+        col("customer_id", "int(11)"),
+        col("status", "enum('pending','paid','shipped','cancelled')"),
+        col("ordered_at", "datetime"),
+        col("total", "decimal(12,2)"),
+      ],
+    },
+    {
+      name: "order_items",
+      kind: "table",
+      rows: 16001,
+      comment: "",
+      columns: [
+        col("id", "int(11)", true),
+        col("order_id", "int(11)"),
+        col("product_id", "int(11)"),
+        col("quantity", "int(11)"),
+        col("unit_price", "decimal(10,2)"),
+      ],
+    },
+    {
+      name: "v_daily_sales",
+      kind: "view",
+      rows: null,
+      comment: "",
+      columns: [col("day", "date", false, true), col("orders", "bigint(21)"), col("revenue", "decimal(34,2)", false, true)],
+    },
   ],
   relations: [
     ["fk_orders_customer", "orders", "customer_id", "customers"],
     ["fk_items_order", "order_items", "order_id", "orders"],
     ["fk_items_product", "order_items", "product_id", "products"],
     ["fk_products_category", "products", "category_id", "categories"],
-  ].map(([constraint, table, column, target]) => ({ constraint, database: "shop", table, columns: [column], referencedDatabase: "shop", referencedTable: target, referencedColumns: ["id"] })),
+  ].map(([constraint, table, column, target]) => ({
+    constraint,
+    database: "shop",
+    table,
+    columns: [column],
+    referencedDatabase: "shop",
+    referencedTable: target,
+    referencedColumns: ["id"],
+  })),
 };
 
 function handle(command: string, payload: Record<string, unknown> = {}): unknown {
@@ -151,7 +292,10 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const meta = payload.workspace as Workspace;
       const existing = config.workspaces.find((item) => item.id === meta.id);
       config = existing
-        ? { ...config, workspaces: config.workspaces.map((item) => (item.id === meta.id ? { ...item, name: meta.name, color: meta.color, icon: meta.icon } : item)) }
+        ? {
+            ...config,
+            workspaces: config.workspaces.map((item) => (item.id === meta.id ? { ...item, name: meta.name, color: meta.color, icon: meta.icon } : item)),
+          }
         : { ...config, workspaces: [...config.workspaces, { ...meta, connections: [], tasks: [] }] };
       return config;
     }
@@ -182,7 +326,8 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       return null;
     case "test_connection":
     case "connect": {
-      const profile = (payload.profile as ConnectionProfile | undefined) ?? config.workspaces.flatMap((item) => item.connections).find((item) => item.id === payload.id);
+      const profile =
+        (payload.profile as ConnectionProfile | undefined) ?? config.workspaces.flatMap((item) => item.connections).find((item) => item.id === payload.id);
       const versions: Record<string, string> = { mariadb: "11.8.2-MariaDB", mysql: "8.4.3", mssql: "16.0.1000.6 (Developer Edition)", mongodb: "8.0.4" };
       return versions[profile?.driver ?? "mariadb"];
     }
@@ -219,7 +364,15 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     }
     case "describe_table":
       return {
-        columns: columns.map((column) => ({ name: column.name, columnType: column.typeName, nullable: !column.primary, key: column.primary ? "PRI" : "", defaultValue: null, extra: column.primary ? "auto_increment" : "", comment: "" })),
+        columns: columns.map((column) => ({
+          name: column.name,
+          columnType: column.typeName,
+          nullable: !column.primary,
+          key: column.primary ? "PRI" : "",
+          defaultValue: null,
+          extra: column.primary ? "auto_increment" : "",
+          comment: "",
+        })),
         ddl: "CREATE TABLE `products` (\n  `id` int(11) NOT NULL AUTO_INCREMENT,\n  `sku` varchar(32) NOT NULL,\n  `name` varchar(120) NOT NULL,\n  `price` decimal(10,2) NOT NULL,\n  `stock` int(11) DEFAULT NULL,\n  `category_id` int(11) NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `embedding` vector(4) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB",
       };
     case "run_sql": {
@@ -234,11 +387,35 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       return ["▶ kubectl port-forward -n shop svc/mariadb 13306:3306", "Forwarding from 127.0.0.1:13306 -> 3306", "Handling connection for 13306"];
     case "table_relations":
       return {
-        outgoing: [{ constraint: "fk_products_category", database: "shop", table: "products", columns: ["category_id"], referencedDatabase: "shop", referencedTable: "categories", referencedColumns: ["id"] }],
-        incoming: [{ constraint: "fk_items_product", database: "shop", table: "order_items", columns: ["product_id"], referencedDatabase: "shop", referencedTable: "products", referencedColumns: ["id"] }],
+        outgoing: [
+          {
+            constraint: "fk_products_category",
+            database: "shop",
+            table: "products",
+            columns: ["category_id"],
+            referencedDatabase: "shop",
+            referencedTable: "categories",
+            referencedColumns: ["id"],
+          },
+        ],
+        incoming: [
+          {
+            constraint: "fk_items_product",
+            database: "shop",
+            table: "order_items",
+            columns: ["product_id"],
+            referencedDatabase: "shop",
+            referencedTable: "products",
+            referencedColumns: ["id"],
+          },
+        ],
       };
     case "vector_info":
-      return { supported: true, columns: [{ name: "embedding", dims: DIMS }], indexes: [{ name: "idx_embedding", column: "embedding", metric: "cosine", m: 6 }] };
+      return {
+        supported: true,
+        columns: [{ name: "embedding", dims: DIMS }],
+        indexes: [{ name: "idx_embedding", column: "embedding", metric: "cosine", m: 6 }],
+      };
     case "fetch_vector":
       return [0.12, -0.4, 0.33, 0.9];
     case "vector_search": {
@@ -247,8 +424,21 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const distance = { name: "distance", typeName: "double", numeric: true, binary: false, primary: false, vectorDims: null };
       const sql = "SELECT *, VEC_DISTANCE_COSINE(`embedding`, ?) AS distance FROM `products` ORDER BY distance LIMIT ?";
       return {
-        result: { columns: [...result.columns, distance], rows: result.rows.map((row, index) => [...row, (0.05 + index * 0.031).toFixed(4)]), affectedRows: 0, truncated: false },
-        plan: { columns: [{ ...distance, name: "type", typeName: "varchar", numeric: false }, { ...distance, name: "key", typeName: "varchar", numeric: false }], rows: [["range", "idx_embedding"]], affectedRows: 0, truncated: false },
+        result: {
+          columns: [...result.columns, distance],
+          rows: result.rows.map((row, index) => [...row, (0.05 + index * 0.031).toFixed(4)]),
+          affectedRows: 0,
+          truncated: false,
+        },
+        plan: {
+          columns: [
+            { ...distance, name: "type", typeName: "varchar", numeric: false },
+            { ...distance, name: "key", typeName: "varchar", numeric: false },
+          ],
+          rows: [["range", "idx_embedding"]],
+          affectedRows: 0,
+          truncated: false,
+        },
         indexUsed: "idx_embedding",
         sql,
         runnableSql: sql.replace("?", "VEC_FromText('[0.12,-0.4,0.33,0.9]')").replace("?", String(request.k)),
@@ -265,7 +455,16 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
         { label: "Vector index", status: "info", value: "idx_embedding", detail: "cosine, M=6" },
       ];
     case "index_recall":
-      return { index: "idx_embedding", metric: "cosine", k: Number(payload.k), queries: Number(payload.queries), recall: 0.97, worstRecall: 0.8, annMs: 1.4, exactMs: 9.8 };
+      return {
+        index: "idx_embedding",
+        metric: "cosine",
+        k: Number(payload.k),
+        queries: Number(payload.queries),
+        recall: 0.97,
+        worstRecall: 0.8,
+        annMs: 1.4,
+        exactMs: 9.8,
+      };
     case "test_embedding":
       return DIMS;
     default:
@@ -301,7 +500,8 @@ function saveAiConnection(connection: AiConnection, apiKey: string | null): AppC
   const aiConnections = previous ? config.aiConnections.map((existing) => (existing.id === item.id ? item : existing)) : [...config.aiConnections, item];
   let aiActive = config.aiActive;
   const moved = previous && (previous.provider !== item.provider || previous.baseUrl !== item.baseUrl);
-  if (previous && aiActive?.connectionId === item.id && (moved || aiActive.model === previous.defaultModel)) aiActive = { ...aiActive, model: item.defaultModel };
+  if (previous && aiActive?.connectionId === item.id && (moved || aiActive.model === previous.defaultModel))
+    aiActive = { ...aiActive, model: item.defaultModel };
   config = repairActive({ ...config, aiConnections, aiActive });
   return config;
 }
@@ -351,7 +551,7 @@ async function failureText(response: Response): Promise<string> {
   const body = await response.text();
   try {
     const parsed = JSON.parse(body) as { error?: { message?: string } | string; message?: string };
-    const message = typeof parsed.error === "string" ? parsed.error : parsed.error?.message ?? parsed.message;
+    const message = typeof parsed.error === "string" ? parsed.error : (parsed.error?.message ?? parsed.message);
     if (message) return `${response.status}: ${message}`;
   } catch {
     // Not JSON; fall through to the raw preview.
@@ -374,7 +574,9 @@ async function providerFetch(url: string, init: RequestInit): Promise<Response> 
   try {
     return await fetch(url, init);
   } catch (error) {
-    throw new Error(`The browser preview could not reach ${new URL(url).host} (${errorText(error)}). The provider probably blocks cross-origin requests; the desktop app calls it from Rust and is not affected.`);
+    throw new Error(
+      `The browser preview could not reach ${new URL(url).host} (${errorText(error)}). The provider probably blocks cross-origin requests; the desktop app calls it from Rust and is not affected.`,
+    );
   }
 }
 
@@ -387,9 +589,12 @@ async function fetchModels(settings: AiSettings, key: string): Promise<string[]>
   if (!response.ok) throw new Error(`${providerPreset(settings.provider).label} API returned ${await failureText(response)}`);
   const payload = (await jsonBody(response, url)) as { data?: unknown; models?: unknown } | unknown[];
   // Same shapes the backend accepts: { data: [...] } (OpenAI, Anthropic), { models: [...] } (Ollama native), or a bare array.
-  const items = Array.isArray(payload) ? payload : (payload as { data?: unknown }).data ?? (payload as { models?: unknown }).models;
+  const items = Array.isArray(payload) ? payload : ((payload as { data?: unknown }).data ?? (payload as { models?: unknown }).models);
   if (!Array.isArray(items)) throw new Error(`${url} returned no model list`);
-  const ids = items.map((item) => (typeof item === "string" ? item : String((item as { id?: string; name?: string }).id ?? (item as { name?: string }).name ?? ""))).map((id) => id.replace(/^models\//, "")).filter(Boolean);
+  const ids = items
+    .map((item) => (typeof item === "string" ? item : String((item as { id?: string; name?: string }).id ?? (item as { name?: string }).name ?? "")))
+    .map((id) => id.replace(/^models\//, ""))
+    .filter(Boolean);
   return [...new Set(ids)].sort();
 }
 
@@ -397,9 +602,15 @@ function systemPrompt(context: ChatRequest["context"]): string {
   const lines = [
     "You are the assistant built into DB Studio, a desktop database client. You cannot run anything: put every runnable query in a fenced code block (```sql, or ```json for MongoDB commands) for the user to run from the editor. Answer in the user's language and keep prose short.",
     "Context:",
-    context.connectionId ? `- Connection: ${context.connectionName ?? "connection"} (${context.driverLabel ?? "unknown"} ${context.serverVersion ?? ""})` : "- No connection is open; write generic SQL and say which engine you assumed.",
+    context.connectionId
+      ? `- Connection: ${context.connectionName ?? "connection"} (${context.driverLabel ?? "unknown"} ${context.serverVersion ?? ""})`
+      : "- No connection is open; write generic SQL and say which engine you assumed.",
   ];
-  if (context.database) lines.push(`- Database: ${context.database}`, "- Tables: products (~1240 rows), categories (12), orders (48210), order_items (153900), customers (9031), v_daily_sales (view)");
+  if (context.database)
+    lines.push(
+      `- Database: ${context.database}`,
+      "- Tables: products (~1240 rows), categories (12), orders (48210), order_items (153900), customers (9031), v_daily_sales (view)",
+    );
   if (context.table) lines.push(`- Table the user is looking at: ${context.table}`);
   if (context.editorText) lines.push("- Current editor text:", "```", context.editorText, "```");
   if (context.lastError) lines.push(`- Last error from the server: ${context.lastError}`);
@@ -443,9 +654,18 @@ async function streamChat(request: ChatRequest, channel: Channel<ChatEvent>): Pr
       for (const line of lines) {
         const payload = line.replace(/\r$/, "").replace(/^data:\s*/, "");
         if (!line.startsWith("data:") || !payload || payload === "[DONE]") continue;
-        const event = JSON.parse(payload) as { type?: string; delta?: { type?: string; text?: string }; choices?: { delta?: { content?: string } }[]; error?: { message?: string } };
+        const event = JSON.parse(payload) as {
+          type?: string;
+          delta?: { type?: string; text?: string };
+          choices?: { delta?: { content?: string } }[];
+          error?: { message?: string };
+        };
         if (event.error?.message) throw new Error(`${preset.label} API: ${event.error.message}`);
-        const piece = anthropic ? (event.type === "content_block_delta" && event.delta?.type === "text_delta" ? event.delta.text : undefined) : event.choices?.[0]?.delta?.content;
+        const piece = anthropic
+          ? event.type === "content_block_delta" && event.delta?.type === "text_delta"
+            ? event.delta.text
+            : undefined
+          : event.choices?.[0]?.delta?.content;
         if (piece) {
           text += piece;
           emit({ type: "text", text: piece });
@@ -462,7 +682,6 @@ async function streamChat(request: ChatRequest, channel: Channel<ChatEvent>): Pr
   }
 }
 
-
 /** "Save & test": one short exchange without streaming. */
 async function probeChat(settings: AiSettings, apiKey: string): Promise<string> {
   const problem = endpointProblem(settings.baseUrl, settings.provider);
@@ -471,7 +690,11 @@ async function probeChat(settings: AiSettings, apiKey: string): Promise<string> 
   const anthropic = preset.wire === "anthropic";
   const prompt = { role: "user", content: "Reply with the single word OK." };
   const body = anthropic ? { model: settings.model, max_tokens: 64, messages: [prompt] } : { model: settings.model, messages: [prompt] };
-  const response = await providerFetch(`${baseUrlOf(settings)}${anthropic ? "/v1/messages" : "/chat/completions"}`, { method: "POST", headers: providerHeaders(settings, apiKey), body: JSON.stringify(body) });
+  const response = await providerFetch(`${baseUrlOf(settings)}${anthropic ? "/v1/messages" : "/chat/completions"}`, {
+    method: "POST",
+    headers: providerHeaders(settings, apiKey),
+    body: JSON.stringify(body),
+  });
   if (!response.ok) throw new Error(`${preset.label} API returned ${await failureText(response)}`);
   const payload = (await jsonBody(response, baseUrlOf(settings))) as { content?: { text?: string }[]; choices?: { message?: { content?: string } }[] };
   return (anthropic ? payload.content?.map((block) => block.text ?? "").join("") : payload.choices?.[0]?.message?.content)?.trim() || "(empty reply)";

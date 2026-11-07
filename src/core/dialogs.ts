@@ -62,10 +62,15 @@ function actionButton(action: ModalAction, close: () => void): HTMLButtonElement
 export function confirmDialog(message: string, confirmLabel = "OK"): Promise<boolean> {
   return new Promise((resolve) => {
     let confirmed = false;
-    openModal("Confirm", h("p", { class: "confirm-text" }, message), [
-      { label: "Cancel", run: () => undefined },
-      { label: confirmLabel, primary: true, danger: confirmLabel === "Delete", run: () => void (confirmed = true) },
-    ], { width: 400, onClose: () => resolve(confirmed) });
+    openModal(
+      "Confirm",
+      h("p", { class: "confirm-text" }, message),
+      [
+        { label: "Cancel", run: () => undefined },
+        { label: confirmLabel, primary: true, danger: confirmLabel === "Delete", run: () => void (confirmed = true) },
+      ],
+      { width: 400, onClose: () => resolve(confirmed) },
+    );
   });
 }
 
@@ -74,10 +79,15 @@ export function promptPassword(connectionName: string): Promise<{ password: stri
     let answer: { password: string; remember: boolean } | null = null;
     const password = textInput("", { type: "password" });
     const remember = checkbox("Save password in Windows Credential Manager", true);
-    openModal(`Password for ${connectionName}`, h("div", { class: "form-grid" }, field("Password", password), remember.element), [
-      { label: "Cancel", run: () => undefined },
-      { label: "Connect", primary: true, run: () => void (answer = { password: password.value, remember: remember.input.checked }) },
-    ], { width: 400, onClose: () => resolve(answer) });
+    openModal(
+      `Password for ${connectionName}`,
+      h("div", { class: "form-grid" }, field("Password", password), remember.element),
+      [
+        { label: "Cancel", run: () => undefined },
+        { label: "Connect", primary: true, run: () => void (answer = { password: password.value, remember: remember.input.checked }) },
+      ],
+      { width: 400, onClose: () => resolve(answer) },
+    );
   });
 }
 

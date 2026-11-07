@@ -103,12 +103,25 @@ function parseMongo(value: string): ParsedConnection {
 }
 
 const SQLSERVER_KEYS: Record<string, string> = {
-  server: "server", "data source": "server", address: "server", addr: "server", "network address": "server",
-  database: "database", "initial catalog": "database", databasename: "database",
-  "user id": "user", uid: "user", user: "user", username: "user",
-  password: "password", pwd: "password",
-  encrypt: "encrypt", trustservercertificate: "trust", "trust server certificate": "trust",
-  port: "port", portnumber: "port",
+  server: "server",
+  "data source": "server",
+  address: "server",
+  addr: "server",
+  "network address": "server",
+  database: "database",
+  "initial catalog": "database",
+  databasename: "database",
+  "user id": "user",
+  uid: "user",
+  user: "user",
+  username: "user",
+  password: "password",
+  pwd: "password",
+  encrypt: "encrypt",
+  trustservercertificate: "trust",
+  "trust server certificate": "trust",
+  port: "port",
+  portnumber: "port",
 };
 
 function parseSqlServer(value: string): ParsedConnection {
@@ -142,7 +155,10 @@ function keyValuePairs(text: string): [string, string][] {
   while (index < text.length) {
     const equals = text.indexOf("=", index);
     if (equals < 0) break;
-    const name = text.slice(index, equals).replace(/^[\s;]+/, "").trim();
+    const name = text
+      .slice(index, equals)
+      .replace(/^[\s;]+/, "")
+      .trim();
     let cursor = equals + 1;
     while (text[cursor] === " ") cursor += 1;
     let value = "";

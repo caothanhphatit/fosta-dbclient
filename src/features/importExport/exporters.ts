@@ -18,11 +18,19 @@ export function exportRows(format: ExportFormat, columns: ColumnMeta[], rows: Ce
     case "csv":
       return delimitedText(names, rows.map(pick), ",");
     case "json":
-      return JSON.stringify(rows.map((row) => Object.fromEntries(pick(row).map((value, index) => [names[index], value]))), null, 2);
+      return JSON.stringify(
+        rows.map((row) => Object.fromEntries(pick(row).map((value, index) => [names[index], value]))),
+        null,
+        2,
+      );
     case "markdown":
       return markdownTable(names, rows.map(pick));
     case "insert":
-      return insertStatements(tableName ?? "table_name", exportable.map(({ column }) => column), rows.map(pick));
+      return insertStatements(
+        tableName ?? "table_name",
+        exportable.map(({ column }) => column),
+        rows.map(pick),
+      );
   }
 }
 

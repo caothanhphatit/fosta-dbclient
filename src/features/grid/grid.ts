@@ -147,7 +147,7 @@ export class DataGrid {
   }
 
   selectedRow(): Cell[] | null {
-    return this.selection ? this.rows[this.selection.row]?.current ?? null : null;
+    return this.selection ? (this.rows[this.selection.row]?.current ?? null) : null;
   }
 
   /** Rows currently shown (after client-side filters), as edited. */
@@ -192,9 +192,7 @@ export class DataGrid {
   private computeVisible(): number[] {
     const indexes = this.rows.map((_, index) => index);
     if (!this.setup.clientFilter) return indexes;
-    const active = this.setup.columns
-      .map((column, index) => ({ index, text: this.filters[column.name] ?? "" }))
-      .filter(({ text }) => text.trim() !== "");
+    const active = this.setup.columns.map((column, index) => ({ index, text: this.filters[column.name] ?? "" })).filter(({ text }) => text.trim() !== "");
     return indexes.filter((rowIndex) => active.every(({ index, text }) => matchesFilter(this.rows[rowIndex].current[index], text)));
   }
 
@@ -456,8 +454,21 @@ export class DataGrid {
     const cell = h(
       "th",
       { class: onSort ? "sortable" : "", title: column.typeName ? `${column.name} · ${column.typeName}${isKey ? " · primary key" : ""}` : column.name },
-      h("div", { class: "th-content" }, isKey ? icon("key", "key-icon") : null, h("span", { class: "th-name" }, column.name), h("span", { class: "sort-mark" }, sort)),
-      column.typeName ? h("div", { class: "th-type" }, h("span", { class: `type-badge type-${kind}` }, TYPE_LABELS[kind]), h("span", { class: "th-type-name" }, column.typeName)) : null,
+      h(
+        "div",
+        { class: "th-content" },
+        isKey ? icon("key", "key-icon") : null,
+        h("span", { class: "th-name" }, column.name),
+        h("span", { class: "sort-mark" }, sort),
+      ),
+      column.typeName
+        ? h(
+            "div",
+            { class: "th-type" },
+            h("span", { class: `type-badge type-${kind}` }, TYPE_LABELS[kind]),
+            h("span", { class: "th-type-name" }, column.typeName),
+          )
+        : null,
     );
     if (onSort) cell.addEventListener("click", () => onSort(column.name));
     return cell;

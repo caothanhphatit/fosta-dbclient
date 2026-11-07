@@ -3,8 +3,7 @@ import type { ConnectionProfile, DriverId } from "./types";
 
 /** Extra per-driver fields the connection dialog shows, stored in `profile.options`. */
 export type DriverOption =
-  | { key: string; kind: "text"; label: string; placeholder?: string; hint?: string }
-  | { key: string; kind: "checkbox"; label: string; default: boolean };
+  { key: string; kind: "text"; label: string; placeholder?: string; hint?: string } | { key: string; kind: "checkbox"; label: string; default: boolean };
 
 export interface DriverInfo {
   id: DriverId;

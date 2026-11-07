@@ -26,7 +26,12 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
       return swatch;
     });
     const icons = WORKSPACE_ICONS.map((option) => {
-      const button = h("button", { class: `icon-choice${option.name === iconName ? " active" : ""}`, type: "button", title: option.label, "aria-label": option.label }, icon(option.name), h("span", {}, option.label));
+      const button = h(
+        "button",
+        { class: `icon-choice${option.name === iconName ? " active" : ""}`, type: "button", title: option.label, "aria-label": option.label },
+        icon(option.name),
+        h("span", {}, option.label),
+      );
       button.addEventListener("click", () => {
         iconName = option.name;
         for (const item of icons) item.classList.toggle("active", item === button);
@@ -43,17 +48,22 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
       field("Kind", h("div", { class: "icon-choices" }, ...icons)),
       field("Color", h("div", { class: "swatches" }, ...swatches)),
     );
-    openModal(existing ? "Edit workspace" : "New workspace", body, [
-      { label: "Cancel", run: () => undefined },
-      {
-        label: existing ? "Save" : "Create",
-        primary: true,
-        run: async () => {
-          const trimmed = name.value.trim();
-          if (!trimmed) throw new Error("Workspace name is required");
-          saved = await api.saveWorkspace({ id, name: trimmed, color, icon: iconName });
+    openModal(
+      existing ? "Edit workspace" : "New workspace",
+      body,
+      [
+        { label: "Cancel", run: () => undefined },
+        {
+          label: existing ? "Save" : "Create",
+          primary: true,
+          run: async () => {
+            const trimmed = name.value.trim();
+            if (!trimmed) throw new Error("Workspace name is required");
+            saved = await api.saveWorkspace({ id, name: trimmed, color, icon: iconName });
+          },
         },
-      },
-    ], { width: 480, onClose: () => resolve(saved) });
+      ],
+      { width: 480, onClose: () => resolve(saved) },
+    );
   });
 }

@@ -62,7 +62,15 @@ export class VectorSearchView implements TabContent {
     const form = h(
       "div",
       { class: "search-form" },
-      h("div", { class: "search-row" }, this.sourceTabs, spacer(), labelled("Column", this.columnSelect), labelled("Top K", this.kInput), labelled("Distance", this.metricSelect)),
+      h(
+        "div",
+        { class: "search-row" },
+        this.sourceTabs,
+        spacer(),
+        labelled("Column", this.columnSelect),
+        labelled("Top K", this.kInput),
+        labelled("Distance", this.metricSelect),
+      ),
       this.queryText,
       this.sourceHint,
       h("div", { class: "search-row" }, h("div", { class: "filter-box wide" }, icon("filter"), this.filterInput)),
@@ -79,7 +87,13 @@ export class VectorSearchView implements TabContent {
       h("span", { class: "toolbar-title" }, `${target.database}.${target.table}`),
     );
     const splitter = h("div", { class: "splitter-x" });
-    const content = h("div", { class: "table-content" }, h("div", { class: "search-results" }, this.status, this.planHost, this.grid.element), splitter, this.record.element);
+    const content = h(
+      "div",
+      { class: "table-content" },
+      h("div", { class: "search-results" }, this.status, this.planHost, this.grid.element),
+      splitter,
+      this.record.element,
+    );
     let panelWidth = 340;
     content.style.setProperty("--record-width", `${panelWidth}px`);
     makeSplitter(splitter, "x", (delta) => {
@@ -121,7 +135,9 @@ export class VectorSearchView implements TabContent {
     const index = info.indexes.find((item) => item.column === this.columnSelect.value);
     this.setStatus(
       index ? "info" : "warn",
-      index ? `Vector index ${index.name} · ${index.metric} · M=${index.m ?? "default"}` : "No vector index on this column: every search scans the whole table.",
+      index
+        ? `Vector index ${index.name} · ${index.metric} · M=${index.m ?? "default"}`
+        : "No vector index on this column: every search scans the whole table.",
     );
   }
 
@@ -139,8 +155,12 @@ export class VectorSearchView implements TabContent {
     this.queryText.hidden = this.source === "row";
     this.queryText.placeholder = this.source === "text" ? "What are employees entitled to for annual leave?" : "[0.0123, -0.0456, …]";
     const seedText = this.seed ? `Query vector from row: ${describeKey(this.seed)}` : "No row selected yet.";
-    this.sourceHint.replaceChildren(this.source === "row" ? seedText : current?.hint ?? "");
-    if (this.source === "text") this.sourceHint.append(" · ", embeddingLink(() => this.navigator.configureEmbedding()));
+    this.sourceHint.replaceChildren(this.source === "row" ? seedText : (current?.hint ?? ""));
+    if (this.source === "text")
+      this.sourceHint.append(
+        " · ",
+        embeddingLink(() => this.navigator.configureEmbedding()),
+      );
   }
 
   private buildQuery(): QueryVector | null {
@@ -186,8 +206,7 @@ export class VectorSearchView implements TabContent {
       clientFilter: true,
       primaryKey: result.primaryKey,
       tableName: this.target.table,
-      onSelect: (row) =>
-        this.record.show(row && { target: this.target, columns, row, primaryKey: result.primaryKey, relations: null }),
+      onSelect: (row) => this.record.show(row && { target: this.target, columns, row, primaryKey: result.primaryKey, relations: null }),
     });
     const indexText = result.indexUsed ? `Used index ${result.indexUsed}` : "Full scan: the vector index was not used";
     this.setStatus(

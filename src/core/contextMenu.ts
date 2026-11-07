@@ -1,8 +1,6 @@
 import { h, icon, type IconName } from "./dom";
 
-export type MenuItem =
-  | { label: string; icon?: IconName; danger?: boolean; disabled?: boolean; run: () => void }
-  | "separator";
+export type MenuItem = { label: string; icon?: IconName; danger?: boolean; disabled?: boolean; run: () => void } | "separator";
 
 let activeMenu: HTMLElement | null = null;
 

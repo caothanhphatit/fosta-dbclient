@@ -3,7 +3,14 @@ import type { ColumnMeta } from "../../core/types";
 import { parseCsv } from "./csv";
 import { exportDelimited, exportRows } from "./exporters";
 
-const column = (name: string, vectorDims: number | null = null): ColumnMeta => ({ name, typeName: "", numeric: false, binary: false, primary: false, vectorDims });
+const column = (name: string, vectorDims: number | null = null): ColumnMeta => ({
+  name,
+  typeName: "",
+  numeric: false,
+  binary: false,
+  primary: false,
+  vectorDims,
+});
 
 describe("exportDelimited", () => {
   const columns = [column("id"), column("note"), column("embedding", 4)];

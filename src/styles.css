@@ -207,7 +207,9 @@ button:focus-visible,
   font: inherit;
   outline: none;
   user-select: text;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
 }
 
 .input:hover {
@@ -271,7 +273,9 @@ select.input {
   background: transparent;
   color: var(--fg-2);
   cursor: pointer;
-  transition: background 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s;
 }
 
 .ws-entry:hover {
@@ -409,14 +413,30 @@ select.input {
   height: 18px;
 }
 
-.color-blue { --ws-color: var(--ws-blue); }
-.color-green { --ws-color: var(--ws-green); }
-.color-orange { --ws-color: var(--ws-orange); }
-.color-red { --ws-color: var(--ws-red); }
-.color-purple { --ws-color: var(--ws-purple); }
-.color-teal { --ws-color: var(--ws-teal); }
-.color-pink { --ws-color: var(--ws-pink); }
-.color-slate { --ws-color: var(--ws-slate); }
+.color-blue {
+  --ws-color: var(--ws-blue);
+}
+.color-green {
+  --ws-color: var(--ws-green);
+}
+.color-orange {
+  --ws-color: var(--ws-orange);
+}
+.color-red {
+  --ws-color: var(--ws-red);
+}
+.color-purple {
+  --ws-color: var(--ws-purple);
+}
+.color-teal {
+  --ws-color: var(--ws-teal);
+}
+.color-pink {
+  --ws-color: var(--ws-pink);
+}
+.color-slate {
+  --ws-color: var(--ws-slate);
+}
 
 .rail-footer {
   display: flex;
@@ -493,7 +513,9 @@ select.input {
   color: var(--fg-2);
   cursor: pointer;
   font-size: 11.5px;
-  transition: background 0.1s, color 0.1s;
+  transition:
+    background 0.1s,
+    color 0.1s;
 }
 
 .big-button .icon {
@@ -799,9 +821,15 @@ select.input {
 }
 
 .tree-row.driver-mariadb > .icon,
-.tree-row.driver-mysql > .icon { color: #2f6fed; }
-.tree-row.driver-mssql > .icon { color: #d64545; }
-.tree-row.driver-mongodb > .icon { color: #1f9d55; }
+.tree-row.driver-mysql > .icon {
+  color: #2f6fed;
+}
+.tree-row.driver-mssql > .icon {
+  color: #d64545;
+}
+.tree-row.driver-mongodb > .icon {
+  color: #1f9d55;
+}
 
 .tree-meta {
   margin-left: auto;
@@ -974,9 +1002,13 @@ select.input {
   color: var(--accent);
 }
 
-.tab-icon.query { color: var(--syn-type); }
+.tab-icon.query {
+  color: var(--syn-type);
+}
 .tab-icon.vector,
-.tab-icon.health { color: var(--ws-teal); }
+.tab-icon.health {
+  color: var(--ws-teal);
+}
 
 .tab-title {
   overflow: hidden;
@@ -1079,7 +1111,10 @@ select.input {
   background: var(--surface-2);
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s,
+    transform 0.12s;
 }
 
 .welcome-action:hover {
@@ -2004,9 +2039,15 @@ pre.field-value.text {
 }
 
 .driver-icon.mariadb,
-.driver-icon.mysql { color: #2f6fed; }
-.driver-icon.mssql { color: #d64545; }
-.driver-icon.mongodb { color: #1f9d55; }
+.driver-icon.mysql {
+  color: #2f6fed;
+}
+.driver-icon.mssql {
+  color: #d64545;
+}
+.driver-icon.mongodb {
+  color: #1f9d55;
+}
 
 .driver-soon {
   position: absolute;
@@ -3263,18 +3304,47 @@ pre.field-value.text {
   letter-spacing: 0.02em;
 }
 
-.type-number { background: color-mix(in srgb, var(--ws-blue) 16%, transparent); color: var(--ws-blue); }
-.type-text { background: color-mix(in srgb, var(--fg-3) 16%, transparent); color: var(--fg-2); }
-.type-date { background: color-mix(in srgb, var(--ws-teal) 16%, transparent); color: var(--ws-teal); }
-.type-bool { background: color-mix(in srgb, var(--ws-pink) 16%, transparent); color: var(--ws-pink); }
-.type-json { background: color-mix(in srgb, var(--ws-purple) 16%, transparent); color: var(--ws-purple); }
-.type-binary { background: color-mix(in srgb, var(--ws-slate) 18%, transparent); color: var(--ws-slate); }
-.type-vector { background: color-mix(in srgb, var(--ws-orange) 16%, transparent); color: var(--ws-orange); }
+.type-number {
+  background: color-mix(in srgb, var(--ws-blue) 16%, transparent);
+  color: var(--ws-blue);
+}
+.type-text {
+  background: color-mix(in srgb, var(--fg-3) 16%, transparent);
+  color: var(--fg-2);
+}
+.type-date {
+  background: color-mix(in srgb, var(--ws-teal) 16%, transparent);
+  color: var(--ws-teal);
+}
+.type-bool {
+  background: color-mix(in srgb, var(--ws-pink) 16%, transparent);
+  color: var(--ws-pink);
+}
+.type-json {
+  background: color-mix(in srgb, var(--ws-purple) 16%, transparent);
+  color: var(--ws-purple);
+}
+.type-binary {
+  background: color-mix(in srgb, var(--ws-slate) 18%, transparent);
+  color: var(--ws-slate);
+}
+.type-vector {
+  background: color-mix(in srgb, var(--ws-orange) 16%, transparent);
+  color: var(--ws-orange);
+}
 
 /* A coloured edge on the row number says what will happen to the row. */
-.grid-table tr.state-modified td.row-number { box-shadow: inset 3px 0 0 var(--warning); color: var(--fg-2); }
-.grid-table tr.state-new td.row-number { box-shadow: inset 3px 0 0 var(--success); color: var(--success); }
-.grid-table tr.state-deleted td.row-number { box-shadow: inset 3px 0 0 var(--danger); }
+.grid-table tr.state-modified td.row-number {
+  box-shadow: inset 3px 0 0 var(--warning);
+  color: var(--fg-2);
+}
+.grid-table tr.state-new td.row-number {
+  box-shadow: inset 3px 0 0 var(--success);
+  color: var(--success);
+}
+.grid-table tr.state-deleted td.row-number {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
 
 .grid-table tbody tr.current td.cell {
   background: color-mix(in srgb, var(--accent) 7%, var(--surface));
@@ -3338,10 +3408,21 @@ pre.field-value.text {
   border-color: var(--selection);
 }
 
-.conn-connected { background: var(--success); }
-.conn-idle { background: var(--danger); opacity: 0.85; }
-.conn-error { background: var(--danger); box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 35%, transparent); }
-.conn-connecting { background: var(--warning); animation: conn-pulse 0.9s ease-in-out infinite alternate; }
+.conn-connected {
+  background: var(--success);
+}
+.conn-idle {
+  background: var(--danger);
+  opacity: 0.85;
+}
+.conn-error {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.conn-connecting {
+  background: var(--warning);
+  animation: conn-pulse 0.9s ease-in-out infinite alternate;
+}
 
 @keyframes conn-pulse {
   to {
