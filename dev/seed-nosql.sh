@@ -9,16 +9,19 @@
 #                 (20,000 elements) and big:set for paging, a key in db 1.
 # Elasticsearch:  products (nested variants, geo_point, dates, dense_vector, multi-fields; 300 docs) with the alias
 #                 products-current, ILM policy logs-policy, ingest pipeline logs-pipeline, component template
-#                 logs-mappings, index template logs-template, data stream logs-app with 20,000 time-series docs.
+#                 fosta-logs-mappings, index template logs-template, data stream logs-app with 20,000 time-series docs.
 # OpenSearch:     the same products index (without the vector field), ISM policy logs-policy, data stream logs-app
 #                 with 2,000 docs.
 set -eu
 
-here=$(cd "$(dirname "$0")" && pwd)
+# Native path on Git Bash (docker.exe gets no path conversion below).
+here=$(cd "$(dirname "$0")" && (pwd -W 2>/dev/null || pwd))
 ES=${ES_URL:-https://127.0.0.1:9200}
 ES_AUTH=${ES_AUTH:-elastic:studio-elastic}
 OS=${OS_URL:-http://127.0.0.1:9201}
 export MSYS_NO_PATHCONV=1
+# curl.exe and docker.exe are native on Git Bash: no /dev/null there.
+if pwd -W >/dev/null 2>&1; then devnull=NUL; else devnull=/dev/null; fi
 
 echo "== Redis"
 docker cp "$here/seed/redis.lua" fosta-dev-nosql-redis-1:/tmp/seed.lua
@@ -27,20 +30,20 @@ docker exec fosta-dev-nosql-redis-1 redis-cli -a studio-redis --no-auth-warning 
 # es METHOD PATH [BODY]  (BODY "-" reads NDJSON from stdin)
 es() {
   if [ "${3:-}" = "-" ]; then
-    curl -sS -k -u "$ES_AUTH" -X "$1" "$ES$2" -H 'Content-Type: application/x-ndjson' --data-binary @- -o /dev/null -w "$1 $2 -> %{http_code}\n"
+    curl -sS -k -u "$ES_AUTH" -X "$1" "$ES$2" -H 'Content-Type: application/x-ndjson' --data-binary @- -o "$devnull" -w "$1 $2 -> %{http_code}\n"
   elif [ -n "${3:-}" ]; then
-    curl -sS -k -u "$ES_AUTH" -X "$1" "$ES$2" -H 'Content-Type: application/json' -d "$3" -o /dev/null -w "$1 $2 -> %{http_code}\n"
+    curl -sS -k -u "$ES_AUTH" -X "$1" "$ES$2" -H 'Content-Type: application/json' -d "$3" -o "$devnull" -w "$1 $2 -> %{http_code}\n"
   else
-    curl -sS -k -u "$ES_AUTH" -X "$1" "$ES$2" -o /dev/null -w "$1 $2 -> %{http_code}\n"
+    curl -sS -k -u "$ES_AUTH" -X "$1" "$ES$2" -o "$devnull" -w "$1 $2 -> %{http_code}\n"
   fi
 }
 os() {
   if [ "${3:-}" = "-" ]; then
-    curl -sS -X "$1" "$OS$2" -H 'Content-Type: application/x-ndjson' --data-binary @- -o /dev/null -w "$1 $2 -> %{http_code}\n"
+    curl -sS -X "$1" "$OS$2" -H 'Content-Type: application/x-ndjson' --data-binary @- -o "$devnull" -w "$1 $2 -> %{http_code}\n"
   elif [ -n "${3:-}" ]; then
-    curl -sS -X "$1" "$OS$2" -H 'Content-Type: application/json' -d "$3" -o /dev/null -w "$1 $2 -> %{http_code}\n"
+    curl -sS -X "$1" "$OS$2" -H 'Content-Type: application/json' -d "$3" -o "$devnull" -w "$1 $2 -> %{http_code}\n"
   else
-    curl -sS -X "$1" "$OS$2" -o /dev/null -w "$1 $2 -> %{http_code}\n"
+    curl -sS -X "$1" "$OS$2" -o "$devnull" -w "$1 $2 -> %{http_code}\n"
   fi
 }
 
@@ -100,25 +103,25 @@ logs_bulk() {
   }'
 }
 
-if curl -sS -k -u "$ES_AUTH" "$ES/" -o /dev/null 2>/dev/null; then
+if curl -sS -k -u "$ES_AUTH" "$ES/" -o "$devnull" 2>/dev/null; then
   echo "== Elasticsearch ($ES)"
   es DELETE "/_data_stream/logs-app" || true
   es DELETE "/products" || true
   es DELETE "/_index_template/logs-template" || true
-  es DELETE "/_component_template/logs-mappings" || true
+  es DELETE "/_component_template/fosta-logs-mappings" || true
   es PUT "/products" "$(products_mapping ',"embedding": { "type": "dense_vector", "dims": 4, "similarity": "cosine" }')"
   products_bulk 1 | es POST "/_bulk?refresh=true" -
   es POST "/_aliases" '{"actions":[{"add":{"index":"products","alias":"products-current","is_write_index":true}}]}'
   es PUT "/_ilm/policy/logs-policy" '{"policy":{"phases":{"hot":{"actions":{"rollover":{"max_primary_shard_size":"1gb","max_age":"7d"}}},"warm":{"min_age":"7d","actions":{"forcemerge":{"max_num_segments":1}}},"delete":{"min_age":"30d","actions":{"delete":{}}}}}}'
   es PUT "/_ingest/pipeline/logs-pipeline" '{"description":"Normalise log events","processors":[{"lowercase":{"field":"level"}},{"rename":{"field":"msg","target_field":"message","ignore_missing":true}},{"set":{"field":"event.ingested","value":"{{_ingest.timestamp}}"}}]}'
-  es PUT "/_component_template/logs-mappings" '{"template":{"mappings":{"properties":{"@timestamp":{"type":"date"},"level":{"type":"keyword"},"service":{"type":"keyword"},"message":{"type":"text"},"duration_ms":{"type":"long"},"status":{"type":"short"},"host":{"properties":{"name":{"type":"keyword"}}},"event":{"properties":{"ingested":{"type":"date"}}}}}}}'
-  es PUT "/_index_template/logs-template" '{"index_patterns":["logs-app*"],"data_stream":{},"priority":200,"composed_of":["logs-mappings"],"template":{"settings":{"number_of_replicas":0,"index.lifecycle.name":"logs-policy","index.default_pipeline":"logs-pipeline"}}}'
+  es PUT "/_component_template/fosta-logs-mappings" '{"template":{"mappings":{"properties":{"@timestamp":{"type":"date"},"level":{"type":"keyword"},"service":{"type":"keyword"},"message":{"type":"text"},"duration_ms":{"type":"long"},"status":{"type":"short"},"host":{"properties":{"name":{"type":"keyword"}}},"event":{"properties":{"ingested":{"type":"date"}}}}}}}'
+  es PUT "/_index_template/logs-template" '{"index_patterns":["logs-app*"],"data_stream":{},"priority":200,"composed_of":["fosta-logs-mappings"],"template":{"settings":{"number_of_replicas":0,"index.lifecycle.name":"logs-policy","index.default_pipeline":"logs-pipeline"}}}'
   logs_bulk 20000 | es POST "/logs-app/_bulk?refresh=true" -
 else
   echo "Elasticsearch is not reachable on $ES; skipped."
 fi
 
-if curl -sS "$OS/" -o /dev/null 2>/dev/null; then
+if curl -sS "$OS/" -o "$devnull" 2>/dev/null; then
   echo "== OpenSearch ($OS)"
   os DELETE "/_data_stream/logs-app" || true
   os DELETE "/products" || true

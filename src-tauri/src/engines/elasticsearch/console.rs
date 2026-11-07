@@ -248,4 +248,38 @@ delete products
         assert!(parse("POST /x\n{\"a\": \"\"\"open}").is_err());
         assert!(parse("   \n# only comments\n").unwrap().is_empty());
     }
+
+    #[test]
+    fn parses_bulk_with_raw_strings_between_requests() {
+        let input = r#"
+PUT fosta-test-console
+{ "settings": { "number_of_replicas": 0 } }
+
+POST _bulk?refresh=true
+{ "index": { "_index": "fosta-test-console", "_id": "1" } }
+{ "title": """multi
+line""" }
+{ "index": { "_index": "fosta-test-console", "_id": "2" } }
+{ "title": "two" }
+
+GET fosta-test-console/_doc/404
+
+DELETE fosta-test-console
+"#;
+        let requests = parse(input).unwrap();
+        let summary: Vec<_> = requests.iter().map(|r| format!("{} {} {}", r.line, r.method, r.path)).collect();
+        assert_eq!(
+            summary,
+            vec![
+                "2 PUT /fosta-test-console",
+                "5 POST /_bulk?refresh=true",
+                "12 GET /fosta-test-console/_doc/404",
+                "14 DELETE /fosta-test-console"
+            ]
+        );
+        let Some(EsBody::NdJson(lines)) = &requests[1].body else {
+            panic!("{:?}", requests[1].body)
+        };
+        assert_eq!(lines[1], json!({ "title": "multi\nline" }));
+    }
 }

@@ -236,10 +236,16 @@ fn transport_error(error: reqwest::Error, timeout: Duration) -> AppError {
     if error.is_timeout() {
         AppError::new(format!("The cluster did not answer within {} s.", timeout.as_secs_f32()))
     } else if error.is_connect() {
-        let detail = std::error::Error::source(&error)
-            .map(|source| source.to_string())
-            .unwrap_or_default();
-        let lower = format!("{error} {detail}").to_ascii_lowercase();
+        // reqwest says only "client error (Connect)"; the cause (rustls "invalid peer certificate", "connection
+        // refused") sits at the bottom of the source chain.
+        let mut chain = Vec::new();
+        let mut source = std::error::Error::source(&error);
+        while let Some(cause) = source {
+            chain.push(cause.to_string());
+            source = cause.source();
+        }
+        let detail = chain.last().cloned().unwrap_or_else(|| error.to_string());
+        let lower = format!("{error} {}", chain.join(" ")).to_ascii_lowercase();
         if lower.contains("certificate") || lower.contains("tls") || lower.contains("ssl") {
             AppError::new(format!(
                 "TLS handshake failed: {detail}. Check the CA certificate or fingerprint, or allow self-signed certificates."

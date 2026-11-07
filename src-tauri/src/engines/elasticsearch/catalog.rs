@@ -67,6 +67,8 @@ pub struct IndexSummary {
     pub status: String,
     pub primaries: Option<u32>,
     pub replicas: Option<u32>,
+    /// Lucene documents, as `_cat/indices` reports them: nested objects count as documents of their own, so an index
+    /// with nested fields shows more than `_count`. [`IndexDetails`] has the exact count.
     pub docs_count: Option<u64>,
     pub docs_deleted: Option<u64>,
     pub store_bytes: Option<u64>,
@@ -185,7 +187,10 @@ pub struct IndexDetails {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexStats {
+    /// Top-level documents (`_count`), nested objects not included.
     pub docs_count: u64,
+    /// Lucene documents in the primaries, nested objects included.
+    pub lucene_docs: u64,
     pub docs_deleted: u64,
     pub store_bytes: u64,
     pub primary_store_bytes: u64,
@@ -304,6 +309,11 @@ impl EsEngine {
                     .collect()
             })
             .unwrap_or_default();
+        if !include_hidden {
+            // `_cat/indices` still lists the `.ds-*` backing indices of visible data streams; they belong under their
+            // data stream, and other dot indices are system ones.
+            indices.retain(|index| !index.hidden);
+        }
         indices.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(indices)
     }
@@ -599,12 +609,14 @@ impl EsEngine {
                     .map(|aliases| aliases.keys().cloned().collect())
             })
             .unwrap_or_default();
+        let count = self.count(&resolved, None).await.ok();
         let stats = stats.ok().map(|body| {
             let total = &body["indices"][&resolved]["total"];
             let primaries = &body["indices"][&resolved]["primaries"];
             let get = |value: &Value| value.as_u64().unwrap_or(0);
             IndexStats {
-                docs_count: get(&primaries["docs"]["count"]),
+                docs_count: count.unwrap_or_else(|| get(&primaries["docs"]["count"])),
+                lucene_docs: get(&primaries["docs"]["count"]),
                 docs_deleted: get(&primaries["docs"]["deleted"]),
                 store_bytes: get(&total["store"]["size_in_bytes"]),
                 primary_store_bytes: get(&primaries["store"]["size_in_bytes"]),

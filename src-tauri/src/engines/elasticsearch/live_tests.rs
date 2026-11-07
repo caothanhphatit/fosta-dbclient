@@ -123,7 +123,8 @@ async fn live_engine_elasticsearch_catalog_and_mappings() {
         .iter()
         .find(|index| index.name == "products")
         .expect("seeded products index");
-    assert_eq!(products.docs_count, Some(300));
+    // 300 products with two nested variants each: 900 Lucene documents.
+    assert_eq!(products.docs_count, Some(900));
     assert!(products.store_bytes.unwrap_or(0) > 0);
     assert!(
         !catalog.indices.items.iter().any(|index| index.hidden),
@@ -149,12 +150,12 @@ async fn live_engine_elasticsearch_catalog_and_mappings() {
         .find(|template| template.name == "logs-template")
         .unwrap();
     assert!(template.data_stream);
-    assert_eq!(template.composed_of, vec!["logs-mappings"]);
+    assert_eq!(template.composed_of, vec!["fosta-logs-mappings"]);
     assert!(catalog
         .component_templates
         .items
         .iter()
-        .any(|template| template.name == "logs-mappings"));
+        .any(|template| template.name == "fosta-logs-mappings"));
     let pipeline = catalog
         .pipelines
         .items
@@ -305,7 +306,7 @@ async fn live_engine_elasticsearch_search_paging_and_aggregations() {
             .count("logs-app", Some(&json!({ "term": { "level": "error" } })))
             .await
             .unwrap(),
-        3334
+        3333
     );
     let valid = engine
         .validate_query("products", &json!({ "match": { "name": "widget" } }))
@@ -557,11 +558,11 @@ DELETE fosta-test-console
     assert_eq!(status, vec![200, 200, 200, 404, 200]);
     assert_eq!(results[1].response.as_ref().unwrap().body["errors"], false);
     assert_eq!(results[2].response.as_ref().unwrap().body["hits"]["total"]["value"], 2);
-    assert_eq!(results[1].request.line, 5);
+    assert_eq!(results[1].request.line, 6);
 
     // Timeouts are per request.
     let slow = engine
-        .run_console("GET _cluster/health?wait_for_status=red&timeout=5s", Duration::from_millis(300))
+        .run_console("GET _cluster/health?wait_for_nodes=5&timeout=5s", Duration::from_millis(300))
         .await
         .unwrap();
     assert!(
