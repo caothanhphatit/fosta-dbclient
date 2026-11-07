@@ -1,7 +1,8 @@
 # Fosta Studio architecture
 
 Fosta Studio is a [Tauri 2](https://tauri.app) desktop app: a Rust process owns the database connections, secrets and child processes, and a
-webview renders a plain TypeScript UI. They talk only through Tauri commands (request/response) and events/channels (streams).
+webview renders a plain TypeScript UI. They talk only through commands (request/response) and events/channels (streams). The same
+backend and UI also ship as a web edition in a Docker image (see [Two front-ends](#two-front-ends-desktop-and-web)).
 
 ## Layers
 
@@ -23,16 +24,64 @@ webview renders a plain TypeScript UI. They talk only through Tauri commands (re
 
 - **UI** (`src/`). `main.ts` is the app shell: it builds the layout, wires the feature modules together and holds the current config.
   `app/navigation.ts` opens tabs; `core/` has the shared pieces (`api.ts` is the only module that calls `invoke`, `types.ts` mirrors the
-  Rust types). Each `features/<area>/` folder owns its views and dialogs.
-- **Commands** (`src-tauri/src/commands/`). Thin functions that read `AppState`, check arguments and delegate. Their names, argument
-  names and JSON shapes are the IPC contract with `core/api.ts`; `main.rs` registers every command.
+  Rust types; `transport.ts` carries the calls). Each `features/<area>/` folder owns its views and dialogs.
+- **Commands** (`src-tauri/src/commands/`). Plain functions that take `&AppState`, check arguments and delegate. Their names, argument
+  names and JSON shapes are the contract with `core/api.ts`; `for_each_command!` in `commands/mod.rs` lists them for both front-ends.
 - **Drivers** (`src-tauri/src/drivers/`). `DbManager` keeps one `Arc<dyn Driver>` per open connection and maps query-tab sessions to
   their connection. A driver turns engine results into the shared shapes in `drivers/types.rs` (`ColumnMeta`, `ResultSet`,
   `TablePage`, `TableDesign`, `RowChange`, …), so the UI never sees engine-specific types. Cells travel as text (`Option<String>`);
   binary values as `0x…` hex, MariaDB vectors as a short summary.
 
-`AppState` (in `main.rs`) holds the `ConfigStore`, the `DbManager`, the `TaskManager`, the in-flight assistant runs and the query
-`HistoryStore`.
+`AppState` (in `lib.rs`) holds the `ConfigStore`, the `DbManager`, the `TaskManager`, the in-flight assistant runs, the query
+`HistoryStore` and the edition's `Capabilities`.
+
+## Two front-ends: desktop and web
+
+`src-tauri` is one crate: a library with the whole backend (`lib.rs`: config, secrets, drivers, assistant, history, tasks, schema,
+vector tools and the command bodies) and two binaries.
+
+| | Desktop (`fosta-studio`, feature `desktop`, default) | Web (`fosta-studio-server`, feature `web`) |
+| --- | --- | --- |
+| Entry | `main.rs`: Tauri window | `server/main.rs`: axum + tokio, the Docker image |
+| Commands | `#[tauri::command]` wrappers | `POST /api/invoke/<command>` (`server/api.rs`) |
+| Assistant stream | Tauri `Channel` | NDJSON lines in the `ai_chat` response |
+| Task events | Tauri events (`listen`) | Server-Sent Events, `GET /api/events` |
+| Secrets | Windows Credential Manager (`KeyringStore`) | `secrets/file.rs`: XChaCha20-Poly1305 file in `/data` |
+| Data directory | next to the `.exe` | `FOSTA_STUDIO_DATA` (`/data` in the image) |
+| Exports | written to ~/Downloads, "Show in folder" | downloaded by the browser |
+
+Both front-ends are generated from `for_each_command!`, so a command added there is reachable from both with the same name, arguments
+and JSON; `ai_chat` (it streams) and the desktop-only `save_download` / `reveal_file` are written by hand. What differs sits behind
+small traits: `secrets::SecretStore` (installed once at startup), `events::EventEmitter` (task status and log lines) and `ai::ChatSink`
+(assistant events). `Capabilities` tells the UI what the edition supports (`capabilities` command); the UI hides the rest
+(`core/capabilities.ts`: elements marked `data-requires`). The web server's build needs no Tauri or WebKit, and uses rustls instead
+of OpenSSL (the TLS stack is chosen per target in `Cargo.toml`: SChannel on Windows, rustls elsewhere).
+
+### Web transport
+
+`core/transport.ts` picks the transport per call: Tauri when `__TAURI_INTERNALS__` exists (the desktop app, and `npm run dev`, whose
+mock installs it), otherwise HTTP. `api.ts` is unchanged apart from that.
+
+- `POST /api/invoke/<command>` takes the same JSON arguments as `invoke` and returns the same JSON. Errors are `{ "error": "…" }`:
+  404 unknown command, 400 arguments that do not parse, 422 the command failed (the message the desktop app would show), 401 not
+  signed in, 403 failed CSRF checks, 429 too many sign-in attempts.
+- `ai_chat` answers with NDJSON: `{ "event": … }` per streamed event, then `{ "result": … }` or `{ "error": … }`. Closing the response
+  cancels the run. Server-Sent Events carry the broadcast task events; an `EventSource` reconnects by itself. Both need no extra
+  protocol (no WebSocket upgrade) and pass through ordinary reverse proxies.
+
+### Web security
+
+- **Authentication**: one access token per server (`FOSTA_STUDIO_TOKEN`, or generated on first start, saved with owner-only
+  permissions and printed once in the log). `/?token=…` or the sign-in form exchanges it for an `HttpOnly`, `SameSite=Strict` session
+  cookie signed with HMAC-SHA256 under a key derived from the token (30 days; a new token signs everyone out). Failed attempts are
+  rate-limited per address and overall. `FOSTA_STUDIO_AUTH=off` disables this with a loud warning and restricts `Host` to loopback names.
+- **CSRF**: API calls need the `X-Fosta-Studio` header (cross-site pages cannot send it without a CORS preflight, which is never
+  approved), an `Origin` equal to the server's (or listed in `FOSTA_STUDIO_ALLOWED_ORIGINS`) and no cross-site `Sec-Fetch-Site`.
+  No CORS headers are sent.
+- **Headers**: a strict Content-Security-Policy (scripts only from the server; inline styles allowed for CodeMirror),
+  `frame-ancestors 'none'`, `X-Content-Type-Options`, `Referrer-Policy: same-origin`, `Cache-Control: no-store` on the API.
+- **Startup tasks** run programs, so they are off in the web edition unless `FOSTA_STUDIO_TASKS=on`; `TaskManager` refuses to start
+  them otherwise.
 
 ## Data flow
 
@@ -73,7 +122,7 @@ webview renders a plain TypeScript UI. They talk only through Tauri commands (re
 ## Query history
 
 `history.rs` keeps every run in `fosta-studio-history.jsonl` next to `fosta-studio.json`: one JSON object per line, appended under a mutex
-so runs from several tabs never interleave, on Tauri's blocking pool so the UI never waits for the disk. When the file grows past
+so runs from several tabs never interleave, on tokio's blocking pool so the UI never waits for the disk. When the file grows past
 5,000 entries plus 10% it is rewritten (temporary file, then rename) with the newest 5,000. Statements longer than 64 KiB are cut.
 The history **never leaves this machine**; it holds only what the user ran (never passwords), and `queryHistory: false` in
 `fosta-studio.json` (Settings → Record query history) stops recording without deleting what is there.
@@ -102,6 +151,9 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
   `connections` + `tasks`, the single `ai` setting) are migrated on load (`config.rs`).
 - **Windows Credential Manager** (`secrets.rs`, service `fosta-studio`; secrets saved under the pre-rename service `db-studio` are moved on first read, and `db-studio.json` / `db-studio-history.jsonl` are renamed on first start): connection passwords under the connection id, LLM keys under
   `ai-key-<id>`, the embedding key under `embedding-api-key`. A password in a pasted connection string is moved there, never into the file.
+- **Web edition**: the same accounts in `fosta-studio-secrets.enc` in the data directory, a JSON map encrypted with XChaCha20-Poly1305;
+  the key comes from `FOSTA_STUDIO_SECRET_KEY` or `fosta-studio-secret.key` next to it (generated, owner-only). The server refuses
+  to start rather than overwrite a store it cannot decrypt. The access token is in `fosta-studio-token`.
 - **`fosta-studio-history.jsonl`** next to the executable: the query history (see above). No secrets.
 - **localStorage** (`db-studio.*`): UI preferences only (theme, assistant panel open/closed, diagram node positions, hidden columns per
   table, the history panel and cell-editor wrap toggles).
@@ -116,7 +168,8 @@ app, so a `kubectl port-forward` never outlives Fosta Studio.
 
 `src/dev/devMock.ts` replaces the Tauri IPC with `mockIPC` when the UI runs in a plain browser (`npm run dev`, no `__TAURI_INTERNALS__`).
 It answers the same commands with sample workspaces, tables and results, so the UI can be reviewed without a database. `main.ts`
-imports it dynamically behind `import.meta.env.DEV`, so it is not part of the production bundle.
+imports it dynamically behind `import.meta.env.DEV`, so it is not part of the production bundle. Because it installs
+`__TAURI_INTERNALS__`, `core/transport.ts` routes calls to it rather than to the web server.
 
 ## How to add a database driver
 

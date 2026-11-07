@@ -19,15 +19,18 @@ src/                     TypeScript UI (no framework, bundled by Vite)
   dev/devMock.ts         in-browser mock backend for `npm run dev`
   styles.css             all styles
 src-tauri/src/           Rust backend
-  main.rs                Tauri setup and the command list
-  commands/              Tauri commands, grouped by area
+  lib.rs                 the shared backend: AppState, Capabilities, module list
+  main.rs                desktop front-end: Tauri setup and the command wrappers
+  server/                web front-end (feature `web`): HTTP API, sign-in, static UI
+  commands/              command bodies, grouped by area; for_each_command! lists them
   drivers/               Driver trait + MariaDB/MySQL, SQL Server and MongoDB drivers, shared types
   ai/                    assistant: prompt, tools, Anthropic and OpenAI wire formats
-  config.rs secrets.rs   fosta-studio.json and Credential Manager
+  config.rs secrets.rs   fosta-studio.json, Credential Manager / encrypted secret file
   tasks.rs job.rs        startup tasks and their child processes
   schema.rs vector.rs    ER diagram data, MariaDB vector tools
 dev/                     docker-compose.yml and seed data for the test databases
 scripts/                 toolchain installer and icon generator (PowerShell)
+deploy/                  docker-compose.yml for the web edition (Dockerfile at the root)
 ```
 
 ## Toolchain
@@ -76,6 +79,10 @@ cd src-tauri
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test              # unit tests; live tests are #[ignore]d
+
+# The web server (CI builds it on Linux; it also builds on Windows)
+cargo clippy --all-targets --no-default-features --features web -- -D warnings
+cargo test --no-default-features --features web
 ```
 
 ## Test databases and live tests
@@ -95,8 +102,7 @@ Notes on the live tests (`src-tauri/src/live_tests.rs`):
 - `live_saved_passwords_are_readable` expects saved passwords in Credential Manager for connections with the ids `local-mariadb`,
   `local-mssql` and `local-mongo` (create them in the app with "Save password" ticked, or skip this test).
 - `live_assistant_tools` talks to the Fosta API and needs `FOSTA_KEY` in the environment; without it the test prints a note and passes.
-- They live inside the binary crate (as a `#[cfg(test)]` module) because they use crate-internal APIs; a `tests/` integration test
-  cannot reach into a binary crate.
+- They live inside the library crate (as a `#[cfg(test)]` module in `lib.rs`) because they use crate-internal APIs.
 
 ## Code style
 
