@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseUrlOf, endpointProblem, providerPreset } from "./aiProviders";
+import { apiKeyProblem, baseUrlOf, endpointProblem, providerPreset } from "./aiProviders";
 
 describe("endpointProblem", () => {
   it("accepts an empty endpoint for built-in providers (their public URL is used)", () => {
@@ -33,5 +33,18 @@ describe("baseUrlOf / providerPreset", () => {
   it("falls back to the first preset for unknown providers", () => {
     expect(providerPreset("nope").value).toBe("fosta");
     expect(providerPreset(undefined).value).toBe("fosta");
+  });
+});
+
+describe("apiKeyProblem", () => {
+  it("requires a key for hosted providers", () => {
+    expect(apiKeyProblem("fosta", "", false)).toBe("Fosta needs an API key. Fosta gateway. Key from admin.fosta.app.");
+    expect(apiKeyProblem("openai", "  ", false)).not.toBeNull();
+  });
+
+  it("accepts a typed key, a saved key, or a custom endpoint without one", () => {
+    expect(apiKeyProblem("fosta", "sk-1", false)).toBeNull();
+    expect(apiKeyProblem("anthropic", "", true)).toBeNull();
+    expect(apiKeyProblem("custom", "", false)).toBeNull();
   });
 });

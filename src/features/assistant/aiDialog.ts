@@ -3,7 +3,7 @@ import { api, errorText } from "../../core/api";
 import { field, openModal, textInput } from "../../core/dialogs";
 import { h, icon, iconButton } from "../../core/dom";
 import type { AiConnection, AiSettings, AppConfig } from "../../core/types";
-import { AI_PROVIDERS, endpointProblem, providerPreset, type ProviderPreset } from "./aiProviders";
+import { AI_PROVIDERS, apiKeyProblem, endpointProblem, providerPreset, type ProviderPreset } from "./aiProviders";
 
 const CUSTOM_MODEL = "__custom__";
 
@@ -125,6 +125,11 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
       const settings = readSettings();
       const label = name.value.trim();
       if (!label) throw new Error("Name is required");
+      const keyProblem = apiKeyProblem(settings.provider, apiKey.value, savedKeyOwner() !== null);
+      if (keyProblem) {
+        apiKey.focus();
+        throw new Error(keyProblem);
+      }
       const connection: AiConnection = { id, name: label, provider: settings.provider, baseUrl: settings.baseUrl, defaultModel: settings.model };
       saved = await api.saveAiConnection(connection, apiKey.value || null);
     };

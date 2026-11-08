@@ -69,6 +69,15 @@ export function baseUrlOf(settings: AiSettings): string {
   return (settings.baseUrl.trim() || providerPreset(settings.provider).url).replace(/\/+$/, "");
 }
 
+/**
+ * Why the provider cannot be saved without a key, or null. The hosted providers all need one; Custom endpoints
+ * (Ollama, LM Studio) often do not. A key saved earlier for the same provider counts.
+ */
+export function apiKeyProblem(provider: AiProvider, typedKey: string, hasSavedKey: boolean): string | null {
+  if (provider === "custom" || typedKey.trim() || hasSavedKey) return null;
+  return `${providerPreset(provider).label} needs an API key. ${providerPreset(provider).hint}`;
+}
+
 /** Why `endpoint` cannot be used as a base URL, or null when it is fine (empty means the default). */
 export function endpointProblem(endpoint: string, provider: AiProvider): string | null {
   const value = endpoint.trim();
