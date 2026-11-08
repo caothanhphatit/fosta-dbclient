@@ -11,9 +11,9 @@ use std::{
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use mongodb::{
-    bson::{doc, oid::ObjectId, Bson, Document},
+    bson::{doc, oid::ObjectId, Bson, DateTime, Decimal128, Document},
     options::{ClientOptions, Credential, ServerAddress},
-    Client, Collection,
+    Client, ClientSession, Collection, Database,
 };
 
 use super::{
@@ -178,17 +178,22 @@ impl Driver for MongoConnection {
                 RowChange::Insert { values } => {
                     let mut document = Document::new();
                     for cell in values {
-                        document.insert(cell.column, cell_to_bson(&cell.value));
+                        let value = coerce_cell(&cell.column, &cell.value, None)?;
+                        document.insert(cell.column, value);
                     }
                     collection.insert_one(document).await?;
                     affected += 1;
                 }
                 RowChange::Update { key, values } => {
+                    // Edited cells arrive as text; the stored document says which BSON type each field keeps.
+                    let filter = key_filter(&key)?;
+                    let original = collection.find_one(filter.clone()).await?.unwrap_or_default();
                     let mut set = Document::new();
                     for cell in values {
-                        set.insert(cell.column, cell_to_bson(&cell.value));
+                        let value = coerce_cell(&cell.column, &cell.value, original.get(&cell.column))?;
+                        set.insert(cell.column, value);
                     }
-                    let result = collection.update_one(key_filter(&key)?, doc! { "$set": set }).await?;
+                    let result = collection.update_one(filter, doc! { "$set": set }).await?;
                     affected += result.modified_count;
                 }
                 RowChange::Delete { key } => {
@@ -220,22 +225,20 @@ impl Driver for MongoConnection {
             ))
         })?;
         let started = Instant::now();
-        let reply = self.client.database(&database).run_command(command).await?;
-        let elapsed_ms = elapsed_millis(started);
-        let set = match reply
-            .get_document("cursor")
-            .ok()
-            .and_then(|cursor| cursor.get_array("firstBatch").ok())
-        {
-            Some(batch) => {
-                let documents: Vec<Document> = batch.iter().filter_map(|item| item.as_document().cloned()).collect();
+        let db = self.client.database(&database);
+        // getMore must run in the session that created the cursor, so the command gets an explicit one.
+        let mut session = self.client.start_session().await?;
+        let reply = db.run_command(command).session(&mut session).await?;
+        let set = match reply.get_document("cursor").ok() {
+            Some(cursor) if cursor.get_array("firstBatch").is_ok() => {
+                let (documents, truncated) = drain_cursor(&db, &mut session, cursor, limits).await?;
                 let mut set = documents_to_set(&documents);
-                set.truncated = documents.len() > limits.max_rows;
-                set.rows.truncate(limits.max_rows);
+                set.truncated = truncated;
                 set
             }
-            None => documents_to_set(std::slice::from_ref(&reply)),
+            _ => documents_to_set(std::slice::from_ref(&reply)),
         };
+        let elapsed_ms = elapsed_millis(started);
         Ok(QueryOutcome {
             sets: vec![set],
             elapsed_ms,
@@ -250,6 +253,51 @@ impl Driver for MongoConnection {
     async fn close(&self) {
         lock(&self.sessions).clear();
         self.client.clone().shutdown().await;
+    }
+}
+
+/// Reads a command cursor to its end (the command's own `limit` ends it) or to `max_rows`, with getMore
+/// after the first batch, and closes it when rows are left over. Returns the documents and whether some were cut.
+async fn drain_cursor(db: &Database, session: &mut ClientSession, cursor: &Document, limits: &Limits) -> AppResult<(Vec<Document>, bool)> {
+    let first = cursor.get_array("firstBatch").map_err(|error| AppError::new(error.to_string()))?;
+    let mut documents: Vec<Document> = first.iter().filter_map(|item| item.as_document().cloned()).collect();
+    let mut id = cursor_id(cursor);
+    let collection = cursor
+        .get_str("ns")
+        .ok()
+        .and_then(|ns| ns.split_once('.'))
+        .map(|(_, name)| name.to_owned())
+        .unwrap_or_default();
+    while id != 0 && documents.len() <= limits.max_rows && !collection.is_empty() {
+        let wanted = i64::try_from(limits.max_rows + 1 - documents.len()).unwrap_or(i64::MAX);
+        let mut get_more = doc! { "getMore": id, "collection": collection.as_str(), "batchSize": wanted };
+        if limits.timeout_secs > 0 {
+            get_more.insert("maxTimeMS", i64::from(limits.timeout_secs) * 1000);
+        }
+        let reply = db.run_command(get_more).session(&mut *session).await?;
+        let next = reply.get_document("cursor").map_err(|error| AppError::new(error.to_string()))?;
+        if let Ok(batch) = next.get_array("nextBatch") {
+            documents.extend(batch.iter().filter_map(|item| item.as_document().cloned()));
+        }
+        id = cursor_id(next);
+    }
+    if id != 0 && !collection.is_empty() {
+        // Release the server-side cursor instead of leaving it to time out.
+        let _ = db
+            .run_command(doc! { "killCursors": collection.as_str(), "cursors": [id] })
+            .session(&mut *session)
+            .await;
+    }
+    let truncated = documents.len() > limits.max_rows || id != 0;
+    documents.truncate(limits.max_rows);
+    Ok((documents, truncated))
+}
+
+fn cursor_id(cursor: &Document) -> i64 {
+    match cursor.get("id") {
+        Some(Bson::Int64(id)) => *id,
+        Some(Bson::Int32(id)) => i64::from(*id),
+        _ => 0,
     }
 }
 
@@ -335,7 +383,8 @@ fn id_to_bson(value: &Cell) -> Bson {
     }
 }
 
-/// Edited cells are text: JSON parses to the matching BSON, anything else stays a string.
+/// A cell without a stored type to follow (new documents, new fields, key values): JSON and Extended
+/// JSON (`{"$date": …}`, `{"$oid": …}`) parse to the matching BSON, anything else stays a string.
 fn cell_to_bson(value: &Cell) -> Bson {
     let Some(text) = value else {
         return Bson::Null;
@@ -348,22 +397,118 @@ fn cell_to_bson(value: &Cell) -> Bson {
         || trimmed == "null"
         || trimmed.parse::<f64>().is_ok();
     if looks_structured {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if let Ok(bson) = mongodb::bson::to_bson(&parsed) {
-                return bson;
-            }
+        if let Some(bson) = parse_extended_json(trimmed) {
+            return bson;
         }
     }
     Bson::String(text.clone())
 }
 
+/// Relaxed Extended JSON writes every number as plain JSON, so a small long reads back as an int and a
+/// whole double as an int. Where the stored value at the same place was a long or a double, the edited
+/// number takes that type again.
+fn match_numbers(edited: Bson, original: &Bson) -> Bson {
+    match (edited, original) {
+        (Bson::Document(edited), Bson::Document(original)) => Bson::Document(
+            edited
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = match original.get(&key) {
+                        Some(before) => match_numbers(value, before),
+                        None => value,
+                    };
+                    (key, value)
+                })
+                .collect(),
+        ),
+        (Bson::Array(edited), Bson::Array(original)) => Bson::Array(
+            edited
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| match original.get(index) {
+                    Some(before) => match_numbers(value, before),
+                    None => value,
+                })
+                .collect(),
+        ),
+        (Bson::Int32(number), Bson::Int64(_)) => Bson::Int64(i64::from(number)),
+        (Bson::Int32(number), Bson::Double(_)) => Bson::Double(f64::from(number)),
+        // Whole doubles beyond i32 read back as longs; the conversion is exact below 2^53.
+        #[allow(clippy::cast_precision_loss)]
+        (Bson::Int64(number), Bson::Double(_)) => Bson::Double(number as f64),
+        (edited, _) => edited,
+    }
+}
+
+/// Relaxed or canonical Extended JSON, the format nested values are shown in, back to BSON with its types.
+fn parse_extended_json(text: &str) -> Option<Bson> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    Bson::try_from(value).ok()
+}
+
+/// An edited cell converted to the BSON type the field already has, so editing a date, a long or an
+/// ObjectId keeps it one. Explicit Extended JSON (`{"$numberLong": "5"}`) is accepted for any field.
+fn coerce_cell(column: &str, value: &Cell, original: Option<&Bson>) -> AppResult<Bson> {
+    let Some(text) = value else {
+        return Ok(Bson::Null);
+    };
+    let trimmed = text.trim();
+    let typed = match original {
+        None | Some(Bson::Null) => return Ok(cell_to_bson(value)),
+        Some(Bson::String(_)) => return Ok(Bson::String(text.clone())),
+        Some(Bson::DateTime(_)) => DateTime::parse_rfc3339_str(trimmed).ok().map(Bson::DateTime),
+        Some(Bson::Int32(_)) => trimmed.parse::<i32>().ok().map(Bson::Int32),
+        Some(Bson::Int64(_)) => trimmed.parse::<i64>().ok().map(Bson::Int64),
+        Some(Bson::Double(_)) => trimmed.parse::<f64>().ok().map(Bson::Double),
+        Some(Bson::Decimal128(_)) => trimmed.parse::<Decimal128>().ok().map(Bson::Decimal128),
+        Some(Bson::Boolean(_)) => match trimmed {
+            "true" => Some(Bson::Boolean(true)),
+            "false" => Some(Bson::Boolean(false)),
+            _ => None,
+        },
+        Some(Bson::ObjectId(_)) => ObjectId::parse_str(trimmed).ok().map(Bson::ObjectId),
+        // Documents, arrays, binary and the rest are shown (and edited) as Extended JSON.
+        Some(_) => None,
+    };
+    if let Some(bson) = typed {
+        return Ok(bson);
+    }
+    let explicit = trimmed.starts_with('{') || trimmed.starts_with('[');
+    if explicit {
+        if let Some(bson) = parse_extended_json(trimmed) {
+            return Ok(match original {
+                Some(original @ (Bson::Document(_) | Bson::Array(_))) => match_numbers(bson, original),
+                _ => bson,
+            });
+        }
+    }
+    let kind = original.map(bson_type).unwrap_or("value");
+    let example = match kind {
+        "date" => "2025-01-02T21:36:00Z",
+        "int" | "long" => "42",
+        "double" | "decimal" => "4.2",
+        "bool" => "true or false",
+        "objectId" => "a 24-digit hex ObjectId",
+        _ => "valid JSON",
+    };
+    Err(AppError::new(format!(
+        "{column} holds a {kind}; enter it as {example}, or as Extended JSON (for example {{\"$date\": \"2025-01-02T21:36:00Z\"}}) to change its type."
+    )))
+}
+
 fn documents_to_set(documents: &[Document]) -> ResultSet {
     let mut order: Vec<String> = vec![ID_FIELD.to_owned()];
     let mut numeric: HashMap<String, bool> = HashMap::new();
+    let mut kinds: HashMap<String, Vec<&'static str>> = HashMap::new();
     for document in documents {
         for (key, value) in document {
             if !order.contains(key) {
                 order.push(key.clone());
+            }
+            let kind = bson_type(value);
+            let seen = kinds.entry(key.clone()).or_default();
+            if kind != "null" && !seen.contains(&kind) {
+                seen.push(kind);
             }
             let is_number = matches!(value, Bson::Int32(_) | Bson::Int64(_) | Bson::Double(_) | Bson::Decimal128(_));
             numeric
@@ -379,7 +524,11 @@ fn documents_to_set(documents: &[Document]) -> ResultSet {
         .iter()
         .map(|key| ColumnMeta {
             name: key.clone(),
-            type_name: "bson".to_owned(),
+            // The BSON type(s) seen on this page, e.g. "date" or "int | string".
+            type_name: kinds
+                .get(key)
+                .filter(|kinds| !kinds.is_empty())
+                .map_or_else(|| "null".to_owned(), |kinds| kinds.join(" | ")),
             numeric: numeric.get(key).copied().unwrap_or(false),
             binary: false,
             primary: key == ID_FIELD,
@@ -437,4 +586,66 @@ fn compact_json(value: &Bson) -> String {
 
 fn pretty_json(value: &Bson) -> String {
     serde_json::to_string_pretty(&value.clone().into_relaxed_extjson()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(value: &str) -> Cell {
+        Some(value.to_owned())
+    }
+
+    #[test]
+    fn edits_keep_the_stored_bson_type() {
+        let date = DateTime::parse_rfc3339_str("2025-01-02T21:36:00Z").unwrap();
+        let shown = bson_text(&Bson::DateTime(date)).unwrap();
+        assert_eq!(coerce_cell("signedUpAt", &Some(shown), Some(&Bson::DateTime(date))).unwrap(), Bson::DateTime(date));
+        let edited = coerce_cell("signedUpAt", &text("2026-03-04T05:06:07.123Z"), Some(&Bson::DateTime(date))).unwrap();
+        assert!(matches!(edited, Bson::DateTime(_)), "{edited:?}");
+
+        assert_eq!(coerce_cell("n", &text("5"), Some(&Bson::Int64(1))).unwrap(), Bson::Int64(5));
+        assert_eq!(coerce_cell("n", &text("5"), Some(&Bson::Int32(1))).unwrap(), Bson::Int32(5));
+        assert_eq!(coerce_cell("x", &text("2"), Some(&Bson::Double(1.5))).unwrap(), Bson::Double(2.0));
+        assert_eq!(coerce_cell("ok", &text("false"), Some(&Bson::Boolean(true))).unwrap(), Bson::Boolean(false));
+        // A string field stays a string even when the text looks like a number.
+        assert_eq!(coerce_cell("zip", &text("01234"), Some(&Bson::String("x".into()))).unwrap(), Bson::String("01234".into()));
+        let id = ObjectId::new();
+        assert_eq!(coerce_cell("ref", &text(&id.to_hex()), Some(&Bson::ObjectId(ObjectId::new()))).unwrap(), Bson::ObjectId(id));
+        let price: Decimal128 = "9.99".parse().unwrap();
+        assert_eq!(coerce_cell("price", &text("9.99"), Some(&Bson::Decimal128(price))).unwrap(), Bson::Decimal128(price));
+        assert_eq!(coerce_cell("gone", &None, Some(&Bson::Int32(1))).unwrap(), Bson::Null);
+    }
+
+    #[test]
+    fn nested_values_round_trip_through_extended_json() {
+        let date = DateTime::parse_rfc3339_str("2025-01-02T21:36:00Z").unwrap();
+        let nested = Bson::Document(doc! { "at": date, "n": 3_i64, "tags": ["a", "b"] });
+        let shown = bson_text(&nested).unwrap();
+        assert_eq!(coerce_cell("meta", &Some(shown), Some(&nested)).unwrap(), nested);
+    }
+
+    #[test]
+    fn wrong_text_for_a_typed_field_is_refused_with_a_hint() {
+        let date = Bson::DateTime(DateTime::now());
+        let error = coerce_cell("signedUpAt", &text("tomorrow"), Some(&date)).unwrap_err();
+        assert!(error.to_string().contains("signedUpAt holds a date"), "{error}");
+        // Explicit Extended JSON changes the type on purpose.
+        assert_eq!(coerce_cell("n", &text(r#"{"$numberDouble": "1.5"}"#), Some(&Bson::Int32(1))).unwrap(), Bson::Double(1.5));
+    }
+
+    #[test]
+    fn new_fields_parse_json_and_extended_json() {
+        assert!(matches!(cell_to_bson(&text(r#"{"$date": "2025-01-02T21:36:00Z"}"#)), Bson::DateTime(_)));
+        assert_eq!(cell_to_bson(&text("plain")), Bson::String("plain".into()));
+        assert!(matches!(cell_to_bson(&text("[1, 2]")), Bson::Array(_)));
+    }
+
+    #[test]
+    fn columns_report_their_bson_types() {
+        let documents = [doc! { "_id": 1, "at": DateTime::now(), "mixed": 1 }, doc! { "_id": 2, "mixed": "x", "at": Bson::Null }];
+        let set = documents_to_set(&documents);
+        let types: Vec<&str> = set.columns.iter().map(|column| column.type_name.as_str()).collect();
+        assert_eq!(types, ["int", "date", "int | string"]);
+    }
 }

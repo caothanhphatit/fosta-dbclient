@@ -311,6 +311,61 @@ async fn live_mongo() {
     driver.close().await;
 }
 
+/// Grid edits keep BSON types, and query-tab cursors are read past the first batch.
+#[tokio::test]
+#[ignore]
+async fn live_mongo_types_and_cursors() {
+    let profile = profile("live-mongo-types", "mongodb", 27017, "root", "admin", &[]);
+    let (driver, _) = drivers::open(&profile, "studio-root").await.expect("connect");
+    driver.open_session("m").await.expect("session");
+    let limits = Limits::default();
+    let run = |text: &'static str| driver.run_query("m", Some("events".into()), text.into(), &limits);
+
+    let user = run(r#"{ "find": "users", "filter": { "_id": 1 } }"#).await.expect("find user");
+    let set = &user.sets[0];
+    let position = set.columns.iter().position(|column| column.name == "signedUpAt").expect("signedUpAt column");
+    assert_eq!(set.columns[position].type_name, "date");
+    let shown = set.rows[0][position].clone().expect("a date");
+    // Save the shown value back, as the grid does after an edit.
+    driver
+        .apply_changes(
+            "events",
+            "users",
+            vec![RowChange::Update {
+                key: vec![cell("_id", "1")],
+                values: vec![cell("signedUpAt", &shown)],
+            }],
+        )
+        .await
+        .expect("apply");
+    let still_date = run(r#"{ "count": "users", "query": { "_id": 1, "signedUpAt": { "$type": "date" } } }"#)
+        .await
+        .expect("count");
+    let n = still_date.sets[0].columns.iter().position(|column| column.name == "n").expect("n");
+    assert_eq!(still_date.sets[0].rows[0][n].as_deref(), Some("1"), "signedUpAt is still a BSON date");
+    let refused = driver
+        .apply_changes(
+            "events",
+            "users",
+            vec![RowChange::Update {
+                key: vec![cell("_id", "1")],
+                values: vec![cell("signedUpAt", "not a date")],
+            }],
+        )
+        .await
+        .expect_err("text is not a date");
+    assert!(refused.to_string().contains("holds a date"), "{refused}");
+
+    let five_hundred = run(r#"{ "find": "clicks", "limit": 500 }"#).await.expect("find 500");
+    assert_eq!(five_hundred.sets[0].rows.len(), 500);
+    assert!(!five_hundred.sets[0].truncated);
+    let capped = run(r#"{ "find": "clicks", "limit": 5000 }"#).await.expect("find 5000");
+    assert_eq!(capped.sets[0].rows.len(), limits.max_rows);
+    assert!(capped.sets[0].truncated);
+    driver.close_session("m");
+    driver.close().await;
+}
+
 /// The ER diagram's data on each engine: tables, columns and the expected foreign keys.
 #[tokio::test]
 #[ignore]
