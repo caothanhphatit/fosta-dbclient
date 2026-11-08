@@ -1,0 +1,170 @@
+/* Table view + record panel ---------------------------------------------- */
+
+.table-content {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) 4px var(--record-width, 340px);
+  min-height: 0;
+}
+
+.table-content.record-hidden {
+  grid-template-columns: minmax(0, 1fr) 0 0;
+}
+
+.table-content.record-hidden > .record-panel {
+  display: none;
+}
+
+.table-content > .grid,
+.search-results {
+  min-width: 0;
+}
+
+.record-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface-2);
+  border-left: 1px solid var(--border);
+}
+
+.record-panel .panel-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.record-body {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 0 12px;
+  user-select: text;
+}
+
+.record-field {
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--grid-line);
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+}
+
+.field-head .icon-button {
+  margin-left: auto;
+  width: 20px;
+  height: 20px;
+  opacity: 0;
+}
+
+.record-field:hover .field-head .icon-button {
+  opacity: 1;
+}
+
+.field-head .icon-button + .icon-button {
+  margin-left: 0;
+}
+
+.field-name {
+  font-weight: 600;
+}
+
+.field-type {
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+.field-value {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.field-value.null {
+  color: var(--null);
+  font-style: italic;
+}
+
+pre.field-value {
+  max-height: 260px;
+  padding: 6px 8px;
+  overflow: auto;
+  background: var(--editor-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: 12px/1.5 var(--font-mono);
+}
+
+pre.field-value.text {
+  white-space: pre-wrap;
+}
+
+.field-value.vector .mono {
+  font-size: 12px;
+}
+
+.vector-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.vector-stats {
+  color: var(--fg-2);
+  font: 11px var(--font-mono);
+}
+
+.sparkline {
+  display: block;
+  width: 100%;
+  height: 48px;
+  margin-top: 6px;
+  background: var(--editor-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.spark-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 0.8;
+}
+
+.spark-baseline {
+  stroke: var(--border-strong);
+  stroke-dasharray: 2 3;
+}
+
+.related-list {
+  padding: 4px 14px;
+}
+
+.related-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.related-row .icon {
+  color: var(--fg-3);
+}
+
+.grid-table td.vector {
+  color: var(--syn-type);
+  font: 12px var(--font-mono);
+}
+
+.section-title {
+  padding: 6px 14px;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+

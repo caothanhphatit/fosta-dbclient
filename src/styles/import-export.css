@@ -1,0 +1,69 @@
+/* Import / export dialogs */
+.file-input {
+  font: inherit;
+  color: var(--fg-2);
+}
+
+.import-options {
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.import-mapping,
+.import-preview {
+  max-height: 210px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.import-mapping:empty,
+.import-preview:empty {
+  display: none;
+}
+
+.import-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.import-table th {
+  position: sticky;
+  top: 0;
+  padding: 5px 8px;
+  background: var(--grid-head);
+  color: var(--fg-2);
+  font-weight: 600;
+  text-align: left;
+}
+
+.import-table td {
+  padding: 3px 8px;
+  border-top: 1px solid var(--grid-line);
+  white-space: nowrap;
+}
+
+.import-table .input {
+  width: 100%;
+  height: 26px;
+}
+
+.import-table.compact td {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.import-sample {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--fg-3);
+  text-overflow: ellipsis;
+}
+
+.saved-path {
+  word-break: break-all;
+  user-select: text;
+}
+

@@ -1,0 +1,81 @@
+/* Query view ------------------------------------------------------------- */
+
+.query-view .database-select {
+  min-width: 200px;
+  margin-left: 6px;
+}
+
+.editor-host {
+  flex: none;
+  height: 42%;
+  min-height: 80px;
+  overflow: hidden;
+}
+
+.splitter-y {
+  flex: none;
+  height: 4px;
+  background: var(--border);
+  cursor: row-resize;
+}
+
+.results {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.result-tabs {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 5px 8px 0;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.result-tab {
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+
+.result-tab:hover {
+  color: var(--fg);
+}
+
+.result-tab.active {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--fg);
+  margin-bottom: -1px;
+}
+
+.result-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.messages {
+  flex: 1;
+  padding: 10px 14px;
+  overflow: auto;
+  font: 12.5px/1.6 var(--font-mono);
+  user-select: text;
+}
+
+.message.error {
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+.message.muted {
+  color: var(--fg-3);
+}
+

@@ -1,0 +1,64 @@
+/* Assistant suggestions in a table view: nothing has run yet. */
+.suggestion-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--accent-soft);
+}
+
+.readonly-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.readonly-bar .icon {
+  color: var(--fg-3);
+}
+
+.suggestion-filter {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.input.suggested {
+  border-color: var(--accent);
+  border-style: dashed;
+}
+
+/* Query tab transactions. */
+.tx-autocommit {
+  margin: 0 4px;
+  white-space: nowrap;
+}
+
+.tx-indicator {
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  color: var(--fg-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tx-indicator.open {
+  background: var(--warning);
+  color: #fff;
+  font-weight: 600;
+}
+
+.tx-indicator.unsupported {
+  color: var(--fg-3);
+}

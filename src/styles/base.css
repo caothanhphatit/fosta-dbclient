@@ -1,0 +1,116 @@
+/* ---------------------------------------------------------------------------
+   Base
+   --------------------------------------------------------------------------- */
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--fg);
+  font: 13px/1.45 var(--font-ui);
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  display: flex;
+}
+
+.app-main {
+  display: grid;
+  flex: 1;
+  /* toolbar, workspace, error panel (when shown), status bar */
+  grid-template-rows: auto 1fr auto auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+body.resizing-x,
+body.resizing-x * {
+  cursor: col-resize !important;
+}
+
+/* The query editor's chunk is loading after Ctrl+T; what is typed meanwhile is kept. */
+body.loading-editor,
+body.loading-editor * {
+  cursor: progress !important;
+}
+
+body.resizing-y,
+body.resizing-y * {
+  cursor: row-resize !important;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.spacer {
+  flex: 1;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+button:focus-visible,
+.input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.input {
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  outline: none;
+  user-select: text;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+
+.input:hover {
+  border-color: color-mix(in srgb, var(--border-strong) 60%, var(--fg-3));
+}
+
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+select.input {
+  padding-right: 4px;
+}
+

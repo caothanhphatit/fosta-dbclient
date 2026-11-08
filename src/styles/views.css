@@ -1,0 +1,154 @@
+/* ---------------------------------------------------------------------------
+   Views
+   --------------------------------------------------------------------------- */
+
+.view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.view.busy {
+  cursor: progress;
+}
+
+.view.busy .grid {
+  opacity: 0.6;
+}
+
+.toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  min-height: 40px;
+  padding: 5px 8px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  container: toolbar / inline-size;
+}
+
+/* Narrow panes: secondary buttons drop their labels (the tooltip keeps the name), and what still does not fit
+   wraps onto a second row instead of being cut off, so the pager and the transaction controls stay reachable. */
+@container toolbar (max-width: 1180px) {
+  .tool-button.secondary {
+    padding: 0 7px;
+  }
+
+  .tool-button.secondary > span:not(.icon) {
+    display: none;
+  }
+}
+
+.toolbar .tool-button,
+.toolbar .tool-button .icon {
+  flex: none;
+}
+
+.toolbar > .pager,
+.toolbar > .toolbar-end {
+  margin-left: auto;
+}
+
+.toolbar-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  row-gap: 4px;
+}
+
+.toolbar-title {
+  padding: 0 6px;
+  overflow: hidden;
+  color: var(--fg-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-icon {
+  margin-left: 4px;
+  color: var(--fg-3);
+}
+
+.tool-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tool-button .icon {
+  color: var(--accent);
+}
+
+.tool-button:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+.tool-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.tool-button.active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.filter-box {
+  flex: 1;
+  min-width: 220px;
+  max-width: 560px;
+  margin-left: 4px;
+}
+
+.filter-box .input {
+  flex: 1;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+}
+
+.pager-info {
+  min-width: 120px;
+  padding: 0 6px;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.page-size {
+  height: 26px;
+  margin-left: 6px;
+}
+

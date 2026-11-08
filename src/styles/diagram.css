@@ -1,0 +1,104 @@
+/* ER diagram ------------------------------------------------------------- */
+
+.diagram-view .toolbar {
+  flex-wrap: wrap;
+}
+
+.diagram-info,
+.diagram-zoom {
+  color: var(--fg-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.diagram-zoom {
+  min-width: 38px;
+  text-align: center;
+}
+
+.diagram-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 4px;
+  color: var(--fg-2);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.diagram-search {
+  width: 160px;
+}
+
+.diagram-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.diagram-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  background-image: radial-gradient(circle, var(--dot) 1px, transparent 1.2px);
+  user-select: none;
+}
+
+.diagram-svg.panning {
+  cursor: grabbing;
+}
+
+.diagram-box {
+  cursor: move;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  transition: opacity 0.12s;
+}
+
+.diagram-box.dimmed {
+  opacity: 0.3;
+}
+
+.diagram-box.selected .diagram-frame,
+.diagram-box.match .diagram-frame {
+  stroke-width: 2.5;
+  filter: drop-shadow(0 4px 10px rgba(15, 23, 42, 0.18));
+}
+
+.diagram-box.match .diagram-frame {
+  stroke: var(--warning);
+}
+
+.tree-action {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  margin-left: 4px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  flex: none;
+}
+
+.tree-action .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.tree-row:hover .tree-action,
+.tree-row.selected .tree-action {
+  display: inline-flex;
+}
+
+.tree-action:hover {
+  background: var(--accent-soft);
+}
+

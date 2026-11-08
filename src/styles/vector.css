@@ -1,0 +1,249 @@
+/* ---------------------------------------------------------------------------
+   Vector search and health
+   --------------------------------------------------------------------------- */
+
+.search-form {
+  display: grid;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.search-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.query-text {
+  height: auto;
+  min-height: 60px;
+  padding: 6px 8px;
+  resize: vertical;
+  font: 13px/1.5 var(--font-ui);
+}
+
+.filter-box.wide {
+  flex: 1;
+  max-width: none;
+  margin-left: 0;
+}
+
+.inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  color: var(--fg-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.k-input {
+  width: 76px;
+}
+
+.segmented {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.segment {
+  padding: 4px 12px;
+  border: none;
+  border-right: 1px solid var(--border-strong);
+  background: transparent;
+  cursor: pointer;
+}
+
+.segment:last-child {
+  border-right: none;
+}
+
+.segment.active {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.search-results {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.search-status {
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.search-status::before {
+  margin-right: 6px;
+  font-weight: 700;
+}
+
+.search-status.ok::before {
+  color: var(--success);
+  content: "✓";
+}
+
+.search-status.info::before {
+  color: var(--accent);
+  content: "i";
+}
+
+.search-status.warn::before {
+  color: var(--warning);
+  content: "!";
+}
+
+.search-status.error {
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+.search-status.error::before {
+  content: "✕";
+}
+
+.plan-host {
+  display: none;
+  max-height: 200px;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+
+.plan-host.open {
+  display: flex;
+}
+
+.health-body {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: 16px;
+}
+
+.health-checks {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.health-card {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--fg-3);
+  border-radius: var(--radius);
+}
+
+.health-card.ok {
+  border-left-color: var(--success);
+}
+
+.health-card.info {
+  border-left-color: var(--accent);
+}
+
+.health-card.warn {
+  border-left-color: var(--warning);
+}
+
+.health-card.error {
+  border-left-color: var(--danger);
+}
+
+.health-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  font-weight: 700;
+}
+
+.health-card.ok .health-mark {
+  color: var(--success);
+}
+
+.health-card.warn .health-mark {
+  color: var(--warning);
+}
+
+.health-card.error .health-mark {
+  color: var(--danger);
+}
+
+.health-label {
+  font-weight: 600;
+}
+
+.health-detail,
+.muted-text {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.muted-text {
+  margin: 8px 14px;
+  line-height: 1.5;
+}
+
+.health-value {
+  font-size: 12px;
+  text-align: right;
+  user-select: text;
+}
+
+.recall-report {
+  padding: 0 14px;
+}
+
+.recall-card {
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--success);
+  border-radius: var(--radius);
+}
+
+.recall-card.warn {
+  border-left-color: var(--warning);
+}
+
+.recall-card.error {
+  border-left-color: var(--danger);
+}
+
+.recall-big {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.recall-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.metric-label {
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+.metric-value {
+  font: 13px var(--font-mono);
+}
+

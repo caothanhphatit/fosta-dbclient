@@ -1,0 +1,126 @@
+/* ---------------------------------------------------------------------------
+   Tabs
+   --------------------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.tab-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+/* No visible scrollbar: the wheel scrolls the strip sideways and the list button reaches every tab. */
+.tab-strip {
+  display: flex;
+  flex: 1;
+  gap: 1px;
+  min-width: 0;
+  padding: 0 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab-list-button {
+  flex: none;
+  margin: 0 4px;
+}
+
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 240px;
+  height: 36px;
+  padding: 0 6px 0 12px;
+  color: var(--fg-2);
+  cursor: default;
+  white-space: nowrap;
+}
+
+.tab::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  right: 0;
+  bottom: 9px;
+  width: 1px;
+  background: var(--border);
+}
+
+.tab:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.tab.active {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.tab.active::after {
+  display: none;
+}
+
+.tab-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--fg-3);
+}
+
+.tab.active .tab-icon {
+  color: var(--accent);
+}
+
+.tab-icon.query {
+  color: var(--syn-type);
+}
+.tab-icon.vector,
+.tab-icon.health {
+  color: var(--ws-teal);
+}
+
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-close {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 0.6;
+}
+
+.tab-close .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.tab-close:hover {
+  background: var(--border);
+  opacity: 1 !important;
+}
+
+.tab-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+

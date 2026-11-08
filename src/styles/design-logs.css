@@ -1,0 +1,27 @@
+/* Design, logs ----------------------------------------------------------- */
+
+.design-columns {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.ddl,
+.log-output {
+  margin: 0;
+  padding: 10px 14px;
+  overflow: auto;
+  background: var(--editor-bg);
+  font: 12.5px/1.55 var(--font-mono);
+  user-select: text;
+  white-space: pre;
+}
+
+.ddl {
+  flex: 0 0 40%;
+}
+
+.log-output {
+  flex: 1;
+}
+

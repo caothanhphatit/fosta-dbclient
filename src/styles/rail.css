@@ -1,0 +1,261 @@
+/* ---------------------------------------------------------------------------
+   Workspace rail
+   --------------------------------------------------------------------------- */
+
+.rail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: var(--rail-width);
+  padding: 8px 6px;
+  background: var(--rail);
+  border-right: 1px solid var(--border);
+  color: var(--rail-fg);
+}
+
+.rail-heading {
+  padding: 2px 6px 8px;
+  color: var(--fg-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 100%;
+  overflow: hidden auto;
+  scrollbar-width: none;
+}
+
+.ws-entry {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 8px 4px 7px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+
+.ws-entry:hover {
+  background: var(--rail-hover);
+  color: var(--fg);
+}
+
+.ws-entry.active {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+}
+
+.ws-entry.active::before {
+  content: "";
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: -6px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--ws-color, var(--ws-blue));
+}
+
+.ws-glyph {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ws-color, var(--ws-blue)) 14%, transparent);
+  color: var(--ws-color, var(--ws-blue));
+}
+
+.ws-entry.active .ws-glyph {
+  background: var(--ws-color, var(--ws-blue));
+  color: #fff;
+}
+
+.ws-glyph .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.ws-label {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-badges {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: flex;
+  gap: 2px;
+}
+
+.ws-badge {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--rail);
+  border-radius: 50%;
+}
+
+.ws-entry.active .ws-badge {
+  border-color: var(--surface);
+}
+
+.ws-badge.online {
+  background: var(--success);
+}
+
+.ws-badge.busy {
+  background: var(--warning);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.ws-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 11px;
+  background: var(--ws-color, var(--ws-blue));
+  color: #fff;
+}
+
+.ws-preview .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.icon-choices {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.icon-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.icon-choice:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.icon-choice.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.icon-choice .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.color-blue {
+  --ws-color: var(--ws-blue);
+}
+.color-green {
+  --ws-color: var(--ws-green);
+}
+.color-orange {
+  --ws-color: var(--ws-orange);
+}
+.color-red {
+  --ws-color: var(--ws-red);
+}
+.color-purple {
+  --ws-color: var(--ws-purple);
+}
+.color-teal {
+  --ws-color: var(--ws-teal);
+}
+.color-pink {
+  --ws-color: var(--ws-pink);
+}
+.color-slate {
+  --ws-color: var(--ws-slate);
+}
+
+.rail-footer {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+}
+
+.rail-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--rail-fg);
+}
+
+.rail-button:hover {
+  background: var(--rail-hover);
+  color: var(--fg);
+}
+
+.rail-button .icon {
+  width: 17px;
+  height: 17px;
+}
+
+.rail-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  margin-top: 4px;
+  padding: 7px 4px 6px;
+  border: 1px dashed color-mix(in srgb, var(--rail-fg) 45%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.rail-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rail-add .icon {
+  width: 14px;
+  height: 14px;
+}
+

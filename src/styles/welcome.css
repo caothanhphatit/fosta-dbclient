@@ -1,0 +1,126 @@
+/* Welcome ---------------------------------------------------------------- */
+
+.welcome {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  overflow: auto;
+  background: var(--canvas);
+}
+
+.welcome-inner {
+  width: min(680px, 100%);
+  padding: 36px 40px 32px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.welcome-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.welcome-brand h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.welcome-icon {
+  width: 36px;
+  height: 36px;
+  padding: 7px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #4f8cff, #2b5fd6);
+  color: #fff;
+}
+
+.welcome-sub {
+  margin: 10px 0 22px;
+  color: var(--fg-2);
+}
+
+.welcome-workspace {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.welcome-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.welcome-action {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s,
+    transform 0.12s;
+}
+
+.welcome-action:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.welcome-action .icon {
+  width: 20px;
+  height: 20px;
+  margin-bottom: 4px;
+  color: var(--accent);
+}
+
+.welcome-action-title {
+  font-weight: 600;
+}
+
+.welcome-action-detail {
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.shortcuts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 24px;
+  margin: 26px 0 0;
+  padding: 18px 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+  color: var(--fg-2);
+}
+
+.shortcuts li {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+kbd {
+  justify-self: start;
+  padding: 2px 6px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font: 11.5px var(--font-ui);
+  white-space: nowrap;
+}
+

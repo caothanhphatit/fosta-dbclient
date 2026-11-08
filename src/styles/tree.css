@@ -1,0 +1,162 @@
+/* Tree ------------------------------------------------------------------- */
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.search-box,
+.filter-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-3);
+}
+
+.search-box {
+  position: relative;
+  padding: 4px 10px 8px;
+}
+
+.search-box .icon {
+  position: absolute;
+  left: 18px;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+.search-box .input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding-left: 28px;
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.tree-body {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: 8px;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin: 0 6px;
+  padding-right: 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.tree-row:hover {
+  background: var(--hover);
+}
+
+.tree-row.selected {
+  background: var(--selection);
+  color: var(--fg);
+}
+
+.tree-row .icon {
+  color: var(--fg-3);
+}
+
+.tree-row.connection > .icon {
+  color: var(--fg-2);
+}
+
+.tree-row.connection.state-connected > .icon {
+  color: var(--success);
+}
+
+.tree-row.connection.state-error > .icon {
+  color: var(--danger);
+}
+
+.tree-row.connection.state-connecting > .icon {
+  color: var(--warning);
+}
+
+.tree-row.connection .tree-label {
+  font-weight: 600;
+}
+
+.tree-row.system .tree-label {
+  color: var(--fg-3);
+}
+
+.tree-row.placeholder {
+  color: var(--fg-3);
+  font-style: italic;
+}
+
+.chevron {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.chevron .icon {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.12s;
+}
+
+.chevron.open .icon {
+  transform: rotate(90deg);
+}
+
+.tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-tag {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--fg-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.tree-row.selected .tree-tag {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg-2);
+}
+
+.tree-row.driver-mariadb > .icon,
+.tree-row.driver-mysql > .icon {
+  color: #2f6fed;
+}
+.tree-row.driver-mssql > .icon {
+  color: #d64545;
+}
+.tree-row.driver-mongodb > .icon {
+  color: #1f9d55;
+}
+
+.tree-meta {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--fg-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty-hint {
+  padding: 10px 14px;
+  color: var(--fg-3);
+  font-style: italic;
+}
+

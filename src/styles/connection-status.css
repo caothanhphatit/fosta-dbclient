@@ -1,0 +1,43 @@
+/* Connection status dot on the driver icon */
+.tree-icon-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.conn-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--surface-2);
+  border-radius: 50%;
+}
+
+.tree-row.selected .conn-dot {
+  border-color: var(--selection);
+}
+
+.conn-connected {
+  background: var(--success);
+}
+.conn-idle {
+  background: var(--danger);
+  opacity: 0.85;
+}
+.conn-error {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.conn-connecting {
+  background: var(--warning);
+  animation: conn-pulse 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes conn-pulse {
+  to {
+    opacity: 0.35;
+  }
+}
+

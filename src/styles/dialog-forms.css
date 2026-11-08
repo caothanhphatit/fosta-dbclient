@@ -1,0 +1,45 @@
+/* Two left-aligned footer buttons sit together; only the last one pushes the rest right. */
+.btn.align-left:has(~ .btn.align-left) {
+  margin-right: 8px;
+}
+
+/* Two-way switch (connection dialog: parameters / connection string) */
+.segmented {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-3);
+}
+
+.segment {
+  flex: 1;
+  height: 26px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+
+.segment:hover {
+  color: var(--fg);
+}
+
+.segment.active {
+  background: var(--surface);
+  color: var(--fg);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.connection-string {
+  height: auto;
+  min-height: 64px;
+  padding: 7px 9px;
+  line-height: 1.45;
+  resize: vertical;
+  word-break: break-all;
+}
+

@@ -1,0 +1,202 @@
+/* Grid ------------------------------------------------------------------- */
+
+.grid {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+  background: var(--surface);
+}
+
+.grid-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+
+.grid-table th,
+.grid-table td {
+  max-width: 360px;
+  height: 26px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-right: 1px solid var(--grid-line);
+  border-bottom: 1px solid var(--grid-line);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grid-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 28px;
+  background: var(--grid-head);
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.grid-table th.sortable {
+  cursor: pointer;
+}
+
+.grid-table th.sortable:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.th-content {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.key-icon {
+  width: 13px;
+  height: 13px;
+  color: var(--warning);
+}
+
+.sort-mark {
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.grid-table .row-number {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 44px;
+  background: var(--grid-head);
+  color: var(--fg-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.grid-table th.row-number {
+  z-index: 3;
+}
+
+.grid-table tbody tr:nth-child(even) td.cell {
+  background: var(--grid-alt);
+}
+
+.grid-table tbody tr:hover td.cell {
+  background: var(--hover);
+}
+
+.grid-table td.cell {
+  cursor: cell;
+}
+
+.grid-table td.numeric {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.grid-table td.null {
+  color: var(--null);
+  font-style: italic;
+}
+
+.grid-table tbody tr td.modified {
+  background: var(--modified) !important;
+}
+
+.grid-table tr.state-new td.cell {
+  background: var(--new) !important;
+}
+
+.grid-table tr.state-deleted td.cell {
+  background: var(--deleted) !important;
+  color: var(--fg-3);
+  text-decoration: line-through;
+}
+
+.grid-table td.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.grid-table td.editing {
+  padding: 0;
+}
+
+.cell-editor {
+  width: 100%;
+  min-width: 120px;
+  height: 25px;
+  padding: 0 7px;
+  border: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--editor-bg);
+  color: var(--fg);
+  font: inherit;
+  user-select: text;
+}
+
+.grid-empty {
+  padding: 32px;
+  color: var(--fg-3);
+  text-align: center;
+}
+
+.grid-table .filter-row th {
+  top: 28px;
+  height: 28px;
+  padding: 2px 3px;
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.grid-table .filter-row th.row-number {
+  color: var(--fg-3);
+  text-align: center;
+}
+
+.grid-table .filter-row .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.column-filter {
+  width: 100%;
+  min-width: 60px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg);
+  font: 12px var(--font-ui);
+  outline: none;
+  user-select: text;
+}
+
+.column-filter::placeholder {
+  color: var(--null);
+  opacity: 0.6;
+}
+
+.column-filter:hover {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.column-filter:focus {
+  border-color: var(--accent);
+  background: var(--editor-bg);
+}
+
+.column-filter.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--editor-bg));
+  font-weight: 600;
+}
+
