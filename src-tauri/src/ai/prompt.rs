@@ -1,12 +1,12 @@
 //! The system prompt: fixed rules plus what the UI shares about where the user is.
 
 use super::ChatContext;
-use crate::drivers::DbManager;
+use crate::runtime::ConnectionManager;
 
 const MAX_TABLES_IN_PROMPT: usize = 400;
 const MAX_EDITOR_CHARS: usize = 6000;
 
-pub(super) async fn system_prompt(db: &DbManager, context: &ChatContext) -> String {
+pub(super) async fn system_prompt(db: &ConnectionManager, context: &ChatContext) -> String {
     let mut text = String::from(
         "You are the assistant built into Fosta Studio, a desktop database client. You help the user write and understand queries for the database they have open.\n\n\
 Rules:\n\
@@ -57,8 +57,8 @@ Context:\n",
     text
 }
 
-async fn table_listing(db: &DbManager, context: &ChatContext, database: &str) -> Option<String> {
-    let driver = db.driver(context.connection_id.as_ref()?).ok()?;
+async fn table_listing(db: &ConnectionManager, context: &ChatContext, database: &str) -> Option<String> {
+    let driver = db.legacy_driver(context.connection_id.as_ref()?).ok()?;
     let tables = driver.list_tables(database).await.ok()?;
     if tables.is_empty() {
         return Some(format!("- {database} has no tables yet.\n"));

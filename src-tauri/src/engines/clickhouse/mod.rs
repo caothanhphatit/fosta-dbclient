@@ -12,11 +12,14 @@
 //! too. The statement timeout is the server's `max_execution_time`. ClickHouse has no transactions, so row changes run one by
 //! one (inserts, then lightweight `ALTER TABLE … UPDATE`/`DELETE FROM` with `mutations_sync`).
 
+pub mod adapter;
+pub mod descriptor;
 pub mod session;
 #[cfg(test)]
 mod tests;
 pub mod types;
 
+pub use adapter::{ClickHouseAdapter, CLICKHOUSE};
 pub use session::ChSession;
 
 use crate::engines::common::split::Dialect;

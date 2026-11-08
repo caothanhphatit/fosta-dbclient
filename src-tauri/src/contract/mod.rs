@@ -17,9 +17,11 @@ pub mod capability;
 pub mod classify;
 pub mod describe;
 pub mod descriptor;
+pub mod engine;
 pub mod errors;
 pub mod limits;
 pub mod object;
+pub mod schema;
 pub mod session;
 pub mod spec;
 pub mod stream;
@@ -33,11 +35,15 @@ pub use descriptor::{
     AuthMethodId, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec, FilterSupport, FormSection,
     LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
 };
+pub use engine::{
+    classify_common, default_validate_filter, require, Connection, DatabaseAdmin, Engine, ParsedConnection, SchemaGraphSource, TabularData,
+};
 pub use errors::{not_wired, unsupported_capability, EngineError, EngineResult, ErrorKind};
 pub use limits::{CallContext, Limits};
 pub use object::{
     ActionTarget, Badge, BuiltinAction, NodeAction, NodeKey, NodeKind, ObjectNode, ObjectRef, Tone, TreeChildren, TreeRequest,
 };
+pub use schema::{Relation, SchemaColumn, SchemaGraph, SchemaTable};
 pub use session::{
     Canceller, OpenedSession, RunRequest, RunSummary, Session, SessionInfo, SessionOptions, TransactionOp, TransactionState, TxState,
 };
@@ -52,3 +58,5 @@ pub use value::{parse_input, Value, ValueKind};
 
 #[cfg(test)]
 mod fixtures;
+#[cfg(test)]
+pub mod testing;

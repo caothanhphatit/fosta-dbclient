@@ -12,7 +12,7 @@ default-run = "fosta-studio"
 # with two front-ends: the Tauri desktop app (`desktop`, the default) and the web server of the Docker image
 # (`web`). Build the server alone with `cargo build --release --no-default-features --features web`.
 [features]
-default = ["desktop"]
+default = ["desktop", "engines-all"]
 desktop = ["dep:tauri", "dep:tauri-build", "dep:keyring"]
 web = [
     "dep:axum",
@@ -22,7 +22,30 @@ web = [
     "dep:sha2",
     "tokio/rt-multi-thread",
     "tokio/signal",
+    "engines-all",
 ]
+# Database engines, one feature each (runtime/registry.rs). Every engine is in the default build and the web image.
+engines-all = [
+    "engine-mysql",
+    "engine-mssql",
+    "engine-mongo",
+    "engine-postgres",
+    "engine-sqlite",
+    "engine-clickhouse",
+    "engine-oracle",
+    "engine-redis",
+    "engine-elastic",
+]
+# MariaDB/MySQL, SQL Server and MongoDB clients stay required until their pre-contract drivers are removed.
+engine-mysql = []
+engine-mssql = []
+engine-mongo = []
+engine-postgres = ["dep:tokio-postgres", "dep:tokio-postgres-rustls"]
+engine-sqlite = ["dep:rusqlite"]
+engine-clickhouse = []
+engine-oracle = ["dep:oracle"]
+engine-redis = ["dep:redis"]
+engine-elastic = []
 
 [lib]
 name = "fosta_studio"
@@ -65,14 +88,14 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
 base64 = "0.22"
-redis = { version = "1.7", default-features = false, features = ["tokio-rustls-comp", "tls-rustls-insecure"] }
+redis = { version = "1.7", default-features = false, features = ["tokio-rustls-comp", "tls-rustls-insecure"], optional = true }
 # Engine modules (PostgreSQL, SQLite, ClickHouse over reqwest, Oracle). Oracle Instant Client is loaded at runtime.
-tokio-postgres = "0.7.18"
-tokio-postgres-rustls = { version = "0.14", features = ["ring"] }
+tokio-postgres = { version = "0.7.18", optional = true }
+tokio-postgres-rustls = { version = "0.14", features = ["ring"], optional = true }
 rustls-pki-types = { version = "1.12", features = ["std"] }
 webpki-roots = "1"
-rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype"] }
-oracle = { version = "0.6.3", features = ["chrono"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype"], optional = true }
+oracle = { version = "0.6.3", features = ["chrono"], optional = true }
 # Web server (feature `web`)
 axum = { version = "0.8", optional = true }
 tower-http = { version = "0.6", features = ["fs", "set-header"], optional = true }

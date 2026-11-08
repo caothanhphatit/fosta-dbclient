@@ -4,10 +4,14 @@
 //! object references with extra qualifiers. Catalog trees built by a core's `catalog()` are served lazily as tree
 //! children by [`catalog_children`], keyed by a stable path id.
 
-use super::{BrowseRequest, CatalogNode, NodeKind, ObjectDescription, ObjectRef, Page, RowChange};
+use super::{
+    classify::ClassifiedStatement, BrowseRequest, CatalogNode, Classification, NodeKind, ObjectDescription, ObjectRef, Page, RowChange,
+    StatementKind, TlsMode,
+};
 use crate::{
     contract::{
         self,
+        classify::{Category, StatementInfo},
         object::{NodeAction, NodeKey, ObjectNode, TreeChildren},
         tabular::Filter,
     },
@@ -162,6 +166,61 @@ pub fn change_to_common(change: &contract::RowChange) -> RowChange {
     }
 }
 
+impl From<StatementKind> for Category {
+    /// Session settings (SET, USE) only change the session, so the gateway treats them as reads.
+    fn from(kind: StatementKind) -> Self {
+        match kind {
+            StatementKind::Read | StatementKind::Session => Category::Read,
+            StatementKind::Transaction => Category::Transaction,
+            StatementKind::Write => Category::Write,
+            StatementKind::Unknown => Category::Unknown,
+            StatementKind::Ddl => Category::Ddl,
+            StatementKind::Admin => Category::Admin,
+            StatementKind::Destructive => Category::Destructive,
+        }
+    }
+}
+
+impl From<ClassifiedStatement> for StatementInfo {
+    fn from(statement: ClassifiedStatement) -> Self {
+        let kind = if statement.keyword.is_empty() {
+            "statement"
+        } else {
+            statement.keyword.as_str()
+        };
+        let mut info = StatementInfo::new(statement.kind.into(), kind, &statement.text);
+        info.reason = statement.reason;
+        info
+    }
+}
+
+/// A core classification (one entry per statement of the script) as the gateway's classification.
+impl From<Classification> for contract::Classification {
+    fn from(classification: Classification) -> Self {
+        Self {
+            statements: classification.statements.into_iter().map(StatementInfo::from).collect(),
+        }
+    }
+}
+
+/// A core TLS mode as the contract's TLS settings; `None` for a plain connection (the form's default).
+/// `SkipVerify` is libpq's `require`: encrypted, certificate not checked.
+pub fn tls_to_contract(mode: &TlsMode) -> Option<contract::TlsConfig> {
+    match mode {
+        TlsMode::Disable => None,
+        TlsMode::Verify { ca_file } => Some(contract::TlsConfig {
+            mode: contract::TlsMode::VerifyFull,
+            ca_file: ca_file.clone(),
+            ..Default::default()
+        }),
+        TlsMode::SkipVerify => Some(contract::TlsConfig {
+            mode: contract::TlsMode::Require,
+            accept_invalid_certs: true,
+            ..Default::default()
+        }),
+    }
+}
+
 /// Icon names (`src/core/dom.ts`) per kind.
 pub fn icon_for(kind: NodeKind) -> &'static str {
     match kind {
@@ -249,6 +308,32 @@ mod tests {
         let open = object_to_contract(&object, Some("shop"));
         assert_eq!(open.database.as_deref(), Some("shop"));
         assert_eq!(object_to_common(&open).unwrap().name, "orders");
+    }
+
+    #[test]
+    fn core_classifications_map_onto_gateway_categories() {
+        use crate::engines::common::{classify, split::Dialect};
+        let classification: contract::Classification = classify(
+            Dialect::Postgres,
+            "SELECT 1; SET search_path = x; BEGIN; DELETE FROM t; DROP TABLE t",
+        )
+        .into();
+        let categories: Vec<Category> = classification.statements.iter().map(|s| s.category).collect();
+        assert_eq!(
+            categories,
+            vec![
+                Category::Read,
+                Category::Read,
+                Category::Transaction,
+                Category::Destructive,
+                Category::Destructive
+            ]
+        );
+        assert!(classification.statements[3].reason.is_some());
+        assert_eq!(classification.statements[4].kind, "DROP TABLE");
+        assert!(tls_to_contract(&TlsMode::Disable).is_none());
+        let skip = tls_to_contract(&TlsMode::SkipVerify).unwrap();
+        assert!(skip.accept_invalid_certs && skip.mode == contract::TlsMode::Require);
     }
 
     #[test]

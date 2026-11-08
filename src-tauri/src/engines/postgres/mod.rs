@@ -4,12 +4,15 @@
 //! spans runs and a cancel request (PostgreSQL's out-of-band CancelRequest) only hits that session. Another database of the same
 //! server is reached with [`PgEngine::connect_database`], since a PostgreSQL connection is bound to one database.
 
+pub mod adapter;
 mod catalog;
+pub mod descriptor;
 pub mod session;
 #[cfg(test)]
 mod tests;
 pub mod types;
 
+pub use adapter::{PostgresAdapter, POSTGRES};
 pub use session::PgSession;
 
 use crate::engines::common::split::Dialect;

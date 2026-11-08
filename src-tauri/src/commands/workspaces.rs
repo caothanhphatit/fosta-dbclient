@@ -40,7 +40,7 @@ pub fn save_workspace(state: &AppState, workspace: WorkspaceMeta, relax_confirma
         Ok(())
     })?;
     if !changes.is_empty() {
-        state.db.gateway.audit(AuditEntry {
+        state.engines.gateway.audit(AuditEntry {
             caller: "settings".to_owned(),
             workspace_id,
             workspace: workspace_name,
@@ -68,7 +68,7 @@ pub async fn delete_workspace(state: &AppState, id: String) -> AppResult<AppConf
         state.tasks.stop(&task.id);
     }
     for profile in &doomed.connections {
-        state.db.disconnect(&profile.id).await;
+        state.engines.disconnect(&profile.id).await;
         secrets::forget_password(&profile.id)?;
     }
     state.config.update(|config| config.remove_workspace(&id).map(|_| ()))

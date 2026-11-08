@@ -52,6 +52,21 @@ fn default_driver() -> String {
     DEFAULT_DRIVER.into()
 }
 
+impl ConnectionProfile {
+    /// What the engine needs to connect (secrets are passed separately).
+    pub fn spec(&self) -> crate::contract::ConnectionSpec {
+        crate::contract::ConnectionSpec {
+            engine: self.driver.clone(),
+            host: self.host.clone(),
+            port: self.port,
+            user: self.user.clone(),
+            database: self.database.clone().filter(|database| !database.is_empty()),
+            options: self.options.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 /// The editable identity of a workspace, without its contents.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -15,9 +15,11 @@
 //! - **Pub/Sub and MONITOR**: need a streaming channel to the UI (event sink port). The console refuses `SUBSCRIBE`,
 //!   `PSUBSCRIBE`, `SSUBSCRIBE` and `MONITOR` with a message instead of hanging a connection.
 
+pub mod adapter;
 pub mod classify;
 pub mod connection;
 pub mod console;
+pub mod descriptor;
 pub mod edit;
 pub mod scan;
 pub mod tree;
@@ -26,6 +28,8 @@ pub mod values;
 
 #[cfg(test)]
 mod live_tests;
+
+pub use adapter::{RedisAdapter, REDIS};
 
 use crate::error::AppError;
 

@@ -73,7 +73,7 @@ macro_rules! for_each_command {
             [async] table_relations(connection_id: String, database: String, table: String)
                 -> $crate::error::AppResult<$crate::drivers::relations::TableRelations> = $crate::commands::data::table_relations;
             [async] open_session(connection_id: String, session_id: String) -> $crate::error::AppResult<()> = $crate::commands::data::open_session;
-            [sync] close_session(session_id: String) -> () = $crate::commands::data::close_session;
+            [async] close_session(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::data::close_session;
             [async] run_sql(session_id: String, database: Option<String>, sql: String, confirmation: Option<$crate::gateway::Confirmation>)
                 -> $crate::error::AppResult<$crate::drivers::types::QueryOutcome> = $crate::commands::data::run_sql;
             [async] cancel_sql(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::data::cancel_sql;

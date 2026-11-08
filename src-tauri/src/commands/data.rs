@@ -20,8 +20,8 @@ pub(crate) fn gateway_context(state: &AppState, connection_id: &str) -> AppResul
 
 pub async fn list_databases(state: &AppState, connection_id: String) -> AppResult<Vec<String>> {
     state
-        .db
-        .call(&connection_id, "listed the databases", |driver| async move {
+        .engines
+        .call_legacy(&connection_id, "listed the databases", |driver| async move {
             driver.list_databases().await
         })
         .await
@@ -30,8 +30,8 @@ pub async fn list_databases(state: &AppState, connection_id: String) -> AppResul
 /// Tables, columns and foreign keys of one database, for the ER diagram.
 pub async fn schema_graph(state: &AppState, connection_id: String, database: String) -> AppResult<schema::SchemaGraph> {
     state
-        .db
-        .call(&connection_id, "read the schema", |driver| async move {
+        .engines
+        .call_legacy(&connection_id, "read the schema", |driver| async move {
             schema::schema_graph(driver.as_ref(), &database).await
         })
         .await
@@ -49,13 +49,13 @@ pub async fn create_database(
         return Err(AppError::new("Database name is required"));
     }
     let context = gateway_context(state, &connection_id)?;
-    gateway::create_database(&state.db, &context, name, first_collection.as_deref(), confirmation.as_ref()).await
+    gateway::create_database(&state.engines, &context, name, first_collection.as_deref(), confirmation.as_ref()).await
 }
 
 pub async fn list_tables(state: &AppState, connection_id: String, database: String) -> AppResult<Vec<TableInfo>> {
     state
-        .db
-        .call(&connection_id, "listed the tables", |driver| async move {
+        .engines
+        .call_legacy(&connection_id, "listed the tables", |driver| async move {
             driver.list_tables(&database).await
         })
         .await
@@ -63,8 +63,8 @@ pub async fn list_tables(state: &AppState, connection_id: String, database: Stri
 
 pub async fn describe_table(state: &AppState, connection_id: String, database: String, table: String) -> AppResult<TableDesign> {
     state
-        .db
-        .call(&connection_id, "described a table", |driver| async move {
+        .engines
+        .call_legacy(&connection_id, "described a table", |driver| async move {
             driver.describe_table(&database, &table).await
         })
         .await
@@ -72,7 +72,7 @@ pub async fn describe_table(state: &AppState, connection_id: String, database: S
 
 pub async fn browse_table(state: &AppState, request: BrowseRequest) -> AppResult<TablePage> {
     let context = gateway_context(state, &request.connection_id)?;
-    gateway::browse(&state.db, &context, &request).await
+    gateway::browse(&state.engines, &context, &request).await
 }
 
 /// Saves grid edits (`caller` "gridSave", the default) or imported rows ("import"; batches of
@@ -91,7 +91,7 @@ pub async fn apply_changes(
     let context = gateway_context(state, &connection_id)?;
     let caller = caller.unwrap_or(Caller::GridSave);
     gateway::apply_changes(
-        &state.db,
+        &state.engines,
         &context,
         caller,
         &database,
@@ -105,19 +105,20 @@ pub async fn apply_changes(
 
 pub async fn table_relations(state: &AppState, connection_id: String, database: String, table: String) -> AppResult<TableRelations> {
     state
-        .db
-        .call(&connection_id, "read the relations of a table", |driver| async move {
+        .engines
+        .call_legacy(&connection_id, "read the relations of a table", |driver| async move {
             driver.table_relations(&database, &table).await
         })
         .await
 }
 
 pub async fn open_session(state: &AppState, connection_id: String, session_id: String) -> AppResult<()> {
-    state.db.open_session(&connection_id, session_id).await
+    state.engines.open_legacy_session(&connection_id, session_id).await
 }
 
-pub fn close_session(state: &AppState, session_id: String) {
-    state.db.close_session(&session_id);
+pub async fn close_session(state: &AppState, session_id: String) -> AppResult<()> {
+    state.engines.close_session(&session_id).await;
+    Ok(())
 }
 
 pub async fn run_sql(
@@ -127,16 +128,16 @@ pub async fn run_sql(
     sql: String,
     confirmation: Option<Confirmation>,
 ) -> AppResult<QueryOutcome> {
-    let context = gateway_context(state, &state.db.session_connection(&session_id)?)?;
-    gateway::run_query(&state.db, &context, &session_id, database, sql, confirmation.as_ref()).await
+    let context = gateway_context(state, &state.engines.session_connection(&session_id)?)?;
+    gateway::run_query(&state.engines, &context, &session_id, database, sql, confirmation.as_ref()).await
 }
 
 pub async fn cancel_sql(state: &AppState, session_id: String) -> AppResult<()> {
-    state.db.cancel_query(&session_id).await
+    state.engines.cancel(&session_id).await
 }
 
 /// Begin / Commit / Rollback / auto-commit on / off / status for a query tab's session.
 pub async fn sql_transaction(state: &AppState, session_id: String, op: TransactionOp) -> AppResult<TransactionState> {
-    let context = gateway_context(state, &state.db.session_connection(&session_id)?)?;
-    gateway::transaction(&state.db, &context, &session_id, op).await
+    let context = gateway_context(state, &state.engines.session_connection(&session_id)?)?;
+    gateway::transaction(&state.engines, &context, &session_id, op).await
 }

@@ -7,7 +7,6 @@
 use std::collections::{HashMap, HashSet};
 
 use futures_util::{stream, StreamExt};
-use serde::Serialize;
 
 use crate::{
     drivers::{relations::Relation, types::TableInfo, Driver},
@@ -19,34 +18,7 @@ const MAX_TABLES: usize = 400;
 /// Describe calls in flight at once; keeps small servers responsive.
 const CONCURRENCY: usize = 8;
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SchemaColumn {
-    pub name: String,
-    pub column_type: String,
-    pub nullable: bool,
-    pub primary: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SchemaTable {
-    pub name: String,
-    pub kind: String,
-    pub rows: Option<u64>,
-    pub comment: String,
-    pub columns: Vec<SchemaColumn>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SchemaGraph {
-    pub tables: Vec<SchemaTable>,
-    /// Foreign keys whose both ends are in `tables`.
-    pub relations: Vec<Relation>,
-    /// Total tables in the database; more than `tables.len()` when capped.
-    pub total_tables: usize,
-}
+pub use crate::contract::schema::{SchemaColumn, SchemaGraph, SchemaTable};
 
 /// A whole database's catalog read in bulk by a driver.
 #[derive(Debug, Default)]

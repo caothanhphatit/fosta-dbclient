@@ -8,8 +8,9 @@ use serde_json::{json, Value};
 
 use super::{prompt::truncate, ChatContext, ChatEvent, ChatSink, ToolCall, UiAction, Wire};
 use crate::{
-    drivers::{types::TableDesign, DbManager},
+    drivers::types::TableDesign,
     gateway,
+    runtime::ConnectionManager,
     schema::{self, SchemaGraph},
 };
 
@@ -108,11 +109,16 @@ pub(super) fn describe_call(call: &ToolCall, context: &ChatContext) -> String {
     }
 }
 
-pub(super) async fn run_tool(db: &DbManager, context: &ChatContext, call: &ToolCall, events: &dyn ChatSink) -> Result<String, String> {
+pub(super) async fn run_tool(
+    db: &ConnectionManager,
+    context: &ChatContext,
+    call: &ToolCall,
+    events: &dyn ChatSink,
+) -> Result<String, String> {
     // Every tool is registered with the gateway as metadata-only or view-opening; anything else is refused.
     gateway::assistant_tool_effect(&call.name).map_err(|error| error.to_string())?;
     let connection_id = context.connection_id.as_deref().ok_or("No connection is open")?;
-    let driver = db.driver(connection_id).map_err(|error| error.to_string())?;
+    let driver = db.legacy_driver(connection_id).map_err(|error| error.to_string())?;
     let argument = |key: &str| {
         call.input
             .get(key)
@@ -408,9 +414,9 @@ mod tests {
 
     #[tokio::test]
     async fn no_assistant_tool_runs_a_statement_or_changes_data() {
-        let db = DbManager::default();
+        let db = ConnectionManager::default();
         let recorder = Arc::new(Recorder::default());
-        db.insert_driver("c", recorder.clone());
+        db.insert_legacy("c", recorder.clone());
         let context: ChatContext = serde_json::from_value(json!({ "connectionId": "c", "database": "shop" })).unwrap();
         let seen = Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = seen.clone();

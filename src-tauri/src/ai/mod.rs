@@ -29,9 +29,9 @@ use self::{
     tools::{append_tool_results, describe_call, run_tool, tool_definitions, ToolSpec},
 };
 use crate::{
-    drivers::DbManager,
     error::{AppError, AppResult},
     lock::lock,
+    runtime::ConnectionManager,
 };
 
 const MAX_TOOL_ROUNDS: usize = 8;
@@ -322,7 +322,7 @@ struct Turn {
 pub async fn chat(
     settings: &AiSettings,
     api_key: Option<String>,
-    db: &DbManager,
+    db: &ConnectionManager,
     runs: &AiRuns,
     request: ChatRequest,
     events: &dyn ChatSink,
@@ -396,7 +396,7 @@ pub async fn probe(settings: &AiSettings, api_key: Option<String>) -> AppResult<
 async fn run(
     settings: &AiSettings,
     api_key: Option<String>,
-    db: &DbManager,
+    db: &ConnectionManager,
     request: ChatRequest,
     events: &dyn ChatSink,
 ) -> AppResult<String> {

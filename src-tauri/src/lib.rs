@@ -22,10 +22,12 @@ pub mod files;
 pub mod gateway;
 pub mod history;
 mod job;
+pub mod lang;
 #[cfg(test)]
 mod live_tests;
 mod lock;
 pub mod logging;
+pub mod net;
 #[cfg(test)]
 mod perf_tests;
 pub mod runtime;
@@ -42,7 +44,7 @@ use crate::{error::AppResult, events::EventEmitter};
 
 pub struct AppState {
     pub config: config::ConfigStore,
-    pub db: drivers::DbManager,
+    pub engines: runtime::ConnectionManager,
     pub tasks: Arc<tasks::TaskManager>,
     pub ai: ai::AiRuns,
     pub history: Arc<history::HistoryStore>,
@@ -62,7 +64,7 @@ impl AppState {
         }
         Ok(Self {
             config,
-            db: drivers::DbManager::default(),
+            engines: runtime::ConnectionManager::default(),
             tasks,
             ai: ai::AiRuns::default(),
             history: Arc::new(history::HistoryStore::open_default()?),

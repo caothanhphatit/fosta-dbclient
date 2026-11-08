@@ -13,14 +13,14 @@ use crate::{
 const EMBEDDING_PROBE: &str = "Fosta Studio embedding test";
 
 pub async fn vector_info(state: &AppState, connection_id: String, database: String, table: String) -> AppResult<VectorInfo> {
-    if !state.db.is_mysql(&connection_id)? {
+    if !state.engines.is_mysql(&connection_id)? {
         return Ok(VectorInfo {
             supported: false,
             columns: Vec::new(),
             indexes: Vec::new(),
         });
     }
-    let mut conn = state.db.mysql_conn(&connection_id).await?;
+    let mut conn = state.engines.mysql_conn(&connection_id).await?;
     vector::vector_info(&mut conn, &database, &table).await
 }
 
@@ -32,16 +32,16 @@ pub async fn fetch_vector(
     column: String,
     key: Vec<CellValue>,
 ) -> AppResult<Vec<f32>> {
-    let mut conn = state.db.mysql_conn(&connection_id).await?;
+    let mut conn = state.engines.mysql_conn(&connection_id).await?;
     vector::fetch_vector(&mut conn, &database, &table, &column, &key).await
 }
 
 pub async fn vector_search(state: &AppState, request: VectorSearchRequest) -> AppResult<VectorSearchResult> {
     // The optional filter is spliced into the search query: it must be one condition, like a grid filter.
     let context = super::data::gateway_context(state, &request.connection_id)?;
-    let engine = state.db.driver(&request.connection_id)?.engine();
-    gateway::check_filter(&state.db, &context, engine, request.filter.as_deref())?;
-    let mut conn = state.db.mysql_conn(&request.connection_id).await?;
+    let engine = state.engines.legacy_engine(&request.connection_id)?;
+    gateway::check_filter(&state.engines, &context, engine, request.filter.as_deref())?;
+    let mut conn = state.engines.mysql_conn(&request.connection_id).await?;
     let query = match &request.query {
         QueryVector::Row { key } => vector::fetch_vector(&mut conn, &request.database, &request.table, &request.column, key).await?,
         QueryVector::Literal { text } => vector::parse_literal(text)?,
@@ -58,7 +58,7 @@ pub async fn vector_health(
     column: String,
     sample: u32,
 ) -> AppResult<Vec<HealthCheck>> {
-    let mut conn = state.db.mysql_conn(&connection_id).await?;
+    let mut conn = state.engines.mysql_conn(&connection_id).await?;
     vector::health(&mut conn, &database, &table, &column, sample).await
 }
 
@@ -71,7 +71,7 @@ pub async fn index_recall(
     k: u32,
     queries: u32,
 ) -> AppResult<RecallReport> {
-    let mut conn = state.db.mysql_conn(&connection_id).await?;
+    let mut conn = state.engines.mysql_conn(&connection_id).await?;
     vector::index_recall(&mut conn, &database, &table, &column, k, queries).await
 }
 

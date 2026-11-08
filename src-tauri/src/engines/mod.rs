@@ -9,10 +9,19 @@
 //! (streaming, cancel, timeout, transaction state) and applies row changes in one transaction where the engine has them.
 #![allow(dead_code)]
 
+#[cfg(feature = "engine-clickhouse")]
 pub mod clickhouse;
 pub mod common;
+#[cfg(feature = "engine-elastic")]
 pub mod elasticsearch;
+pub mod mongo;
+pub mod mssql;
+pub mod mysql;
+#[cfg(feature = "engine-oracle")]
 pub mod oracle;
+#[cfg(feature = "engine-postgres")]
 pub mod postgres;
+#[cfg(feature = "engine-redis")]
 pub mod redis;
+#[cfg(feature = "engine-sqlite")]
 pub mod sqlite;

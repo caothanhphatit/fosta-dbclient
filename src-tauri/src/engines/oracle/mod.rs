@@ -8,11 +8,14 @@
 //! off; Oracle opens a transaction implicitly on the first change, and the state is read from
 //! `DBMS_TRANSACTION.LOCAL_TRANSACTION_ID`.
 
+pub mod adapter;
+pub mod descriptor;
 pub mod session;
 #[cfg(test)]
 mod tests;
 pub mod types;
 
+pub use adapter::{OracleAdapter, ORACLE};
 pub use session::OraSession;
 
 use crate::engines::common::split::Dialect;

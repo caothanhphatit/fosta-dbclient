@@ -15,6 +15,7 @@
 //! OpenSearch differences handled here: PIT (`_search/point_in_time`, `pit_id`), SQL (`_plugins/_sql`, JDBC format),
 //! ISM policies (`_plugins/_ism/policies`, states instead of phases) instead of ILM, no ES|QL (PPL is deferred).
 
+pub mod adapter;
 pub mod admin;
 pub mod catalog;
 pub mod classify;
@@ -22,6 +23,7 @@ pub mod client;
 pub mod config;
 pub mod connection;
 pub mod console;
+pub mod descriptor;
 pub mod docs;
 pub mod mapping;
 pub mod query_lang;
@@ -29,3 +31,5 @@ pub mod search;
 
 #[cfg(test)]
 mod live_tests;
+
+pub use adapter::{ElasticAdapter, ELASTICSEARCH, OPENSEARCH};

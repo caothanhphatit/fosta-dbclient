@@ -4,11 +4,14 @@
 //! edits, and each session opens its own connection to the same file so `BEGIN … COMMIT` can span runs. Cancelling uses
 //! SQLite's interrupt handle; the statement timeout is a watchdog that interrupts a statement once it runs too long.
 
+pub mod adapter;
+pub mod descriptor;
 pub mod session;
 #[cfg(test)]
 mod tests;
 pub mod types;
 
+pub use adapter::{SqliteAdapter, SQLITE};
 pub use session::SqliteSession;
 
 use crate::engines::common::split::Dialect;

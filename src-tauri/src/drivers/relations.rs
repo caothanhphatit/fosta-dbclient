@@ -5,17 +5,7 @@ use serde::Serialize;
 
 use super::types::TextRow;
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Relation {
-    pub constraint: String,
-    pub database: String,
-    pub table: String,
-    pub columns: Vec<String>,
-    pub referenced_database: String,
-    pub referenced_table: String,
-    pub referenced_columns: Vec<String>,
-}
+pub use crate::contract::schema::Relation;
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]

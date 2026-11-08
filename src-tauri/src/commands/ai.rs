@@ -53,7 +53,7 @@ pub async fn test_ai(_state: &AppState, settings: AiSettings, api_key: Option<St
 /// Streams one assistant reply over `on_event`; resolves with the full text.
 pub async fn ai_chat(state: &AppState, request: ChatRequest, on_event: &dyn ChatSink) -> AppResult<String> {
     let (settings, api_key) = chat_settings(&state.config.snapshot(), &request)?;
-    ai::chat(&settings, api_key, &state.db, &state.ai, request, on_event).await
+    ai::chat(&settings, api_key, &state.engines, &state.ai, request, on_event).await
 }
 
 pub fn ai_cancel(state: &AppState, id: String) {

@@ -2,8 +2,9 @@
 
 use crate::{
     config::{AppConfig, ConnectionProfile},
-    drivers,
+    contract::ConnectSecrets,
     error::{AppError, AppResult, PASSWORD_REQUIRED},
+    runtime::ConnectionManager,
     secrets, AppState,
 };
 
@@ -19,7 +20,7 @@ pub fn save_connection(
 }
 
 pub async fn delete_connection(state: &AppState, id: String) -> AppResult<AppConfig> {
-    state.db.disconnect(&id).await;
+    state.engines.disconnect(&id).await;
     secrets::forget_password(&id)?;
     state.config.update(|config| {
         config.remove_connection(&id);
@@ -29,17 +30,22 @@ pub async fn delete_connection(state: &AppState, id: String) -> AppResult<AppCon
 
 pub async fn test_connection(_state: &AppState, profile: ConnectionProfile, password: Option<String>) -> AppResult<String> {
     let password = resolve_password(&profile.id, password)?;
-    drivers::probe(&profile, &password).await
+    let info = ConnectionManager::probe(profile.spec(), ConnectSecrets::password(&password)).await?;
+    Ok(info.server.version)
 }
 
 pub async fn connect(state: &AppState, id: String, password: Option<String>) -> AppResult<String> {
     let profile = state.config.connection(&id)?;
     let password = resolve_password(&id, password)?;
-    state.db.connect(&profile, &password).await
+    let info = state
+        .engines
+        .connect(&id, profile.spec(), ConnectSecrets::password(&password))
+        .await?;
+    Ok(info.server.version)
 }
 
 pub async fn disconnect(state: &AppState, id: String) -> AppResult<()> {
-    state.db.disconnect(&id).await;
+    state.engines.disconnect(&id).await;
     Ok(())
 }
 

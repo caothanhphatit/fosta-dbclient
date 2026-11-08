@@ -34,10 +34,11 @@ use crate::{
     config::AppConfig,
     drivers::{
         types::{BrowseRequest, QueryOutcome, RowChange, TablePage, TransactionOp, TransactionState},
-        DbManager, Engine, Limits,
+        Engine, Limits,
     },
     error::{AppError, AppResult},
     lock::lock,
+    runtime::ConnectionManager,
 };
 
 pub const CONFIRMATION_REQUIRED: &str = "CONFIRMATION_REQUIRED";
@@ -436,18 +437,18 @@ fn audit_entry(request: &Request<'_>, outcome: Outcome, detail: &str) -> AuditEn
 // --- Gated operations: what the Tauri commands call -------------------------------------
 
 /// `browse_table`: validates the filter as one condition, then reads a page.
-pub async fn browse(db: &DbManager, context: &Context, request: &BrowseRequest) -> AppResult<TablePage> {
-    let driver = db.driver(&request.connection_id)?;
-    check_filter(db, context, driver.engine(), request.filter.as_deref())?;
+pub async fn browse(db: &ConnectionManager, context: &Context, request: &BrowseRequest) -> AppResult<TablePage> {
+    let engine = db.legacy_engine(&request.connection_id)?;
+    check_filter(db, context, engine, request.filter.as_deref())?;
     let (request, limits) = (request.clone(), context.limits());
-    db.call(&request.connection_id.clone(), "read a page of rows", |driver| async move {
+    db.call_legacy(&request.connection_id.clone(), "read a page of rows", |driver| async move {
         driver.browse_table(&request, &limits).await
     })
     .await
 }
 
 /// Validates a grid (or vector-search) filter and audits a rejection.
-pub fn check_filter(db: &DbManager, context: &Context, engine: Engine, filter: Option<&str>) -> AppResult<()> {
+pub fn check_filter(db: &ConnectionManager, context: &Context, engine: Engine, filter: Option<&str>) -> AppResult<()> {
     validate_filter(engine, filter).inspect_err(|error| {
         if error.code() == Some(INVALID_FILTER) {
             db.gateway.audit(AuditEntry {
@@ -469,7 +470,7 @@ pub fn check_filter(db: &DbManager, context: &Context, engine: Engine, filter: O
 /// `apply_changes` from a grid save or an import.
 #[allow(clippy::too_many_arguments)]
 pub async fn apply_changes(
-    db: &DbManager,
+    db: &ConnectionManager,
     context: &Context,
     caller: Caller,
     database: &str,
@@ -498,7 +499,7 @@ pub async fn apply_changes(
         reusable: import_run.is_some(),
     })?;
     let (database, table) = (database.to_owned(), table.to_owned());
-    db.call(&context.connection_id, "saved row changes", |driver| async move {
+    db.call_legacy(&context.connection_id, "saved row changes", |driver| async move {
         driver.apply_changes(&database, &table, changes).await
     })
     .await
@@ -506,7 +507,7 @@ pub async fn apply_changes(
 
 /// "New database…" (DDL).
 pub async fn create_database(
-    db: &DbManager,
+    db: &ConnectionManager,
     context: &Context,
     name: &str,
     first_collection: Option<&str>,
@@ -531,7 +532,7 @@ pub async fn create_database(
         reusable: false,
     })?;
     let (name, first_collection) = (name.to_owned(), first_collection.map(str::to_owned));
-    db.call(&context.connection_id, "created a database", |driver| async move {
+    db.call_legacy(&context.connection_id, "created a database", |driver| async move {
         driver.create_database(&name, first_collection.as_deref()).await
     })
     .await
@@ -539,15 +540,15 @@ pub async fn create_database(
 
 /// `run_sql` from a query tab: classified, checked against the rules, then run with the limits.
 pub async fn run_query(
-    db: &DbManager,
+    db: &ConnectionManager,
     context: &Context,
     session_id: &str,
     database: Option<String>,
     text: String,
     confirmation: Option<&Confirmation>,
 ) -> AppResult<QueryOutcome> {
-    let driver = db.session_driver(session_id)?;
-    let classification = classify_for(driver.engine(), &text);
+    let engine = db.legacy_engine(&db.session_connection(session_id)?)?;
+    let classification = classify_for(engine, &text);
     let binding = format!("{}\u{0}{text}", database.as_deref().unwrap_or_default());
     db.gateway.authorize(&Request {
         caller: Caller::QueryTab,
@@ -560,7 +561,7 @@ pub async fn run_query(
     })?;
     tracing::debug!(session = session_id, statement = %crate::logging::statement_excerpt(&text), "run");
     let (session, limits) = (session_id.to_owned(), context.limits());
-    db.call_session(session_id, "ran a query", |driver| async move {
+    db.call_legacy_session(session_id, "ran a query", |driver| async move {
         driver.run_query(&session, database, text, &limits).await
     })
     .await
@@ -568,7 +569,7 @@ pub async fn run_query(
 
 /// Begin / Commit / Rollback / auto-commit from the query toolbar: always allowed, even in a
 /// Read-only workspace (Begin then opens a read-only transaction where the engine has one).
-pub async fn transaction(db: &DbManager, context: &Context, session_id: &str, op: TransactionOp) -> AppResult<TransactionState> {
+pub async fn transaction(db: &ConnectionManager, context: &Context, session_id: &str, op: TransactionOp) -> AppResult<TransactionState> {
     let classification = Classification::single(StatementInfo {
         category: Category::Transaction,
         kind: format!("{op:?}").to_uppercase(),
@@ -587,7 +588,7 @@ pub async fn transaction(db: &DbManager, context: &Context, session_id: &str, op
         reusable: false,
     })?;
     let (session, limits) = (session_id.to_owned(), context.limits());
-    db.call_session(session_id, "changed the transaction state", |driver| async move {
+    db.call_legacy_session(session_id, "changed the transaction state", |driver| async move {
         driver.transaction(&session, op, &limits).await
     })
     .await

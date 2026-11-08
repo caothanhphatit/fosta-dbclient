@@ -4,9 +4,9 @@ use serde::Serialize;
 
 use crate::{
     config::AppConfig,
-    drivers::OpenConnection,
     error::{AppError, AppResult},
     logging::{self, RecentError},
+    runtime::manager::OpenConnection,
     AppState,
 };
 
@@ -34,7 +34,7 @@ pub fn diagnostics(state: &AppState) -> Diagnostics {
         os_version: os_version(),
         log_folder: logging::log_dir().map(|dir| dir.display().to_string()),
         debug_logging: state.config.snapshot().debug_logging,
-        connections: state.db.open_connections(),
+        connections: state.engines.open_connections(),
         recent_errors: logging::recent_errors(),
     }
 }

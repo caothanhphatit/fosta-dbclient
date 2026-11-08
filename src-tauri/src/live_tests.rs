@@ -6,16 +6,18 @@ use std::collections::HashMap;
 
 use crate::{
     config::ConnectionProfile,
+    contract::ConnectSecrets,
     drivers::{
         self,
         types::{BrowseRequest, CellValue, RowChange, TransactionOp},
-        DbManager, Driver, Limits,
+        Driver, Limits,
     },
     gateway::{
         self,
         rules::{self, Preset, SafetySettings},
         Confirmation, Context,
     },
+    runtime::ConnectionManager,
 };
 
 fn profile(id: &str, driver: &str, port: u16, user: &str, database: &str, options: &[(&str, &str)]) -> ConnectionProfile {
@@ -504,9 +506,13 @@ async fn live_assistant_tools() {
         println!("FOSTA_KEY not set; skipped");
         return;
     };
-    let manager = crate::drivers::DbManager::default();
+    let manager = ConnectionManager::default();
     manager
-        .connect(&profile("chat-maria", "mariadb", 3306, "root", "shop", &[]), "studio-root")
+        .connect(
+            "chat-maria",
+            profile("chat-maria", "mariadb", 3306, "root", "shop", &[]).spec(),
+            ConnectSecrets::password("studio-root"),
+        )
         .await
         .expect("connect");
     let settings = crate::ai::AiSettings {
@@ -563,18 +569,23 @@ fn gate(connection_id: &str, preset: Preset) -> Context {
 }
 
 /// Runs app-internal setup SQL in a throwaway session (no gateway: this is the test's own fixture).
-async fn setup(manager: &DbManager, connection_id: &str, database: &str, sql: &str) {
+async fn setup(manager: &ConnectionManager, connection_id: &str, database: &str, sql: &str) {
     let session = format!("setup-{connection_id}");
-    manager.open_session(connection_id, session.clone()).await.expect("setup session");
-    let driver = manager.session_driver(&session).expect("driver");
+    manager
+        .open_legacy_session(connection_id, session.clone())
+        .await
+        .expect("setup session");
+    let driver = manager
+        .legacy_driver(&manager.session_connection(&session).unwrap())
+        .expect("driver");
     driver
         .run_query(&session, Some(database.into()), sql.into(), &Limits::default())
         .await
         .unwrap_or_else(|error| panic!("setup {sql}: {error}"));
-    manager.close_session(&session);
+    manager.close_session(&session).await;
 }
 
-async fn probe_rows(manager: &DbManager, connection_id: &str, database: &str) -> u64 {
+async fn probe_rows(manager: &ConnectionManager, connection_id: &str, database: &str) -> u64 {
     let request = BrowseRequest {
         connection_id: connection_id.into(),
         ..browse(database, "gate_probe", None)
@@ -595,8 +606,11 @@ async fn live_gateway_rejects_injected_filters() {
         (mssql_profile("gate-mssql"), "Studio#Pass2026", "ERP"),
     ];
     for (profile, password, database) in cases {
-        let manager = DbManager::default();
-        manager.connect(&profile, password).await.expect("connect");
+        let manager = ConnectionManager::default();
+        manager
+            .connect(&profile.id, profile.spec(), ConnectSecrets::password(password))
+            .await
+            .expect("connect");
         let id = profile.id.as_str();
         let create = if profile.driver == "mssql" {
             "IF OBJECT_ID('dbo.gate_probe') IS NULL CREATE TABLE dbo.gate_probe (id INT PRIMARY KEY); \
@@ -622,7 +636,7 @@ async fn live_gateway_rejects_injected_filters() {
         );
         if profile.driver == "mariadb" {
             // Defence in depth: the driver itself runs browse queries as prepared statements.
-            let direct = manager.driver(id).unwrap().browse_table(&injected, &Limits::default()).await;
+            let direct = manager.legacy_driver(id).unwrap().browse_table(&injected, &Limits::default()).await;
             assert!(direct.is_err(), "a prepared statement cannot carry a second statement");
             assert_eq!(probe_rows(&manager, id, database).await, 1);
         }
@@ -641,9 +655,12 @@ async fn live_gateway_rejects_injected_filters() {
 #[tokio::test]
 #[ignore]
 async fn live_gateway_rules_and_confirmation() {
-    let manager = DbManager::default();
+    let manager = ConnectionManager::default();
     let profile = profile("rules-maria", "mariadb", 3306, "root", "shop", &[]);
-    manager.connect(&profile, "studio-root").await.expect("connect");
+    manager
+        .connect(&profile.id, profile.spec(), ConnectSecrets::password("studio-root"))
+        .await
+        .expect("connect");
     setup(
         &manager,
         "rules-maria",
@@ -651,7 +668,7 @@ async fn live_gateway_rules_and_confirmation() {
         "CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe",
     )
     .await;
-    manager.open_session("rules-maria", "tab".into()).await.expect("session");
+    manager.open_legacy_session("rules-maria", "tab".into()).await.expect("session");
     let insert = "INSERT INTO gate_probe VALUES (7)";
 
     let read_only = gate("rules-maria", Preset::ReadOnly);
@@ -671,7 +688,7 @@ async fn live_gateway_rules_and_confirmation() {
     .expect("reads still run");
     assert_eq!(read.sets[0].rows[0][0].as_deref(), Some("0"));
     // The session itself is read-only now: even bypassing the gateway the server refuses the write.
-    let driver = manager.session_driver("tab").unwrap();
+    let driver = manager.legacy_driver(&manager.session_connection("tab").unwrap()).unwrap();
     let engine_refusal = driver
         .run_query(
             "tab",
@@ -728,7 +745,7 @@ async fn live_gateway_rules_and_confirmation() {
         "max_statement_time stops the query"
     );
 
-    manager.close_session("tab");
+    manager.close_session("tab").await;
     setup(&manager, "rules-maria", "shop", "DROP TABLE gate_probe").await;
     manager.disconnect("rules-maria").await;
 }
@@ -742,8 +759,11 @@ async fn live_transactions() {
         (mssql_profile("tx-mssql"), "Studio#Pass2026", "ERP"),
     ];
     for (profile, password, database) in cases {
-        let manager = DbManager::default();
-        manager.connect(&profile, password).await.expect("connect");
+        let manager = ConnectionManager::default();
+        manager
+            .connect(&profile.id, profile.spec(), ConnectSecrets::password(password))
+            .await
+            .expect("connect");
         let id = profile.id.as_str();
         let create = if profile.driver == "mssql" {
             "IF OBJECT_ID('dbo.gate_probe') IS NULL CREATE TABLE dbo.gate_probe (id INT PRIMARY KEY); DELETE FROM dbo.gate_probe"
@@ -751,7 +771,7 @@ async fn live_transactions() {
             "CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe"
         };
         setup(&manager, id, database, create).await;
-        manager.open_session(id, "tx".into()).await.expect("session");
+        manager.open_legacy_session(id, "tx".into()).await.expect("session");
         let context = gate(id, Preset::Open);
         let run = |sql: &'static str| gateway::run_query(&manager, &context, "tx", Some(database.into()), sql.into(), None);
 
@@ -796,7 +816,7 @@ async fn live_transactions() {
         assert_eq!(count.sets[0].rows[0][0].as_deref(), Some("1"), "{}: committed", profile.driver);
         println!("{}: transaction states {idle:?} → {begun:?} → {rolled:?}", profile.driver);
 
-        manager.close_session("tx");
+        manager.close_session("tx").await;
         setup(&manager, id, database, "DROP TABLE gate_probe").await;
         manager.disconnect(id).await;
     }
@@ -806,10 +826,13 @@ async fn live_transactions() {
 #[tokio::test]
 #[ignore]
 async fn live_gateway_mongo() {
-    let manager = DbManager::default();
+    let manager = ConnectionManager::default();
     let profile = profile("gate-mongo", "mongodb", 27017, "root", "admin", &[]);
-    manager.connect(&profile, "studio-root").await.expect("connect");
-    manager.open_session("gate-mongo", "m".into()).await.expect("session");
+    manager
+        .connect(&profile.id, profile.spec(), ConnectSecrets::password("studio-root"))
+        .await
+        .expect("connect");
+    manager.open_legacy_session("gate-mongo", "m".into()).await.expect("session");
     let read_only = gate("gate-mongo", Preset::ReadOnly);
     let insert = r#"{ "insert": "clicks", "documents": [ { "type": "probe" } ] }"#;
     let blocked = gateway::run_query(&manager, &read_only, "m", Some("events".into()), insert.into(), None)
@@ -839,7 +862,7 @@ async fn live_gateway_mongo() {
     };
     let error = gateway::browse(&manager, &read_only, &request).await.expect_err("$where rejected");
     assert_eq!(error.code(), Some(gateway::filter::INVALID_FILTER));
-    manager.close_session("m");
+    manager.close_session("m").await;
     manager.disconnect("gate-mongo").await;
 }
 
