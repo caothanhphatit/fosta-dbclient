@@ -2140,15 +2140,25 @@ pre.field-value.text {
   box-shadow: 0 0 0 2px var(--surface) inset;
 }
 
+/* Top centre, over the app toolbar: away from dialog footers, the Apply/Discard bar and the pager, so a toast
+   never sits on a button the user is about to click. The column itself lets clicks through its gaps. */
 .toasts {
   position: fixed;
-  right: 16px;
-  bottom: 36px;
+  top: 8px;
+  left: 50%;
   z-index: 60;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 8px;
+  width: max-content;
   max-width: min(460px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.toasts > .toast {
+  pointer-events: auto;
 }
 
 .toast {
@@ -2174,7 +2184,7 @@ pre.field-value.text {
 
 @keyframes slide-in {
   from {
-    transform: translateY(8px);
+    transform: translateY(-8px);
     opacity: 0;
   }
 }
