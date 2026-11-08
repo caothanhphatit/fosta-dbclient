@@ -82,10 +82,14 @@ fn table_from_description(kind: &str, description: &ObjectDescription) -> Comple
     )
 }
 
-/// A table from the engine's schema graph (matched by name); `None` when the graph does not have it.
+/// A table from the engine's schema graph; `None` when the graph does not have it. Graphs name tables outside the
+/// default schema `schema.table` (SQL Server's non-`dbo` tables), so both spellings match, and a qualified referenced
+/// table is split into its schema and name.
 fn table_from_graph(node: &ObjectNode, kind: &str, graph: &SchemaGraph) -> Option<CompletionTable> {
     let object = node.object.as_ref()?;
-    let table = graph.tables.iter().find(|table| table.name == object.name)?;
+    let qualified = object.schema.as_ref().map(|schema| format!("{schema}.{}", object.name));
+    let is_this = |name: &str| name == object.name || qualified.as_deref() == Some(name);
+    let table = graph.tables.iter().find(|table| is_this(&table.name))?;
     let primary: Vec<String> = table
         .columns
         .iter()
@@ -95,12 +99,18 @@ fn table_from_graph(node: &ObjectNode, kind: &str, graph: &SchemaGraph) -> Optio
     let foreign: Vec<ForeignKeyPart<'_>> = graph
         .relations
         .iter()
-        .filter(|relation| relation.table == object.name)
-        .map(|relation| ForeignKeyPart {
-            columns: &relation.columns,
-            ref_schema: None,
-            ref_table: &relation.referenced_table,
-            ref_columns: &relation.referenced_columns,
+        .filter(|relation| is_this(&relation.table))
+        .map(|relation| {
+            let (ref_schema, ref_table) = match relation.referenced_table.split_once('.') {
+                Some((schema, table)) => (Some(schema), table),
+                None => (None, relation.referenced_table.as_str()),
+            };
+            ForeignKeyPart {
+                columns: &relation.columns,
+                ref_schema,
+                ref_table,
+                ref_columns: &relation.referenced_columns,
+            }
         })
         .collect();
     Some(CompletionTable::from_parts(
@@ -194,5 +204,65 @@ mod tests {
             assert_eq!(contract, serde_json::to_value(dialect_of(Some(dialect))).unwrap());
         }
         assert_eq!(dialect_of(None), Dialect::Generic);
+    }
+
+    fn table_node(schema: &str, name: &str) -> ObjectNode {
+        let object = serde_json::json!({ "database": "shop", "schema": schema, "name": name, "kind": "table" });
+        serde_json::from_value(serde_json::json!({
+            "key": { "id": name, "kind": "table", "object": object },
+            "label": name,
+            "kind": "table",
+            "icon": "table",
+            "object": object,
+            "expandable": false,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn schema_graph_tables_match_plain_and_schema_qualified_names() {
+        use crate::contract::{Relation, SchemaColumn, SchemaTable};
+        let column = |name: &str, primary: bool| SchemaColumn {
+            name: name.into(),
+            column_type: "int".into(),
+            nullable: !primary,
+            primary,
+        };
+        let table = |name: &str, columns: Vec<SchemaColumn>| SchemaTable {
+            name: name.into(),
+            kind: "table".into(),
+            rows: None,
+            comment: String::new(),
+            columns,
+        };
+        // SQL Server style: dbo tables plain, others `schema.table`.
+        let graph = SchemaGraph {
+            tables: vec![
+                table("customers", vec![column("id", true)]),
+                table("sales.orders", vec![column("id", true), column("customer_id", false)]),
+            ],
+            relations: vec![Relation {
+                constraint: "fk_orders_customers".into(),
+                database: "shop".into(),
+                table: "sales.orders".into(),
+                columns: vec!["customer_id".into()],
+                referenced_database: "shop".into(),
+                referenced_table: "dbo.customers".into(),
+                referenced_columns: vec!["id".into()],
+            }],
+            total_tables: 2,
+        };
+        let orders = table_from_graph(&table_node("sales", "orders"), "table", &graph).expect("qualified name matches");
+        assert_eq!(orders.schema.as_deref(), Some("sales"));
+        assert_eq!(orders.columns.len(), 2);
+        assert!(orders.columns[0].pk);
+        let fk = orders.columns[1].fk.as_ref().expect("foreign key");
+        assert_eq!(
+            (fk.schema.as_deref(), fk.table.as_str(), fk.column.as_str()),
+            (Some("dbo"), "customers", "id")
+        );
+        let customers = table_from_graph(&table_node("dbo", "customers"), "table", &graph).expect("plain name matches");
+        assert_eq!(customers.columns.len(), 1);
+        assert!(table_from_graph(&table_node("dbo", "missing"), "table", &graph).is_none());
     }
 }
