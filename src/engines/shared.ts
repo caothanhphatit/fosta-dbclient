@@ -1,9 +1,9 @@
 /**
  * Views every engine gets unless its UI module registers its own: the table grid and the design view for tabular
- * objects, the query tab as the console, and the ER diagram where the engine has `schemaGraph`. The factories wrap the
- * existing view classes; steps 12-14 move those classes onto `ViewContext` (the injected `ConnectionApi`).
+ * objects, the query tab as the console, and the ER diagram where the engine has `schemaGraph`. The data, design and
+ * diagram views take the `ViewContext` (the injected `ConnectionApi`); the query view moves onto it in step 14.
  */
-import type { ConnectionProfile, DriverId, TableTarget } from "../core/types";
+import type { ConnectionProfile } from "../core/types";
 import type { ViewContext, ViewFactory, ViewRegistration } from "../core/views";
 // The grid, design and diagram views are in the main chunk today (app/navigation.ts imports them); `load` stays async so
 // they can move to chunks of their own once navigation opens every view through the registry (step 12).
@@ -14,19 +14,6 @@ import { TableView } from "../features/table/tableView";
 
 /** Object kinds the shared grid and design view handle for SQL engines. */
 export const SQL_TABULAR_KINDS = ["table", "view", "materializedView", "foreignTable", "dictionary"];
-
-/** The old views address an object as database + "schema.table" (the tree's label). */
-export function tableTarget(ctx: ViewContext): TableTarget {
-  const object = ctx.object;
-  if (!object) throw new Error("This view needs a table, view or collection");
-  return {
-    connectionId: ctx.profile.id,
-    driver: ctx.profile.driver as DriverId,
-    database: object.database ?? "",
-    table: object.schema ? `${object.schema}.${object.name}` : object.name,
-    kind: object.kind === "view" || object.kind === "materializedView" ? "view" : "table",
-  };
-}
 
 function databaseOf(ctx: ViewContext): string | null {
   const fromParams = ctx.params?.database;
@@ -43,12 +30,11 @@ function defaultQueryHost(profile: ConnectionProfile): QueryHost {
 }
 
 const dataView = async (): Promise<ViewFactory> => {
-  return (ctx) =>
-    new TableView(tableTarget(ctx), ctx.navigator, typeof ctx.params?.filter === "string" ? ctx.params.filter : "", ctx.params?.suggested === true);
+  return (ctx) => new TableView(ctx);
 };
 
 const designView = async (): Promise<ViewFactory> => {
-  return (ctx) => new DesignView(tableTarget(ctx));
+  return (ctx) => new DesignView(ctx);
 };
 
 export const sharedViews: ViewRegistration[] = [
@@ -82,7 +68,7 @@ export const sharedViews: ViewRegistration[] = [
       return (ctx) => {
         const database = databaseOf(ctx);
         if (!database) throw new Error("Pick a database for the diagram");
-        return new DiagramView(ctx.profile.id, ctx.profile.driver, database, ctx.navigator);
+        return new DiagramView(ctx, database);
       };
     },
   },

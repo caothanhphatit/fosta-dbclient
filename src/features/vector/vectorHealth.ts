@@ -1,5 +1,6 @@
 import { showError } from "../../core/errorPanel";
 import { api, errorText } from "../../core/api";
+import { capabilityOf } from "../../core/engines";
 import { formatNumber, h, separator, spacer, toolButton } from "../../core/dom";
 import type { TabContent } from "../../core/tabs";
 import type { CheckStatus, HealthCheck, RecallReport, TableTarget } from "../../core/types";
@@ -57,6 +58,12 @@ export class VectorHealthView implements TabContent {
   }
 
   private async loadColumns(preferred: string): Promise<void> {
+    if (!capabilityOf(this.target.connectionId, "vector")) {
+      this.checks.replaceChildren(
+        h("div", { class: "empty-hint" }, "This connection has no vector support (the engine does not report the vector capability)."),
+      );
+      return;
+    }
     try {
       const info = await api.vectorInfo(this.target.connectionId, this.target.database, this.target.table);
       this.columnSelect.replaceChildren(

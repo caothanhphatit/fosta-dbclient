@@ -1,4 +1,5 @@
-import type { SqlDialectId } from "./contract";
+import type { SqlDialectId, Value } from "./contract";
+import { displayValue } from "./values";
 import type { Cell, CellValue, ColumnMeta } from "./types";
 
 /**
@@ -59,6 +60,25 @@ export function sqlLiteral(value: Cell, column: ColumnMeta | undefined, dialect:
   if (column?.binary && dialect !== "ansi" && /^0x[0-9a-f]*$/i.test(value)) return value;
   if (column?.numeric && /^-?\d+(\.\d+)?(e[+-]?\d+)?$/i.test(value)) return value;
   return stringLiteral(value, dialect);
+}
+
+/** A typed cell as a SQL literal (INSERT export): numbers bare, booleans and bytes in the dialect's spelling, the rest quoted. */
+export function valueLiteral(value: Value, dialect: SqlDialect): string {
+  switch (value.t) {
+    case "null":
+      return "NULL";
+    case "int":
+    case "decimal":
+      return String(value.v);
+    case "float":
+      return typeof value.v === "number" && Number.isFinite(value.v) ? (displayValue(value) ?? "NULL") : stringLiteral(String(value.v), dialect);
+    case "bool":
+      return dialect === "ansi" ? (value.v ? "TRUE" : "FALSE") : value.v ? "1" : "0";
+    case "bytes":
+      return dialect === "ansi" ? `X'${value.v.replace(/^0x/i, "")}'` : value.v;
+    default:
+      return stringLiteral(displayValue(value) ?? "", dialect);
+  }
 }
 
 function stringLiteral(value: string, dialect: SqlDialect): string {

@@ -1,61 +1,127 @@
-import { showError } from "../../core/errorPanel";
-import { api } from "../../core/api";
-import { combinedCondition, combinedJsonFilter, type ColumnFilters } from "../grid/columnFilter";
-import { driverInfo, type DriverInfo } from "../../core/drivers";
+/**
+ * The data view of a table, view or collection (ADR 0001: it gets its `ConnectionApi` through the `ViewContext`):
+ *
+ * - Pages come from `browse_object`: by keyset while the engine hands out `nextKeyset` (cheap at any depth), by offset
+ *   otherwise (a jump to the last page, sorts the engine cannot seek on). The total is the engine's estimate by default
+ *   (`~`), and exact after "Count".
+ * - Column filter boxes send structured conditions (`Filter.conditions`; the engine binds the values). The filter box in
+ *   the toolbar sends the engine's raw filter language (`Filter.raw`: SQL WHERE, a MongoDB query document) and appears
+ *   only when the connection has the `rawFilter` capability. One request carries one filter, so while the raw box is in
+ *   use the column boxes are paused (kept, shown disabled with a note); clearing the box brings them back.
+ * - Edits are saved with `apply_edits` through the gateway's confirmation flow, with optimistic concurrency (`original`,
+ *   row versions); no transaction is held while the user edits. A `CONFLICT` opens the conflict dialog.
+ */
+import type {
+  ColumnInfo,
+  ConnectInfo,
+  EngineDescriptor,
+  Field,
+  Filter,
+  FilterCond,
+  ObjectDescription,
+  ObjectRef,
+  Page,
+  RawFilterLang,
+  RowChangeSet,
+  SortKey,
+  Total,
+  Value,
+} from "../../core/contract";
+import type { ConnectionApi } from "../../core/connectionApi";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
-import { confirmDialog, toast } from "../../core/dialogs";
+import { confirmDialog, openModal, toast } from "../../core/dialogs";
 import { clamp, copyText, formatNumber, h, icon, iconButton, secondaryTool, separator, spacer, toolButton } from "../../core/dom";
-import { EXPORT_LABELS, type ExportFormat } from "../importExport/exporters";
-import { exportDialog, importDialog } from "../importExport/importExport";
-import { DataGrid, type SortState } from "../grid/grid";
+import { hasCapability } from "../../core/engines";
+import { showError } from "../../core/errorPanel";
+import { LatestRequest } from "../../core/latest";
+import type { Navigator } from "../../core/navigator";
+import { makeSplitter } from "../../core/splitter";
+import { dialectOf, type SqlDialect } from "../../core/sql";
+import type { TabContent } from "../../core/tabs";
+import type { DriverId, TableTarget, VectorInfo } from "../../core/types";
+import { displayValue } from "../../core/values";
+import type { ViewContext } from "../../core/views";
+import { api } from "../../core/api";
+import { forced, type BuiltChange } from "../grid/changeSet";
+import { conditionsFilter, filterConditions, type ColumnFilters } from "../grid/columnFilter";
 import { openColumnsPopover } from "../grid/columnsPopover";
 import { columnStorageKey, loadHiddenColumns, saveHiddenColumns } from "../grid/columnVisibility";
-import type { Navigator } from "../../core/navigator";
-import { RecordPanel } from "./recordPanel";
+import { openConflictDialog } from "../grid/conflictDialog";
+import { conflictPayload, conflictRows, type ConflictPayload, type ConflictRow } from "../grid/conflicts";
+import { DataGrid, type SortState } from "../grid/grid";
+import { keyCells, textColumn } from "../grid/legacy";
+import { EXPORT_LABELS, type ExportFormat } from "../importExport/exporters";
+import { exportDialog, importDialog } from "../importExport/importExport";
 import { withConfirmation } from "../safety/confirmationDialog";
-import { makeSplitter } from "../../core/splitter";
-import { equalsFilter, rowKey, sqlDialect, type SqlDialect } from "../../core/sql";
-import { LatestRequest } from "../../core/latest";
-import type { TabContent } from "../../core/tabs";
-import type { Cell, ColumnMeta, TableRelations, TableTarget, VectorInfo } from "../../core/types";
+import { RecordPanel, referencingFilters, referencingObject } from "./recordPanel";
 
 const PAGE_SIZES = [100, 200, 500, 1000];
 const EXPORT_FORMATS: ExportFormat[] = ["csv", "json", "markdown", "insert"];
 const DEFAULT_PANEL_WIDTH = 340;
 const NARROW_WINDOW = 1200;
 const READ_ONLY_NOTE = "Read-only workspace: rows cannot be edited, added or deleted here. Change the workspace's safety rules to edit.";
+const PAUSED_NOTE =
+  "Column filters are paused while the filter box is in use: one request carries one filter. Clear the box (Enter) to filter by column again.";
+const NULL: Value = { t: "null", v: null };
+
+/** Where a page starts: after a keyset or at an offset (`offset` is also the row number of its first row). */
+interface PageCursor {
+  offset: number;
+  after: Value[] | null;
+}
 
 interface ReloadOptions {
-  offset?: number;
+  cursor?: PageCursor;
+  /** Pages before the new one, for Previous (keyset pages cannot be computed backwards). */
+  history?: PageCursor[];
   sort?: SortState | null;
   force?: boolean;
+  /** Ask for an exact total ("Count"). */
+  exact?: boolean;
 }
+
+/** Object kinds whose rows can be edited (views never are). */
+const EDITABLE_KINDS = new Set(["table", "collection"]);
 
 export class TableView implements TabContent {
   readonly element: HTMLElement;
+  /** The pre-contract address the vector views and the assistant still use. */
   readonly target: TableTarget;
+  private readonly connection: ConnectionApi;
+  private readonly object: ObjectRef;
+  private readonly engine: EngineDescriptor;
+  private readonly info: ConnectInfo;
   private readonly navigator: Navigator;
-  private readonly driver: DriverInfo;
-  /** How filters and foreign-key navigation quote names and values for this engine. */
+  private readonly label: string;
+  /** How "Copy as INSERT" quotes names and values. */
   private readonly dialect: SqlDialect;
+  /** The engine's raw filter language when the connection has `rawFilter`; null hides the filter box. */
+  private readonly rawLanguage: RawFilterLang | null;
   private readonly grid: DataGrid;
   private readonly record: RecordPanel;
   private readonly filter: HTMLInputElement;
   private readonly pageInfo = h("span", { class: "pager-info" }, "Loading…");
+  private readonly countButton: HTMLButtonElement;
+  private readonly pagerButtons: { first: HTMLButtonElement; prev: HTMLButtonElement; next: HTMLButtonElement; last: HTMLButtonElement };
   /** Page loads overlap when the user pages quickly; only the newest one is shown. */
   private readonly loads = new LatestRequest();
   private readonly vectorTools = h("div", { class: "toolbar-group" });
   private readonly content: HTMLElement;
   private readonly pendingText = h("span", { class: "pending-text" });
   private pendingBar: HTMLElement | null = null;
-  private offset = 0;
+  private cursor: PageCursor = { offset: 0, after: null };
+  private history: PageCursor[] = [];
+  private page: Page | null = null;
   private limit = 200;
-  private total = 0;
+  private total: Total | null = null;
+  private exact = false;
   private sort: SortState | null = null;
-  private columns: ColumnMeta[] = [];
-  private columnFilters: ColumnFilters = {};
-  private primaryKey: string[] = [];
-  private relations: TableRelations | null = null;
+  private columns: ColumnInfo[] = [];
+  private columnFilters: ColumnFilters;
+  /** The raw filter of the page on screen (what the box held when it was applied). */
+  private appliedRaw = "";
+  private keyColumns: string[] = [];
+  private description: ObjectDescription | null = null;
   private vectorInfo: VectorInfo | null = null;
   private panelWidth = DEFAULT_PANEL_WIDTH;
   private readonly columnsKey: string;
@@ -68,27 +134,47 @@ export class TableView implements TabContent {
   private suggestionBar: HTMLElement | null = null;
 
   /**
-   * `suggested`: the filter comes from the assistant. It is only pre-filled and marked as such;
-   * the table does not load until the user applies it (or opens the table without it).
+   * `ctx.params`: `filter` (raw filter text), `suggested` (the filter comes from the assistant: it is only pre-filled and
+   * marked; the table does not load until the user applies it), `columnFilters` (foreign-key navigation).
    */
-  constructor(target: TableTarget, navigator: Navigator, initialFilter = "", suggested = false) {
-    this.target = target;
-    this.navigator = navigator;
-    this.columnsKey = columnStorageKey(target.connectionId, target.database, target.table);
+  constructor(ctx: ViewContext) {
+    if (!ctx.object) throw new Error("This view needs a table, view or collection");
+    this.connection = ctx.connection;
+    this.object = ctx.object;
+    this.engine = ctx.engine;
+    this.info = ctx.info;
+    this.navigator = ctx.navigator;
+    this.label = this.object.schema ? `${this.object.schema}.${this.object.name}` : this.object.name;
+    this.target = {
+      connectionId: ctx.profile.id,
+      driver: ctx.profile.driver as DriverId,
+      database: this.object.database ?? "",
+      table: this.label,
+      kind: EDITABLE_KINDS.has(this.object.kind) ? "table" : "view",
+    };
+    this.dialect = dialectOf(this.engine.sqlDialect);
+    this.rawLanguage = hasCapability(this.info, "rawFilter") ? this.engine.filter.raw : null;
+    const params = ctx.params ?? {};
+    const initialFilter = typeof params.filter === "string" ? params.filter : "";
+    const suggested = params.suggested === true;
+    this.columnFilters = isFilters(params.columnFilters) ? { ...params.columnFilters } : {};
+    this.columnsKey = columnStorageKey(this.target.connectionId, this.target.database, this.target.table);
     this.hiddenColumns = loadHiddenColumns(this.columnsKey);
-    this.driver = driverInfo(target.driver);
-    this.dialect = sqlDialect(target.driver);
     this.grid = new DataGrid(() => this.refreshButtons());
-    this.record = new RecordPanel(navigator);
-    this.filter = h("input", { class: "input", placeholder: this.driver.filterPlaceholder, spellcheck: "false", value: initialFilter });
+    this.record = new RecordPanel();
+    this.filter = h("input", {
+      class: "input",
+      placeholder: this.engine.filter.placeholder,
+      spellcheck: "false",
+      value: this.rawLanguage ? initialFilter : "",
+    });
     this.filter.addEventListener("keydown", (event) => {
       if (event.key === "Enter") this.applyFilter();
     });
+    if (initialFilter && !this.rawLanguage) toast(`${this.engine.label} takes no raw filter here; the table opens unfiltered`);
     const exportButton = secondaryTool(toolButton("copy", "Copy as", () => undefined, "Copy this page to the clipboard"));
     const exportFileButton = secondaryTool(toolButton("download", "Export", () => this.exportFile(), "Export rows to a file in Downloads"));
-    const importButton = secondaryTool(
-      toolButton("upload", "Import", () => importDialog(this.target, this.columns, () => void this.reload({ force: true })), "Import rows from CSV or JSON"),
-    );
+    const importButton = secondaryTool(toolButton("upload", "Import", () => this.openImport(), "Import rows from CSV or JSON"));
     importButton.hidden = !this.editable;
     exportButton.addEventListener("click", (event) => showContextMenu(event, this.exportMenu()));
     const recordButton = secondaryTool(toolButton("design", "Record", () => this.toggleRecord(), "Show or hide the record panel"));
@@ -96,6 +182,19 @@ export class TableView implements TabContent {
     const editorButton = secondaryTool(
       toolButton("expand", "Cell editor", () => this.grid.openSelectedInEditor(), "Open the selected cell in a larger editor (Shift+Enter)"),
     );
+    const queryButton = secondaryTool(toolButton("query", "Show query", () => this.showStatement(), "The statement the engine ran for this page"));
+    this.countButton = h(
+      "button",
+      { class: "link-button pager-count", type: "button", title: "Count the matching rows exactly (may be slow on big tables)" },
+      "Count",
+    );
+    this.countButton.addEventListener("click", () => void this.reload({ cursor: this.cursor, history: this.history, exact: true }));
+    this.pagerButtons = {
+      first: iconButton("first", "First page", () => this.goFirst()),
+      prev: iconButton("prev", "Previous page", () => this.goPrevious()),
+      next: iconButton("chevron", "Next page", () => this.goNext()),
+      last: iconButton("last", "Last page", () => this.goLast()),
+    };
 
     // Saving and discarding live in the pending-changes bar (Apply / Discard), which shows up as soon as there is an edit.
     const editTools = this.editable
@@ -105,13 +204,16 @@ export class TableView implements TabContent {
           separator(),
         ]
       : [];
+    const filterBox = this.rawLanguage
+      ? h("div", { class: "filter-box", title: `Raw ${this.engine.label} filter (${this.rawLanguage})` }, icon("filter"), this.filter)
+      : null;
     const toolbar = h(
       "div",
       { class: "toolbar" },
-      toolButton("refresh", "Refresh", () => void this.reload({}), "Reload (F5)"),
+      toolButton("refresh", "Refresh", () => void this.reload({ cursor: this.cursor, history: this.history }), "Reload (F5)"),
       separator(),
       ...editTools,
-      h("div", { class: "filter-box" }, icon("filter"), this.filter),
+      filterBox ?? spacer(),
       // One right-aligned group: when the pane is narrow it wraps onto its own row as a whole, pager included.
       h(
         "div",
@@ -119,6 +221,7 @@ export class TableView implements TabContent {
         this.vectorTools,
         columnsButton,
         editorButton,
+        queryButton,
         importButton,
         exportFileButton,
         exportButton,
@@ -138,10 +241,10 @@ export class TableView implements TabContent {
     discardPending.addEventListener("click", () => this.grid.discard());
     this.pendingBar = h("div", { class: "pending-bar" }, icon("edit"), this.pendingText, spacer(), discardPending, applyButton);
     this.pendingBar.hidden = true;
-    this.suggestionBar = suggested && initialFilter ? this.suggestion(initialFilter) : null;
+    this.suggestionBar = suggested && initialFilter && this.rawLanguage ? this.suggestion(initialFilter) : null;
     // A Read-only workspace blocks every save, so the grid says so up front instead of failing at Apply.
     const readOnlyBar =
-      this.target.kind === "table" && this.writesBlocked
+      EDITABLE_KINDS.has(this.object.kind) && this.writesBlocked
         ? h("div", { class: "readonly-bar", role: "status" }, icon("view"), h("span", {}, READ_ONLY_NOTE))
         : null;
     this.element = h("div", { class: "view table-view" }, toolbar, readOnlyBar, this.suggestionBar, this.content, this.pendingBar);
@@ -156,7 +259,7 @@ export class TableView implements TabContent {
     await this.firstLoad;
     if (kind === "export") this.exportFile();
     else if (!this.editable) toast("This object cannot be edited here, so rows cannot be imported into it");
-    else importDialog(this.target, this.columns, () => void this.reload({ force: true }));
+    else this.openImport();
   }
 
   private suggestion(filter: string): HTMLElement {
@@ -187,16 +290,17 @@ export class TableView implements TabContent {
       this.suggestionBar = null;
       this.filter.classList.remove("suggested");
     }
-    void this.reload({ offset: 0 });
+    this.exact = false;
+    void this.reload({ cursor: { offset: 0, after: null }, history: [] });
   }
 
   canClose(): boolean | Promise<boolean> {
-    return !this.grid.hasChanges() || confirmDialog(`Discard unsaved changes in ${this.target.table}?`, "Discard");
+    return !this.grid.hasChanges() || confirmDialog(`Discard unsaved changes in ${this.label}?`, "Discard");
   }
 
-  /** Tables are editable unless the workspace's rules block writes; views never are. */
+  /** Tables and collections are editable when the engine edits rows and the workspace's rules allow writes; views never. */
   private get editable(): boolean {
-    return this.target.kind === "table" && !this.writesBlocked;
+    return EDITABLE_KINDS.has(this.object.kind) && hasCapability(this.info, "editRows") && !this.writesBlocked;
   }
 
   private get writesBlocked(): boolean {
@@ -204,12 +308,12 @@ export class TableView implements TabContent {
   }
 
   private async loadMetadata(): Promise<void> {
-    const { connectionId, database, table } = this.target;
-    const [relations, vectorInfo] = await Promise.allSettled([
-      api.tableRelations(connectionId, database, table),
-      api.vectorInfo(connectionId, database, table),
+    const vector = hasCapability(this.info, "vector");
+    const [description, vectorInfo] = await Promise.allSettled([
+      hasCapability(this.info, "describe") ? this.connection.describe(this.object) : Promise.resolve(null),
+      vector ? api.vectorInfo(this.target.connectionId, this.target.database, this.target.table) : Promise.resolve(null),
     ]);
-    this.relations = relations.status === "fulfilled" ? relations.value : null;
+    this.description = description.status === "fulfilled" ? description.value : null;
     this.vectorInfo = vectorInfo.status === "fulfilled" ? vectorInfo.value : null;
     this.renderVectorTools();
     // The first page usually arrives before the metadata; refresh the record
@@ -217,8 +321,12 @@ export class TableView implements TabContent {
     this.showRecord(this.grid.selectedRow());
   }
 
+  private get hasVectors(): boolean {
+    return Boolean(this.vectorInfo?.supported && this.vectorInfo.columns.length > 0);
+  }
+
   private renderVectorTools(): void {
-    const columns = this.vectorInfo?.columns ?? [];
+    const columns = this.hasVectors ? (this.vectorInfo?.columns ?? []) : [];
     if (columns.length === 0) {
       this.vectorTools.replaceChildren();
       return;
@@ -231,31 +339,73 @@ export class TableView implements TabContent {
     );
   }
 
+  private openImport(): void {
+    importDialog({
+      title: this.label,
+      where: `${this.target.database}.${this.label} (${this.engine.label})`,
+      object: this.object,
+      columns: this.columns.length ? this.columns : (this.description?.columns ?? []),
+      connection: this.connection,
+      onDone: () => void this.reload({ cursor: this.cursor, history: this.history, force: true }),
+    });
+  }
+
   private exportFile(): void {
     if (this.suggestionBar) {
       toast("Apply the suggested filter (or open the table without it) first");
       return;
     }
+    let filter: Filter;
+    try {
+      filter = this.currentFilter();
+    } catch (error) {
+      showError(error, "Export");
+      return;
+    }
     exportDialog({
-      target: this.target,
+      title: this.label,
       columns: this.columns,
       pageRows: this.grid.pageRows(),
-      request: {
-        connectionId: this.target.connectionId,
-        database: this.target.database,
-        table: this.target.table,
-        orderBy: this.sort?.column ?? null,
-        descending: this.sort?.descending ?? false,
-        filter: this.currentFilter(),
-      },
+      filtered: filter.kind !== "none",
       total: this.total,
+      dialect: this.dialect,
+      read: (cursor, limit) =>
+        this.connection.browse({
+          ...this.request(filter, cursor, this.sort),
+          limit,
+          estimateTotal: false,
+          exactTotal: false,
+        }),
     });
   }
 
-  private currentFilter(): string | null {
-    return this.driver.filterKind === "json"
-      ? combinedJsonFilter(this.columns, this.columnFilters, this.filter.value)
-      : combinedCondition(this.columns, this.columnFilters, this.filter.value, this.dialect);
+  /** The filter of the next request: the raw box when it is in use, else the column boxes' valid conditions. */
+  private currentFilter(): Filter {
+    const raw = this.filter.value.trim();
+    if (this.rawLanguage && raw) return { kind: "raw", language: this.rawLanguage, text: raw };
+    return conditionsFilter(this.conditions());
+  }
+
+  /** Conditions of the column boxes. Before the first page the columns are not known; boxes then parse as text columns. */
+  private conditions(): FilterCond[] {
+    const known = this.columns.length ? this.columns : (this.description?.columns ?? []);
+    const columns = Object.keys(this.columnFilters).map((name) => known.find((column) => column.name === name) ?? textColumn(name));
+    return filterConditions(columns, this.columnFilters).conditions;
+  }
+
+  private request(filter: Filter, cursor: PageCursor, sort: SortState | null) {
+    const keys: SortKey[] = sort ? [{ column: sort.column, descending: sort.descending }] : [];
+    return {
+      object: this.object,
+      filter,
+      sort: keys,
+      offset: cursor.offset,
+      after: cursor.after,
+      limit: this.limit,
+      estimateTotal: true,
+      exactTotal: this.exact,
+      columns: null,
+    };
   }
 
   private exportMenu(): MenuItem[] {
@@ -267,43 +417,50 @@ export class TableView implements TabContent {
     }));
   }
 
-  private rowMenu(row: Cell[]): MenuItem[] {
-    const vectorItems: MenuItem[] = this.columns
-      .filter((column) => column.vectorDims != null)
-      .map((column) => ({
-        label: `Find similar by ${column.name}`,
-        icon: "vector",
-        run: () => this.navigator.openVectorSearch(this.target, column.name, rowKey(this.columns, row, this.primaryKey)),
-      }));
-    const relatedItems: MenuItem[] = (this.relations?.incoming ?? []).map((relation) => ({
-      label: `Open related ${relation.table}`,
+  private rowMenu(row: Value[]): MenuItem[] {
+    const vectorItems: MenuItem[] = this.hasVectors
+      ? this.columns
+          .filter((column) => column.hints.vectorDims != null)
+          .map((column) => ({
+            label: `Find similar by ${column.name}`,
+            icon: "vector",
+            run: () => this.navigator.openVectorSearch(this.target, column.name, keyCells(this.columns, row, this.keyColumns)),
+          }))
+      : [];
+    const relatedItems: MenuItem[] = (this.description?.referencedBy ?? []).map((key) => ({
+      label: `Open related ${key.table}`,
       icon: "table",
-      run: () =>
-        this.navigator.openTable(
-          { ...this.target, database: relation.database, table: relation.table, kind: "table" },
-          equalsFilter(
-            relation.columns.map((column, index) => {
-              const position = this.columns.findIndex((meta) => meta.name === relation.referencedColumns[index]);
-              return { column, value: row[position] ?? null, meta: this.columns[position] };
-            }),
-            this.dialect,
-          ),
-        ),
+      run: () => this.openRelated(referencingObject(this.description, key), referencingFilters(this.columns, row, key)),
     }));
     return [...vectorItems, ...relatedItems];
   }
 
-  private showRecord(row: Cell[] | null): void {
+  private openRelated(object: ObjectRef, filters: ColumnFilters): void {
+    this.navigator.openData(this.target.connectionId, object, filters);
+  }
+
+  private showRecord(row: Value[] | null): void {
     this.record.show(
       row && {
-        target: this.target,
         columns: this.columns,
         row,
-        primaryKey: this.primaryKey,
-        relations: this.relations,
+        keyColumns: this.keyColumns,
+        description: this.description,
         openEditor: (column) => this.grid.openEditorForColumn(column),
+        openRelated: (object, filters) => this.openRelated(object, filters),
+        vector: this.hasVectors
+          ? {
+              load: (column) => this.fetchVector(row, column),
+              findSimilar: (column) => this.navigator.openVectorSearch(this.target, column.name, keyCells(this.columns, row, this.keyColumns)),
+            }
+          : null,
       },
     );
+  }
+
+  private fetchVector(row: Value[], column: ColumnInfo): Promise<number[]> {
+    const { connectionId, database, table } = this.target;
+    return api.fetchVector(connectionId, database, table, column.name, keyCells(this.columns, row, this.keyColumns));
   }
 
   private toggleRecord(): void {
@@ -315,6 +472,28 @@ export class TableView implements TabContent {
     this.content.style.setProperty("--record-width", `${this.panelWidth}px`);
   }
 
+  private showStatement(): void {
+    const statement = this.page?.statement;
+    if (!statement) {
+      toast(this.page ? "The engine reported no statement for this page" : "Load a page first");
+      return;
+    }
+    openModal(
+      "Query for this page",
+      h(
+        "div",
+        { class: "form-grid" },
+        h("p", { class: "form-intro" }, "What the engine ran for the page on screen (values of the filters are bound as parameters)."),
+        h("pre", { class: "ddl statement-text" }, statement),
+      ),
+      [
+        { label: "Copy", alignLeft: true, run: async () => void (await copyText(statement)) },
+        { label: "Close", primary: true, run: () => undefined },
+      ],
+      { width: 680 },
+    );
+  }
+
   private pager(): HTMLElement {
     const sizes = h(
       "select",
@@ -323,38 +502,56 @@ export class TableView implements TabContent {
     );
     sizes.addEventListener("change", () => {
       this.limit = Number(sizes.value);
-      void this.reload({ offset: 0 });
+      void this.reload({ cursor: { offset: 0, after: null }, history: [] });
     });
-    return h(
-      "div",
-      { class: "pager" },
-      iconButton("first", "First page", () => this.goTo(0)),
-      iconButton("prev", "Previous page", () => this.goTo(this.offset - this.limit)),
-      this.pageInfo,
-      iconButton("chevron", "Next page", () => this.goTo(this.offset + this.limit)),
-      iconButton("last", "Last page", () => this.goTo(this.lastPageOffset())),
-      sizes,
-    );
+    const { first, prev, next, last } = this.pagerButtons;
+    return h("div", { class: "pager" }, first, prev, this.pageInfo, this.countButton, next, last, sizes);
   }
 
-  private lastPageOffset(): number {
-    return Math.floor(Math.max(this.total - 1, 0) / this.limit) * this.limit;
+  private lastPageOffset(): number | null {
+    if (!this.total) return null;
+    return Math.floor(Math.max(this.total.value - 1, 0) / this.limit) * this.limit;
   }
 
-  private goTo(offset: number): void {
-    const target = Math.min(Math.max(offset, 0), this.lastPageOffset());
-    if (target !== this.offset) void this.reload({ offset: target });
+  private goFirst(): void {
+    if (this.cursor.offset > 0 || this.cursor.after) void this.reload({ cursor: { offset: 0, after: null }, history: [] });
+  }
+
+  private goPrevious(): void {
+    if (this.cursor.offset === 0) return;
+    const history = [...this.history];
+    // Keyset pages cannot be computed backwards: Previous returns to the cursor of the page before. After a jump by offset
+    // (Last) there is no history, so it steps back by offset.
+    const previous = history.pop() ?? { offset: Math.max(0, this.cursor.offset - this.limit), after: null };
+    void this.reload({ cursor: previous, history });
+  }
+
+  private goNext(): void {
+    const page = this.page;
+    if (!page?.hasMore) return;
+    const offset = this.cursor.offset + page.rows.length;
+    void this.reload({ cursor: { offset, after: page.nextKeyset ?? null }, history: [...this.history, this.cursor] });
+  }
+
+  private goLast(): void {
+    const offset = this.lastPageOffset();
+    if (offset === null) {
+      toast("The total is not known yet: press Count first");
+      return;
+    }
+    if (offset !== this.cursor.offset) void this.reload({ cursor: { offset, after: null }, history: [] });
   }
 
   private applyColumnFilters(filters: ColumnFilters): void {
     this.columnFilters = filters;
-    void this.reload({ offset: 0 });
+    this.exact = false;
+    void this.reload({ cursor: { offset: 0, after: null }, history: [] });
   }
 
   private toggleSort(column: string): void {
     const current = this.sort?.column === column ? this.sort : null;
     const next = !current ? { column, descending: false } : current.descending ? null : { column, descending: true };
-    void this.reload({ offset: 0, sort: next });
+    void this.reload({ cursor: { offset: 0, after: null }, history: [], sort: next });
   }
 
   private async reload(options: ReloadOptions): Promise<void> {
@@ -364,61 +561,82 @@ export class TableView implements TabContent {
       return;
     }
     if (!options.force && this.grid.hasChanges() && !(await confirmDialog("Discard unsaved changes?", "Discard"))) return;
-    const offset = options.offset ?? this.offset;
+    const cursor = options.cursor ?? this.cursor;
+    const history = options.history ?? this.history;
     const sort = options.sort === undefined ? this.sort : options.sort;
+    if (options.exact) this.exact = true;
     const ticket = this.loads.begin();
     this.element.classList.add("busy");
     try {
       const filter = this.currentFilter();
-      const page = await api.browseTable({
-        connectionId: this.target.connectionId,
-        database: this.target.database,
-        table: this.target.table,
-        offset,
-        limit: this.limit,
-        orderBy: sort?.column ?? null,
-        descending: sort?.descending ?? false,
-        filter,
-      });
+      const page = await this.connection.browse(this.request(filter, cursor, sort));
       // A newer page change (or a closed tab) wins over this answer.
       if (!this.loads.isCurrent(ticket)) return;
-      this.offset = offset;
+      this.cursor = cursor;
+      this.history = history;
       this.sort = sort;
-      this.total = page.total;
+      this.page = page;
+      if (page.total) this.total = page.total;
+      else if (cursor.offset === 0) this.total = null;
+      // The last page tells the exact number of rows.
+      if (!page.hasMore && !this.total?.exact) this.total = { value: cursor.offset + page.rows.length, exact: true };
+      this.appliedRaw = filter.kind === "raw" ? filter.text : "";
       this.columns = page.columns;
-      this.primaryKey = page.primaryKey;
+      this.keyColumns = page.keyColumns;
       this.grid.load({
         columns: page.columns,
         rows: page.rows,
+        rowVersions: page.rowVersions ?? null,
         editable: this.editable,
         readOnlyReason: this.writesBlocked ? "The workspace is Read-only" : null,
-        primaryKey: page.primaryKey,
-        rowOffset: offset,
+        keyColumns: page.keyColumns,
+        rowOffset: cursor.offset,
         sort,
         onSort: (column) => this.toggleSort(column),
-        tableName: this.target.table,
+        tableName: this.label,
         dialect: this.dialect,
         onSelect: (row) => this.showRecord(row),
         extraMenu: (row) => this.rowMenu(row),
         columnFilters: this.columnFilters,
         onColumnFilter: (filters) => this.applyColumnFilters(filters),
+        filtersPaused: this.appliedRaw ? PAUSED_NOTE : null,
         clientFilter: false,
         hiddenColumns: this.hiddenColumns,
         onHiddenColumns: (hidden) => {
           this.hiddenColumns = hidden;
           saveHiddenColumns(this.columnsKey, hidden);
         },
-        loadVector: (row, column) => {
-          const { connectionId, database, table } = this.target;
-          return api.fetchVector(connectionId, database, table, column.name, rowKey(page.columns, row, page.primaryKey));
-        },
+        loadVector: hasCapability(this.info, "vector") ? (row, column) => this.fetchVector(row, column) : null,
       });
-      this.pageInfo.textContent = describePage(offset, page.rows.length, page.total, page.elapsedMs);
+      this.describePage();
     } catch (error) {
-      if (this.loads.isCurrent(ticket)) showError(error, `Read rows of ${this.target.database}.${this.target.table}`);
+      if (this.loads.isCurrent(ticket)) showError(error, `Read rows of ${this.target.database}.${this.label}`);
     } finally {
       if (this.loads.isCurrent(ticket)) this.element.classList.remove("busy");
     }
+  }
+
+  private describePage(): void {
+    const page = this.page;
+    if (!page) return;
+    const count = page.rows.length;
+    const offset = this.cursor.offset;
+    const total = this.total;
+    const totalText = total ? `${total.exact ? "" : "~"}${formatNumber(total.value)}` : page.hasMore ? "?" : formatNumber(offset + count);
+    const range = count === 0 ? `0 of ${totalText}` : `${formatNumber(offset + 1)}–${formatNumber(offset + count)} of ${totalText}`;
+    this.pageInfo.textContent = `${range} · ${page.elapsedMs} ms`;
+    this.pageInfo.title = total
+      ? total.exact
+        ? "Exact count"
+        : "Estimated from the engine's statistics; press Count for the exact number"
+      : "The total is unknown; press Count";
+    this.countButton.hidden = Boolean(total?.exact) || (!page.hasMore && offset === 0);
+    const { first, prev, next, last } = this.pagerButtons;
+    first.disabled = offset === 0 && !this.cursor.after;
+    prev.disabled = offset === 0;
+    next.disabled = !page.hasMore;
+    const lastOffset = this.lastPageOffset();
+    last.disabled = !page.hasMore || lastOffset === null || lastOffset <= offset;
   }
 
   dispose(): void {
@@ -427,20 +645,87 @@ export class TableView implements TabContent {
   }
 
   private async submit(): Promise<void> {
-    const changes = this.grid.changes();
-    if (changes.length === 0) return;
-    const noKeyWarning = `${this.target.table} has no primary key. Rows will be matched by all of their original values. Continue?`;
-    if (this.primaryKey.length === 0 && !(await confirmDialog(noKeyWarning, "Continue"))) return;
+    const built = this.grid.changes();
+    if (built.length === 0) return;
+    const noKeyWarning = `${this.label} has no primary key. Rows will be matched by all of their comparable original values. Continue?`;
+    if (this.keyColumns.length === 0 && built.some(({ change }) => change.op !== "insert") && !(await confirmDialog(noKeyWarning, "Continue"))) return;
+    const set: RowChangeSet = { object: this.object, changes: built.map(({ change }) => change) };
     try {
-      const affected = await withConfirmation((confirmation) =>
-        api.applyChanges(this.target.connectionId, this.target.database, this.target.table, changes, "gridSave", confirmation),
-      );
-      if (affected === null) return;
-      toast(`Saved ${changes.length} change(s), ${affected} row(s) affected`, "success");
-      await this.reload({ force: true });
+      const result = await withConfirmation((confirmation) => this.connection.applyEdits(set, "gridSave", confirmation));
+      if (result === null) return;
+      const parts = [
+        result.updated ? `${result.updated} updated` : "",
+        result.inserted ? `${result.inserted} inserted` : "",
+        result.deleted ? `${result.deleted} deleted` : "",
+      ];
+      toast(`Saved ${built.length} change(s): ${parts.filter(Boolean).join(", ") || "no rows affected"}`, "success");
+      await this.reload({ cursor: this.cursor, history: this.history, force: true });
     } catch (error) {
-      showError(error, "Save changes");
+      const conflict = conflictPayload(error);
+      if (conflict) this.showConflicts(conflict, built);
+      else showError(error, "Save changes");
     }
+  }
+
+  /** The conflict dialog for a failed save; nothing of it was applied, so every edit is still pending. */
+  private showConflicts(payload: ConflictPayload, built: BuiltChange[]): void {
+    const rowOf = (row: ConflictRow) => built[row.index];
+    openConflictDialog({
+      objectLabel: this.label,
+      payload,
+      rows: conflictRows(payload.conflicts, (conflict) => {
+        const entry = built[conflict.index];
+        return entry ? this.grid.loadedFields(entry.row) : null;
+      }),
+      otherPending: Math.max(0, built.length - payload.conflicts.length),
+      overwrite: async (row) => {
+        const entry = rowOf(row);
+        if (!entry) return false;
+        const change = forced(entry.change);
+        const result = await withConfirmation((confirmation) =>
+          this.connection.applyEdits({ object: this.object, changes: [change] }, "gridSave", confirmation),
+        );
+        if (result === null) return false;
+        if (change.op === "delete") this.grid.replaceRow(entry.row, null, null);
+        else if (change.op === "update") await this.refreshRow(entry.row, updatedKey(change.key, change.values));
+        return true;
+      },
+      takeTheirs: async (row) => {
+        const entry = rowOf(row);
+        if (!entry) return false;
+        if (row.missing || entry.change.op === "insert") this.grid.replaceRow(entry.row, null, null);
+        else await this.refreshRow(entry.row, row.key);
+        return true;
+      },
+      onClose: () => this.refreshButtons(),
+    });
+  }
+
+  /** Reloads one row by its key (keeping every other pending edit); a row that is gone leaves the grid. */
+  private async refreshRow(index: number, key: Field[]): Promise<void> {
+    const conditions: FilterCond[] = key.map((field) =>
+      field.value.t === "null"
+        ? { column: field.column, op: "isNull", values: [] }
+        : { column: field.column, op: "eq", values: [displayValue(field.value) ?? ""] },
+    );
+    const page = await this.connection.browse({
+      object: this.object,
+      filter: conditionsFilter(conditions),
+      sort: [],
+      offset: 0,
+      after: null,
+      limit: 1,
+      estimateTotal: false,
+      exactTotal: false,
+      columns: null,
+    });
+    const found = page.rows[0];
+    if (!found) {
+      this.grid.replaceRow(index, null, null);
+      return;
+    }
+    const values = this.columns.map((column) => found[page.columns.findIndex((item) => item.name === column.name)] ?? NULL);
+    this.grid.replaceRow(index, values, page.rowVersions?.[0] ?? null);
   }
 
   private refreshButtons(): void {
@@ -460,12 +745,16 @@ export class TableView implements TabContent {
       void this.submit();
     } else if (event.key === "F5") {
       event.preventDefault();
-      void this.reload({});
+      void this.reload({ cursor: this.cursor, history: this.history });
     }
   }
 }
 
-function describePage(offset: number, count: number, total: number, elapsedMs: number): string {
-  if (count === 0) return `0 of ${formatNumber(total)}`;
-  return `${formatNumber(offset + 1)}–${formatNumber(offset + count)} of ${formatNumber(total)} · ${elapsedMs} ms`;
+/** The key of a row after an update that may have changed key columns. */
+function updatedKey(key: Field[], values: Field[]): Field[] {
+  return key.map((field) => values.find((value) => value.column === field.column) ?? field);
+}
+
+function isFilters(value: unknown): value is ColumnFilters {
+  return typeof value === "object" && value !== null && Object.values(value).every((item) => typeof item === "string");
 }

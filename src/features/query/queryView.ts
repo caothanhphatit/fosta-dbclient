@@ -9,6 +9,7 @@ import { clamp, formatNumber, h, icon, secondaryTool, separator, spacer, toolBut
 import { driverInfo } from "../../core/drivers";
 import { openColumnsPopover } from "../grid/columnsPopover";
 import { DataGrid, gridSetup } from "../grid/grid";
+import { legacyGridData } from "../grid/legacy";
 import { makeSplitter } from "../../core/splitter";
 import { createSqlEditor, selectedOrAllText, setSchemaTables } from "./sqlEditor";
 import { HistoryPanel } from "./historyPanel";
@@ -458,7 +459,8 @@ export class QueryView implements TabContent {
 
 function resultGrid(set: ResultSet, dialect: SqlDialect): DataGrid {
   const grid = new DataGrid();
-  grid.load({ ...gridSetup(set.columns, set.rows, dialect), clientFilter: true });
+  const data = legacyGridData(set.columns, set.rows);
+  grid.load({ ...gridSetup(data.columns, data.rows, dialect), clientFilter: true });
   return grid;
 }
 

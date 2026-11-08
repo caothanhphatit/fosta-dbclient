@@ -27,7 +27,6 @@ import type {
   AiSettings,
   AppConfig,
   Capabilities,
-  BrowseRequest,
   Caller,
   CellValue,
   ChatEvent,
@@ -41,11 +40,7 @@ import type {
   HistoryQuery,
   QueryOutcome,
   RecallReport,
-  RowChange,
   SchemaGraph,
-  TableDesign,
-  TablePage,
-  TableRelations,
   TaskDef,
   TaskLogEvent,
   TaskStatus,
@@ -119,18 +114,6 @@ export const api = {
   schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),
   createDatabase: (connectionId: string, name: string, firstCollection: string | null, confirmation: Confirmation | null = null) =>
     invoke<void>("create_database", { connectionId, name, firstCollection, confirmation }),
-  describeTable: (connectionId: string, database: string, table: string) => invoke<TableDesign>("describe_table", { connectionId, database, table }),
-  browseTable: (request: BrowseRequest) => invoke<TablePage>("browse_table", { request }),
-  /** `caller` is "gridSave" or "import"; batches of one import share `importId` and are confirmed once. */
-  applyChanges: (
-    connectionId: string,
-    database: string,
-    table: string,
-    changes: RowChange[],
-    caller: Caller = "gridSave",
-    confirmation: Confirmation | null = null,
-    importId: string | null = null,
-  ) => invoke<number>("apply_changes", { connectionId, database, table, changes, caller, confirmation, importId }),
   /** Opens a query session; `options` picks the language and database (defaults: the engine's default language). */
   openSession: (connectionId: string, sessionId: string, options: SessionOptions | null = null) =>
     invoke<SessionInfo>("open_session", { connectionId, sessionId, options }),
@@ -151,7 +134,6 @@ export const api = {
   saveWorkspace: (workspace: WorkspaceMeta, relaxConfirmation: string | null = null) => invoke<AppConfig>("save_workspace", { workspace, relaxConfirmation }),
   setActiveWorkspace: (id: string) => invoke<AppConfig>("set_active_workspace", { id }),
   deleteWorkspace: (id: string) => invoke<AppConfig>("delete_workspace", { id }),
-  tableRelations: (connectionId: string, database: string, table: string) => invoke<TableRelations>("table_relations", { connectionId, database, table }),
   vectorInfo: (connectionId: string, database: string, table: string) => invoke<VectorInfo>("vector_info", { connectionId, database, table }),
   fetchVector: (connectionId: string, database: string, table: string, column: string, key: CellValue[]) =>
     invoke<number[]>("fetch_vector", { connectionId, database, table, column, key }),

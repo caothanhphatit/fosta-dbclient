@@ -1,7 +1,9 @@
 /**
  * Pure helpers for the cell editor: JSON detection, formatting and validation, text statistics and a
- * hex dump of binary values (which travel as `0x…` text).
+ * hex dump of binary values (which travel as `0x…` text), and the typed-cell helpers (editor text, input hints, paste).
  */
+import type { Value, ValueKind } from "../../core/contract";
+import { displayValue, parseInput, valueToJson } from "../../core/values";
 
 export interface JsonCheck {
   valid: boolean;
@@ -98,4 +100,57 @@ export function hexDump(value: string, bytesPerLine = 16): string {
 export function vectorListing(values: number[]): string {
   const width = String(values.length - 1).length;
   return values.map((value, index) => `${String(index).padStart(width)}  ${value}`).join("\n");
+}
+
+// --- Typed cells ----------------------------------------------------------------------------------------------------------
+
+/** What to type for a value of each kind (input placeholders and the editor's hint). */
+export const KIND_HINTS: Partial<Record<ValueKind["kind"], string>> = {
+  int: "whole number",
+  float: "number",
+  decimal: "number",
+  bool: "true or false",
+  date: "YYYY-MM-DD",
+  time: "HH:MM:SS",
+  timestamp: "YYYY-MM-DD HH:MM:SS",
+  timestampTz: "YYYY-MM-DD HH:MM:SS+00:00",
+  uuid: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+  objectId: "24 hex characters",
+  bytes: "0x… hex (other text is stored as its UTF-8 bytes)",
+  json: "JSON",
+  document: "JSON object",
+  array: "JSON array, e.g. [1, 2]",
+};
+
+/** Kinds edited in the large JSON editor rather than in the cell. */
+export function isJsonKind(kind: ValueKind): boolean {
+  return kind.kind === "json" || kind.kind === "document" || kind.kind === "array";
+}
+
+/** The text an editor starts with: documents and arrays as JSON (indented when `pretty`), everything else as shown. */
+export function editText(value: Value, pretty = false): string {
+  if (value.t === "doc" || value.t === "array") return JSON.stringify(valueToJson(value), null, pretty ? 2 : undefined);
+  if (value.t === "json" && pretty) {
+    try {
+      return JSON.stringify(JSON.parse(value.v), null, 2);
+    } catch {
+      return value.v;
+    }
+  }
+  return displayValue(value) ?? "";
+}
+
+/**
+ * Text pasted into a cell: exactly `NULL` is NULL (what "Copy row" writes for NULL), anything else is parsed for the
+ * column's kind. Returns an `Error` when it does not fit.
+ */
+export function pastedValue(kind: ValueKind, text: string): Value | Error {
+  if (text === "NULL") return { t: "null", v: null };
+  return parseInput(kind, text);
+}
+
+/** Tab- and newline-separated text (a copied block of cells) as rows of fields. */
+export function splitPasted(text: string): string[][] {
+  const lines = text.replace(/\r\n?/g, "\n").replace(/\n$/, "").split("\n");
+  return lines.map((line) => line.split("\t"));
 }

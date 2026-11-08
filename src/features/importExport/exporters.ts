@@ -1,5 +1,11 @@
-import { quoteIdent, quoteTable, sqlLiteral, type SqlDialect } from "../../core/sql";
-import type { Cell, ColumnMeta } from "../../core/types";
+/**
+ * Rows of a grid as text: CSV / delimited and Markdown (cells as the grid shows them, `displayValue`), JSON (relaxed JSON
+ * values: numbers stay numbers, documents stay objects) and SQL INSERT statements (typed literals per dialect). Vector
+ * columns are left out (the grid holds only a summary of them).
+ */
+import type { ColumnInfo, Value } from "../../core/contract";
+import { quoteIdent, quoteTable, valueLiteral, type SqlDialect } from "../../core/sql";
+import { displayValue, valueToJson } from "../../core/values";
 
 export type ExportFormat = "csv" | "json" | "markdown" | "insert";
 
@@ -10,28 +16,31 @@ export const EXPORT_LABELS: Record<ExportFormat, string> = {
   insert: "INSERT statements",
 };
 
-export function exportRows(format: ExportFormat, columns: ColumnMeta[], rows: Cell[][], tableName: string | null, dialect: SqlDialect): string {
-  const exportable = columns.map((column, index) => ({ column, index })).filter(({ column }) => column.vectorDims === null);
-  const pick = (row: Cell[]) => exportable.map(({ index }) => row[index]);
+type Exportable = { column: ColumnInfo; index: number }[];
+
+function exportableColumns(columns: ColumnInfo[]): Exportable {
+  return columns.map((column, index) => ({ column, index })).filter(({ column }) => column.hints.vectorDims == null);
+}
+
+const NULL: Value = { t: "null", v: null };
+
+export function exportRows(format: ExportFormat, columns: ColumnInfo[], rows: Value[][], tableName: string | null, dialect: SqlDialect): string {
+  const exportable = exportableColumns(columns);
+  const pick = (row: Value[]) => exportable.map(({ index }) => row[index] ?? NULL);
   const names = exportable.map(({ column }) => column.name);
   switch (format) {
     case "csv":
       return delimitedText(names, rows.map(pick), ",");
     case "json":
       return JSON.stringify(
-        rows.map((row) => Object.fromEntries(pick(row).map((value, index) => [names[index], value]))),
+        rows.map((row) => Object.fromEntries(pick(row).map((value, index) => [names[index], valueToJson(value)]))),
         null,
         2,
       );
     case "markdown":
       return markdownTable(names, rows.map(pick));
     case "insert":
-      return insertStatements(
-        tableName ?? "table_name",
-        exportable.map(({ column }) => column),
-        rows.map(pick),
-        dialect,
-      );
+      return insertStatements(tableName ?? "table_name", names, rows.map(pick), dialect);
   }
 }
 
@@ -49,35 +58,33 @@ export function excelSeparator(locale?: string): string {
  * Values holding the separator, a quote or a line break are quoted, so a cell
  * may span lines. NULL becomes an empty field. Vector columns are left out.
  */
-export function exportDelimited(columns: ColumnMeta[], rows: Cell[][], separator: string): string {
-  const exportable = columns.map((column, index) => ({ column, index })).filter(({ column }) => column.vectorDims === null);
+export function exportDelimited(columns: ColumnInfo[], rows: Value[][], separator: string): string {
+  const exportable = exportableColumns(columns);
   return delimitedText(
     exportable.map(({ column }) => column.name),
-    rows.map((row) => exportable.map(({ index }) => row[index])),
+    rows.map((row) => exportable.map(({ index }) => row[index] ?? NULL)),
     separator,
   );
 }
 
-function delimitedText(names: string[], rows: Cell[][], separator: string): string {
-  const field = (value: Cell): string => {
-    if (value === null) return "";
-    const needsQuotes = value.includes(separator) || /["\r\n]/.test(value);
-    return needsQuotes ? `"${value.replace(/"/g, '""')}"` : value;
+function delimitedText(names: string[], rows: Value[][], separator: string): string {
+  const field = (text: string | null): string => {
+    if (text === null) return "";
+    const needsQuotes = text.includes(separator) || /["\r\n]/.test(text);
+    return needsQuotes ? `"${text.replace(/"/g, '""')}"` : text;
   };
-  return [names, ...rows].map((values) => values.map(field).join(separator)).join("\r\n");
+  return [names.map(field), ...rows.map((row) => row.map((value) => field(displayValue(value))))].map((values) => values.join(separator)).join("\r\n");
 }
 
-function markdownTable(names: string[], rows: Cell[][]): string {
-  const escape = (value: Cell) => (value ?? "NULL").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+function markdownTable(names: string[], rows: Value[][]): string {
+  const escape = (text: string) => text.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
   const header = `| ${names.map(escape).join(" | ")} |`;
   const divider = `| ${names.map(() => "---").join(" | ")} |`;
-  return [header, divider, ...rows.map((row) => `| ${row.map(escape).join(" | ")} |`)].join("\n");
+  return [header, divider, ...rows.map((row) => `| ${row.map((value) => escape(displayValue(value) ?? "NULL")).join(" | ")} |`)].join("\n");
 }
 
-function insertStatements(table: string, columns: ColumnMeta[], rows: Cell[][], dialect: SqlDialect): string {
-  const columnList = columns.map((column) => quoteIdent(column.name, dialect)).join(", ");
+function insertStatements(table: string, names: string[], rows: Value[][], dialect: SqlDialect): string {
+  const columnList = names.map((name) => quoteIdent(name, dialect)).join(", ");
   const target = quoteTable(table, dialect);
-  return rows
-    .map((row) => `INSERT INTO ${target} (${columnList}) VALUES (${row.map((value, index) => sqlLiteral(value, columns[index], dialect)).join(", ")});`)
-    .join("\n");
+  return rows.map((row) => `INSERT INTO ${target} (${columnList}) VALUES (${row.map((value) => valueLiteral(value, dialect)).join(", ")});`).join("\n");
 }

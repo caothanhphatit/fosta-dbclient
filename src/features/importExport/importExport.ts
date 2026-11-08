@@ -1,21 +1,25 @@
 /**
- * Table import (CSV, TSV, JSON, NDJSON) and export (CSV, CSV for Excel, JSON,
- * SQL INSERT, Markdown) for the data tab. Export can cover the whole table
- * (all rows matching the current filter), fetched page by page. Files are
- * written to Downloads by the backend; imports run as batched INSERTs, each
- * batch in one transaction.
+ * Table import (CSV, TSV, JSON, NDJSON) and export (CSV, CSV for Excel, JSON, SQL INSERT, Markdown) for the data tab.
+ * Export can cover every row matching the current filter, read page by page with `browse_object` (by keyset where the
+ * engine offers one, so a large export stays linear). Files are written to Downloads by the backend. Imports parse each
+ * value for its column's kind first (nothing is sent while a value does not fit), then insert through `apply_edits`
+ * (caller "import", one `importId` per run, so the safety rules confirm the run once) in batches; each batch is applied
+ * as one set.
  */
 import { capabilities } from "../../core/capabilities";
 import { api, errorText } from "../../core/api";
+import type { ConnectionApi } from "../../core/connectionApi";
+import type { ColumnInfo, ObjectRef, Page, Total, Value } from "../../core/contract";
 import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs";
 import { formatNumber, h } from "../../core/dom";
-import { driverInfo } from "../../core/drivers";
+import type { SqlDialect } from "../../core/sql";
+import type { Cell } from "../../core/types";
+import { isEditableColumn } from "../grid/changeSet";
 import { detectDelimiter, parseCsv } from "./csv";
 import { excelSeparator, exportDelimited, exportRows } from "./exporters";
-import { ExportCancelled, exportFileName, fetchAllRows } from "./exportFetch";
-import { sqlDialect, type SqlDialect } from "../../core/sql";
+import { importChanges, importValue } from "./importValues";
+import { ExportCancelled, exportFileName, fetchAllRows, type PageCursor } from "./exportFetch";
 import { ConfirmationSession } from "../safety/confirmationDialog";
-import type { BrowseRequest, Cell, ColumnMeta, RowChange, TableTarget } from "../../core/types";
 
 const IMPORT_BATCH = 500;
 const PREVIEW_ROWS = 6;
@@ -35,26 +39,31 @@ const FORMATS: { value: FileFormat; label: string; extension: string }[] = [
 ];
 
 export interface ExportSource {
-  target: TableTarget;
-  columns: ColumnMeta[];
+  /** The object's name: the dialog title, the default file name and the INSERT target. */
+  title: string;
+  columns: ColumnInfo[];
   /** Rows of the page on screen. */
-  pageRows: Cell[][];
-  /** Everything needed to fetch all rows matching the current filter and sort. */
-  request: Omit<BrowseRequest, "offset" | "limit">;
-  total: number;
+  pageRows: Value[][];
+  /** Whether a filter is applied (the "all rows" choice says so). */
+  filtered: boolean;
+  total: Total | null;
+  dialect: SqlDialect;
+  /** Reads one page of every row matching the current filter and sort. */
+  read: (cursor: PageCursor, limit: number) => Promise<Page>;
 }
 
 export function exportDialog(source: ExportSource): void {
   const format = h("select", { class: "input" }, ...FORMATS.map((item) => h("option", { value: item.value }, item.label)));
   const scopeAll = h("input", { type: "radio", name: "scope", checked: true });
   const scopePage = h("input", { type: "radio", name: "scope" });
-  const fileName = textInput(`${source.target.table}.csv`, { class: "input mono" });
+  const fileName = textInput(`${source.title}.csv`, { class: "input mono" });
   const progress = h("p", { class: "test-status" });
   format.addEventListener("change", () => {
     const extension = FORMATS.find((item) => item.value === format.value)?.extension ?? "txt";
     fileName.value = fileName.value.replace(/\.[^.]*$/, "") + `.${extension}`;
   });
-  const filtered = source.request.filter ? " matching the filter" : "";
+  const filtered = source.filtered ? " matching the filter" : "";
+  const totalText = source.total ? `${source.total.exact ? "" : "about "}${formatNumber(source.total.value)} ` : "";
   const body = h(
     "div",
     { class: "form-grid" },
@@ -63,7 +72,7 @@ export function exportDialog(source: ExportSource): void {
       "div",
       { class: "field" },
       h("span", { class: "field-label" }, "Rows"),
-      h("label", { class: "checkbox" }, scopeAll, h("span", {}, `All ${formatNumber(source.total)} rows${filtered}`)),
+      h("label", { class: "checkbox" }, scopeAll, h("span", {}, `All ${totalText}rows${filtered}`)),
       h("label", { class: "checkbox" }, scopePage, h("span", {}, `This page only (${formatNumber(source.pageRows.length)} rows)`)),
     ),
     field("File name", fileName, capabilities().browserDownloads ? "Downloaded by your browser" : "Saved to your Downloads folder"),
@@ -71,8 +80,9 @@ export function exportDialog(source: ExportSource): void {
   );
   // Closing the dialog (Esc, Cancel) while rows are being read stops the export.
   const cancel = new AbortController();
+  const of = source.total ? ` / ${source.total.exact ? "" : "~"}${formatNumber(source.total.value)}` : "";
   openModal(
-    `Export ${source.target.table}`,
+    `Export ${source.title}`,
     body,
     [
       { label: "Cancel", run: () => undefined },
@@ -83,17 +93,12 @@ export function exportDialog(source: ExportSource): void {
           try {
             const rows = scopePage.checked
               ? source.pageRows
-              : await fetchAllRows(
-                  async (offset, limit) => (await api.browseTable({ ...source.request, offset, limit })).rows,
-                  source.total,
-                  cancel.signal,
-                  (done) => (progress.textContent = `Reading rows… ${formatNumber(done)} / ${formatNumber(source.total)}`),
-                );
+              : await fetchAllRows(source.read, cancel.signal, (done) => (progress.textContent = `Reading rows… ${formatNumber(done)}${of}`));
             if (cancel.signal.aborted) return;
             progress.textContent = "Writing file…";
             const chosen = FORMATS.find((item) => item.value === format.value) ?? FORMATS[0];
-            const text = render(chosen.value, source.columns, rows, source.target.table, sqlDialect(source.target.driver));
-            const path = await api.saveDownload(exportFileName(fileName.value, source.target.table, chosen.extension), text, null);
+            const text = render(chosen.value, source.columns, rows, source.title, source.dialect);
+            const path = await api.saveDownload(exportFileName(fileName.value, source.title, chosen.extension), text, null);
             savedDialog(`Exported ${formatNumber(rows.length)} rows`, path);
           } catch (error) {
             if (error instanceof ExportCancelled) return;
@@ -106,7 +111,7 @@ export function exportDialog(source: ExportSource): void {
   );
 }
 
-function render(format: FileFormat, columns: ColumnMeta[], rows: Cell[][], table: string, dialect: SqlDialect): string {
+function render(format: FileFormat, columns: ColumnInfo[], rows: Value[][], table: string, dialect: SqlDialect): string {
   switch (format) {
     case "excel":
       // Excel reads UTF-8 only with a BOM, and splits on the locale's list separator ("," in the US, ";" in Vietnam or Germany).
@@ -144,7 +149,17 @@ interface ParsedFile {
   rows: Cell[][];
 }
 
-export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone: () => void): void {
+export interface ImportTarget {
+  title: string;
+  /** "shop.products (MariaDB)", for the intro line. */
+  where: string;
+  object: ObjectRef;
+  columns: ColumnInfo[];
+  connection: Pick<ConnectionApi, "applyEdits">;
+  onDone: () => void;
+}
+
+export function importDialog(target: ImportTarget): void {
   const fileInput = h("input", { type: "file", accept: ".csv,.tsv,.txt,.json,.ndjson", class: "file-input" });
   const delimiter = h(
     "select",
@@ -162,7 +177,7 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
   const mappingHost = h("div", { class: "import-mapping" });
   const preview = h("div", { class: "import-preview" });
   const status = h("p", { class: "test-status" }, "Choose a CSV or JSON file.");
-  const insertable = columns.filter((column) => column.vectorDims == null);
+  const insertable = target.columns.filter(isEditableColumn);
   let text = "";
   let fileName = "";
   let parsed: ParsedFile | null = null;
@@ -186,6 +201,12 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
     status.className = "test-status";
     status.textContent = `${formatNumber(parsed.rows.length)} rows, ${parsed.headers.length} columns in ${fileName}.`;
   };
+
+  const used = () =>
+    mapping.flatMap((name, index) => {
+      const column = insertable.find((item) => item.name === name);
+      return column ? [{ index, column }] : [];
+    });
 
   const renderMapping = () => {
     if (!parsed) return;
@@ -225,15 +246,24 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
 
   const renderPreview = () => {
     if (!parsed) return;
-    const used = mapping.map((name, index) => ({ name, index })).filter((item) => item.name !== SKIP);
-    if (used.length === 0) {
+    const columns = used();
+    if (columns.length === 0) {
       preview.replaceChildren(h("p", { class: "field-hint" }, "Map at least one column."));
       return;
     }
-    const head = h("tr", {}, ...used.map((item) => h("th", {}, item.name)));
-    const body = parsed.rows
-      .slice(0, PREVIEW_ROWS)
-      .map((row) => h("tr", {}, ...used.map((item) => h("td", {}, cellText(normalize(row[item.index], emptyAsNull.input.checked))))));
+    const head = h("tr", {}, ...columns.map((item) => h("th", {}, item.column.name)));
+    const body = parsed.rows.slice(0, PREVIEW_ROWS).map((row) =>
+      h(
+        "tr",
+        {},
+        ...columns.map((item) => {
+          const value = importValue(item.column, row[item.index] ?? null, emptyAsNull.input.checked);
+          return value instanceof Error
+            ? h("td", { class: "import-invalid", title: value.message }, cellText(row[item.index] ?? null))
+            : h("td", { class: value.t === "null" ? "null" : "" }, value.t === "null" ? "NULL" : cellText(row[item.index] ?? null));
+        }),
+      ),
+    );
     preview.replaceChildren(h("table", { class: "import-table compact" }, h("thead", {}, head), h("tbody", {}, ...body)));
   };
 
@@ -248,7 +278,6 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
   header.input.addEventListener("change", reparse);
   emptyAsNull.input.addEventListener("change", renderPreview);
 
-  const info = driverInfo(target.driver);
   const body = h(
     "div",
     { class: "form-grid" },
@@ -256,8 +285,8 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
       "p",
       { class: "form-intro" },
       "Rows are inserted into ",
-      h("strong", {}, `${target.database}.${target.table}`),
-      ` (${info.label}) in batches of ${IMPORT_BATCH}; each batch is one transaction, so a failed batch leaves the earlier ones in place.`,
+      h("strong", {}, target.where),
+      ` in batches of ${IMPORT_BATCH}; each batch is applied as one set, so a failed batch leaves the earlier ones in place. Values are checked against the column types before anything is sent.`,
     ),
     field("File", fileInput),
     h(
@@ -271,7 +300,7 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
     status,
   );
   openModal(
-    `Import into ${target.table}`,
+    `Import into ${target.title}`,
     body,
     [
       { label: "Cancel", run: () => undefined },
@@ -280,12 +309,15 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
         primary: true,
         run: async () => {
           if (!parsed) throw new Error("Choose a file first");
-          const used = mapping.map((name, index) => ({ name, index })).filter((item) => item.name !== SKIP);
-          if (used.length === 0) throw new Error("Map at least one column");
-          const changes: RowChange[] = parsed.rows.map((row) => ({
-            kind: "insert",
-            values: used.map((item) => ({ column: item.name, value: normalize(row[item.index], emptyAsNull.input.checked) })),
-          }));
+          const columns = used();
+          if (columns.length === 0) throw new Error("Map at least one column");
+          const { changes, errors, errorCount } = importChanges(parsed.rows, columns, emptyAsNull.input.checked);
+          if (errorCount > 0) {
+            status.className = "test-status error";
+            const more = errorCount > errors.length ? ` …and ${formatNumber(errorCount - errors.length)} more.` : "";
+            status.textContent = `${formatNumber(errorCount)} value(s) do not fit their column; nothing was imported. ${errors.join(" · ")}${more}`;
+            return false;
+          }
           let done = 0;
           status.className = "test-status";
           // One import run is confirmed once (when the rules ask), for all of its batches.
@@ -294,35 +326,30 @@ export function importDialog(target: TableTarget, columns: ColumnMeta[], onDone:
           for (let start = 0; start < changes.length; start += IMPORT_BATCH) {
             const batch = changes.slice(start, start + IMPORT_BATCH);
             try {
-              const affected = await confirmations.run((confirmation) =>
-                api.applyChanges(target.connectionId, target.database, target.table, batch, "import", confirmation, importId),
+              const result = await confirmations.run((confirmation) =>
+                target.connection.applyEdits({ object: target.object, changes: batch }, "import", confirmation, importId),
               );
-              if (affected === null) {
+              if (result === null) {
                 status.textContent = `Import cancelled. ${formatNumber(done)} rows were imported before that.`;
-                if (done > 0) onDone();
+                if (done > 0) target.onDone();
                 return false;
               }
             } catch (error) {
               status.className = "test-status error";
               status.textContent = `Rows ${formatNumber(start + 1)}–${formatNumber(start + batch.length)} failed: ${errorText(error)}. ${formatNumber(done)} rows were imported before that.`;
-              if (done > 0) onDone();
+              if (done > 0) target.onDone();
               return false;
             }
             done += batch.length;
             status.textContent = `Imported ${formatNumber(done)} / ${formatNumber(changes.length)} rows…`;
           }
-          toast(`Imported ${formatNumber(done)} rows into ${target.table}`, "success");
-          onDone();
+          toast(`Imported ${formatNumber(done)} rows into ${target.title}`, "success");
+          target.onDone();
         },
       },
     ],
     { width: 720 },
   );
-}
-
-function normalize(value: Cell, emptyAsNull: boolean): Cell {
-  if (value === null) return null;
-  return emptyAsNull && value === "" ? null : value;
 }
 
 function cellText(value: Cell): string {

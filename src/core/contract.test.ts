@@ -277,6 +277,7 @@ const SHAPES: Record<string, Shape> = {
         attempted: arr(field),
       }),
     ),
+    compensated: opt("boolean"),
   }),
   "stream-events": arr({
     union: {

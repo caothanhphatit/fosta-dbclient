@@ -1,4 +1,4 @@
-import type { Cell } from "../../core/types";
+import type { Page, Value } from "../../core/contract";
 
 export const FETCH_PAGE = 1000;
 
@@ -10,24 +10,30 @@ export class ExportCancelled extends Error {
   }
 }
 
+/** Where the next page starts: after a keyset (the previous page's `nextKeyset`) or, without one, at an offset. */
+export interface PageCursor {
+  offset: number;
+  after: Value[] | null;
+}
+
+export type PageReader = (cursor: PageCursor, limit: number) => Promise<Pick<Page, "rows" | "hasMore" | "nextKeyset">>;
+
 /**
- * Reads every row page by page. Checks `signal` before each page and after it arrives, so closing the dialog
+ * Reads every row page by page: by keyset while the engine hands one out (each page is an index seek, so a large export
+ * stays linear), by offset otherwise. Checks `signal` before each page and after it arrives, so closing the dialog
  * (Esc or Cancel) stops the export instead of letting it finish in the background.
  */
-export async function fetchAllRows(
-  fetchPage: (offset: number, limit: number) => Promise<Cell[][]>,
-  total: number,
-  signal: AbortSignal,
-  onProgress: (done: number) => void = () => undefined,
-): Promise<Cell[][]> {
-  const rows: Cell[][] = [];
-  for (let offset = 0; offset < total || offset === 0; offset += FETCH_PAGE) {
+export async function fetchAllRows(read: PageReader, signal: AbortSignal, onProgress: (done: number) => void = () => undefined): Promise<Value[][]> {
+  const rows: Value[][] = [];
+  let cursor: PageCursor = { offset: 0, after: null };
+  for (;;) {
     if (signal.aborted) throw new ExportCancelled();
-    const page = await fetchPage(offset, FETCH_PAGE);
+    const page = await read(cursor, FETCH_PAGE);
     if (signal.aborted) throw new ExportCancelled();
-    rows.push(...page);
+    rows.push(...page.rows);
     onProgress(rows.length);
-    if (page.length < FETCH_PAGE) break;
+    if (!page.hasMore || page.rows.length === 0) break;
+    cursor = { offset: rows.length, after: page.nextKeyset ?? null };
   }
   return rows;
 }

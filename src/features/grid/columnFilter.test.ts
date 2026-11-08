@@ -1,121 +1,153 @@
 import { describe, expect, it } from "vitest";
-import type { ColumnMeta } from "../../core/types";
-import { columnCondition, combinedCondition, combinedJsonFilter, matchesFilter } from "./columnFilter";
+import type { ColumnInfo, FilterOp, Value, ValueKind } from "../../core/contract";
+import {
+  FILTER_OPERATORS,
+  columnCondition,
+  conditionsFilter,
+  filterConditions,
+  formatFilter,
+  matchesFilter,
+  parseFilterText,
+  withOperator,
+} from "./columnFilter";
 
-const column = (name: string, kind: Partial<ColumnMeta> = {}): ColumnMeta => ({
+const col = (name: string, kind: ValueKind["kind"]): ColumnInfo => ({
   name,
-  typeName: "varchar",
-  numeric: false,
-  binary: false,
-  primary: false,
-  vectorDims: null,
-  ...kind,
+  typeName: kind,
+  kind: { kind } as ValueKind,
+  nullable: true,
+  default: null,
+  comment: null,
+  identity: null,
+  generated: null,
+  hints: {},
 });
 
-const name = column("name");
-const price = column("price", { typeName: "decimal", numeric: true });
-const hash = column("hash", { typeName: "varbinary", binary: true });
+const name = col("name", "text");
+const price = col("price", "decimal");
+const created = col("created", "date");
+const active = col("active", "bool");
+
+describe("parseFilterText", () => {
+  const cases: [string, FilterOp, string[]][] = [
+    ["abc", "contains", ["abc"]],
+    ["!abc", "notContains", ["abc"]],
+    ["^Oak", "startsWith", ["Oak"]],
+    ["desk$", "endsWith", ["desk"]],
+    ["=x", "eq", ["x"]],
+    ["!= x", "ne", ["x"]],
+    ["<>x", "ne", ["x"]],
+    ["<5", "lt", ["5"]],
+    ["<=5", "le", ["5"]],
+    [">5", "gt", ["5"]],
+    [">= 5", "ge", ["5"]],
+    ["1.5..2.5", "between", ["1.5", "2.5"]],
+    ["in: a, b ,c", "in", ["a", "b", "c"]],
+    ["!in:a,b", "notIn", ["a", "b"]],
+    ["~a%b_", "like", ["a%b_"]],
+    ["!~a%", "notLike", ["a%"]],
+    ["NULL", "isNull", []],
+    ["!null", "isNotNull", []],
+    ["not null", "isNotNull", []],
+  ];
+  it.each(cases)("%s → %s", (text, op, values) => {
+    expect(parseFilterText(text)).toEqual({ op, values });
+  });
+
+  it("covers every operator the menu offers", () => {
+    const seen = new Set(cases.map(([, op]) => op));
+    expect(FILTER_OPERATORS.filter((item) => !seen.has(item.op))).toEqual([]);
+    expect(FILTER_OPERATORS).toHaveLength(17);
+  });
+
+  it("reads plain text as equals on non-text columns", () => {
+    expect(parseFilterText("42", price.kind)).toEqual({ op: "eq", values: ["42"] });
+    expect(parseFilterText("42", name.kind)).toEqual({ op: "contains", values: ["42"] });
+  });
+
+  it("keeps a leading = of the value after the operator", () => {
+    expect(parseFilterText("==a")).toEqual({ op: "eq", values: ["=a"] });
+  });
+
+  it("ignores empty boxes", () => {
+    expect(parseFilterText("   ")).toBeNull();
+  });
+});
+
+describe("formatFilter / withOperator", () => {
+  it("round-trips every operator", () => {
+    const values: Record<string, string[]> = { between: ["1", "9"], in: ["a", "b"], notIn: ["a", "b"], isNull: [], isNotNull: [] };
+    for (const { op } of FILTER_OPERATORS) {
+      const text = formatFilter(op, values[op] ?? ["v"]);
+      expect(parseFilterText(text), text).toEqual({ op, values: values[op] ?? ["v"] });
+    }
+  });
+
+  it("switches the operator but keeps the value", () => {
+    expect(withOperator(">= 10", "lt")).toBe("<10");
+    expect(withOperator("abc", "startsWith")).toBe("^abc");
+    expect(withOperator("abc", "isNull")).toBe("null");
+    expect(withOperator("null", "eq")).toBe("=");
+    expect(withOperator("5", "between")).toBe("5..");
+  });
+});
 
 describe("columnCondition", () => {
-  it("turns plain text into a case-insensitive contains", () => {
-    expect(columnCondition(name, "abc", "mysql")).toBe("`name` LIKE '%abc%'");
-    expect(columnCondition(name, "O'Brien", "mysql")).toBe("`name` LIKE '%O''Brien%'");
+  it("emits structured conditions with the values as typed text", () => {
+    expect(columnCondition(name, "O'Brien")).toEqual({ column: "name", op: "contains", values: ["O'Brien"] });
+    expect(columnCondition(price, ">= 10.5")).toEqual({ column: "price", op: "ge", values: ["10.5"] });
+    expect(columnCondition(created, "2026-01-01..2026-02-01")).toEqual({ column: "created", op: "between", values: ["2026-01-01", "2026-02-01"] });
   });
 
-  it("compares numbers on numeric columns and hex on binary ones", () => {
-    expect(columnCondition(price, "42", "mysql")).toBe("`price` = 42");
-    expect(columnCondition(name, "42", "mysql")).toBe("`name` LIKE '%42%'");
-    expect(columnCondition(hash, "0xABCD", "mysql")).toBe("`hash` = 0xABCD");
+  it("rejects values that do not fit the column's type", () => {
+    expect(columnCondition(price, ">abc")).toBeInstanceOf(Error);
+    expect(columnCondition(created, "=2026-13-01")).toBeInstanceOf(Error);
+    expect(columnCondition(active, "maybe")).toBeInstanceOf(Error);
+    expect(columnCondition(price, "in:")).toBeInstanceOf(Error);
   });
 
-  it("understands comparison operators, with != written as <>", () => {
-    expect(columnCondition(price, ">= 10", "mysql")).toBe("`price` >= 10");
-    expect(columnCondition(name, "!=x", "mysql")).toBe("`name` <> 'x'");
-    expect(columnCondition(name, "<b", "mysql")).toBe("`name` < 'b'");
-  });
-
-  it("understands null and not null", () => {
-    expect(columnCondition(name, "NULL", "mysql")).toBe("`name` IS NULL");
-    expect(columnCondition(name, "!null", "mysql")).toBe("`name` IS NOT NULL");
-    expect(columnCondition(name, "not null", "mysql")).toBe("`name` IS NOT NULL");
-  });
-
-  it("ignores empty filters", () => {
-    expect(columnCondition(name, "   ", "mysql")).toBeNull();
+  it("lets pattern operators take any text, even on typed columns", () => {
+    expect(columnCondition(price, "~1%")).toEqual({ column: "price", op: "like", values: ["1%"] });
   });
 });
 
-describe("combinedCondition", () => {
-  it("returns null without filters and a bare condition for one", () => {
-    expect(combinedCondition([name, price], {}, " ", "mysql")).toBeNull();
-    expect(combinedCondition([name, price], { price: ">5" }, "", "mysql")).toBe("`price` > 5");
-  });
-
-  it("wraps several conditions in parentheses, the WHERE text first", () => {
-    expect(combinedCondition([name, price], { name: "x", price: "<9" }, "status = 1", "mysql")).toBe("(status = 1) AND (`name` LIKE '%x%') AND (`price` < 9)");
-  });
-});
-
-describe("column filters per dialect", () => {
-  it("uses brackets and N'…' strings on SQL Server", () => {
-    const status = column("Status");
-    expect(columnCondition(status, "paid", "tsql")).toBe("[Status] LIKE N'%paid%'");
-    expect(columnCondition(status, "a[b", "tsql")).toBe("[Status] LIKE N'%a[[]b%'");
-    expect(columnCondition(column("we]ird"), "=x", "tsql")).toBe("[we]]ird] = N'x'");
-    expect(columnCondition(price, "42", "tsql")).toBe("[price] = 42");
-    expect(columnCondition(hash, "0xABCD", "tsql")).toBe("[hash] = 0xABCD");
-    expect(columnCondition(status, String.raw`C:\tmp`, "tsql")).toBe(String.raw`[Status] LIKE N'%C:\tmp%'`);
-    expect(combinedCondition([status, price], { Status: "paid", price: ">5" }, "", "tsql")).toBe("([Status] LIKE N'%paid%') AND ([price] > 5)");
-  });
-
-  it("uses double quotes and standard strings in ANSI SQL", () => {
-    expect(columnCondition(name, "O'Brien", "ansi")).toBe(`"name" LIKE '%O''Brien%'`);
-    expect(columnCondition(name, String.raw`a\b`, "ansi")).toBe(String.raw`"name" LIKE '%a\b%'`);
-    expect(columnCondition(hash, "0xABCD", "ansi")).toBe(`"hash" = '0xABCD'`);
-    expect(columnCondition(name, "null", "ansi")).toBe(`"name" IS NULL`);
+describe("filterConditions", () => {
+  it("returns the valid conditions and the errors of the others", () => {
+    const { conditions, errors } = filterConditions([name, price, created], { name: "desk", price: "> x", created: "" });
+    expect(conditions).toEqual([{ column: "name", op: "contains", values: ["desk"] }]);
+    expect([...errors.keys()]).toEqual(["price"]);
+    expect(conditionsFilter(conditions)).toEqual({ kind: "conditions", conditions, matchAny: false });
+    expect(conditionsFilter([])).toEqual({ kind: "none" });
   });
 });
 
-describe("combinedJsonFilter (MongoDB)", () => {
-  const parse = (value: string | null) => (value === null ? null : JSON.parse(value));
+describe("matchesFilter", () => {
+  const text = (v: string): Value => ({ t: "text", v });
+  const dec = (v: string): Value => ({ t: "decimal", v });
+  const NULL: Value = { t: "null", v: null };
 
-  it("turns text into a case-insensitive regex with special characters escaped", () => {
-    expect(parse(combinedJsonFilter([name], { name: "a.b" }, ""))).toEqual({ name: { $regex: String.raw`a\.b`, $options: "i" } });
+  it("matches text case-insensitively", () => {
+    expect(matchesFilter(text("Hello World"), name, "world")).toBe(true);
+    expect(matchesFilter(text("Hello"), name, "^he")).toBe(true);
+    expect(matchesFilter(text("Hello"), name, "!ell")).toBe(false);
+    expect(matchesFilter(text("Hello"), name, "~H_llo")).toBe(true);
   });
 
-  it("maps comparison operators and typed operands", () => {
-    expect(parse(combinedJsonFilter([price], { price: ">5" }, ""))).toEqual({ price: { $gt: 5 } });
-    expect(parse(combinedJsonFilter([name], { name: "=true" }, ""))).toEqual({ name: { $eq: true } });
-    expect(parse(combinedJsonFilter([name], { name: '!="x"' }, ""))).toEqual({ name: { $ne: "x" } });
-    expect(parse(combinedJsonFilter([price], { price: "7" }, ""))).toEqual({ price: 7 });
+  it("compares numbers numerically", () => {
+    expect(matchesFilter(dec("9.5"), price, ">10")).toBe(false);
+    expect(matchesFilter(dec("12"), price, ">10")).toBe(true);
+    expect(matchesFilter(dec("12"), price, "10..12")).toBe(true);
+    expect(matchesFilter(dec("12"), price, "in:1,12")).toBe(true);
   });
 
-  it("combines the JSON query and column filters with $and", () => {
-    expect(parse(combinedJsonFilter([name, price], { name: "null", price: "!null" }, '{ "status": "ACTIVE" }'))).toEqual({
-      $and: [{ status: "ACTIVE" }, { name: null }, { price: { $ne: null } }],
-    });
-    expect(combinedJsonFilter([name], {}, "")).toBeNull();
+  it("handles NULL like the engines", () => {
+    expect(matchesFilter(NULL, name, "null")).toBe(true);
+    expect(matchesFilter(NULL, name, "!null")).toBe(false);
+    expect(matchesFilter(NULL, name, "!abc")).toBe(false);
+    expect(matchesFilter(text("x"), name, "")).toBe(true);
   });
 
-  it("rejects a filter that is not JSON", () => {
-    expect(() => combinedJsonFilter([name], {}, "status = 1")).toThrow("JSON query document");
-  });
-});
-
-describe("matchesFilter (client-side filter of loaded rows)", () => {
-  it("matches text case-insensitively and handles null", () => {
-    expect(matchesFilter("Hello", "ell")).toBe(true);
-    expect(matchesFilter("Hello", "xyz")).toBe(false);
-    expect(matchesFilter(null, "null")).toBe(true);
-    expect(matchesFilter(null, "x")).toBe(false);
-    expect(matchesFilter("x", "!null")).toBe(true);
-    expect(matchesFilter("x", "")).toBe(true);
-  });
-
-  it("compares numerically when both sides are numbers, otherwise by text", () => {
-    expect(matchesFilter("10", ">9")).toBe(true);
-    expect(matchesFilter("10", "=10.0")).toBe(true);
-    expect(matchesFilter("b", "<c")).toBe(true);
-    expect(matchesFilter("b", "<>b")).toBe(false);
+  it("matches nothing for an invalid filter", () => {
+    expect(matchesFilter(dec("1"), price, ">abc")).toBe(false);
   });
 });

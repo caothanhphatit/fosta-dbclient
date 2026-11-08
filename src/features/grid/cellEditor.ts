@@ -1,70 +1,86 @@
 /**
- * Large editor for one cell: a monospace textarea with line/char counts, word wrap and NULL toggles,
- * and Format / Minify with inline validation for JSON. Binary and vector values, and cells of read-only
- * grids, open read-only with Copy. Saving hands the value back to the grid as a normal pending edit.
+ * Large editor for one cell, chosen by the column's kind: a textarea for text, a JSON editor (Format / Minify, inline
+ * validation that jumps to the error) for JSON, documents and arrays, a checkbox for booleans, `0x…` hex for bytes, and
+ * validated text for numbers, dates, times, timestamps, UUIDs and ObjectIds (`parseInput`; the server validates again).
+ * NULL is a toggle, never an empty box. Vector values and cells of read-only grids open read-only with Copy. Saving hands
+ * the typed value back to the grid as a pending edit.
  *
  * Keys stay inside the dialog: Esc closes without saving, Ctrl+Enter saves.
  */
+import type { ColumnInfo, Value } from "../../core/contract";
 import { showError } from "../../core/errorPanel";
 import { registerModal, toast } from "../../core/dialogs";
 import { copyText, h, icon } from "../../core/dom";
-import type { Cell, ColumnMeta } from "../../core/types";
-import { checkJson, formatJson, hexDump, looksLikeJson, minifyJson, textStats, vectorListing } from "./cellValue";
+import { displayValue, parseInput } from "../../core/values";
+import { checkJson, editText, formatJson, hexDump, isJsonKind, KIND_HINTS, looksLikeJson, minifyJson, textStats, vectorListing } from "./cellValue";
 
 export interface CellEditorOptions {
-  column: ColumnMeta;
-  value: Cell;
+  column: ColumnInfo;
+  value: Value;
   /** Where the value comes from, e.g. "products · row 12". */
   context: string;
   /** Set when the value cannot be changed; the editor then only shows and copies it. */
   readOnlyReason: string | null;
   /** Loads every component of a vector value (the grid only holds a summary). */
   loadVector: (() => Promise<number[]>) | null;
-  save: (value: Cell) => void;
+  save: (value: Value) => void;
   onClose?: () => void;
 }
 
 const WRAP_STORAGE_KEY = "db-studio.cellEditor.wrap";
 const numberFormat = new Intl.NumberFormat("en-US");
 
+/** Kinds whose text needs no check (anything typed is a valid value). */
+const FREE_TEXT = new Set(["text", "other", "interval"]);
+
 export function openCellEditor(options: CellEditorOptions): void {
   const { column, value } = options;
-  const binary = column.vectorDims == null && column.binary;
-  const vector = column.vectorDims != null;
+  const kind = column.kind;
+  const vector = column.hints.vectorDims != null;
   const readOnly = options.readOnlyReason !== null;
-  const jsonColumn = /json/i.test(column.typeName);
-  let copyValue = value ?? "";
+  const bytes = kind.kind === "bytes";
+  const bool = kind.kind === "bool";
+  const jsonKind = isJsonKind(kind);
+  const startsNull = value.t === "null";
+  const initialText = editText(value, true);
+  let copyValue = displayValue(value) ?? "";
 
   const textarea = h("textarea", {
     class: "cell-editor-text",
     spellcheck: "false",
     autocomplete: "off",
     "aria-label": `Value of ${column.name}`,
+    placeholder: KIND_HINTS[kind.kind] ?? "",
   });
-  textarea.value = binary && value !== null ? hexDump(value) : (value ?? "");
+  textarea.value = bytes && readOnly && !startsNull ? hexDump(initialText) : initialText;
   textarea.readOnly = readOnly;
   let savedText = textarea.value;
 
+  const boolInput = h("input", { type: "checkbox", checked: value.t === "bool" && value.v, disabled: readOnly });
+  const boolLabel = h("span", {}, String(value.t === "bool" && value.v));
+  const boolControl = h("label", { class: "checkbox cell-editor-bool" }, boolInput, boolLabel);
+
   const wrap = h("input", { type: "checkbox", checked: readWrap() });
-  const isNull = h("input", { type: "checkbox", checked: value === null, disabled: readOnly });
+  const isNull = h("input", { type: "checkbox", checked: startsNull, disabled: readOnly });
   const formatButton = toolbarButton("Format", readOnly ? "Pretty-print the JSON for reading" : "Pretty-print the JSON (2-space indent)");
   const minifyButton = toolbarButton("Minify", readOnly ? "Show the JSON on one line" : "Remove whitespace from the JSON");
-  const copyButton = toolbarButton("Copy", binary ? "Copy the value as 0x… hex" : "Copy the value");
+  const copyButton = toolbarButton("Copy", bytes ? "Copy the value as 0x… hex" : "Copy the value");
   const stats = h("span", { class: "cell-editor-stats" });
-  const jsonStatus = h("button", { class: "cell-editor-json", type: "button" });
+  const status = h("button", { class: "cell-editor-json", type: "button" });
   const footer = h("div", { class: "modal-footer" });
+  const saveButton = actionButton("Save", true, () => save());
 
   const tools = h(
     "div",
     { class: "cell-editor-tools" },
-    h("label", { class: "checkbox" }, wrap, h("span", {}, "Wrap lines")),
+    bool ? null : h("label", { class: "checkbox" }, wrap, h("span", {}, "Wrap lines")),
     readOnly ? null : h("label", { class: "checkbox" }, isNull, h("span", {}, "NULL")),
     h("span", { class: "spacer" }),
     formatButton,
     minifyButton,
     copyButton,
   );
-  const typeLabel = vector ? `vector(${column.vectorDims})` : column.typeName;
+  const typeLabel = vector ? `vector(${column.hints.vectorDims})` : column.typeName || kind.kind;
   const dialog = h(
     "div",
     { class: "modal cell-editor-modal", role: "dialog", "aria-modal": "true", "aria-label": `Edit ${column.name}` },
@@ -80,8 +96,8 @@ export function openCellEditor(options: CellEditorOptions): void {
       { class: "modal-body cell-editor-body" },
       readOnly ? h("div", { class: "cell-editor-note" }, icon("view"), `${options.readOnlyReason}. You can read and copy the value.`) : null,
       tools,
-      textarea,
-      h("div", { class: "cell-editor-status" }, stats, jsonStatus),
+      bool ? boolControl : textarea,
+      h("div", { class: "cell-editor-status" }, stats, status),
     ),
     footer,
   );
@@ -94,40 +110,79 @@ export function openCellEditor(options: CellEditorOptions): void {
     }
   });
 
-  const jsonMode = () => !binary && !vector && !isNull.checked && (jsonColumn || looksLikeJson(textarea.value));
+  /** Text columns that hold JSON still get Format / Minify and a (non-blocking) JSON check. */
+  const jsonMode = () => !bytes && !vector && !bool && !isNull.checked && (jsonKind || (FREE_TEXT.has(kind.kind) && looksLikeJson(textarea.value)));
+
+  /** The value as typed, or an `Error` that blocks saving. */
+  const currentValue = (): Value | Error => {
+    if (isNull.checked) return { t: "null", v: null };
+    if (bool) return { t: "bool", v: boolInput.checked };
+    if (kind.kind === "text") return { t: "text", v: textarea.value };
+    return parseInput(kind, textarea.value);
+  };
+
+  const showStatus = (kindClass: "ok" | "error" | null, text: string, position: number | null = null) => {
+    status.hidden = kindClass === null;
+    status.className = `cell-editor-json${kindClass ? ` ${kindClass}` : ""}`;
+    status.textContent = text;
+    status.title = "";
+    status.onclick = null;
+    if (position === null) return;
+    const at = Math.min(position, textarea.value.length);
+    status.title = "Go to the error";
+    status.onclick = () => {
+      textarea.focus();
+      textarea.setSelectionRange(at, Math.min(at + 1, textarea.value.length));
+    };
+  };
+
   const refresh = () => {
     textarea.disabled = isNull.checked;
-    textarea.placeholder = isNull.checked ? "NULL" : "";
+    boolInput.disabled = readOnly || isNull.checked;
+    boolLabel.textContent = isNull.checked ? "NULL" : String(boolInput.checked);
+    textarea.placeholder = isNull.checked ? "NULL" : (KIND_HINTS[kind.kind] ?? "");
     textarea.classList.toggle("nowrap", !wrap.checked);
     const { lines, chars } = textStats(isNull.checked ? "" : textarea.value);
-    stats.textContent = isNull.checked ? "NULL" : `${numberFormat.format(lines)} ${lines === 1 ? "line" : "lines"} · ${numberFormat.format(chars)} chars`;
+    stats.textContent = isNull.checked
+      ? "NULL"
+      : bool
+        ? ""
+        : bytes && !readOnly
+          ? bytesStats(textarea.value)
+          : `${numberFormat.format(lines)} ${lines === 1 ? "line" : "lines"} · ${numberFormat.format(chars)} chars`;
     const json = jsonMode();
     formatButton.hidden = !json;
     minifyButton.hidden = !json;
-    jsonStatus.hidden = !json || textarea.value.trim() === "";
-    jsonStatus.className = "cell-editor-json";
-    jsonStatus.title = "";
-    jsonStatus.onclick = null;
-    if (jsonStatus.hidden) return;
-    const check = checkJson(textarea.value);
-    formatButton.disabled = !check.valid;
-    minifyButton.disabled = !check.valid;
-    if (check.valid) {
-      jsonStatus.classList.add("ok");
-      jsonStatus.textContent = "Valid JSON";
-      return;
+    saveButton.disabled = false;
+    if (readOnly || isNull.checked || bool) return showStatus(null, "");
+    if (json) {
+      if (textarea.value.trim() === "") {
+        saveButton.disabled = jsonKind;
+        return jsonKind ? showStatus("error", "Empty: type JSON or tick NULL") : showStatus(null, "");
+      }
+      const check = checkJson(textarea.value);
+      formatButton.disabled = !check.valid;
+      minifyButton.disabled = !check.valid;
+      if (check.valid) {
+        const typed = jsonKind ? currentValue() : null;
+        if (typed instanceof Error) {
+          saveButton.disabled = true;
+          return showStatus("error", typed.message);
+        }
+        return showStatus("ok", "Valid JSON");
+      }
+      // A text column may hold text that only looks like JSON; it still saves.
+      saveButton.disabled = jsonKind;
+      const where = check.line !== null ? ` (line ${check.line}, column ${check.column})` : "";
+      return showStatus("error", `Invalid JSON: ${check.message}${where}`, check.position);
     }
-    jsonStatus.classList.add("error");
-    const where = check.line !== null ? ` (line ${check.line}, column ${check.column})` : "";
-    jsonStatus.textContent = `Invalid JSON: ${check.message}${where}`;
-    if (check.position !== null) {
-      const position = Math.min(check.position, textarea.value.length);
-      jsonStatus.title = "Go to the error";
-      jsonStatus.onclick = () => {
-        textarea.focus();
-        textarea.setSelectionRange(position, Math.min(position + 1, textarea.value.length));
-      };
+    if (FREE_TEXT.has(kind.kind)) return showStatus(null, "");
+    const typed = currentValue();
+    if (typed instanceof Error) {
+      saveButton.disabled = true;
+      return showStatus("error", typed.message);
     }
+    showStatus("ok", `Valid ${KIND_HINTS[kind.kind] ? kind.kind : "value"}: ${displayValue(typed) ?? "NULL"}`);
   };
 
   // Keys inside the dialog are handled below; Esc with focus elsewhere still closes it.
@@ -142,11 +197,17 @@ export function openCellEditor(options: CellEditorOptions): void {
     overlay.remove();
     options.onClose?.();
   };
-  const currentValue = (): Cell => (isNull.checked ? null : textarea.value);
+  const unchanged = () =>
+    isNull.checked === startsNull && (isNull.checked || (bool ? value.t === "bool" && boolInput.checked === value.v : textarea.value === initialText));
   const save = () => {
     if (readOnly) return close();
+    if (unchanged()) return close();
     const next = currentValue();
-    if (next !== value) options.save(next);
+    if (next instanceof Error) {
+      toast(next.message, "error");
+      return;
+    }
+    options.save(next);
     close();
   };
   const replaceText = (text: string) => {
@@ -162,7 +223,8 @@ export function openCellEditor(options: CellEditorOptions): void {
   minifyButton.addEventListener("click", () => replaceText(minifyJson(textarea.value)));
   copyButton.addEventListener("click", () => {
     // What is shown, except for binary and vector values, which copy as 0x… hex and [a,b,…].
-    const text = binary || vector ? copyValue : (currentValue() ?? "");
+    const typed = currentValue();
+    const text = bytes || vector ? copyValue : typed instanceof Error ? textarea.value : (displayValue(typed) ?? "");
     void copyText(text).then(() => toast("Copied", "success"));
   });
   wrap.addEventListener("change", () => {
@@ -174,9 +236,10 @@ export function openCellEditor(options: CellEditorOptions): void {
     else textarea.value = savedText;
     refresh();
     // The textarea is disabled while NULL is on; keep focus inside the dialog so Esc and Ctrl+Enter still work.
-    (isNull.checked ? isNull : textarea).focus();
+    (isNull.checked ? isNull : bool ? boolInput : textarea).focus();
   });
   textarea.addEventListener("input", refresh);
+  boolInput.addEventListener("change", refresh);
 
   // Keys never leave the dialog: the grid, the tab and the app shortcuts must not see them.
   overlay.addEventListener("keydown", (event) => {
@@ -197,12 +260,13 @@ export function openCellEditor(options: CellEditorOptions): void {
     footer.append(
       h("span", { class: "cell-editor-hint" }, "Ctrl+Enter saves · Esc cancels · changes stay pending until Apply"),
       actionButton("Cancel", false, close),
-      actionButton("Save", true, save),
+      saveButton,
     );
   }
 
-  if (vector && options.loadVector && value !== null) {
-    textarea.value = `${value}\n\nLoading all values…`;
+  if (vector && options.loadVector && value.t !== "null") {
+    const summary = displayValue(value) ?? "";
+    textarea.value = `${summary}\n\nLoading all values…`;
     options
       .loadVector()
       .then((values) => {
@@ -212,7 +276,7 @@ export function openCellEditor(options: CellEditorOptions): void {
         refresh();
       })
       .catch((error: unknown) => {
-        textarea.value = value;
+        textarea.value = summary;
         showError(error, "Load the vector");
         refresh();
       });
@@ -220,8 +284,14 @@ export function openCellEditor(options: CellEditorOptions): void {
 
   refresh();
   document.body.append(overlay);
-  textarea.focus();
-  if (!readOnly) textarea.setSelectionRange(0, 0);
+  (bool ? boolInput : textarea).focus();
+  if (!readOnly && !bool) textarea.setSelectionRange(0, 0);
+}
+
+function bytesStats(text: string): string {
+  const hex = /^0x([0-9a-f]*)$/i.exec(text.trim())?.[1];
+  if (hex !== undefined && hex.length % 2 === 0) return `${numberFormat.format(hex.length / 2)} bytes`;
+  return `${numberFormat.format(new TextEncoder().encode(text).length)} bytes as UTF-8 text`;
 }
 
 function toolbarButton(label: string, title: string): HTMLButtonElement {

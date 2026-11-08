@@ -1,13 +1,21 @@
+/**
+ * The data grid: typed rows (`Value[]`, NULL explicit), virtualised rendering, per-column filter boxes, inline editing
+ * per column kind (validated with `parseInput` before an edit is accepted), copy / paste, and pending edits that become
+ * contract `RowChange`s (`changeSet.ts`). Query results and design tables use it read-only.
+ */
+import { buildChanges, isEditableColumn, type BuiltChange, type PendingRow } from "./changeSet";
 import { openCellEditor } from "./cellEditor";
-import { FILTER_HELP, matchesFilter, type ColumnFilters } from "./columnFilter";
+import { editText, isJsonKind, KIND_HINTS, pastedValue, splitPasted } from "./cellValue";
+import { columnCondition, FILTER_HELP, FILTER_OPERATORS, matchesFilter, parseFilterText, withOperator, type ColumnFilters } from "./columnFilter";
 import { openColumnsPopover } from "./columnsPopover";
 import { nearestVisibleColumn, normalizeHidden, setColumnHidden, stepVisibleColumn, visibleColumnIndexes } from "./columnVisibility";
+import type { ColumnInfo, Field, FilterOp, Value } from "../../core/contract";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
 import { clamp, copyText, h, icon } from "../../core/dom";
 import { EXPORT_LABELS, exportRows, type ExportFormat } from "../importExport/exporters";
-import { rowKey, type SqlDialect } from "../../core/sql";
-import type { Cell, CellValue, ColumnMeta, RowChange } from "../../core/types";
+import type { SqlDialect } from "../../core/sql";
+import { displayValue, isNumericKind, parseInput, valuesEqual } from "../../core/values";
 import "./grid-virtual.css";
 import "./grid-tools.css";
 
@@ -17,35 +25,46 @@ export interface SortState {
 }
 
 export interface GridSetup {
-  columns: ColumnMeta[];
-  rows: Cell[][];
+  columns: ColumnInfo[];
+  rows: Value[][];
+  /** `Page.rowVersions`: one per row, sent back with updates and deletes. */
+  rowVersions: Value[] | null;
   editable: boolean;
   /** Why a non-editable grid is read-only, shown in the cell editor (e.g. a Read-only workspace). */
   readOnlyReason: string | null;
-  primaryKey: string[];
+  /** Columns that identify a row (`Page.keyColumns`); empty: every comparable column. */
+  keyColumns: string[];
   rowOffset: number;
   sort: SortState | null;
   onSort: ((column: string) => void) | null;
   tableName: string | null;
   /** How "Copy as INSERT statements" quotes names and values. */
   dialect: SqlDialect;
-  onSelect: ((row: Cell[] | null) => void) | null;
-  extraMenu: ((row: Cell[]) => MenuItem[]) | null;
+  onSelect: ((row: Value[] | null) => void) | null;
+  extraMenu: ((row: Value[]) => MenuItem[]) | null;
   columnFilters: ColumnFilters;
   onColumnFilter: ((filters: ColumnFilters) => void) | null;
+  /** Set while the column filters do not apply (the raw filter box is in use); the boxes are shown disabled with it. */
+  filtersPaused: string | null;
   clientFilter: boolean;
   /** Column names not drawn; their data, filters and edits are kept. */
   hiddenColumns: string[];
   /** Called when the user hides or shows columns (the table view saves the choice). */
   onHiddenColumns: ((hidden: string[]) => void) | null;
   /** Loads all components of a vector cell for the cell editor (table views only). */
-  loadVector: ((row: Cell[], column: ColumnMeta) => Promise<number[]>) | null;
+  loadVector: ((row: Value[], column: ColumnInfo) => Promise<number[]>) | null;
 }
 
-interface GridRow {
-  original: Cell[] | null;
-  current: Cell[];
+interface GridRow extends PendingRow {
+  original: Value[] | null;
+  current: Value[];
   deleted: boolean;
+  version: Value | null;
+  touched: Set<number>;
+  /** Set once a cell was edited; untouched rows skip the comparison. */
+  edited: boolean;
+  /** Gone from the server (resolved in the conflict dialog): not drawn and not saved. */
+  removed: boolean;
   element: HTMLTableRowElement | null;
 }
 
@@ -56,6 +75,7 @@ interface Position {
 
 type RowState = "clean" | "modified" | "new" | "deleted";
 
+const NULL: Value = { t: "null", v: null };
 const PREVIEW_LIMIT = 300;
 const FILTER_DEBOUNCE_MS = 350;
 const TOOLTIP_THRESHOLD = 60;
@@ -75,13 +95,35 @@ const MOVES: Record<string, Position> = {
   ArrowRight: { row: 0, column: 1 },
 };
 
-export function gridSetup(columns: ColumnMeta[], rows: Cell[][], dialect: SqlDialect = "ansi"): GridSetup {
+/** The short mark of each operator on the filter boxes' operator button. */
+const OPERATOR_MARKS: Record<FilterOp, string> = {
+  contains: "≈",
+  notContains: "!≈",
+  startsWith: "^",
+  endsWith: "$",
+  eq: "=",
+  ne: "≠",
+  lt: "<",
+  le: "≤",
+  gt: ">",
+  ge: "≥",
+  between: "..",
+  in: "in",
+  notIn: "!in",
+  like: "~",
+  notLike: "!~",
+  isNull: "∅",
+  isNotNull: "!∅",
+};
+
+export function gridSetup(columns: ColumnInfo[], rows: Value[][], dialect: SqlDialect = "ansi"): GridSetup {
   return {
     columns,
     rows,
+    rowVersions: null,
     editable: false,
     readOnlyReason: null,
-    primaryKey: [],
+    keyColumns: [],
     rowOffset: 0,
     sort: null,
     onSort: null,
@@ -91,15 +133,12 @@ export function gridSetup(columns: ColumnMeta[], rows: Cell[][], dialect: SqlDia
     extraMenu: null,
     columnFilters: {},
     onColumnFilter: null,
+    filtersPaused: null,
     clientFilter: false,
     hiddenColumns: [],
     onHiddenColumns: null,
     loadVector: null,
   };
-}
-
-export function textColumn(name: string): ColumnMeta {
-  return { name, typeName: "", numeric: false, binary: false, primary: false, vectorDims: null };
 }
 
 const EXPORT_FORMATS: ExportFormat[] = ["csv", "json", "markdown", "insert"];
@@ -108,17 +147,35 @@ type TypeKind = "number" | "text" | "date" | "bool" | "json" | "binary" | "vecto
 
 const TYPE_LABELS: Record<TypeKind, string> = { number: "123", text: "abc", date: "date", bool: "bool", json: "json", binary: "bin", vector: "vec" };
 
-/** Coarse family of a column type, for the badge under its name. */
-function typeKind(column: ColumnMeta): TypeKind {
-  const type = column.typeName.toLowerCase();
-  if (column.vectorDims != null) return "vector";
-  if (/^(bit|bool|boolean|tinyint\(1\))/.test(type)) return "bool";
-  if (/date|time|year/.test(type)) return "date";
-  if (/json|object|array|document/.test(type)) return "json";
-  if (column.binary || /blob|binary|image|objectid/.test(type)) return "binary";
-  if (column.numeric) return "number";
-  return "text";
+/** Coarse family of a column's kind, for the badge under its name. */
+function typeKind(column: ColumnInfo): TypeKind {
+  if (column.hints.vectorDims != null) return "vector";
+  switch (column.kind.kind) {
+    case "int":
+    case "float":
+    case "decimal":
+      return "number";
+    case "bool":
+      return "bool";
+    case "date":
+    case "time":
+    case "timestamp":
+    case "timestampTz":
+    case "interval":
+      return "date";
+    case "json":
+    case "document":
+    case "array":
+      return "json";
+    case "bytes":
+    case "objectId":
+      return "binary";
+    default:
+      return column.hints.binary ? "binary" : "text";
+  }
 }
+
+const TEXT_KINDS = new Set(["text", "other", "interval"]);
 
 export class DataGrid {
   readonly element: HTMLElement;
@@ -167,18 +224,27 @@ export class DataGrid {
     this.setup = setup;
     this.filters = { ...setup.columnFilters };
     this.applyHidden(setup.hiddenColumns);
-    this.rows = setup.rows.map((row) => ({ original: row, current: [...row], deleted: false, element: null }));
+    this.rows = setup.rows.map((row, index) => ({
+      original: row,
+      current: [...row],
+      deleted: false,
+      version: setup.rowVersions?.[index] ?? null,
+      touched: new Set<number>(),
+      edited: false,
+      removed: false,
+      element: null,
+    }));
     this.selection = null;
     this.render();
     this.onChange();
     this.selectFirstVisible();
   }
 
-  selectedRow(): Cell[] | null {
+  selectedRow(): Value[] | null {
     return this.selection ? (this.rows[this.selection.row]?.current ?? null) : null;
   }
 
-  columns(): ColumnMeta[] {
+  columns(): ColumnInfo[] {
     return this.setup.columns;
   }
 
@@ -235,16 +301,12 @@ export class DataGrid {
   }
 
   /** Rows currently shown (after client-side filters), as edited. */
-  pageRows(): Cell[][] {
-    return this.visibleRows();
+  pageRows(): Value[][] {
+    return this.visible.map((index) => this.rows[index].current);
   }
 
   exportPage(format: ExportFormat): string {
-    return exportRows(format, this.setup.columns, this.visibleRows(), this.setup.tableName, this.setup.dialect);
-  }
-
-  private visibleRows(): Cell[][] {
-    return this.visible.map((index) => this.rows[index].current);
+    return exportRows(format, this.setup.columns, this.pageRows(), this.setup.tableName, this.setup.dialect);
   }
 
   private selectFirstVisible(): void {
@@ -274,10 +336,12 @@ export class DataGrid {
   }
 
   private computeVisible(): number[] {
-    const indexes = this.rows.map((_, index) => index);
+    const indexes = this.rows.flatMap((row, index) => (row.removed ? [] : [index]));
     if (!this.setup.clientFilter) return indexes;
-    const active = this.setup.columns.map((column, index) => ({ index, text: this.filters[column.name] ?? "" })).filter(({ text }) => text.trim() !== "");
-    return indexes.filter((rowIndex) => active.every(({ index, text }) => matchesFilter(this.rows[rowIndex].current[index], text)));
+    const active = this.setup.columns
+      .map((column, index) => ({ column, index, text: this.filters[column.name] ?? "" }))
+      .filter(({ text }) => text.trim() !== "");
+    return indexes.filter((rowIndex) => active.every(({ column, index, text }) => matchesFilter(this.rows[rowIndex].current[index] ?? NULL, column, text)));
   }
 
   discard(): void {
@@ -300,13 +364,48 @@ export class DataGrid {
     return summary;
   }
 
-  changes(): RowChange[] {
-    return this.rows.flatMap((row) => this.changeOf(row));
+  /** The pending changes as contract `RowChange`s, each with the index of its grid row. */
+  changes(): BuiltChange[] {
+    return buildChanges(this.setup.columns, this.setup.keyColumns, this.rows).filter(({ row }) => !this.rows[row].removed);
+  }
+
+  /** A row as loaded (every column), for the conflict dialog; null for a new row. */
+  loadedFields(index: number): Field[] | null {
+    const original = this.rows[index]?.original;
+    return original ? this.setup.columns.map((column, position) => ({ column: column.name, value: original[position] ?? NULL })) : null;
+  }
+
+  /**
+   * Replaces a row with what the server has now, dropping its pending edit (the conflict dialog's "Take theirs" and the
+   * refresh after an "Overwrite"). `values` null: the row no longer exists and leaves the grid.
+   */
+  replaceRow(index: number, values: Value[] | null, version: Value | null): void {
+    const row = this.rows[index];
+    if (!row) return;
+    if (values === null) {
+      row.removed = true;
+      if (this.selection?.row === index) this.selection = null;
+      this.render();
+    } else {
+      Object.assign(row, { original: values, current: [...values], deleted: false, version, touched: new Set<number>(), edited: false });
+      this.refreshRow(index);
+      if (this.selection?.row === index) this.setup.onSelect?.(row.current);
+    }
+    this.onChange();
   }
 
   addRow(): void {
     if (!this.setup.editable) return;
-    const row: GridRow = { original: null, current: this.setup.columns.map(() => null), deleted: false, element: null };
+    const row: GridRow = {
+      original: null,
+      current: this.setup.columns.map(() => NULL),
+      deleted: false,
+      version: null,
+      touched: new Set<number>(),
+      edited: true,
+      removed: false,
+      element: null,
+    };
     const index = this.rows.push(row) - 1;
     this.visiblePosition.set(index, this.visible.push(index) - 1);
     this.element.querySelector(".grid-empty")?.remove();
@@ -321,6 +420,7 @@ export class DataGrid {
     const row = this.rows[index];
     if (row.original) {
       row.deleted = !row.deleted;
+      row.edited = true;
       this.refreshRow(index);
     } else {
       this.rows.splice(index, 1);
@@ -328,24 +428,6 @@ export class DataGrid {
       this.render();
     }
     this.onChange();
-  }
-
-  private changeOf(row: GridRow): RowChange[] {
-    const original = row.original;
-    if (original === null) {
-      return [{ kind: "insert", values: this.cellsWhere(row.current, (index) => row.current[index] !== null) }];
-    }
-    if (row.deleted) return [{ kind: "delete", key: this.keyOf(original) }];
-    const values = this.cellsWhere(row.current, (index) => row.current[index] !== original[index]);
-    return values.length ? [{ kind: "update", key: this.keyOf(original), values }] : [];
-  }
-
-  private keyOf(original: Cell[]): CellValue[] {
-    return rowKey(this.setup.columns, original, this.setup.primaryKey);
-  }
-
-  private cellsWhere(values: Cell[], include: (index: number) => boolean): CellValue[] {
-    return this.setup.columns.flatMap((column, index) => (include(index) ? [{ column: column.name, value: values[index] }] : []));
   }
 
   private render(): void {
@@ -494,26 +576,32 @@ export class DataGrid {
 
   private emptyMessage(): string {
     if (this.setup.columns.length === 0) return "No data";
-    return Object.keys(this.filters).length ? "No rows match the column filters" : "No rows";
+    return Object.keys(this.filters).length && !this.setup.filtersPaused ? "No rows match the column filters" : "No rows";
   }
 
   private filterRow(): HTMLTableRowElement {
+    const paused = this.setup.filtersPaused;
     const cells = this.displayed.map((index) => {
       const column = this.setup.columns[index];
-      if (column.vectorDims != null) return h("th", { class: "filter-cell" });
+      if (column.hints.vectorDims != null) return h("th", { class: "filter-cell" });
+      const text = this.filters[column.name] ?? "";
+      const condition = text ? columnCondition(column, text) : null;
+      const invalid = condition instanceof Error;
       const input = h("input", {
-        class: `column-filter${this.filters[column.name] ? " active" : ""}`,
-        value: this.filters[column.name] ?? "",
-        placeholder: "filter",
-        title: FILTER_HELP,
+        class: `column-filter${text ? " active" : ""}${invalid ? " invalid" : ""}`,
+        value: text,
+        placeholder:
+          TEXT_KINDS.has(column.kind.kind) || isJsonKind(column.kind) || column.kind.kind === "bytes" ? "filter" : (KIND_HINTS[column.kind.kind] ?? "filter"),
+        title: paused ?? (invalid ? `${condition.message} (not applied)` : FILTER_HELP),
         spellcheck: "false",
+        disabled: paused !== null,
         "data-column": column.name,
       });
       let pending: ReturnType<typeof setTimeout> | null = null;
-      const apply = (text: string) => {
+      const apply = (value: string) => {
         if (pending) clearTimeout(pending);
         pending = null;
-        this.applyColumnFilter(column.name, text);
+        this.applyColumnFilter(column.name, value);
       };
       input.addEventListener("keydown", (event) => {
         event.stopPropagation();
@@ -525,9 +613,44 @@ export class DataGrid {
         if (pending) clearTimeout(pending);
         pending = setTimeout(() => apply(input.value), FILTER_DEBOUNCE_MS);
       });
-      return h("th", { class: "filter-cell" }, input);
+      const op = parseFilterText(text, column.kind)?.op ?? null;
+      const opButton = h(
+        "button",
+        { class: `filter-op${op ? " active" : ""}`, type: "button", title: "Choose an operator", disabled: paused !== null, tabIndex: -1 },
+        op ? OPERATOR_MARKS[op] : icon("filter"),
+      );
+      opButton.addEventListener("click", (event) => showContextMenu(event, this.operatorMenu(column, input, op, apply)));
+      return h("th", { class: "filter-cell" }, h("div", { class: "filter-wrap" }, opButton, input));
     });
-    return h("tr", { class: "filter-row" }, h("th", { class: "row-number filter-cell", title: FILTER_HELP }, icon("filter")), ...cells);
+    return h(
+      "tr",
+      { class: `filter-row${paused ? " paused" : ""}` },
+      h("th", { class: "row-number filter-cell", title: paused ?? FILTER_HELP }, icon("filter")),
+      ...cells,
+    );
+  }
+
+  private operatorMenu(column: ColumnInfo, input: HTMLInputElement, current: FilterOp | null, apply: (text: string) => void): MenuItem[] {
+    const plainOp = TEXT_KINDS.has(column.kind.kind) || isJsonKind(column.kind) || column.kind.kind === "bytes" ? "contains" : "eq";
+    return FILTER_OPERATORS.map((item) => ({
+      label: `${item.label}   ${item.op === plainOp ? "x" : item.syntax}`,
+      icon: item.op === current ? "check" : undefined,
+      run: () => {
+        const text = withOperator(input.value, item.op);
+        input.value = text;
+        const parsed = parseFilterText(text, column.kind);
+        const complete =
+          parsed !== null && (parsed.values.length === 0 ? item.op === "isNull" || item.op === "isNotNull" : parsed.values.every((value) => value !== ""));
+        if (complete) {
+          apply(text);
+          return;
+        }
+        // Wait for the value: put the cursor where it goes.
+        input.focus();
+        const at = item.op === "endsWith" ? Math.max(0, text.length - 1) : text.length;
+        input.setSelectionRange(at, at);
+      },
+    }));
   }
 
   private restoreFilterFocus(): void {
@@ -535,21 +658,22 @@ export class DataGrid {
     this.pendingFilterFocus = null;
     if (!column) return;
     const input = [...this.element.querySelectorAll<HTMLInputElement>("input.column-filter")].find((item) => item.dataset.column === column);
-    if (!input) return;
+    if (!input || input.disabled) return;
     input.focus({ preventScroll: true });
     input.setSelectionRange(input.value.length, input.value.length);
   }
 
-  private headerCell(column: ColumnMeta, index: number): HTMLElement {
+  private headerCell(column: ColumnInfo, index: number): HTMLElement {
     const sort = this.setup.sort?.column === column.name ? (this.setup.sort.descending ? "▼" : "▲") : "";
-    const isKey = column.primary || this.setup.primaryKey.includes(column.name);
+    const isKey = Boolean(column.hints.primary) || this.setup.keyColumns.includes(column.name);
     const onSort = this.setup.onSort;
     const kind = typeKind(column);
+    const typeName = column.hints.vectorDims != null && !column.typeName ? `vector(${column.hints.vectorDims})` : column.typeName;
     const cell = h(
       "th",
       {
         class: onSort ? "sortable" : "",
-        title: column.typeName ? `${column.name} · ${column.typeName}${isKey ? " · primary key" : ""}` : column.name,
+        title: typeName ? `${column.name} · ${typeName}${isKey ? " · key" : ""}${column.nullable ? "" : " · not null"}` : column.name,
         "data-column-index": index,
       },
       h(
@@ -559,13 +683,8 @@ export class DataGrid {
         h("span", { class: "th-name" }, column.name),
         h("span", { class: "sort-mark" }, sort),
       ),
-      column.typeName
-        ? h(
-            "div",
-            { class: "th-type" },
-            h("span", { class: `type-badge type-${kind}` }, TYPE_LABELS[kind]),
-            h("span", { class: "th-type-name" }, column.typeName),
-          )
+      typeName
+        ? h("div", { class: "th-type" }, h("span", { class: `type-badge type-${kind}` }, TYPE_LABELS[kind]), h("span", { class: "th-type-name" }, typeName))
         : null,
     );
     if (onSort) cell.addEventListener("click", () => onSort(column.name));
@@ -579,7 +698,7 @@ export class DataGrid {
       "tr",
       { class: `state-${rowState(row)}${current}`, "data-row": index },
       h("td", { class: "row-number" }, label),
-      ...this.displayed.map((column) => this.renderCell(row, row.current[column], column)),
+      ...this.displayed.map((column) => this.renderCell(row, row.current[column] ?? NULL, column)),
     );
     row.element = element;
     const selected = current ? this.displayed.indexOf(this.selection!.column) : -1;
@@ -587,18 +706,20 @@ export class DataGrid {
     return element;
   }
 
-  private renderCell(row: GridRow, value: Cell, column: number): HTMLTableCellElement {
-    const modified = row.original !== null && row.original[column] !== value;
+  private renderCell(row: GridRow, value: Value, column: number): HTMLTableCellElement {
+    const modified = row.edited && row.original !== null && !valuesEqual(row.original[column] ?? NULL, value);
     const meta = this.setup.columns[column];
+    const text = displayValue(value);
     const classes = [
       "cell",
-      meta?.numeric ? "numeric" : "",
-      meta?.vectorDims != null ? "vector" : "",
-      value === null ? "null" : "",
+      meta && isNumericKind(meta.kind) ? "numeric" : "",
+      meta?.hints.vectorDims != null ? "vector" : "",
+      text === null ? "null" : "",
+      value.t === "bool" ? "bool" : "",
       modified ? "modified" : "",
     ];
-    const title = value !== null && value.length > TOOLTIP_THRESHOLD ? preview(value) : null;
-    return h("td", { class: classes.filter(Boolean).join(" "), title }, value === null ? "NULL" : preview(value));
+    const title = text !== null && text.length > TOOLTIP_THRESHOLD ? preview(text) : null;
+    return h("td", { class: classes.filter(Boolean).join(" "), title }, text === null ? "NULL" : preview(text));
   }
 
   private refreshRow(index: number): void {
@@ -651,7 +772,7 @@ export class DataGrid {
   }
 
   private handlePointer(event: MouseEvent): void {
-    if (event.target instanceof HTMLInputElement) return;
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) return;
     const position = this.positionOf(event.target);
     if (position) this.select(position);
   }
@@ -685,12 +806,13 @@ export class DataGrid {
 
   private menuItems(position: Position): MenuItem[] {
     const row = this.rows[position.row];
-    const value = row.current[position.column];
+    const value = row.current[position.column] ?? NULL;
+    const column = this.setup.columns[position.column];
     const copyItems: MenuItem[] = [
       { label: "Open in editor", icon: "expand", run: () => this.openEditor(position) },
       "separator",
-      { label: "Copy value", icon: "copy", run: () => void copyText(value ?? "") },
-      { label: "Copy row", run: () => void copyText(row.current.map((cell) => cell ?? "NULL").join("\t")) },
+      { label: "Copy value", icon: "copy", run: () => void copyText(displayValue(value) ?? "") },
+      { label: "Copy row", run: () => void copyText(rowText(row.current)) },
       ...EXPORT_FORMATS.map((format): MenuItem => ({
         label: `Copy page as ${EXPORT_LABELS[format]}`,
         run: () => void this.copyExport(format),
@@ -699,11 +821,15 @@ export class DataGrid {
     const extra = this.setup.extraMenu?.(row.current) ?? [];
     const readOnlyItems: MenuItem[] = extra.length ? [...extra, "separator", ...copyItems] : copyItems;
     if (!this.setup.editable) return readOnlyItems;
+    const locked = row.deleted || !column || !isEditableColumn(column);
     return [
       ...readOnlyItems,
+      { label: "Paste", disabled: locked, run: () => void this.pasteFromClipboard(position) },
       "separator",
-      { label: "Set NULL", disabled: row.deleted, run: () => this.setCell(position, null) },
-      { label: "Set empty string", disabled: row.deleted, run: () => this.setCell(position, "") },
+      { label: "Set NULL", disabled: locked, run: () => this.setCell(position, NULL) },
+      ...(column && TEXT_KINDS.has(column.kind.kind)
+        ? [{ label: "Set empty string", disabled: locked, run: () => this.setCell(position, { t: "text", v: "" }) }]
+        : []),
       "separator",
       { label: "Add row", icon: "plus", run: () => this.addRow() },
       { label: row.deleted ? "Undo delete" : "Delete row", icon: "trash", danger: !row.deleted, run: () => this.deleteSelectedRow() },
@@ -716,13 +842,16 @@ export class DataGrid {
   }
 
   private isReadOnlyColumn(column: number): boolean {
-    return this.setup.columns[column]?.vectorDims != null;
+    const meta = this.setup.columns[column];
+    return !meta || !isEditableColumn(meta);
   }
 
-  private setCell(position: Position, value: Cell): void {
+  private setCell(position: Position, value: Value): void {
     const row = this.rows[position.row];
     if (!row || row.deleted || this.isReadOnlyColumn(position.column)) return;
     row.current[position.column] = value;
+    row.touched.add(position.column);
+    row.edited = true;
     this.refreshRow(position.row);
     if (this.selection?.row === position.row) this.setup.onSelect?.(row.current);
     this.onChange();
@@ -734,8 +863,8 @@ export class DataGrid {
     const column = this.setup.columns[position.column];
     if (!this.setup.editable) return this.setup.readOnlyReason ?? "This grid is read-only";
     if (row?.deleted) return "The row is marked for deletion";
-    if (column?.vectorDims != null) return "Vector values are read-only here";
-    if (column?.binary) return "Binary values are shown read-only";
+    if (column?.hints.vectorDims != null) return "Vector values are read-only here";
+    if (column?.hints.readOnly) return "This column is read-only (computed or generated)";
     return null;
   }
 
@@ -749,10 +878,10 @@ export class DataGrid {
     const label = row.original ? `row ${this.setup.rowOffset + position.row + 1}` : "new row";
     openCellEditor({
       column,
-      value: row.current[position.column],
+      value: row.current[position.column] ?? NULL,
       context: [this.setup.tableName, label].filter(Boolean).join(" · "),
       readOnlyReason: this.readOnlyReason(position),
-      loadVector: column.vectorDims != null && original && loadVector ? () => loadVector(original, column) : null,
+      loadVector: column.hints.vectorDims != null && original && loadVector ? () => loadVector(original, column) : null,
       save: (value) => this.setCell(position, value),
       onClose: () => this.element.focus({ preventScroll: true }),
     });
@@ -772,7 +901,10 @@ export class DataGrid {
     const command = event.ctrlKey || event.metaKey;
     if (command && event.key.toLowerCase() === "c") {
       event.preventDefault();
-      void copyText(this.rows[this.selection.row].current[this.selection.column] ?? "");
+      void copyText(displayValue(this.rows[this.selection.row].current[this.selection.column] ?? NULL) ?? "");
+    } else if (command && event.key.toLowerCase() === "v") {
+      event.preventDefault();
+      void this.pasteFromClipboard(this.selection);
     } else if (event.key === "Enter" && event.shiftKey && !command) {
       event.preventDefault();
       this.openEditor(this.selection);
@@ -785,32 +917,132 @@ export class DataGrid {
     }
   }
 
+  /**
+   * Pastes text at `position`: one value, or a tab/newline-separated block (as copied from a spreadsheet or with "Copy
+   * row") over the cells to the right and below. Each field is parsed for its column's kind; `NULL` is NULL. Fields that
+   * do not fit are skipped and reported.
+   */
+  pasteText(position: Position, text: string): void {
+    if (!this.setup.editable) return;
+    const block = splitPasted(text);
+    const errors: string[] = [];
+    let pasted = 0;
+    const startRow = this.visiblePosition.get(position.row) ?? 0;
+    const startColumn = this.displayed.indexOf(position.column);
+    block.forEach((fields, rowOffset) => {
+      const rowIndex = this.visible[startRow + rowOffset];
+      const row = rowIndex === undefined ? undefined : this.rows[rowIndex];
+      if (!row || row.deleted) return;
+      fields.forEach((field, columnOffset) => {
+        const columnIndex = this.displayed[startColumn + columnOffset];
+        const column = columnIndex === undefined ? undefined : this.setup.columns[columnIndex];
+        if (!column || !isEditableColumn(column)) return;
+        const value = pastedValue(column.kind, field);
+        if (value instanceof Error) {
+          errors.push(`${column.name}: ${value.message}`);
+          return;
+        }
+        row.current[columnIndex] = value;
+        row.touched.add(columnIndex);
+        row.edited = true;
+        pasted += 1;
+      });
+      this.refreshRow(rowIndex);
+    });
+    if (pasted > 0) {
+      const selected = this.selection ? this.rows[this.selection.row] : null;
+      if (selected) this.setup.onSelect?.(selected.current);
+      this.onChange();
+    }
+    if (errors.length > 0) toast(`${errors.length} pasted value(s) skipped. ${errors[0]}`, "error");
+  }
+
+  private async pasteFromClipboard(position: Position): Promise<void> {
+    if (!this.setup.editable) return;
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      toast("The clipboard cannot be read here; use the cell editor (Shift+Enter) and paste into it");
+      return;
+    }
+    this.pasteText(position, text);
+  }
+
   private beginEdit(position: Position, initial?: string): void {
     const row = this.rows[position.row];
     const cell = this.cellAt(position);
-    if (!this.setup.editable || !row || row.deleted || !cell || this.isReadOnlyColumn(position.column)) return;
-    const original = row.current[position.column];
-    const input = h("input", { class: "cell-editor", value: initial ?? original ?? "", spellcheck: "false" });
+    const column = this.setup.columns[position.column];
+    if (!this.setup.editable || !row || row.deleted || !cell || !column || this.isReadOnlyColumn(position.column)) return;
+    const value = row.current[position.column] ?? NULL;
+    // JSON, documents, arrays and multi-line text get the large editor.
+    if (isJsonKind(column.kind) || value.t === "doc" || value.t === "array" || (value.t === "text" && value.v.includes("\n"))) {
+      this.openEditor(position);
+      return;
+    }
+    if (column.kind.kind === "bool") {
+      this.beginBoolEdit(position, row, cell, value, initial);
+      return;
+    }
+    const startText = editText(value);
+    const input = h("input", {
+      class: "cell-editor",
+      value: initial ?? startText,
+      spellcheck: "false",
+      placeholder: value.t === "null" && initial === undefined ? "NULL" : (KIND_HINTS[column.kind.kind] ?? ""),
+    });
     let finished = false;
+    /** The typed value, or an Error that keeps the editor open. */
+    const parsed = (): Value | Error => (column.kind.kind === "text" ? { t: "text", v: input.value } : parseInput(column.kind, input.value));
+    const markInvalid = (error: Error | null) => {
+      input.classList.toggle("invalid", error !== null);
+      input.title = error?.message ?? "";
+    };
     const finish = (commit: boolean, next: Position | null, refocus: boolean) => {
       if (finished) return;
+      const untouched = initial === undefined && input.value === startText;
+      // An empty box on a NULL cell that was only opened and left stays NULL.
+      const leftNull = value.t === "null" && initial === undefined && input.value === "";
+      if (commit && !untouched && !leftNull) {
+        const result = parsed();
+        if (result instanceof Error) {
+          // Enter / Tab keep the editor open on invalid input; leaving it (blur, scrolling away) drops the edit.
+          if (refocus) {
+            markInvalid(result);
+            toast(result.message, "error");
+            return;
+          }
+          toast(`Not changed: ${result.message}`, "error");
+          commit = false;
+        } else if (!valuesEqual(result, value)) {
+          row.current[position.column] = result;
+          row.touched.add(position.column);
+          row.edited = true;
+        }
+      }
       finished = true;
       this.editing = false;
       this.editingRow = null;
       this.commitEdit = null;
-      if (commit && input.value !== (original ?? "")) row.current[position.column] = input.value;
       this.refreshRow(position.row);
       if (refocus) this.element.focus({ preventScroll: true });
       if (next) this.select(next);
+      if (commit && this.selection?.row === position.row) this.setup.onSelect?.(row.current);
       this.onChange();
     };
+    input.addEventListener("input", () => {
+      if (input.classList.contains("invalid")) {
+        const result = parsed();
+        markInvalid(result instanceof Error ? result : null);
+      }
+    });
     input.addEventListener("keydown", (event) => {
       event.stopPropagation();
       if (event.key === "Enter" && event.shiftKey) {
         // Continue in the large editor with what was typed so far.
         event.preventDefault();
         finish(true, null, true);
-        this.openEditor(position);
+        if (finished) this.openEditor(position);
       } else if (event.key === "Enter") finish(true, { row: position.row + 1, column: position.column }, true);
       else if (event.key === "Escape") finish(false, null, true);
       else if (event.key === "Tab") {
@@ -821,19 +1053,73 @@ export class DataGrid {
     input.addEventListener("blur", () => finish(true, null, false));
     this.editing = true;
     this.editingRow = position.row;
-    this.commitEdit = () => finish(true, null, true);
+    this.commitEdit = () => finish(true, null, false);
     cell.classList.add("editing");
     cell.replaceChildren(input);
     input.focus();
     if (initial === undefined) input.select();
   }
+
+  /** Booleans edit as a checkbox in the cell: Space toggles, Enter / Tab keep, Esc cancels; t/f/1/0/y/n set it. */
+  private beginBoolEdit(position: Position, row: GridRow, cell: HTMLElement, value: Value, initial?: string): void {
+    const start = value.t === "bool" ? value.v : false;
+    const box = h("input", { type: "checkbox", class: "cell-editor-check", checked: start });
+    const typed = initial?.toLowerCase();
+    if (typed && "t1y".includes(typed)) box.checked = true;
+    else if (typed && "f0n".includes(typed)) box.checked = false;
+    else if (typed === " ") box.checked = !start;
+    let finished = false;
+    const finish = (commit: boolean, next: Position | null, refocus: boolean) => {
+      if (finished) return;
+      finished = true;
+      this.editing = false;
+      this.editingRow = null;
+      this.commitEdit = null;
+      const changed = value.t !== "bool" || value.v !== box.checked;
+      if (commit && changed) {
+        row.current[position.column] = { t: "bool", v: box.checked };
+        row.touched.add(position.column);
+        row.edited = true;
+      }
+      this.refreshRow(position.row);
+      if (refocus) this.element.focus({ preventScroll: true });
+      if (next) this.select(next);
+      if (commit && changed && this.selection?.row === position.row) this.setup.onSelect?.(row.current);
+      this.onChange();
+    };
+    box.addEventListener("keydown", (event) => {
+      event.stopPropagation();
+      const key = event.key.toLowerCase();
+      if (event.key === "Enter") finish(true, { row: position.row + 1, column: position.column }, true);
+      else if (event.key === "Escape") finish(false, null, true);
+      else if (event.key === "Tab") {
+        event.preventDefault();
+        finish(true, { row: position.row, column: stepVisibleColumn(this.displayed, position.column, event.shiftKey ? -1 : 1) }, true);
+      } else if (key.length === 1 && "t1y".includes(key)) box.checked = true;
+      else if (key.length === 1 && "f0n".includes(key)) box.checked = false;
+    });
+    box.addEventListener("blur", () => finish(true, null, false));
+    this.editing = true;
+    this.editingRow = position.row;
+    this.commitEdit = () => finish(true, null, false);
+    cell.classList.add("editing");
+    cell.replaceChildren(h("label", { class: "cell-check" }, box, h("span", {}, "true")));
+    box.focus();
+  }
 }
 
 function rowState(row: GridRow): RowState {
+  if (row.removed) return "clean";
   const original = row.original;
   if (!original) return "new";
   if (row.deleted) return "deleted";
-  return row.current.some((value, index) => value !== original[index]) ? "modified" : "clean";
+  if (!row.edited) return "clean";
+  return row.current.some((value, index) => !valuesEqual(value, original[index] ?? NULL)) ? "modified" : "clean";
+}
+
+/** A row as tab-separated text, NULL spelled out (what Paste reads back). */
+function rowText(row: Value[]): string {
+  return row.map((value) => displayValue(value) ?? "NULL").join("\t");
 }
 
 function preview(value: string): string {

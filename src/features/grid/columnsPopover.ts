@@ -3,12 +3,12 @@
  * Show all / Hide all. At least one column always stays visible.
  */
 import { h, icon } from "../../core/dom";
-import type { ColumnMeta } from "../../core/types";
+import type { ColumnInfo } from "../../core/contract";
 import { hideAllButFirst, matchColumns, setColumnHidden, visibleColumnIndexes } from "./columnVisibility";
 
 /** What the popover needs from a grid. */
 export interface ColumnsTarget {
-  columns(): ColumnMeta[];
+  columns(): ColumnInfo[];
   hiddenColumns(): string[];
   setHiddenColumns(hidden: string[]): void;
   filteredColumns(): Set<string>;
@@ -74,7 +74,7 @@ export function openColumnsPopover(target: ColumnsTarget, anchor: Anchor): void 
           input,
           h("span", { class: "columns-name" }, column.name),
           filtered.has(column.name) ? h("span", { class: "columns-filtered", title: "This column has an active filter" }, icon("filter")) : null,
-          h("span", { class: "columns-type" }, column.vectorDims != null ? `vector(${column.vectorDims})` : column.typeName),
+          h("span", { class: "columns-type" }, column.typeName || (column.hints.vectorDims != null ? `vector(${column.hints.vectorDims})` : column.kind.kind)),
         );
       }),
     );

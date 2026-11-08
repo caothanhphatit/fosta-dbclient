@@ -16,7 +16,8 @@ interface ModalOptions {
   onClose?: () => void;
 }
 
-export function openModal(title: string, body: HTMLElement, actions: ModalAction[], options: ModalOptions = {}): void {
+/** Opens a dialog on the modal stack; returns the function that closes it (for bodies with actions of their own). */
+export function openModal(title: string, body: HTMLElement, actions: ModalAction[], options: ModalOptions = {}): () => void {
   const footer = h("div", { class: "modal-footer" });
   const dialog = h(
     "div",
@@ -49,6 +50,7 @@ export function openModal(title: string, body: HTMLElement, actions: ModalAction
   footer.append(...buttons);
   document.body.append(overlay);
   focusInto(dialog, dialog.querySelector<HTMLElement>("input:not([type=checkbox]), select, textarea"));
+  return close;
 }
 
 const modals = new ModalStack();

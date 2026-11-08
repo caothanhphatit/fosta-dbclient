@@ -7,14 +7,16 @@
  */
 import { showError } from "../../core/errorPanel";
 import { api } from "../../core/api";
+import type { ConnectionApi } from "../../core/connectionApi";
+import type { EngineDescriptor, Relation, SchemaGraph, SchemaTable } from "../../core/contract";
 import { showContextMenu } from "../../core/contextMenu";
-import { copyText, formatCompact, h, icon, iconButton, separator, spacer, toolButton } from "../../core/dom";
-import { driverInfo } from "../../core/drivers";
+import { copyText, formatCompact, h, icon, iconButton, iconOrDefault, separator, spacer, toolButton } from "../../core/dom";
 import type { Navigator } from "../../core/navigator";
 import { savedDialog } from "../importExport/importExport";
 import type { TabContent } from "../../core/tabs";
 import { onThemeChange } from "../../core/theme";
-import type { DriverId, Relation, SchemaGraph, SchemaTable } from "../../core/types";
+import type { DriverId } from "../../core/types";
+import type { ViewContext } from "../../core/views";
 
 const SVG = "http://www.w3.org/2000/svg";
 const FONT = "12px 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif";
@@ -80,6 +82,8 @@ export class DiagramView implements TabContent {
   readonly element: HTMLElement;
   private readonly connectionId: string;
   private readonly driver: DriverId;
+  private readonly connection: Pick<ConnectionApi, "schemaGraph">;
+  private readonly engine: EngineDescriptor;
   private readonly database: string;
   private readonly navigator: Navigator;
   private readonly host = h("div", { class: "diagram-host" });
@@ -108,12 +112,15 @@ export class DiagramView implements TabContent {
   private pendingFocus: string | null = null;
   private cullFrame: number | null = null;
 
-  constructor(connectionId: string, driver: DriverId, database: string, navigator: Navigator) {
-    this.connectionId = connectionId;
-    this.driver = driver;
+  constructor(ctx: ViewContext, database: string) {
+    this.connectionId = ctx.profile.id;
+    this.driver = ctx.profile.driver;
+    this.connection = ctx.connection;
+    this.engine = ctx.engine;
     this.database = database;
-    this.navigator = navigator;
-    this.inferLinks = driver === "mongodb";
+    this.navigator = ctx.navigator;
+    // Document stores declare no foreign keys; links guessed from field names are on by default there.
+    this.inferLinks = ctx.engine.family === "document";
     this.measure.font = FONT;
     this.svg.classList.add("diagram-svg");
     this.viewport.append(this.linkLayer, this.boxLayer);
@@ -135,11 +142,10 @@ export class DiagramView implements TabContent {
         this.applySearch(false);
       }
     });
-    const info = driverInfo(driver);
     const toolbar = h(
       "div",
       { class: "toolbar" },
-      icon(info.icon, `driver-icon ${info.id}`),
+      icon(iconOrDefault(ctx.engine.icon, "database"), `driver-icon ${ctx.engine.id}`),
       h("span", { class: "toolbar-title" }, database),
       this.info,
       separator(),
@@ -212,11 +218,11 @@ export class DiagramView implements TabContent {
   private async load(): Promise<void> {
     this.info.textContent = "Reading schema…";
     try {
-      this.graph = await api.schemaGraph(this.connectionId, this.database);
+      this.graph = await this.connection.schemaGraph(this.database);
       this.rebuild();
       const { tables, totalTables } = this.graph;
       const capped = totalTables > tables.length ? ` (first ${tables.length} of ${totalTables})` : "";
-      this.info.textContent = `${tables.length} ${driverInfo(this.driver).objectsLabel}${capped} · ${this.links.length} links`;
+      this.info.textContent = `${tables.length} ${this.engine.objectsLabel}${capped} · ${this.links.length} links`;
       requestAnimationFrame(() => {
         this.fitIfNew();
         this.applyPendingFocus();
@@ -427,7 +433,7 @@ export class DiagramView implements TabContent {
     const palette = this.palette;
     const { table } = box;
     const height = this.boxHeight(box);
-    const color = table.kind === "view" ? palette.view : this.driver === "mongodb" ? palette.collection : palette.accent;
+    const color = table.kind === "view" ? palette.view : this.engine.family === "document" ? palette.collection : palette.accent;
     const group = svg("g", { class: "diagram-box", transform: `translate(${box.x},${box.y})` });
     group.dataset.table = table.name;
     group.append(

@@ -1,0 +1,143 @@
+/* Conflict dialog: one section per row that changed since it was loaded. */
+.conflict-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(70vh, 640px);
+  overflow: auto;
+}
+
+.conflict-intro,
+.conflict-note,
+.conflict-hint {
+  margin: 0;
+}
+
+.conflict-note,
+.conflict-hint {
+  color: color-mix(in srgb, var(--fg) 75%, transparent);
+  font-size: 12px;
+}
+
+.conflict-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 60%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.conflict-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.conflict-row.resolved {
+  opacity: 0.65;
+}
+
+.conflict-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conflict-key {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conflict-op {
+  color: color-mix(in srgb, var(--fg) 65%, transparent);
+  font-size: 12px;
+}
+
+.conflict-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.conflict-status {
+  font-size: 12px;
+}
+
+.conflict-status.ok {
+  color: var(--success);
+}
+
+.conflict-status.error {
+  color: var(--danger);
+}
+
+.conflict-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.conflict-table th,
+.conflict-table td {
+  overflow: hidden;
+  padding: 4px 8px;
+  border: 1px solid var(--grid-line);
+  text-align: left;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.conflict-table thead th {
+  background: var(--grid-head);
+  font-weight: 600;
+}
+
+.conflict-table tbody th {
+  width: 22%;
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.conflict-table td {
+  font-family: var(--font-mono);
+}
+
+.conflict-table td.null {
+  color: var(--null);
+  font-style: italic;
+}
+
+.conflict-table td.changed {
+  background: color-mix(in srgb, var(--warning) 22%, transparent);
+}
+
+.conflict-table td.mine {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.conflict-table td.conflict-gone,
+.conflict-table td.conflict-delete {
+  color: var(--danger);
+  font-family: var(--font-ui);
+  vertical-align: middle;
+  white-space: normal;
+}
+
+.conflict-table td.conflict-same {
+  color: color-mix(in srgb, var(--fg) 50%, transparent);
+  font-family: var(--font-ui);
+  font-style: italic;
+}

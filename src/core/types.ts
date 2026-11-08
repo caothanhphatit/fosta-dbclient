@@ -1,4 +1,4 @@
-import type { AuthMethodId, SshConfig, TlsConfig } from "./contract";
+import type { AuthMethodId, Relation, SshConfig, TlsConfig } from "./contract";
 
 export type Cell = string | null;
 
@@ -335,38 +335,7 @@ export interface CellValue {
   value: Cell;
 }
 
-export interface Relation {
-  constraint: string;
-  database: string;
-  table: string;
-  columns: string[];
-  referencedDatabase: string;
-  referencedTable: string;
-  referencedColumns: string[];
-}
-
-export interface SchemaColumn {
-  name: string;
-  columnType: string;
-  nullable: boolean;
-  primary: boolean;
-}
-
-export interface SchemaTable {
-  name: string;
-  /** Rust `contract::SchemaTable.kind`: "table" and "view" today; engines may report other object kinds. */
-  kind: "table" | "view" | (string & {});
-  rows: number | null;
-  comment: string;
-  columns: SchemaColumn[];
-}
-
-/** Everything the ER diagram draws for one database (Rust `contract::SchemaGraph`, returned by `schema_graph`). */
-export interface SchemaGraph {
-  tables: SchemaTable[];
-  relations: Relation[];
-  totalTables: number;
-}
+export type { Relation, SchemaColumn, SchemaGraph, SchemaTable } from "./contract";
 
 export interface TableRelations {
   outgoing: Relation[];

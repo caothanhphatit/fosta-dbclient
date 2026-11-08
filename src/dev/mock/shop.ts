@@ -38,7 +38,11 @@ function vector(id: number): Value {
   return v.other("vector", `[${(id % 10) / 10},${((id * 3) % 10) / 10},${((id * 7) % 10) / 10},${((id * 9) % 10) / 10}]`);
 }
 
-export function shopDatabase(name: string, flavor: "MariaDB" | "MySQL", counts = { products: 1240, customers: 2000, orders: 4000, items: 9000 }): DatabaseSpec {
+export function shopDatabase(
+  name: string,
+  flavor: "MariaDB" | "MySQL",
+  counts = { products: 1240, customers: 2000, orders: 4000, items: 10000 },
+): DatabaseSpec {
   const id = (primary = false) => column("id", "int(11)", "int", { primary, identity: primary ? "AUTO_INCREMENT" : null, nullable: false });
   const jsonType = flavor === "MariaDB" ? "longtext" : "json";
   const tables: TableSpec[] = [

@@ -49,10 +49,12 @@ export type OpenTarget = ObjectNode | ObjectRef | null;
 
 /** Extras of `openObject`; the known ones also shape the tab key and title. */
 export interface OpenParams extends Record<string, unknown> {
-  /** A data tab's filter (part of its key: the same table with another filter is another tab). */
+  /** A data tab's raw filter (part of its key: the same table with another filter is another tab). */
   filter?: string;
   /** The filter comes from the assistant and is only pre-filled. */
   suggested?: boolean;
+  /** A data tab's column filter boxes (column → filter text), also part of its key. */
+  columnFilters?: Record<string, string>;
   /** The database a console or diagram works in. */
   database?: string | null;
 }
@@ -187,6 +189,12 @@ export class AppNavigation implements Navigator {
     void this.openObject(profile, objectOfTarget(engineOf(profile), target), "data", { filter, suggested });
   }
 
+  openData(connectionId: string, object: ObjectRef, columnFilters: Record<string, string>): void {
+    const profile = this.profile(connectionId);
+    if (!profile) return;
+    void this.openObject(profile, object, "data", { columnFilters });
+  }
+
   openDesign(target: TableTarget): void {
     const profile = this.profile(target.connectionId);
     if (!profile) return;
@@ -195,6 +203,13 @@ export class AppNavigation implements Navigator {
 
   /** Opens the ER diagram of `database`, optionally centred on one table. */
   openDiagram(profile: ConnectionProfile, database: string, focusTable?: string): void {
+    // The diagram needs the `schemaGraph` capability (of the connection once it is connected, else of the engine).
+    const info = connectInfo(profile.id);
+    const engine = engineOf(profile);
+    if (!hasCapability(info ?? engine, "schemaGraph")) {
+      toast(`${engine.label} has no schema diagram`);
+      return;
+    }
     const object: ObjectRef = { database, schema: null, name: database, kind: "database" };
     void this.openObject(profile, object, "diagram", { database }).then((view) => {
       const diagram = view as (TabContent & { focus?: (name: string) => void }) | null;
@@ -252,7 +267,7 @@ export class AppNavigation implements Navigator {
   private objectKey(connectionId: string, role: ViewRole, identity: string, params: OpenParams): string {
     if (role === "console") return this.tabKey(connectionId, "console", crypto.randomUUID());
     if (role === "data") {
-      const filter = params.filter ?? "";
+      const filter = [params.filter ?? "", columnFiltersText(params.columnFilters)].filter(Boolean).join(" ");
       if (params.suggested) return this.tabKey(connectionId, "data-suggested", identity, filter, crypto.randomUUID());
       return this.tabKey(connectionId, "data", identity, filter);
     }
@@ -271,8 +286,9 @@ export class AppNavigation implements Navigator {
     switch (role) {
       case "data": {
         const filter = params.filter ?? "";
-        const title = params.suggested ? `${name} (suggested filter)` : filter ? `${name} (filtered)` : name;
-        return { title, subtitle: filter ? `${where} WHERE ${filter}` : where };
+        const columns = columnFiltersText(params.columnFilters);
+        const title = params.suggested ? `${name} (suggested filter)` : filter || columns ? `${name} (filtered)` : name;
+        return { title, subtitle: filter ? `${where} WHERE ${filter}` : columns ? `${where} · ${columns}` : where };
       }
       case "design":
         return { title: `${name} · design`, subtitle: where };
@@ -324,4 +340,11 @@ function dataIcon(kind: string): IconName {
 
 function describeOpen(role: ViewRole, kind: string): string {
   return role === "console" ? "a query tab" : `the ${role} view of a ${kind}`;
+}
+
+/** "customer_id =42, status null": column filters for a tab key and subtitle. */
+function columnFiltersText(filters: Record<string, string> | undefined): string {
+  return Object.entries(filters ?? {})
+    .map(([column, text]) => `${column} ${text}`)
+    .join(", ");
 }

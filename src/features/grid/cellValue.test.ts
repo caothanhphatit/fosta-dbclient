@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { checkJson, describeJsonError, formatJson, hexDump, lineColumn, looksLikeJson, minifyJson, textStats, vectorListing } from "./cellValue";
+import type { Value } from "../../core/contract";
+import {
+  checkJson,
+  describeJsonError,
+  editText,
+  formatJson,
+  hexDump,
+  isJsonKind,
+  lineColumn,
+  looksLikeJson,
+  minifyJson,
+  pastedValue,
+  splitPasted,
+  textStats,
+  vectorListing,
+} from "./cellValue";
 
 describe("cell value helpers", () => {
   it("detects JSON objects and arrays", () => {
@@ -57,5 +72,36 @@ describe("cell value helpers", () => {
 
   it("lists vector components", () => {
     expect(vectorListing([0.5, -1, 2])).toBe("0  0.5\n1  -1\n2  2");
+  });
+});
+
+describe("typed cell helpers", () => {
+  it("starts editors with documents and arrays as JSON", () => {
+    const doc: Value = { t: "doc", v: [["a", { t: "int", v: 1 }]] };
+    expect(editText(doc)).toBe('{"a":1}');
+    expect(editText(doc, true)).toBe('{\n  "a": 1\n}');
+    expect(editText({ t: "json", v: '{"b":2}' }, true)).toBe('{\n  "b": 2\n}');
+    expect(editText({ t: "null", v: null })).toBe("");
+    expect(editText({ t: "decimal", v: "1.50" })).toBe("1.50");
+  });
+
+  it("parses pasted text for the column, NULL spelled out", () => {
+    expect(pastedValue({ kind: "int" }, "7")).toEqual({ t: "int", v: 7 });
+    expect(pastedValue({ kind: "text" }, "NULL")).toEqual({ t: "null", v: null });
+    expect(pastedValue({ kind: "date" }, "nope")).toBeInstanceOf(Error);
+  });
+
+  it("splits a copied block into rows and fields", () => {
+    expect(splitPasted("a\tb\r\nc\td\n")).toEqual([
+      ["a", "b"],
+      ["c", "d"],
+    ]);
+    expect(splitPasted("one")).toEqual([["one"]]);
+  });
+
+  it("knows which kinds open the JSON editor", () => {
+    expect(isJsonKind({ kind: "document" })).toBe(true);
+    expect(isJsonKind({ kind: "array", of: { kind: "int" } })).toBe(true);
+    expect(isJsonKind({ kind: "text" })).toBe(false);
   });
 });

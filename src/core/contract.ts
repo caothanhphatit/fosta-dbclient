@@ -294,6 +294,49 @@ export interface ConflictError {
   message: string;
   object: ObjectRef;
   conflicts: RowConflict[];
+  /**
+   * Engines without transactions (MongoDB standalone) undo the writes they already made when a later change conflicts:
+   * true when that worked, false when some writes could not be undone. Absent when nothing had been written.
+   */
+  compensated?: boolean;
+}
+
+// --- Schema graph (the ER diagram) --------------------------------------------------------------------------------------
+
+export interface SchemaColumn {
+  name: string;
+  columnType: string;
+  nullable: boolean;
+  primary: boolean;
+}
+
+export interface SchemaTable {
+  name: string;
+  /** "table" and "view" today; engines may report other object kinds. */
+  kind: "table" | "view" | (string & {});
+  rows: number | null;
+  comment: string;
+  columns: SchemaColumn[];
+}
+
+/** One foreign key, possibly over several columns. */
+export interface Relation {
+  constraint: string;
+  database: string;
+  table: string;
+  columns: string[];
+  referencedDatabase: string;
+  referencedTable: string;
+  referencedColumns: string[];
+}
+
+/** Everything the ER diagram draws for one database (`schema_graph`, gated on the `schemaGraph` capability). */
+export interface SchemaGraph {
+  tables: SchemaTable[];
+  /** Foreign keys whose both ends are in `tables`. */
+  relations: Relation[];
+  /** Total tables in the database; more than `tables.length` when capped. */
+  totalTables: number;
 }
 
 // --- Sessions and streaming ---------------------------------------------------------------------------------------------

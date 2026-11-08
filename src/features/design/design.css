@@ -1,0 +1,59 @@
+/* Design view: the columns grid on top, indexes, keys, details and the DDL below it (scrolling together). */
+.design-view .design-columns {
+  min-height: 140px;
+}
+
+.design-lower {
+  display: flex;
+  flex: 0 0 45%;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}
+
+.design-lower .ddl {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.design-indexes {
+  display: flex;
+  flex: 0 0 auto;
+  max-height: 180px;
+  min-height: 56px;
+}
+
+.design-comment {
+  margin: 0;
+  padding: 6px 14px;
+  color: color-mix(in srgb, var(--fg) 75%, transparent);
+}
+
+.design-list {
+  margin: 0;
+  padding: 4px 14px 8px 32px;
+  font-size: 12px;
+}
+
+.design-list li {
+  margin: 2px 0;
+}
+
+.design-details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 16px;
+  margin: 0;
+  padding: 4px 14px 8px;
+  font-size: 12px;
+}
+
+.design-details dt {
+  color: color-mix(in srgb, var(--fg) 65%, transparent);
+}
+
+.design-details dd {
+  margin: 0;
+  font-family: var(--font-mono);
+}

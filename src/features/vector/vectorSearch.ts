@@ -2,7 +2,9 @@ import { showError } from "../../core/errorPanel";
 import { api, errorText } from "../../core/api";
 import { toast } from "../../core/dialogs";
 import { clamp, copyText, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
+import { capabilityOf } from "../../core/engines";
 import { DataGrid, gridSetup } from "../grid/grid";
+import { keyCells, legacyGridData } from "../grid/legacy";
 import type { Navigator } from "../../core/navigator";
 import { RecordPanel } from "../table/recordPanel";
 import { makeSplitter } from "../../core/splitter";
@@ -52,7 +54,7 @@ export class VectorSearchView implements TabContent {
     this.seed = seed;
     this.source = seed ? "row" : "text";
     this.grid = new DataGrid();
-    this.record = new RecordPanel(navigator);
+    this.record = new RecordPanel();
     this.searchButton = toolButton("vector", "Search", () => void this.search(), "Search (Ctrl+Enter)");
     this.queryText.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") void this.search();
@@ -116,6 +118,10 @@ export class VectorSearchView implements TabContent {
   }
 
   private async loadColumns(preferred: string): Promise<void> {
+    if (!capabilityOf(this.target.connectionId, "vector")) {
+      this.setStatus("error", "This connection has no vector support (the engine does not report the vector capability).");
+      return;
+    }
     try {
       const info = await api.vectorInfo(this.target.connectionId, this.target.database, this.target.table);
       this.info = info;
@@ -202,21 +208,26 @@ export class VectorSearchView implements TabContent {
 
   private showResult(result: VectorSearchResult): void {
     this.last = result;
-    const { columns, rows } = result.result;
+    const { columns, rows } = legacyGridData(result.result.columns, result.result.rows);
+    const { connectionId, database, table } = this.target;
     this.grid.load({
       ...gridSetup(columns, rows),
       clientFilter: true,
-      primaryKey: result.primaryKey,
+      keyColumns: result.primaryKey,
       tableName: this.target.table,
       onSelect: (row) =>
         this.record.show(
           row && {
-            target: this.target,
             columns,
             row,
-            primaryKey: result.primaryKey,
-            relations: null,
+            keyColumns: result.primaryKey,
+            description: null,
             openEditor: (column) => this.grid.openEditorForColumn(column),
+            openRelated: null,
+            vector: {
+              load: (column) => api.fetchVector(connectionId, database, table, column.name, keyCells(columns, row, result.primaryKey)),
+              findSimilar: (column) => this.setSeed(column.name, keyCells(columns, row, result.primaryKey)),
+            },
           },
         ),
     });
@@ -228,7 +239,8 @@ export class VectorSearchView implements TabContent {
     this.planGrid?.dispose();
     const plan = new DataGrid();
     this.planGrid = plan;
-    plan.load(gridSetup(result.plan.columns, result.plan.rows));
+    const planData = legacyGridData(result.plan.columns, result.plan.rows);
+    plan.load(gridSetup(planData.columns, planData.rows));
     this.planHost.replaceChildren(h("div", { class: "section-title" }, "EXPLAIN"), plan.element);
   }
 
