@@ -218,6 +218,11 @@ impl Driver for MssqlConnection {
         );
         let count_sql = format!("SELECT COUNT_BIG(*) FROM {source}{condition}");
         let key_sql = primary_key_sql(&request.database);
+        let types_sql = format!(
+            "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE \
+             FROM {}.INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = @P1 AND TABLE_NAME = @P2",
+            bracket(&request.database)
+        );
         self.with_main(|client| {
             Box::pin(async move {
                 let started = Instant::now();
@@ -237,8 +242,20 @@ impl Driver for MssqlConnection {
                     .iter()
                     .map(|row| row.text(0))
                     .collect();
+                // Declared types (nvarchar(40), decimal(12,2)) instead of the wire types.
+                let declared: HashMap<String, String> = fetch(client, &types_sql, &[&schema, &name])
+                    .await?
+                    .iter()
+                    .map(|row| (row.text(0), type_label(&row.text(1), row.optional(2), row.optional(3), row.optional(4))))
+                    .collect();
+                let mut columns = page.columns;
+                for column in &mut columns {
+                    if let Some(declared) = declared.get(&column.name) {
+                        column.type_name.clone_from(declared);
+                    }
+                }
                 Ok(TablePage {
-                    columns: page.columns,
+                    columns,
                     rows: page.rows,
                     total: total.parse().unwrap_or(0),
                     primary_key,
@@ -563,11 +580,50 @@ fn column_meta(column: &tiberius::Column) -> ColumnMeta {
     let column_type = column.column_type();
     ColumnMeta {
         name: column.name().to_owned(),
-        type_name: format!("{column_type:?}").to_lowercase(),
+        type_name: sql_type_name(column_type).to_owned(),
         numeric: is_numeric(column_type),
         binary: matches!(column_type, ColumnType::BigVarBin | ColumnType::BigBinary | ColumnType::Image),
         primary: false,
         vector_dims: None,
+    }
+}
+
+/// The SQL Server type a result column was declared with, from its TDS wire type (`Int4` is an `int`,
+/// `BigVarChar` a `varchar`). Table pages replace it with the declared type, length included.
+fn sql_type_name(column_type: ColumnType) -> &'static str {
+    use ColumnType::*;
+    match column_type {
+        Null => "null",
+        Bit | Bitn => "bit",
+        Int1 => "tinyint",
+        Int2 => "smallint",
+        Int4 | Intn => "int",
+        Int8 => "bigint",
+        Float4 => "real",
+        Float8 | Floatn => "float",
+        Money => "money",
+        Money4 => "smallmoney",
+        Decimaln => "decimal",
+        Numericn => "numeric",
+        Guid => "uniqueidentifier",
+        Datetime4 => "smalldatetime",
+        Datetime | Datetimen => "datetime",
+        Daten => "date",
+        Timen => "time",
+        Datetime2 => "datetime2",
+        DatetimeOffsetn => "datetimeoffset",
+        BigVarBin => "varbinary",
+        BigBinary => "binary",
+        BigVarChar => "varchar",
+        BigChar => "char",
+        NVarchar => "nvarchar",
+        NChar => "nchar",
+        Xml => "xml",
+        Udt => "udt",
+        Text => "text",
+        NText => "ntext",
+        Image => "image",
+        SSVariant => "sql_variant",
     }
 }
 

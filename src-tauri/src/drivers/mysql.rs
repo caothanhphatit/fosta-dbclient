@@ -231,7 +231,7 @@ impl Driver for MysqlConnection {
         let mut conn = self.pooled().await?;
         let rows = text_rows(
             &mut conn,
-            "SELECT TABLE_NAME, TABLE_TYPE, TABLE_ROWS, TABLE_COMMENT FROM information_schema.TABLES \
+            "SELECT TABLE_NAME, TABLE_TYPE, TABLE_ROWS, TABLE_COMMENT, DATA_LENGTH FROM information_schema.TABLES \
              WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
             (database.to_owned(),),
         )
@@ -241,7 +241,7 @@ impl Driver for MysqlConnection {
             .map(|row| TableInfo {
                 name: row.text(0),
                 kind: if row.text(1).contains("VIEW") { "view" } else { "table" }.to_owned(),
-                rows: row.text(2).parse().ok(),
+                rows: row_estimate(row.optional(2), row.optional(4)),
                 comment: row.text(3),
             })
             .collect())
@@ -306,8 +306,15 @@ impl Driver for MysqlConnection {
         let count_sql = self.with_timeout(format!("SELECT COUNT(*) FROM {source}{condition}"), limits.timeout_secs);
         let total: Option<u64> = conn.exec_first(count_sql, ()).await?;
         let primary_key = primary_key(&mut conn, &request.database, &request.table).await?;
+        let declared = declared_types(&mut conn, &request.database, &request.table).await?;
+        let mut columns = page.columns;
+        for column in columns.iter_mut().filter(|column| column.vector_dims.is_none()) {
+            if let Some(declared) = declared.get(&column.name) {
+                column.type_name.clone_from(declared);
+            }
+        }
         Ok(TablePage {
-            columns: page.columns,
+            columns,
             rows: page.rows,
             total: total.unwrap_or(0),
             primary_key,
@@ -577,13 +584,76 @@ fn column_meta(column: &Column, hint: &VectorHint<'_>) -> ColumnMeta {
         type_name: if vector_dims.is_some() {
             "vector".to_owned()
         } else {
-            format!("{column_type:?}").trim_start_matches("MYSQL_TYPE_").to_lowercase()
+            sql_type_name(column_type, column.character_set() == BINARY_CHARSET, column.flags()).to_owned()
         },
         numeric: is_numeric(column_type),
         binary: vector_dims.is_none() && column.character_set() == BINARY_CHARSET && is_byte_string(column_type),
         primary: column.flags().contains(ColumnFlags::PRI_KEY_FLAG),
         vector_dims,
     }
+}
+
+/// The SQL type a result column was declared with, from its wire type (`MYSQL_TYPE_LONG` is an `int`,
+/// `NEWDECIMAL` a `decimal`). Table pages replace it with the exact `COLUMN_TYPE` (`int(11)`, `decimal(10,2)`).
+fn sql_type_name(column_type: ColumnType, binary: bool, flags: ColumnFlags) -> &'static str {
+    use ColumnType::*;
+    if flags.contains(ColumnFlags::ENUM_FLAG) {
+        return "enum";
+    }
+    if flags.contains(ColumnFlags::SET_FLAG) {
+        return "set";
+    }
+    match column_type {
+        MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => "decimal",
+        MYSQL_TYPE_TINY => "tinyint",
+        MYSQL_TYPE_SHORT => "smallint",
+        MYSQL_TYPE_INT24 => "mediumint",
+        MYSQL_TYPE_LONG => "int",
+        MYSQL_TYPE_LONGLONG => "bigint",
+        MYSQL_TYPE_FLOAT => "float",
+        MYSQL_TYPE_DOUBLE => "double",
+        MYSQL_TYPE_NULL => "null",
+        MYSQL_TYPE_TIMESTAMP | MYSQL_TYPE_TIMESTAMP2 => "timestamp",
+        MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE => "date",
+        MYSQL_TYPE_TIME | MYSQL_TYPE_TIME2 => "time",
+        MYSQL_TYPE_DATETIME | MYSQL_TYPE_DATETIME2 => "datetime",
+        MYSQL_TYPE_YEAR => "year",
+        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING if binary => "varbinary",
+        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING => "varchar",
+        MYSQL_TYPE_STRING if binary => "binary",
+        MYSQL_TYPE_STRING => "char",
+        MYSQL_TYPE_TINY_BLOB | MYSQL_TYPE_BLOB | MYSQL_TYPE_MEDIUM_BLOB | MYSQL_TYPE_LONG_BLOB if binary => "blob",
+        MYSQL_TYPE_TINY_BLOB | MYSQL_TYPE_BLOB | MYSQL_TYPE_MEDIUM_BLOB | MYSQL_TYPE_LONG_BLOB => "text",
+        MYSQL_TYPE_BIT => "bit",
+        MYSQL_TYPE_JSON => "json",
+        MYSQL_TYPE_ENUM => "enum",
+        MYSQL_TYPE_SET => "set",
+        MYSQL_TYPE_GEOMETRY => "geometry",
+        MYSQL_TYPE_VECTOR => "vector",
+        _ => "unknown",
+    }
+}
+
+/// Size of one InnoDB page: what an empty table reports as `DATA_LENGTH`.
+const EMPTY_TABLE_BYTES: u64 = 16 * 1024;
+
+/// The tree's row estimate. InnoDB's `TABLE_ROWS` stays 0 until statistics are refreshed (right after a
+/// bulk load, for example), so a table that holds data but claims 0 rows reports "unknown" instead.
+fn row_estimate(table_rows: Cell, data_length: Cell) -> Option<u64> {
+    let rows: u64 = table_rows?.parse().ok()?;
+    let bytes: u64 = data_length.and_then(|text| text.parse().ok()).unwrap_or(0);
+    (rows > 0 || bytes <= EMPTY_TABLE_BYTES).then_some(rows)
+}
+
+/// `COLUMN_TYPE` of each column of a table, e.g. `int(11) unsigned`, keyed by column name.
+async fn declared_types(conn: &mut Conn, database: &str, table: &str) -> AppResult<HashMap<String, String>> {
+    let rows = text_rows(
+        conn,
+        "SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+        (database.to_owned(), table.to_owned()),
+    )
+    .await?;
+    Ok(rows.iter().map(|row| (row.text(0), row.text(1))).collect())
 }
 
 fn guess_vector_dims(column: &Column) -> Option<u32> {
@@ -772,4 +842,33 @@ pub(crate) fn quote_ident(name: &str) -> String {
 
 pub(crate) fn qualified(database: &str, table: &str) -> String {
     format!("{}.{}", quote_ident(database), quote_ident(table))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(value: &str) -> Cell {
+        Some(value.to_owned())
+    }
+
+    #[test]
+    fn stale_zero_row_estimates_are_unknown() {
+        assert_eq!(row_estimate(text("16001"), text("1589248")), Some(16001));
+        assert_eq!(row_estimate(text("0"), text("16384")), Some(0), "an empty table");
+        assert_eq!(row_estimate(text("0"), text("1589248")), None, "data but no statistics yet");
+        assert_eq!(row_estimate(None, None), None, "views");
+    }
+
+    #[test]
+    fn wire_types_read_as_sql_types() {
+        let none = ColumnFlags::empty();
+        assert_eq!(sql_type_name(ColumnType::MYSQL_TYPE_LONG, false, none), "int");
+        assert_eq!(sql_type_name(ColumnType::MYSQL_TYPE_LONGLONG, false, none), "bigint");
+        assert_eq!(sql_type_name(ColumnType::MYSQL_TYPE_NEWDECIMAL, false, none), "decimal");
+        assert_eq!(sql_type_name(ColumnType::MYSQL_TYPE_VAR_STRING, false, none), "varchar");
+        assert_eq!(sql_type_name(ColumnType::MYSQL_TYPE_VAR_STRING, true, none), "varbinary");
+        assert_eq!(sql_type_name(ColumnType::MYSQL_TYPE_BLOB, false, none), "text");
+        assert_eq!(sql_type_name(ColumnType::MYSQL_TYPE_STRING, false, ColumnFlags::ENUM_FLAG), "enum");
+    }
 }

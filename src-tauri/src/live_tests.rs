@@ -141,6 +141,21 @@ async fn live_mariadb() {
     create_and_drop(driver.as_ref(), "studio_scratch", None, None, "DROP DATABASE `studio_scratch`").await;
     let relations = driver.table_relations("shop", "products").await.expect("relations");
     assert!(!relations.outgoing.is_empty() && !relations.incoming.is_empty());
+    // Declared SQL types on table pages and SQL type names in query results, not wire types (long, newdecimal).
+    let page = driver
+        .browse_table(&browse("shop", "order_items", None), &Limits::default())
+        .await
+        .expect("browse");
+    let id = page.columns.iter().find(|column| column.name == "id").expect("id");
+    assert!(id.type_name.starts_with("int") || id.type_name.starts_with("bigint"), "{}", id.type_name);
+    driver.open_session("types").await.expect("session");
+    let typed = driver
+        .run_query("types", Some("shop".into()), "SELECT 1 AS n, CAST(1.5 AS DECIMAL(4,2)) AS d, CAST('2025-01-02' AS DATE) AS t".into(), &Limits::default())
+        .await
+        .expect("typed query");
+    let names: Vec<&str> = typed.sets[0].columns.iter().map(|column| column.type_name.as_str()).collect();
+    assert_eq!(names, ["int", "decimal", "date"]);
+    driver.close_session("types");
     // MySQL counts changed rows, so write a different value and then restore it.
     for name in ["Outdoor (edited)", "Outdoor"] {
         let changed = driver
@@ -189,6 +204,11 @@ async fn live_mssql() {
         .await
         .expect("bracket-quoted filter");
     assert!(filtered.total > 0, "bracket-quoted filter matches rows");
+    // Declared SQL types, not TDS wire types (int4, bigvarchar, decimaln).
+    let invoice_id = filtered.columns.iter().find(|column| column.name == "InvoiceId").expect("InvoiceId");
+    assert_eq!(invoice_id.type_name, "int");
+    let wire = ["int4", "intn", "bigvarchar", "nvarchar_", "decimaln"];
+    assert!(filtered.columns.iter().all(|column| !wire.contains(&column.type_name.as_str())), "{:?}", filtered.columns);
     create_and_drop(driver.as_ref(), "StudioScratch", None, None, "DROP DATABASE [StudioScratch]").await;
     let relations = driver.table_relations("ERP", "sales.Invoices").await.expect("relations");
     assert!(!relations.outgoing.is_empty());
