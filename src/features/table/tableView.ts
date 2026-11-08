@@ -3,7 +3,7 @@ import { combinedCondition, combinedJsonFilter, type ColumnFilters } from "../gr
 import { driverInfo, type DriverInfo } from "../../core/drivers";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { confirmDialog, toast } from "../../core/dialogs";
-import { clamp, copyText, formatNumber, h, icon, iconButton, separator, spacer, toolButton } from "../../core/dom";
+import { clamp, copyText, formatNumber, h, icon, iconButton, secondaryTool, separator, spacer, toolButton } from "../../core/dom";
 import { EXPORT_LABELS, type ExportFormat } from "../importExport/exporters";
 import { exportDialog, importDialog } from "../importExport/importExport";
 import { DataGrid, type SortState } from "../grid/grid";
@@ -20,6 +20,7 @@ import type { Cell, ColumnMeta, TableRelations, TableTarget, VectorInfo } from "
 const PAGE_SIZES = [100, 200, 500, 1000];
 const EXPORT_FORMATS: ExportFormat[] = ["csv", "json", "markdown", "insert"];
 const DEFAULT_PANEL_WIDTH = 340;
+const NARROW_WINDOW = 1200;
 
 interface ReloadOptions {
   offset?: number;
@@ -36,8 +37,6 @@ export class TableView implements TabContent {
   private readonly record: RecordPanel;
   private readonly filter: HTMLInputElement;
   private readonly pageInfo = h("span", { class: "pager-info" }, "Loading…");
-  private readonly submitButton: HTMLButtonElement;
-  private readonly discardButton: HTMLButtonElement;
   private readonly vectorTools = h("div", { class: "toolbar-group" });
   private readonly content: HTMLElement;
   private readonly pendingText = h("span", { class: "pending-text" });
@@ -74,28 +73,24 @@ export class TableView implements TabContent {
     this.filter.addEventListener("keydown", (event) => {
       if (event.key === "Enter") this.applyFilter();
     });
-    this.submitButton = toolButton("check", "Submit", () => void this.submit(), "Save changes (Ctrl+S)");
-    this.discardButton = toolButton("x", "Discard", () => this.grid.discard(), "Discard all changes");
-    const exportButton = toolButton("copy", "Copy as", () => undefined, "Copy this page to the clipboard");
-    const exportFileButton = toolButton("download", "Export", () => this.exportFile(), "Export rows to a file in Downloads");
-    const importButton = toolButton(
-      "upload",
-      "Import",
-      () => importDialog(this.target, this.columns, () => void this.reload({ force: true })),
-      "Import rows from CSV or JSON",
+    const exportButton = secondaryTool(toolButton("copy", "Copy as", () => undefined, "Copy this page to the clipboard"));
+    const exportFileButton = secondaryTool(toolButton("download", "Export", () => this.exportFile(), "Export rows to a file in Downloads"));
+    const importButton = secondaryTool(
+      toolButton("upload", "Import", () => importDialog(this.target, this.columns, () => void this.reload({ force: true })), "Import rows from CSV or JSON"),
     );
     importButton.hidden = !this.editable;
     exportButton.addEventListener("click", (event) => showContextMenu(event, this.exportMenu()));
-    const recordButton = toolButton("design", "Record", () => this.toggleRecord(), "Show or hide the record panel");
-    const columnsButton = toolButton("columns", "Columns", () => openColumnsPopover(this.grid, columnsButton), "Show or hide columns");
-    const editorButton = toolButton("expand", "Cell editor", () => this.grid.openSelectedInEditor(), "Open the selected cell in a larger editor (Shift+Enter)");
+    const recordButton = secondaryTool(toolButton("design", "Record", () => this.toggleRecord(), "Show or hide the record panel"));
+    const columnsButton = secondaryTool(toolButton("columns", "Columns", () => openColumnsPopover(this.grid, columnsButton), "Show or hide columns"));
+    const editorButton = secondaryTool(
+      toolButton("expand", "Cell editor", () => this.grid.openSelectedInEditor(), "Open the selected cell in a larger editor (Shift+Enter)"),
+    );
 
+    // Saving and discarding live in the pending-changes bar (Apply / Discard), which shows up as soon as there is an edit.
     const editTools = this.editable
       ? [
           toolButton("plus", "Add", () => this.grid.addRow(), "Add row"),
           toolButton("minus", "Delete", () => this.grid.deleteSelectedRow(), "Delete selected row"),
-          this.submitButton,
-          this.discardButton,
           separator(),
         ]
       : [];
@@ -106,20 +101,26 @@ export class TableView implements TabContent {
       separator(),
       ...editTools,
       h("div", { class: "filter-box" }, icon("filter"), this.filter),
-      this.vectorTools,
-      spacer(),
-      columnsButton,
-      editorButton,
-      importButton,
-      exportFileButton,
-      exportButton,
-      recordButton,
-      this.pager(),
+      // One right-aligned group: when the pane is narrow it wraps onto its own row as a whole, pager included.
+      h(
+        "div",
+        { class: "toolbar-end" },
+        this.vectorTools,
+        columnsButton,
+        editorButton,
+        importButton,
+        exportFileButton,
+        exportButton,
+        recordButton,
+        this.pager(),
+      ),
     );
     const splitter = h("div", { class: "splitter-x" });
     makeSplitter(splitter, "x", (delta) => this.resizeRecord(-delta));
     this.content = h("div", { class: "table-content" }, this.grid.element, splitter, this.record.element);
     this.content.style.setProperty("--record-width", `${this.panelWidth}px`);
+    // In a narrow window the record panel would leave room for only a few grid columns; it starts closed there.
+    if (window.innerWidth < NARROW_WINDOW) this.content.classList.add("record-hidden");
     const applyButton = h("button", { class: "btn primary", type: "button", title: "Save changes in one transaction (Ctrl+S)" }, "Apply");
     applyButton.addEventListener("click", () => void this.submit());
     const discardPending = h("button", { class: "btn", type: "button" }, "Discard");
@@ -196,8 +197,8 @@ export class TableView implements TabContent {
     const first = columns[0].name;
     this.vectorTools.replaceChildren(
       separator(),
-      toolButton("vector", "Vector search", () => this.navigator.openVectorSearch(this.target, first), "Similarity search on this table"),
-      toolButton("health", "Vector health", () => this.navigator.openVectorHealth(this.target, first), "Check vector data and index quality"),
+      secondaryTool(toolButton("vector", "Vector search", () => this.navigator.openVectorSearch(this.target, first), "Similarity search on this table")),
+      secondaryTool(toolButton("health", "Vector health", () => this.navigator.openVectorHealth(this.target, first), "Check vector data and index quality")),
     );
   }
 
@@ -414,8 +415,6 @@ export class TableView implements TabContent {
       this.pendingText.textContent = `${total} pending ${total === 1 ? "change" : "changes"} · ${parts.join(" · ")}`;
       this.pendingBar.hidden = !dirty;
     }
-    this.submitButton.disabled = !dirty;
-    this.discardButton.disabled = !dirty;
   }
 
   private handleShortcut(event: KeyboardEvent): void {

@@ -1,5 +1,6 @@
 import { showContextMenu, type MenuItem } from "./contextMenu";
 import { h, icon, type IconName } from "./dom";
+import { horizontalWheelDelta } from "./wheelScroll";
 
 export interface TabContent {
   readonly element: HTMLElement;
@@ -39,10 +40,42 @@ export class TabManager {
   /** Called after the active tab changes (also when the last tab closes). */
   onActiveChange: ((content: TabContent | null) => void) | null = null;
 
+  private readonly listButton: HTMLButtonElement;
+  private readonly stripObserver: ResizeObserver;
+
   constructor(placeholder: HTMLElement) {
     this.placeholder = placeholder;
     this.body.append(placeholder);
-    this.element = h("div", { class: "tabs" }, this.strip, this.body);
+    // The strip has no visible scrollbar: the wheel scrolls it sideways, the active tab is kept in view,
+    // and the list button (shown only when tabs overflow) reaches every tab.
+    this.strip.addEventListener(
+      "wheel",
+      (event) => {
+        const delta = horizontalWheelDelta(event);
+        if (delta === 0 || this.strip.scrollWidth <= this.strip.clientWidth) return;
+        event.preventDefault();
+        this.strip.scrollLeft += delta;
+      },
+      { passive: false },
+    );
+    this.listButton = h("button", { class: "icon-button tab-list-button", type: "button", title: "All tabs", "aria-label": "All tabs" }, icon("chevronDown"));
+    this.listButton.hidden = true;
+    this.listButton.addEventListener("click", (event) => showContextMenu(event, this.listMenu()));
+    this.stripObserver = new ResizeObserver(() => this.refreshOverflow());
+    this.stripObserver.observe(this.strip);
+    this.element = h("div", { class: "tabs" }, h("div", { class: "tab-bar" }, this.strip, this.listButton), this.body);
+  }
+
+  private refreshOverflow(): void {
+    this.listButton.hidden = this.strip.scrollWidth <= this.strip.clientWidth + 1;
+  }
+
+  private listMenu(): MenuItem[] {
+    return this.visibleTabs().map((tab) => ({
+      label: tab.header.querySelector(".tab-title")?.textContent ?? tab.key,
+      icon: tab.key === this.activeKey ? "check" : undefined,
+      run: () => this.activate(tab.key),
+    }));
   }
 
   activeContent(): TabContent | null {
@@ -126,6 +159,7 @@ export class TabManager {
 
   private refreshPlaceholder(): void {
     this.placeholder.hidden = this.visibleTabs().length > 0;
+    this.refreshOverflow();
   }
 
   private createHeader(spec: TabSpec): HTMLElement {

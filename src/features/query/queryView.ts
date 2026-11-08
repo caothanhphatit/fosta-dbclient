@@ -1,7 +1,7 @@
 import type { EditorView } from "@codemirror/view";
 import { api, errorText } from "../../core/api";
 import { confirmDialog, toast } from "../../core/dialogs";
-import { clamp, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
+import { clamp, formatNumber, h, icon, secondaryTool, separator, spacer, toolButton } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
 import { openColumnsPopover } from "../grid/columnsPopover";
 import { DataGrid, gridSetup } from "../grid/grid";
@@ -88,19 +88,13 @@ export class QueryView implements TabContent {
     this.stopButton = toolButton("stop", "Stop", () => void this.cancel(), "Cancel the running query");
     this.stopButton.disabled = true;
     this.stopButton.hidden = !info.supportsCancel;
-    this.columnsButton = toolButton(
-      "columns",
-      "Columns",
-      () => this.activeGrid && openColumnsPopover(this.activeGrid, this.columnsButton),
-      "Show or hide columns of this result",
+    this.columnsButton = secondaryTool(
+      toolButton("columns", "Columns", () => this.activeGrid && openColumnsPopover(this.activeGrid, this.columnsButton), "Show or hide columns of this result"),
     );
-    this.cellButton = toolButton(
-      "expand",
-      "Cell editor",
-      () => this.activeGrid?.openSelectedInEditor(),
-      "Open the selected cell in a larger viewer (Shift+Enter)",
+    this.cellButton = secondaryTool(
+      toolButton("expand", "Cell editor", () => this.activeGrid?.openSelectedInEditor(), "Open the selected cell in a larger viewer (Shift+Enter)"),
     );
-    this.historyButton = toolButton("history", "History", () => this.toggleHistory(), "Show or hide the query history");
+    this.historyButton = secondaryTool(toolButton("history", "History", () => this.toggleHistory(), "Show or hide the query history"));
     this.transactionsSupported = info.id !== "mongodb";
     this.transactionButtons = [
       toolButton("bolt", "Begin", () => void this.transactionControl("begin"), "Start a transaction in this tab"),
@@ -138,10 +132,7 @@ export class QueryView implements TabContent {
         ...(this.transactionsSupported ? this.transactionButtons : []),
         this.transactionIndicator,
         spacer(),
-        this.columnsButton,
-        this.cellButton,
-        separator(),
-        this.historyButton,
+        h("div", { class: "toolbar-group toolbar-end" }, this.columnsButton, this.cellButton, separator(), this.historyButton),
       ),
       h(
         "div",

@@ -104,6 +104,13 @@ export function toolButton(iconName: IconName, label: string, onClick: () => voi
   return button;
 }
 
+/** Marks a toolbar button as secondary: in narrow panes it shows only its icon (the tooltip and aria-label keep the name). */
+export function secondaryTool(button: HTMLButtonElement): HTMLButtonElement {
+  button.classList.add("secondary");
+  button.setAttribute("aria-label", button.textContent ?? "");
+  return button;
+}
+
 export function iconButton(iconName: IconName, title: string, onClick: () => void): HTMLButtonElement {
   const button = h("button", { class: "icon-button", title, "aria-label": title, type: "button" }, icon(iconName));
   button.addEventListener("click", (event) => {
