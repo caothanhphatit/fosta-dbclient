@@ -90,6 +90,7 @@ export class DiagramView implements TabContent {
   private readonly search = h("input", { class: "input diagram-search", placeholder: "Find table…", spellcheck: "false" });
   private readonly measure = document.createElement("canvas").getContext("2d")!;
   private readonly unsubscribeTheme: () => void;
+  private resizeObserver: ResizeObserver | null = null;
   private boxes = new Map<string, Box>();
   private links: Link[] = [];
   private palette: Palette = readPalette();
@@ -166,7 +167,10 @@ export class DiagramView implements TabContent {
     );
     this.element = h("div", { class: "view diagram-view" }, toolbar, this.host);
     this.installPanZoom();
-    if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => this.scheduleCull()).observe(this.svg);
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => this.scheduleCull());
+      this.resizeObserver.observe(this.svg);
+    }
     this.unsubscribeTheme = onThemeChange(() => {
       this.palette = readPalette();
       this.rebuild();
@@ -198,6 +202,7 @@ export class DiagramView implements TabContent {
 
   dispose(): void {
     this.unsubscribeTheme();
+    this.resizeObserver?.disconnect();
   }
 
   // --- Data -----------------------------------------------------------------

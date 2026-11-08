@@ -146,12 +146,17 @@ export class DataGrid {
   private frame: number | null = null;
   private editingRow: number | null = null;
   private commitEdit: (() => void) | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+  private disposed = false;
 
   constructor(onChange: () => void = () => undefined) {
     this.onChange = onChange;
     this.element = h("div", { class: "grid", tabIndex: 0 });
     this.element.addEventListener("scroll", () => this.scheduleWindow(), { passive: true });
-    if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => this.scheduleWindow()).observe(this.element);
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => this.scheduleWindow());
+      this.resizeObserver.observe(this.element);
+    }
     this.element.addEventListener("keydown", (event) => this.handleKey(event));
     this.element.addEventListener("mousedown", (event) => this.handlePointer(event));
     this.element.addEventListener("dblclick", (event) => this.handleDoubleClick(event));
@@ -373,8 +378,17 @@ export class DataGrid {
     this.restoreFilterFocus();
   }
 
+  /** Stops observing the grid's size; call when the view that owns the grid closes or replaces it. */
+  dispose(): void {
+    this.disposed = true;
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    if (this.frame !== null) cancelAnimationFrame(this.frame);
+    this.frame = null;
+  }
+
   private scheduleWindow(): void {
-    if (this.frame !== null) return;
+    if (this.frame !== null || this.disposed) return;
     this.frame = requestAnimationFrame(() => {
       this.frame = null;
       this.updateWindow(false);

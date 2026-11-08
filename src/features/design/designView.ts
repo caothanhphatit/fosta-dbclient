@@ -31,6 +31,10 @@ export class DesignView implements TabContent {
     void this.load(target);
   }
 
+  dispose(): void {
+    this.grid.dispose();
+  }
+
   private async load(target: TableTarget): Promise<void> {
     try {
       const design = await api.describeTable(target.connectionId, target.database, target.table);

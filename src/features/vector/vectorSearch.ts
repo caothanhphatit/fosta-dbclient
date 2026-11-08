@@ -32,6 +32,7 @@ export class VectorSearchView implements TabContent {
   private readonly kInput = h("input", { class: "input k-input", type: "number", min: 1, max: 1000, value: String(DEFAULT_K) });
   private readonly filterInput = h("input", { class: "input mono", placeholder: "Optional WHERE, e.g. tenant_id = 't1'", spellcheck: "false" });
   private readonly queryText = h("textarea", { class: "input query-text", spellcheck: "false", rows: 3 });
+  private planGrid: DataGrid | null = null;
   private readonly sourceTabs = h("div", { class: "segmented" });
   private readonly sourceHint = h("div", { class: "field-hint" });
   private readonly status = h("div", { class: "search-status" });
@@ -223,9 +224,16 @@ export class VectorSearchView implements TabContent {
       result.indexUsed ? "ok" : "warn",
       `${indexText} · ${formatNumber(rows.length)} result(s) · ${formatNumber(result.elapsedMs)} ms · ${result.queryDims} dims`,
     );
+    this.planGrid?.dispose();
     const plan = new DataGrid();
+    this.planGrid = plan;
     plan.load(gridSetup(result.plan.columns, result.plan.rows));
     this.planHost.replaceChildren(h("div", { class: "section-title" }, "EXPLAIN"), plan.element);
+  }
+
+  dispose(): void {
+    this.grid.dispose();
+    this.planGrid?.dispose();
   }
 
   private async copySql(runnable: boolean): Promise<void> {

@@ -14,6 +14,7 @@ import { RecordPanel } from "./recordPanel";
 import { withConfirmation } from "../safety/confirmationDialog";
 import { makeSplitter } from "../../core/splitter";
 import { equalsFilter, rowKey, sqlDialect, type SqlDialect } from "../../core/sql";
+import { LatestRequest } from "../../core/latest";
 import type { TabContent } from "../../core/tabs";
 import type { Cell, ColumnMeta, TableRelations, TableTarget, VectorInfo } from "../../core/types";
 
@@ -40,6 +41,8 @@ export class TableView implements TabContent {
   private readonly record: RecordPanel;
   private readonly filter: HTMLInputElement;
   private readonly pageInfo = h("span", { class: "pager-info" }, "Loading…");
+  /** Page loads overlap when the user pages quickly; only the newest one is shown. */
+  private readonly loads = new LatestRequest();
   private readonly vectorTools = h("div", { class: "toolbar-group" });
   private readonly content: HTMLElement;
   private readonly pendingText = h("span", { class: "pending-text" });
@@ -351,12 +354,10 @@ export class TableView implements TabContent {
     if (!options.force && this.grid.hasChanges() && !(await confirmDialog("Discard unsaved changes?", "Discard"))) return;
     const offset = options.offset ?? this.offset;
     const sort = options.sort === undefined ? this.sort : options.sort;
+    const ticket = this.loads.begin();
     this.element.classList.add("busy");
     try {
-      const filter =
-        this.driver.filterKind === "json"
-          ? combinedJsonFilter(this.columns, this.columnFilters, this.filter.value)
-          : combinedCondition(this.columns, this.columnFilters, this.filter.value, this.dialect);
+      const filter = this.currentFilter();
       const page = await api.browseTable({
         connectionId: this.target.connectionId,
         database: this.target.database,
@@ -367,6 +368,8 @@ export class TableView implements TabContent {
         descending: sort?.descending ?? false,
         filter,
       });
+      // A newer page change (or a closed tab) wins over this answer.
+      if (!this.loads.isCurrent(ticket)) return;
       this.offset = offset;
       this.sort = sort;
       this.total = page.total;
@@ -400,10 +403,15 @@ export class TableView implements TabContent {
       });
       this.pageInfo.textContent = describePage(offset, page.rows.length, page.total, page.elapsedMs);
     } catch (error) {
-      toast(errorText(error), "error");
+      if (this.loads.isCurrent(ticket)) toast(errorText(error), "error");
     } finally {
-      this.element.classList.remove("busy");
+      if (this.loads.isCurrent(ticket)) this.element.classList.remove("busy");
     }
+  }
+
+  dispose(): void {
+    this.loads.close();
+    this.grid.dispose();
   }
 
   private async submit(): Promise<void> {

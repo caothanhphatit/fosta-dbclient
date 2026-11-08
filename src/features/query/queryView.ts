@@ -66,6 +66,7 @@ export class QueryView implements TabContent {
   private readonly host: QueryHost;
   private readonly history: HistoryPanel;
   private activeGrid: DataGrid | null = null;
+  private panelGrids: DataGrid[] = [];
   private sessionOpened = false;
   private running = false;
   private cancelRequested = false;
@@ -281,6 +282,7 @@ export class QueryView implements TabContent {
   dispose(): void {
     window.clearInterval(this.idleTimer);
     this.editor.destroy();
+    for (const grid of this.panelGrids) grid.dispose();
     if (this.sessionOpened) void api.closeSession(this.sessionId);
   }
 
@@ -402,6 +404,9 @@ export class QueryView implements TabContent {
   }
 
   private showPanels(panels: ResultPanel[]): void {
+    // The previous results' grids stop observing their size.
+    for (const grid of this.panelGrids) grid.dispose();
+    this.panelGrids = panels.flatMap((panel) => (panel.grid ? [panel.grid] : []));
     const buttons = panels.map((panel) => h("button", { class: "result-tab", type: "button" }, panel.title));
     const activate = (active: number) => {
       buttons.forEach((button, index) => button.classList.toggle("active", index === active));
