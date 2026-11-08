@@ -32,7 +32,7 @@ fn entries() -> Vec<&'static dyn Engine> {
     #[cfg(feature = "engine-mssql")]
     engines.push(&crate::engines::mssql::MSSQL);
     #[cfg(feature = "engine-mongo")]
-    engines.push(&super::legacy::MONGODB);
+    engines.push(&crate::engines::mongo::MONGODB);
     #[cfg(feature = "engine-postgres")]
     engines.push(&crate::engines::postgres::POSTGRES);
     #[cfg(feature = "engine-sqlite")]

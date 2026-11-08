@@ -339,6 +339,37 @@ impl From<mongodb::error::Error> for AppError {
                     .with("codeName", &concern.code_name)
                     .retryable(true)
             }
+            // insert_many: the first failed document's error, and its position.
+            ErrorKind::InsertMany(failure) => match failure
+                .write_errors
+                .as_ref()
+                .and_then(|errors| errors.iter().min_by_key(|e| e.index))
+            {
+                Some(write) => {
+                    let name = write.code_name.clone().unwrap_or_default();
+                    let message = if name.is_empty() {
+                        write.message.clone()
+                    } else {
+                        format!("{} ({name})", write.message)
+                    };
+                    let mut out = Self::coded("ENGINE_ERROR", message)
+                        .with_vendor_code(write.code)
+                        .with("codeName", write.code_name.clone())
+                        .with("index", write.index)
+                        .retryable(retryable);
+                    if let Some(details) = &write.details {
+                        out = out.with("errInfo", mongodb::bson::Bson::Document(details.clone()).into_relaxed_extjson());
+                    }
+                    out
+                }
+                None => match &failure.write_concern_error {
+                    Some(concern) => Self::coded("ENGINE_ERROR", format!("{} ({})", concern.message, concern.code_name))
+                        .with_vendor_code(concern.code)
+                        .with("codeName", &concern.code_name)
+                        .retryable(true),
+                    None => Self::new(error.to_string()).retryable(retryable),
+                },
+            },
             ErrorKind::Io(_) | ErrorKind::ConnectionPoolCleared { .. } | ErrorKind::ServerSelection { .. } => {
                 Self::coded("CONNECTION_ERROR", error.to_string()).retryable(true)
             }

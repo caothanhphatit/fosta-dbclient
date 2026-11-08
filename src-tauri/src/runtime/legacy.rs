@@ -1,15 +1,14 @@
-//! Transitional: the engine contract over the pre-contract `drivers::Driver`s (MongoDB), so the core, the new commands
-//! and the contract tests use one path while the native adapters are written. Values are converted at the boundary
-//! (text cells become `Value::Text`, `Value::Bytes` for binary columns, numbers keep their text). Removed once every
-//! engine has a native adapter.
+//! Transitional: the engine contract over the pre-contract `drivers::Driver`s, for the old commands until they are
+//! removed. Values are converted at the boundary (text cells become `Value::Text`, `Value::Bytes` for binary columns,
+//! numbers keep their text).
 //!
-//! The old commands still call the `Driver` directly; [`connect`] returns it next to the contract connection and the
-//! `ConnectionManager` keeps both. MariaDB/MySQL and SQL Server have native adapters; [`open_driver`] opens their legacy
-//! driver next to it for the old commands.
+//! Every engine with a legacy driver (MariaDB/MySQL, SQL Server, MongoDB) now has a native adapter; [`open_driver`]
+//! opens the legacy driver next to it and the `ConnectionManager` keeps both. [`LegacyConnection`] still wraps a
+//! driver for tests that register fakes.
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, OnceLock,
+    Arc,
 };
 
 use async_trait::async_trait;
@@ -18,12 +17,11 @@ use futures_util::future::BoxFuture;
 use crate::{
     config::ConnectionProfile,
     contract::{
-        classify_common, unsupported_capability, ApplyResult, BrowseRequest, CallContext, Canceller, Capability, CapabilitySet,
-        Classification, ClassifyInput, ColumnHints, ColumnInfo, ConnectRequest, Connection, DatabaseAdmin, Engine, EngineDescriptor, Field,
-        Filter, ForeignKeyInfo, KeyInfo, LanguageSpec, NodeKey, NodeKind, ObjectDescription, ObjectNode, ObjectRef, OpenedSession, Page,
-        ReferencingKey, ResultSink, RowChange, RowChangeSet, RunOptions, RunRequest, SchemaGraph, SchemaGraphSource, ServerInfo, Session,
-        SessionOptions, StatementInfo, StreamEvent, TabularData, Total, TransactionOp, TransactionState, TreeChildren, TreeRequest, Value,
-        ValueKind,
+        unsupported_capability, ApplyResult, BrowseRequest, CallContext, Canceller, Capability, CapabilitySet, ColumnHints, ColumnInfo,
+        ConnectRequest, Connection, DatabaseAdmin, Engine, Field, Filter, ForeignKeyInfo, KeyInfo, LanguageSpec, NodeKey, NodeKind,
+        ObjectDescription, ObjectNode, ObjectRef, OpenedSession, Page, ReferencingKey, ResultSink, RowChange, RowChangeSet, RunOptions,
+        RunRequest, SchemaGraph, SchemaGraphSource, ServerInfo, Session, SessionOptions, StreamEvent, TabularData, Total, TransactionOp,
+        TransactionState, TreeChildren, TreeRequest, Value, ValueKind,
     },
     drivers::{
         self,
@@ -32,28 +30,8 @@ use crate::{
     },
     engines::{mongo, mssql, mysql},
     error::AppResult,
-    gateway::classify::{classify_mongo, classify_sql},
     schema,
 };
-
-/// An engine served by a legacy driver.
-pub struct LegacyEngine {
-    kind: drivers::Engine,
-    descriptor: fn() -> EngineDescriptor,
-    cell: OnceLock<EngineDescriptor>,
-}
-
-impl LegacyEngine {
-    const fn new(kind: drivers::Engine, descriptor: fn() -> EngineDescriptor) -> Self {
-        Self {
-            kind,
-            descriptor,
-            cell: OnceLock::new(),
-        }
-    }
-}
-
-pub static MONGODB: LegacyEngine = LegacyEngine::new(drivers::Engine::MongoDb, mongo::descriptor::descriptor);
 
 /// What the legacy drivers can do through the contract (no structured filters, no keyset, no concurrency checks).
 fn legacy_capabilities(kind: drivers::Engine) -> CapabilitySet {
@@ -81,43 +59,16 @@ fn legacy_capabilities(kind: drivers::Engine) -> CapabilitySet {
     set
 }
 
-#[async_trait]
-impl Engine for LegacyEngine {
-    fn descriptor(&self) -> &EngineDescriptor {
-        self.cell.get_or_init(self.descriptor)
-    }
-
-    fn classify(&self, input: &ClassifyInput<'_>) -> Classification {
-        if let Some(classification) = classify_common(input) {
-            return classification;
-        }
-        match input {
-            ClassifyInput::Statement { text, .. } if self.kind == drivers::Engine::MongoDb => classify_mongo(text),
-            ClassifyInput::Statement { text, .. } => classify_sql(
-                self.descriptor().sql_dialect.unwrap_or(crate::contract::SqlDialectId::Generic),
-                text,
-            ),
-            ClassifyInput::Capability { name, .. } => Classification::single(StatementInfo::refused(name, name, "unknown operation")),
-            _ => Classification::default(),
-        }
-    }
-
-    async fn connect(&self, request: ConnectRequest) -> AppResult<Arc<dyn Connection>> {
-        let (connection, _) = connect(&request).await?;
-        Ok(connection)
-    }
-}
-
-/// Whether this engine id is served by a legacy driver.
+/// Whether this engine id has a legacy driver (opened next to its native connection for the old commands).
 pub fn handles(engine_id: &str) -> bool {
     matches!(engine_id, "mariadb" | "mysql" | "mssql" | "mongodb")
 }
 
-/// Whether the contract connection itself is still [`LegacyConnection`] (no native adapter yet). Engines with a native
-/// adapter (MariaDB/MySQL) still get a legacy driver next to it (a second pool) for the old commands, until those are
-/// removed.
-pub fn wrapped(engine_id: &str) -> bool {
-    matches!(engine_id, "mongodb")
+/// Whether the contract connection itself is still [`LegacyConnection`] (no native adapter yet). Every engine has a
+/// native adapter now; engines with a legacy driver still get it next to the native connection (a second pool) for the
+/// old commands, until those are removed.
+pub fn wrapped(_engine_id: &str) -> bool {
+    false
 }
 
 /// Opens only the legacy driver (next to a native connection).
@@ -168,7 +119,7 @@ pub fn engine_for(kind: drivers::Engine) -> &'static dyn Engine {
         drivers::Engine::MariaDb => &mysql::MARIADB,
         drivers::Engine::MySql => &mysql::MYSQL,
         drivers::Engine::SqlServer => &mssql::MSSQL,
-        drivers::Engine::MongoDb => &MONGODB,
+        drivers::Engine::MongoDb => &mongo::MONGODB,
     }
 }
 
@@ -652,7 +603,6 @@ impl Canceller for LegacyCanceller {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::Category;
 
     #[test]
     fn type_names_map_to_neutral_kinds() {
@@ -675,21 +625,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_engines_classify_with_the_gateway_classifiers() {
-        let mongo = MONGODB.classify(&ClassifyInput::Statement {
-            language: "mongo-command",
-            text: r#"{ "find": "t" }"#,
-        });
-        assert_eq!(mongo.worst(), Some(Category::Read));
-        let unknown = MONGODB.classify(&ClassifyInput::Capability {
-            name: "x.y",
-            args: &serde_json::Value::Null,
-        });
-        assert!(unknown.refusal().is_some());
-        assert_eq!(MONGODB.descriptor().id, "mongodb");
+    fn legacy_drivers_map_to_their_native_engines() {
         assert_eq!(engine_for(drivers::Engine::MariaDb).id(), "mariadb");
         assert_eq!(engine_for(drivers::Engine::SqlServer).id(), "mssql");
+        assert_eq!(engine_for(drivers::Engine::MongoDb).id(), "mongodb");
         assert!(!handles("postgres") && handles("mysql") && !wrapped("mysql"));
-        assert!(handles("mssql") && !wrapped("mssql") && wrapped("mongodb"));
+        assert!(handles("mssql") && !wrapped("mssql") && handles("mongodb") && !wrapped("mongodb"));
     }
 }
