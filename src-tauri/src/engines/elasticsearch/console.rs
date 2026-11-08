@@ -35,7 +35,7 @@ const METHODS: &[&str] = &["GET", "POST", "PUT", "DELETE", "HEAD", "PATCH"];
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConsoleRequest {
-    /// 1-based line of the request line.
+    /// 1-based line of the request line; the body starts on the next line.
     pub line: usize,
     pub method: String,
     /// Path with a leading `/` and the query string.
@@ -93,6 +93,27 @@ pub fn parse(input: &str) -> AppResult<Vec<ConsoleRequest>> {
         });
     }
     Ok(requests)
+}
+
+impl ConsoleRequest {
+    /// The HTTP request to send. A request whose path the classifier refused (a path the client would rewrite) is never
+    /// built, so it cannot reach the cluster whatever called it.
+    pub fn to_es_request(&self, timeout: Duration, opaque_id: Option<String>) -> AppResult<EsRequest> {
+        if let Some(reason) = &self.classification.refused {
+            return Err(AppError::coded("INVALID_REQUEST", format!("Line {}: {reason}", self.line)));
+        }
+        if self.path.starts_with("kbn:") {
+            return Err(AppError::coded(
+                "INVALID_REQUEST",
+                format!("Line {}: Kibana APIs (kbn:) are not available here.", self.line),
+            ));
+        }
+        let method = Method::from_bytes(self.method.as_bytes()).map_err(|_| AppError::new("Unknown HTTP method."))?;
+        let mut request = EsRequest::new(method, self.path.clone()).timeout(timeout);
+        request.body = self.body.clone();
+        request.opaque_id = opaque_id;
+        Ok(request)
+    }
 }
 
 fn is_comment(line: &str) -> bool {
@@ -184,10 +205,7 @@ impl EsEngine {
     }
 
     pub async fn run_console_request(&self, request: &ConsoleRequest, timeout: Duration) -> AppResult<EsResponse> {
-        let method = Method::from_bytes(request.method.as_bytes()).map_err(|_| AppError::new("Unknown HTTP method."))?;
-        let mut es_request = EsRequest::new(method, request.path.clone()).timeout(timeout);
-        es_request.body = request.body.clone();
-        self.client.send(&es_request).await
+        self.client.send(&request.to_es_request(timeout, None)?).await
     }
 }
 
@@ -247,6 +265,17 @@ delete products
         assert!(error.starts_with("Line 3:"), "{error}");
         assert!(parse("POST /x\n{\"a\": \"\"\"open}").is_err());
         assert!(parse("   \n# only comments\n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn requests_with_rewritten_paths_are_never_built() {
+        let requests = parse("DELETE /_count/../products\n\nGET /products/_search").unwrap();
+        assert!(requests[0].classification.refused.is_some());
+        let error = requests[0].to_es_request(Duration::from_secs(1), None).unwrap_err();
+        assert_eq!(error.code(), Some("INVALID_REQUEST"));
+        assert!(requests[1].to_es_request(Duration::from_secs(1), Some("fosta-1".into())).is_ok());
+        let kibana = parse("GET kbn:/api/status").unwrap();
+        assert!(kibana[0].to_es_request(Duration::from_secs(1), None).is_err());
     }
 
     #[test]

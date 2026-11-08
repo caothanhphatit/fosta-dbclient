@@ -212,7 +212,7 @@ impl DocumentOp {
 impl ByQueryOp {
     pub fn class(&self) -> RequestClass {
         match self.kind {
-            ByQueryKind::Update => RequestClass::Write,
+            ByQueryKind::Update => RequestClass::Destructive,
             ByQueryKind::Delete => RequestClass::Destructive,
         }
     }
@@ -227,7 +227,7 @@ impl EsEngine {
         }
         let response = self.client.send(&EsRequest::new(Method::GET, path)).await?;
         if response.status >= 400 && !(response.status == 404 && response.body["found"] == false) {
-            return Err(AppError::new(super::client::error_message(response.status, &response.body)));
+            return Err(super::errors::from_response(response.status, &response.body));
         }
         let body = response.body;
         Ok(Document {
@@ -246,7 +246,7 @@ impl EsEngine {
         let response = self.client.send(&op.request()?).await?;
         // Deleting a missing document answers 404 with `result: not_found`; report it rather than fail.
         if response.status >= 400 && response.body["result"] != "not_found" {
-            return Err(AppError::new(super::client::error_message(response.status, &response.body)));
+            return Err(super::errors::from_response(response.status, &response.body));
         }
         let body = response.body;
         Ok(WriteResult {

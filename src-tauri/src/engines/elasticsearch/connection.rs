@@ -156,7 +156,12 @@ pub struct EsEngine {
 impl EsEngine {
     /// Calls `/` (checks the URL, credentials and TLS) and detects the distribution and version.
     pub async fn connect(options: &EsConnectOptions) -> AppResult<Self> {
-        let client = EsClient::new(options)?;
+        Self::connect_with(options, None).await
+    }
+
+    /// [`Self::connect`] with a rustls configuration from the connection's TLS settings.
+    pub async fn connect_with(options: &EsConnectOptions, tls: Option<rustls::ClientConfig>) -> AppResult<Self> {
+        let client = EsClient::with_tls(options, tls)?;
         let root = client.get("/").await?;
         let info = ClusterInfo::from_root(&root)?;
         Ok(Self { client, info })

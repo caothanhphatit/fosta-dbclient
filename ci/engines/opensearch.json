@@ -1,0 +1,18 @@
+{
+  "id": "opensearch",
+  "compose": "dev/compose/opensearch.yml",
+  "versions": ["2.19.6"],
+  "versionEnv": "OPENSEARCH_TAG",
+  "seed": null,
+  "paths": [
+    "src-tauri/src/engines/elasticsearch/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "dev/compose/opensearch.yml",
+    "ci/engines/opensearch.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_opensearch",
+  "note": "Security plugin off, plain http on 9201. The suites recreate their own indices; the point-in-time test needs the logs-app data stream of dev/seed-nosql.sh and skips without it."
+}

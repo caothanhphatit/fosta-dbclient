@@ -136,7 +136,7 @@ impl EsEngine {
         }
         let response = self.client.send(&http).await?;
         if response.status >= 400 {
-            return Err(AppError::new(super::client::error_message(response.status, &response.body)));
+            return Err(super::errors::from_response(response.status, &response.body));
         }
         let mut table = parse_esql(&response.body);
         table.warnings = response.warnings;

@@ -736,9 +736,9 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     label: "Elasticsearch",
     family: "search",
     icon: "search",
-    status: "planned",
+    status: "ready",
     sqlDialect: null,
-    capabilities: ["tree", "describe", "browseRows", "editRows", "rawFilter", "query", "documents", "search", "console", "serverOverview"],
+    capabilities: ["tree", "describe", "browseRows", "editRows", "rawFilter", "keysetPaging", "estimatedCount", "exactCount", "query", "cancel", "statementTimeout", "documents", "search", "console", "serverOverview"],
     objectsLabel: "indices",
     connection: {
       usesHost: true,
@@ -836,9 +836,9 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     label: "OpenSearch",
     family: "search",
     icon: "search",
-    status: "planned",
+    status: "ready",
     sqlDialect: null,
-    capabilities: ["tree", "describe", "browseRows", "editRows", "rawFilter", "query", "documents", "search", "console", "serverOverview"],
+    capabilities: ["tree", "describe", "browseRows", "editRows", "rawFilter", "keysetPaging", "estimatedCount", "exactCount", "query", "cancel", "statementTimeout", "documents", "search", "console", "serverOverview"],
     objectsLabel: "indices",
     connection: {
       usesHost: true,
