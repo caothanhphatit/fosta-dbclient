@@ -1,6 +1,10 @@
-import { MariaSQL, sql } from "@codemirror/lang-sql";
+/**
+ * The query tab's CodeMirror editor. The language (highlighting, completion) is not fixed here: it comes from the
+ * engine's `LanguageSupport.editorExtensions` and is swapped in with `setEditorLanguage` (when it has loaded, or when
+ * the database or the language changes).
+ */
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { Compartment, Prec } from "@codemirror/state";
+import { Compartment, Prec, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
@@ -12,7 +16,7 @@ const highlightStyle = HighlightStyle.define([
   { tag: [tags.string, tags.special(tags.string)], color: "var(--syn-string)" },
   { tag: [tags.number, tags.bool, tags.null], color: "var(--syn-number)" },
   { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "var(--syn-comment)", fontStyle: "italic" },
-  { tag: [tags.typeName, tags.standard(tags.name)], color: "var(--syn-type)" },
+  { tag: [tags.typeName, tags.standard(tags.name), tags.propertyName], color: "var(--syn-type)" },
   { tag: [tags.operator, tags.punctuation], color: "var(--fg-muted)" },
 ]);
 
@@ -31,9 +35,18 @@ const editorTheme = EditorView.theme({
   ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--accent)", color: "var(--accent-fg)" },
 });
 
-export function createSqlEditor(parent: HTMLElement, doc: string, onRun: () => void): EditorView {
-  const run = () => {
-    onRun();
+export interface EditorCommands {
+  /** Ctrl+Enter / F9: the selection, or everything. */
+  run(): void;
+  /** Ctrl+Shift+Enter: the statement under the cursor. */
+  runStatement(): void;
+  /** Shift+Alt+F. */
+  format(): void;
+}
+
+export function createSqlEditor(parent: HTMLElement, doc: string, commands: EditorCommands): EditorView {
+  const command = (action: () => void) => () => {
+    action();
     return true;
   };
   return new EditorView({
@@ -42,20 +55,23 @@ export function createSqlEditor(parent: HTMLElement, doc: string, onRun: () => v
     extensions: [
       Prec.highest(
         keymap.of([
-          { key: "Mod-Enter", run },
-          { key: "F9", run },
+          { key: "Mod-Shift-Enter", run: command(commands.runStatement) },
+          { key: "Mod-Enter", run: command(commands.run) },
+          { key: "F9", run: command(commands.run) },
+          { key: "Shift-Alt-f", run: command(commands.format) },
         ]),
       ),
       basicSetup,
-      language.of(sqlLanguage([])),
+      language.of([]),
       syntaxHighlighting(highlightStyle),
       editorTheme,
     ],
   });
 }
 
-export function setSchemaTables(view: EditorView, tables: string[]): void {
-  view.dispatch({ effects: language.reconfigure(sqlLanguage(tables)) });
+/** Replaces the language extensions (from `LanguageSupport.editorExtensions`). */
+export function setEditorLanguage(view: EditorView, extensions: Extension[]): void {
+  view.dispatch({ effects: language.reconfigure(extensions) });
 }
 
 export function selectedOrAllText(view: EditorView): string {
@@ -65,12 +81,4 @@ export function selectedOrAllText(view: EditorView): string {
     .map((range) => state.sliceDoc(range.from, range.to))
     .join("\n");
   return selected || state.doc.toString();
-}
-
-function sqlLanguage(tables: string[]) {
-  return sql({
-    dialect: MariaSQL,
-    upperCaseKeywords: true,
-    schema: Object.fromEntries(tables.map((table) => [table, []])),
-  });
 }

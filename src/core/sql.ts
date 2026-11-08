@@ -34,6 +34,23 @@ export function dialectOf(id: SqlDialectId | null | undefined): SqlDialect {
   }
 }
 
+/**
+ * Statements that commit an open transaction implicitly in a dialect, or null when it has none the UI knows of. On
+ * MariaDB and MySQL every DDL statement (and START TRANSACTION / BEGIN) ends the current transaction first, so a later
+ * Rollback cannot undo what ran before it; Oracle commits around DDL too.
+ */
+export function implicitCommitPattern(id: SqlDialectId | null | undefined): RegExp | null {
+  switch (id) {
+    case "mariaDb":
+    case "mySql":
+      return /(^|;)\s*(create|alter|drop|truncate|rename|start\s+transaction|begin)\b/i;
+    case "oracle":
+      return /(^|;)\s*(create|alter|drop|truncate|rename|grant|revoke)\b/i;
+    default:
+      return null;
+  }
+}
+
 export function quoteIdent(name: string, dialect: SqlDialect): string {
   switch (dialect) {
     case "mysql":

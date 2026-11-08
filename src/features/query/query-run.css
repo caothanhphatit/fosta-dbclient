@@ -1,0 +1,66 @@
+/* Query tab: language picker, result tab counts, the run status line and notices. */
+
+.query-view .language-select {
+  min-width: 140px;
+  margin-left: 6px;
+}
+
+.query-view .language-select + .database-select {
+  margin-left: 4px;
+}
+
+.result-bar {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.result-bar .result-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  background: transparent;
+  border-bottom: none;
+}
+
+.result-bar .result-tab {
+  flex: none;
+  white-space: nowrap;
+}
+
+.result-count {
+  margin-left: 6px;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-status {
+  /* Gives way first in a narrow pane; the full text stays in the Messages tab. */
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  align-self: center;
+  padding: 0 12px;
+  color: var(--fg-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.message.notice {
+  color: var(--fg-2);
+}
+
+.message.notice::before {
+  content: "› ";
+  color: var(--fg-3);
+}
+
+.tx-indicator.failed {
+  color: var(--danger);
+}

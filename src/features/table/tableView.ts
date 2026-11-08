@@ -49,7 +49,8 @@ import { columnStorageKey, loadHiddenColumns, saveHiddenColumns } from "../grid/
 import { openConflictDialog } from "../grid/conflictDialog";
 import { conflictPayload, conflictRows, type ConflictPayload, type ConflictRow } from "../grid/conflicts";
 import { DataGrid, type SortState } from "../grid/grid";
-import { keyCells, textColumn } from "../grid/legacy";
+import { textColumn } from "../grid/textColumns";
+import { keyCells } from "../vector/vectorRows";
 import { EXPORT_LABELS, type ExportFormat } from "../importExport/exporters";
 import { exportDialog, importDialog } from "../importExport/importExport";
 import { withConfirmation } from "../safety/confirmationDialog";

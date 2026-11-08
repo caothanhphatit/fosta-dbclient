@@ -4,7 +4,7 @@ import { toast } from "../../core/dialogs";
 import { clamp, copyText, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
 import { capabilityOf } from "../../core/engines";
 import { DataGrid, gridSetup } from "../grid/grid";
-import { keyCells, legacyGridData } from "../grid/legacy";
+import { keyCells, textResultData } from "./vectorRows";
 import type { Navigator } from "../../core/navigator";
 import { RecordPanel } from "../table/recordPanel";
 import { makeSplitter } from "../../core/splitter";
@@ -208,7 +208,7 @@ export class VectorSearchView implements TabContent {
 
   private showResult(result: VectorSearchResult): void {
     this.last = result;
-    const { columns, rows } = legacyGridData(result.result.columns, result.result.rows);
+    const { columns, rows } = textResultData(result.result.columns, result.result.rows);
     const { connectionId, database, table } = this.target;
     this.grid.load({
       ...gridSetup(columns, rows),
@@ -239,7 +239,7 @@ export class VectorSearchView implements TabContent {
     this.planGrid?.dispose();
     const plan = new DataGrid();
     this.planGrid = plan;
-    const planData = legacyGridData(result.plan.columns, result.plan.rows);
+    const planData = textResultData(result.plan.columns, result.plan.rows);
     plan.load(gridSetup(planData.columns, planData.rows));
     this.planHost.replaceChildren(h("div", { class: "section-title" }, "EXPLAIN"), plan.element);
   }

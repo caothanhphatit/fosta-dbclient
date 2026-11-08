@@ -14,6 +14,8 @@ import type {
   Workspace,
   WorkspaceMeta,
 } from "../../core/types";
+import type { SqlDialectId } from "../../core/contract";
+import { implicitCommitPattern } from "../../core/sql";
 
 export const PRODUCTION_ICON = "shield";
 const DEFAULT_MAX_ROWS = 1000;
@@ -242,13 +244,15 @@ export function transactionLabel(state: TransactionState | null): string {
 }
 
 /**
- * True when running `sql` would silently commit the open transaction: on MySQL/MariaDB every DDL statement (and
- * START TRANSACTION / BEGIN) ends the current transaction first. A plain keyword check, so it errs on asking.
+ * True when running `sql` would silently commit the open transaction: the engine's SQL dialect commits implicitly
+ * before some statements (`implicitCommitPattern`: DDL and BEGIN on MariaDB/MySQL). A plain keyword check, so it errs
+ * on asking.
  */
-export function commitsOpenTransaction(driver: string, sql: string, state: TransactionState | null): boolean {
-  if (state?.open !== true || (driver !== "mariadb" && driver !== "mysql")) return false;
+export function commitsOpenTransaction(dialect: SqlDialectId | null | undefined, sql: string, state: TransactionState | null): boolean {
+  const pattern = implicitCommitPattern(dialect);
+  if (state?.open !== true || pattern === null) return false;
   const withoutComments = sql.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(--|#)[^\n]*/g, " ");
-  return /(^|;)\s*(create|alter|drop|truncate|rename|start\s+transaction|begin)\b/i.test(withoutComments);
+  return pattern.test(withoutComments);
 }
 
 /**

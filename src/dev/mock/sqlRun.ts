@@ -1,7 +1,8 @@
 /**
  * A pretend SQL engine over a `MockCatalog`, enough for the query tab to feel real: SELECT from a table (columns, WHERE,
  * ORDER BY, LIMIT / TOP), SELECT of literals and a few functions, SHOW DATABASES / TABLES, USE, transactions, writes and
- * DDL (reported, not applied), `SELECT SLEEP(n)` / `WAITFOR DELAY` to try Stop, and engine-style errors with the
+ * DDL (reported, not applied), `SELECT SLEEP(n)` / `WAITFOR DELAY` to try Stop, `SELECT * FROM seq_1_to_5000` /
+ * `generate_series(1, 5000)` for the row limit, PRINT as a notice, and engine-style errors with the
  * statement and its position for anything else.
  */
 import type { ColumnInfo, RunRequest, StreamEvent, Value } from "../../core/contract";
@@ -22,11 +23,14 @@ export interface SqlDialectMock {
   split: SplitOptions;
   errors: SqlErrors;
   version: string;
+  /** MariaDB/MySQL: DDL and BEGIN commit an open transaction first. */
+  ddlCommits?: boolean;
   /** Rows a SELECT returns at most (the rest is `truncated`). */
   maxRows?: number;
 }
 
 const BATCH = 100;
+const BATCH_DELAY_MS = 25;
 
 function statement(category: StatementCategory, kind: string, tables: string[], excerpt: string, reason: string | null = null): StatementInfo {
   return { category, kind, tables, excerpt, reason };
@@ -101,14 +105,23 @@ export async function runSql(
     });
     const done = (rows: number, affected: number | null, truncated = false) =>
       emit({ event: "done", index, affected, rows, truncated, elapsedMs: Math.max(1, Math.round(performance.now() - started)) });
-    const result = (columns: ColumnInfo[], rows: Value[][]) => {
+    // Batches after the first arrive a little later, like a network stream, so the live row count can be seen.
+    const result = async (columns: ColumnInfo[], rows: Value[][]) => {
       emit({ event: "columns", index, columns });
       const shown = rows.slice(0, maxRows);
-      for (let start = 0; start < shown.length; start += BATCH) emit({ event: "rows", index, rows: shown.slice(start, start + BATCH) });
+      for (let start = 0; start < shown.length; start += BATCH) {
+        if (start > 0) await pause(BATCH_DELAY_MS, context, () => fail(dialect.errors.cancelled()));
+        emit({ event: "rows", index, rows: shown.slice(start, start + BATCH) });
+      }
       done(shown.length, null, rows.length > maxRows);
     };
 
     let match: RegExpExecArray | null;
+    if (dialect.ddlCommits && session.transaction.open && /^(create|alter|drop|truncate|rename|start\s+transaction|begin)\b/i.test(sql)) {
+      // MariaDB/MySQL commit the open transaction before DDL (and a new BEGIN).
+      session.transaction = { ...session.transaction, open: false };
+      emit({ event: "notice", index, text: "The open transaction was committed implicitly before this statement" });
+    }
     if (/^(begin|start\s+transaction|begin\s+tran(saction)?)\b/i.test(sql)) {
       session.transaction = { ...session.transaction, open: true };
       done(0, null);
@@ -125,14 +138,26 @@ export async function runSql(
     } else if ((match = /^(?:select\s+sleep\(\s*(\d+(?:\.\d+)?)\s*\)|waitfor\s+delay\s+'(?:00:)?(?:00:)?(\d+)')$/i.exec(sql))) {
       const seconds = Number(match[1] ?? match[2]);
       await pause(seconds * 1000, context, () => fail(dialect.errors.cancelled()));
-      result([column("SLEEP", "bigint", "int", { nullable: true })], [[v.int(0)]]);
+      await result([column("SLEEP", "bigint", "int", { nullable: true })], [[v.int(0)]]);
+    } else if ((match = /^select\s+\*\s+from\s+(?:seq_1_to_(\d+)|generate_series\(\s*1\s*,\s*(\d+)\s*\))$/i.exec(sql))) {
+      // MariaDB's sequence tables and SQL Server's GENERATE_SERIES: many rows, to try the row limit and live counts.
+      const count = Math.min(Number(match[1] ?? match[2]), 1_000_000);
+      const name = match[1] ? "seq" : "value";
+      await result(
+        [column(name, "bigint", "int")],
+        Array.from({ length: Math.min(count, maxRows + 1) }, (_, i) => [v.int(i + 1)]),
+      );
+    } else if ((match = /^print\s+N?'((?:[^']|'')*)'$/i.exec(sql))) {
+      // SQL Server PRINT: a server message, no result.
+      emit({ event: "notice", index, text: match[1].replace(/''/g, "'") });
+      done(0, null);
     } else if (/^show\s+databases$/i.test(sql)) {
-      result(
+      await result(
         [column("Database", "varchar(64)", "text")],
         catalog.databases.map((item) => [v.text(item.name)]),
       );
     } else if (/^show\s+(full\s+)?tables$/i.test(sql)) {
-      result(
+      await result(
         [column(`Tables_in_${database ?? ""}`, "varchar(64)", "text")],
         catalog.tablesOf(database ?? "").map((table) => [v.text(catalog.style.label(table.spec))]),
       );
@@ -172,7 +197,7 @@ export async function runSql(
       const skip = Number(offset ?? 0);
       const take = top ? Number(top) : limit ? Number(limit) : rows.length;
       rows = rows.slice(skip, skip + take);
-      result(
+      await result(
         indexes.map((i) => table.spec.columns[i]),
         rows.map((row) => indexes.map((i) => row[i])),
       );
@@ -192,7 +217,7 @@ export async function runSql(
         if (/^null$/i.test(expression)) return [name, v.null()];
         throw fail(dialect.errors.noColumn(expression, "field list"), sql.indexOf(expression));
       });
-      result(
+      await result(
         values.map(([name, value]) => literalColumn(name, value)),
         [values.map(([, value]) => value)],
       );
@@ -205,7 +230,7 @@ export async function runSql(
       emit({ event: "notice", index, text: "Query OK (the dev mock reports DDL without running it)" });
       done(0, 0);
     } else if (/^(explain|describe|desc)\b/i.test(sql)) {
-      result(
+      await result(
         [
           column("id", "bigint", "int"),
           column("select_type", "varchar", "text"),

@@ -9,7 +9,7 @@ import { copyText, h, spacer, toolButton } from "../../core/dom";
 import type { TabContent } from "../../core/tabs";
 import type { ViewContext } from "../../core/views";
 import { DataGrid, gridSetup } from "../grid/grid";
-import { textColumn, textRows } from "../grid/legacy";
+import { textColumn, textRows } from "../grid/textColumns";
 import "./design.css";
 
 const COLUMN_HEADERS = ["Name", "Type", "Kind", "Nullable", "Key", "Default", "Identity / generated", "Comment"].map(textColumn);

@@ -1,8 +1,10 @@
 /**
  * Views every engine gets unless its UI module registers its own: the table grid and the design view for tabular
  * objects, the query tab as the console, and the ER diagram where the engine has `schemaGraph`. The data, design and
- * diagram views take the `ViewContext` (the injected `ConnectionApi`); the query view moves onto it in step 14.
+ * diagram views take the `ViewContext` (the injected `ConnectionApi`); the query view gets it too, plus the engine's
+ * `languageSupport` for its editor.
  */
+import type { LanguageSupport } from "../core/language";
 import type { ConnectionProfile } from "../core/types";
 import type { ViewContext, ViewFactory, ViewRegistration } from "../core/views";
 // The grid, design and diagram views are in the main chunk today (app/navigation.ts imports them); `load` stays async so
@@ -37,7 +39,10 @@ const designView = async (): Promise<ViewFactory> => {
   return (ctx) => new DesignView(ctx);
 };
 
-export const sharedViews: ViewRegistration[] = [
+/** The editor support of an engine's query language (`index.ts` passes its `languageSupport`, so this file needs no import of it). */
+export type LanguageLoader = (engineId: string, languageId: string) => Promise<LanguageSupport>;
+
+export const sharedViews = (languageSupport: LanguageLoader): ViewRegistration[] => [
   { engine: "*", family: "sql", kinds: SQL_TABULAR_KINDS, role: "data", icon: "table", load: dataView },
   { engine: "*", family: "sql", kinds: SQL_TABULAR_KINDS, role: "design", icon: "design", load: designView },
   { engine: "*", kinds: ["collection"], role: "data", icon: "table", load: dataView },
@@ -50,11 +55,16 @@ export const sharedViews: ViewRegistration[] = [
     title: () => "Query",
     load: async () => {
       const { QueryView } = await import("../features/query/queryView");
-      return (ctx) => {
-        const host = (ctx.params?.host as QueryHost | undefined) ?? defaultQueryHost(ctx.profile);
-        const text = typeof ctx.params?.text === "string" ? ctx.params.text : "";
-        return new QueryView(ctx.profile.id, ctx.profile.driver, databaseOf(ctx), text, host);
-      };
+      return (ctx) =>
+        new QueryView({
+          connection: ctx.connection,
+          engine: ctx.engine,
+          info: ctx.info,
+          database: databaseOf(ctx),
+          text: typeof ctx.params?.text === "string" ? ctx.params.text : "",
+          host: (ctx.params?.host as QueryHost | undefined) ?? defaultQueryHost(ctx.profile),
+          languageSupport: (languageId) => languageSupport(ctx.engine.id, languageId),
+        });
     },
   },
   {

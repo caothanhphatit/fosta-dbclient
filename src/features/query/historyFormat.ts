@@ -1,5 +1,5 @@
 /** Pure formatting for query history entries (no DOM), shared by the query tab and its history panel. */
-import type { HistoryEntry, HistoryResult, ResultSet } from "../../core/types";
+import type { HistoryEntry } from "../../core/types";
 
 export type HistoryStatus = "ok" | "error" | "cancelled";
 
@@ -8,16 +8,6 @@ const numberFormat = new Intl.NumberFormat("en-US");
 export function historyStatus(entry: Pick<HistoryEntry, "error" | "cancelled">): HistoryStatus {
   if (entry.cancelled) return "cancelled";
   return entry.error ? "error" : "ok";
-}
-
-/** What a run returned, for the history: rows per set or affected rows. */
-export function summarizeSets(sets: ResultSet[]): HistoryResult[] {
-  return sets.map((set) => ({
-    rowSet: set.columns.length > 0,
-    rows: set.columns.length > 0 ? set.rows.length : 0,
-    affectedRows: set.columns.length > 0 ? 0 : set.affectedRows,
-    truncated: set.truncated,
-  }));
 }
 
 /** "3 rows", "12 affected", "2 rows · 1 affected", "1,000+ rows", the error, or "Cancelled". */

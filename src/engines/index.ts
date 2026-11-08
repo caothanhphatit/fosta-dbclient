@@ -7,7 +7,7 @@
  */
 import type { IconName } from "../core/dom";
 import { defaultLanguage, engineInfo } from "../core/engines";
-import { defaultLanguageSupport, sqlLanguageSupport, type LanguageSupport } from "../core/language";
+import { defaultLanguageSupport, jsonLanguageSupport, sqlLanguageSupport, type LanguageSupport } from "../core/language";
 import { registerViews, setEngineLoader, setIconResolver } from "../core/views";
 import { sharedViews } from "./shared";
 
@@ -25,7 +25,7 @@ const modules = import.meta.glob<{ default: EngineUiModule }>("./*/index.ts");
 const loaded = new Map<string, Promise<EngineUiModule | null>>();
 const resolvedIcons = new Map<string, IconName>();
 
-registerViews(sharedViews);
+registerViews(sharedViews(languageSupport));
 setEngineLoader(async (id) => void (await ensureEngine(id)));
 setIconResolver(engineIcon);
 
@@ -55,7 +55,8 @@ export async function languageSupport(engineId: string, languageId?: string): Pr
   const id = spec?.id ?? languageId ?? "text";
   const custom = module?.languages?.[id];
   if (custom) return custom();
-  return spec?.editor === "sql" ? sqlLanguageSupport(spec.dialect ?? descriptor.sqlDialect) : defaultLanguageSupport(id);
+  if (spec?.editor === "sql") return sqlLanguageSupport(spec.dialect ?? descriptor.sqlDialect);
+  return spec?.editor === "json" ? jsonLanguageSupport(id) : defaultLanguageSupport(id);
 }
 
 /** Maps an "engine:<id>/<name>" node icon through the engine module's `icons` (once loaded); other values pass through. */

@@ -1,20 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { firstLine, formatDuration, historyStatus, relativeTime, resultSummary, summarizeSets } from "./historyFormat";
-import type { ColumnMeta, HistoryResult } from "../../core/types";
+import { firstLine, formatDuration, historyStatus, relativeTime, resultSummary } from "./historyFormat";
+import type { HistoryResult } from "../../core/types";
 
-const column: ColumnMeta = { name: "id", typeName: "int", numeric: true, binary: false, primary: true, vectorDims: null };
 const rows = (count: number, truncated = false): HistoryResult => ({ rowSet: true, rows: count, affectedRows: 0, truncated });
 const affected = (count: number): HistoryResult => ({ rowSet: false, rows: 0, affectedRows: count, truncated: false });
 
 describe("query history formatting", () => {
-  it("summarises result sets", () => {
-    const sets = [
-      { columns: [column], rows: [["1"], ["2"]], affectedRows: 0, truncated: false },
-      { columns: [], rows: [], affectedRows: 7, truncated: false },
-    ];
-    expect(summarizeSets(sets)).toEqual([rows(2), affected(7)]);
-  });
-
   it("describes the outcome", () => {
     expect(resultSummary({ results: [rows(1)], error: null, cancelled: false })).toBe("1 row");
     expect(resultSummary({ results: [rows(1200), affected(3)], error: null, cancelled: false })).toBe("1,200 rows · 3 affected");

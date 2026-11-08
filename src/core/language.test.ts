@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultLanguageSupport, splitStatements, statementAt } from "./language";
+import { defaultLanguageSupport, formatJsonLike, jsonLanguageSupport, splitStatements, statementAt } from "./language";
 
 const texts = (text: string, ranges: { from: number; to: number }[]) => ranges.map((range) => text.slice(range.from, range.to));
 
@@ -54,5 +54,29 @@ describe("statementAt", () => {
     const support = defaultLanguageSupport();
     expect(support.statementAt("a; b", 3)).toEqual({ from: 3, to: 4 });
     expect(await support.editorExtensions({ language: { id: "x", label: "X", editor: "text", dialect: null, default: true, hint: "" } })).toEqual([]);
+  });
+});
+
+describe("JSON command formatting", () => {
+  it("re-indents without touching tokens", () => {
+    expect(formatJsonLike('{"find":"products","filter":{"stock":0,"name":"a, b: {c}"},"limit":50}')).toBe(
+      '{\n  "find": "products",\n  "filter": {\n    "stock": 0,\n    "name": "a, b: {c}"\n  },\n  "limit": 50\n}',
+    );
+  });
+
+  it("keeps relaxed JSON, big numbers, empty containers and escaped quotes", () => {
+    expect(formatJsonLike('{ find: "x", filter: { _id: ObjectId("65f0") }, n: 12345678901234567890, a: [], s: "q\\"x" }')).toBe(
+      '{\n  find: "x",\n  filter: {\n    _id: ObjectId("65f0")\n  },\n  n: 12345678901234567890,\n  a: [],\n  s: "q\\"x"\n}',
+    );
+  });
+
+  it("leaves text with comments alone", () => {
+    const text = '{ "find": "x" } // all';
+    expect(formatJsonLike(text)).toBe(text);
+  });
+
+  it("treats a JSON command as one statement", () => {
+    const support = jsonLanguageSupport("mongo-command");
+    expect(support.statementAt('  { "ping": 1 }\n', 3)).toEqual({ from: 2, to: 15 });
   });
 });

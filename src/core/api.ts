@@ -15,8 +15,8 @@ import type {
   SessionOptions,
   SqlDialectId,
   StreamEvent,
-  TransactionOp as SessionTransactionOp,
-  TransactionState as SessionTransactionState,
+  TransactionOp,
+  TransactionState,
   TreeChildren,
   TreeRequest,
 } from "./contract";
@@ -38,14 +38,11 @@ import type {
   HealthCheck,
   HistoryEntry,
   HistoryQuery,
-  QueryOutcome,
   RecallReport,
   SchemaGraph,
   TaskDef,
   TaskLogEvent,
   TaskStatus,
-  TransactionOp,
-  TransactionState,
   VectorInfo,
   VectorSearchRequest,
   VectorSearchResult,
@@ -98,12 +95,16 @@ export const api = {
     confirmation: Confirmation | null = null,
     importId: string | null = null,
   ) => invoke<ApplyResult>("apply_edits", { connectionId, changes, caller, confirmation, importId }),
+  /** Opens a query session; `options` picks the language and database (defaults: the engine's default language). */
+  openSession: (connectionId: string, sessionId: string, options: SessionOptions | null = null) =>
+    invoke<SessionInfo>("open_session", { connectionId, sessionId, options }),
+  closeSession: (sessionId: string) => invoke<void>("close_session", { sessionId }),
   /** Streams `StreamEvent`s (statement, columns, row batches, done, notices) through `onEvent`; resolves with the summary. */
   run: (sessionId: string, request: RunRequest, onEvent: (event: StreamEvent) => void, confirmation: Confirmation | null = null) =>
     invokeStreaming<RunSummary, StreamEvent>("run", { sessionId, request, confirmation }, "onEvent", onEvent),
   cancelRun: (sessionId: string) => invoke<void>("cancel_run", { sessionId }),
   /** Begin / commit / rollback / auto-commit of a session; resolves with the engine-reported state. */
-  transaction: (sessionId: string, op: SessionTransactionOp) => invoke<SessionTransactionState>("transaction", { sessionId, op }),
+  transaction: (sessionId: string, op: TransactionOp) => invoke<TransactionState>("transaction", { sessionId, op }),
   /** An engine-specific operation (`vector.search`, `redis.scan`, …); the gateway refuses names the engine does not know. */
   invokeCapability: <T = unknown>(connectionId: string, name: string, args: unknown = null, confirmation: Confirmation | null = null) =>
     invoke<T>("invoke_capability", { connectionId, name, args, confirmation }),
@@ -114,15 +115,6 @@ export const api = {
   schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),
   createDatabase: (connectionId: string, name: string, firstCollection: string | null, confirmation: Confirmation | null = null) =>
     invoke<void>("create_database", { connectionId, name, firstCollection, confirmation }),
-  /** Opens a query session; `options` picks the language and database (defaults: the engine's default language). */
-  openSession: (connectionId: string, sessionId: string, options: SessionOptions | null = null) =>
-    invoke<SessionInfo>("open_session", { connectionId, sessionId, options }),
-  closeSession: (sessionId: string) => invoke<void>("close_session", { sessionId }),
-  runSql: (sessionId: string, database: string | null, sql: string, confirmation: Confirmation | null = null) =>
-    invoke<QueryOutcome>("run_sql", { sessionId, database, sql, confirmation }),
-  /** Begin / Commit / Rollback / auto-commit for a query tab; resolves with the engine-reported state. */
-  sqlTransaction: (sessionId: string, op: TransactionOp) => invoke<TransactionState>("sql_transaction", { sessionId, op }),
-  cancelSql: (sessionId: string) => invoke<void>("cancel_sql", { sessionId }),
   taskStatuses: () => invoke<TaskStatus[]>("task_statuses"),
   taskLogs: (id: string) => invoke<string[]>("task_logs", { id }),
   startTask: (id: string) => invoke<void>("start_task", { id }),

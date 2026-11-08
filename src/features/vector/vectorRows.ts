@@ -1,7 +1,8 @@
 /**
- * Text result sets (the pre-contract `ResultSet`: `ColumnMeta` + text cells) as typed grid data. The query tab uses it
- * until it streams typed rows (step 14); the vector views keep it, since the `vector_*` commands still answer with text.
- * Display is unchanged: numbers stay right-aligned (decimal text), binary values stay `0x…` text.
+ * The `vector_*` commands still answer with text result sets (`ColumnMeta` + text cells) and take text key cells. These
+ * helpers turn their results into typed grid data and typed rows into their key cells, until the vector views move to
+ * `invoke_capability` (the MariaDB engine module). Display is unchanged: numbers stay right-aligned (decimal text),
+ * binary values stay `0x…` text.
  */
 import type { ColumnInfo, Value, ValueKind } from "../../core/contract";
 import type { Cell, CellValue, ColumnMeta } from "../../core/types";
@@ -14,7 +15,7 @@ function kindOf(column: ColumnMeta): ValueKind {
   return { kind: "text" };
 }
 
-export function legacyColumn(column: ColumnMeta): ColumnInfo {
+function textResultColumn(column: ColumnMeta): ColumnInfo {
   return {
     name: column.name,
     typeName: column.typeName,
@@ -33,7 +34,7 @@ export function legacyColumn(column: ColumnMeta): ColumnInfo {
 }
 
 /** A text cell as a value of the column's kind (decimal text for numeric columns, so the grid aligns it). */
-export function legacyValue(cell: Cell, column: ColumnInfo): Value {
+function textResultValue(cell: Cell, column: ColumnInfo): Value {
   if (cell === null) return { t: "null", v: null };
   switch (column.kind.kind) {
     case "decimal":
@@ -47,18 +48,9 @@ export function legacyValue(cell: Cell, column: ColumnInfo): Value {
   }
 }
 
-export function legacyGridData(columns: ColumnMeta[], rows: Cell[][]): { columns: ColumnInfo[]; rows: Value[][] } {
-  const infos = columns.map(legacyColumn);
-  return { columns: infos, rows: rows.map((row) => row.map((cell, index) => legacyValue(cell, infos[index] ?? infos[0]))) };
-}
-
-/** Plain text columns (design view, EXPLAIN output). */
-export function textColumn(name: string): ColumnInfo {
-  return legacyColumn({ name, typeName: "", numeric: false, binary: false, primary: false, vectorDims: null });
-}
-
-export function textRows(rows: Cell[][]): Value[][] {
-  return rows.map((row) => row.map((cell): Value => (cell === null ? { t: "null", v: null } : { t: "text", v: cell })));
+export function textResultData(columns: ColumnMeta[], rows: Cell[][]): { columns: ColumnInfo[]; rows: Value[][] } {
+  const infos = columns.map(textResultColumn);
+  return { columns: infos, rows: rows.map((row) => row.map((cell, index) => textResultValue(cell, infos[index] ?? infos[0]))) };
 }
 
 /**

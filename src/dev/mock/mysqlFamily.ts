@@ -45,7 +45,7 @@ export function mysqlFamily(descriptor: EngineDescriptor, order: number, flavor:
     errors,
   };
   const catalog = new MockCatalog(style, [shopDatabase("shop", flavor), analyticsDatabase(), ...mysqlSystemDatabases()]);
-  const dialect: SqlDialectMock = { split: { hashComments: true }, errors, version };
+  const dialect: SqlDialectMock = { split: { hashComments: true }, errors, version, ddlCommits: true };
 
   const products = () => catalog.table({ database: "shop", schema: null, name: "products" });
   const vectorOps: Record<string, (args: Record<string, unknown>) => unknown> = {
