@@ -74,15 +74,11 @@ export class PartsView implements TabContent {
   }
 
   private drawParts(table: OperationTable): (HTMLElement | null)[] {
-    if (table.rows.length === 0) return [emptyHint("This table has no parts (it is empty, or its engine does not store parts).")];
+    if (table.rows.length === 0) return [emptyHint("No parts.")];
     const active = table.rows.filter((row) => cellOf(table, row, "active") === "1");
     const rows = active.reduce((sum, row) => sum + Number(cellOf(table, row, "rows") || 0), 0);
     const bytes = active.reduce((sum, row) => sum + Number(cellOf(table, row, "bytes_on_disk") || 0), 0);
-    const summary = h(
-      "div",
-      { class: "ch-note" },
-      `${active.length} active part(s) · ${numberCell(String(rows))} rows · ${formatBytes(bytes)} on disk. Inactive parts are merged away and removed after a while.`,
-    );
+    const summary = h("div", { class: "ch-note" }, `${active.length} active part(s) · ${numberCell(String(rows))} rows · ${formatBytes(bytes)} on disk`);
     return [
       summary,
       dataTable(table.columns, table.rows, {
@@ -94,11 +90,7 @@ export class PartsView implements TabContent {
   }
 
   private drawMutations(table: OperationTable): (HTMLElement | null)[] {
-    const intro = h(
-      "div",
-      { class: "ch-note" },
-      "Edits of this table run as mutations. Each rewrites the data parts that hold matching rows, in the background.",
-    );
+    const intro = h("div", { class: "ch-note" }, "Edits run as background mutations that rewrite matching parts.");
     if (table.rows.length === 0) return [intro, emptyHint("No mutations yet.")];
     return [
       intro,

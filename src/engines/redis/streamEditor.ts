@@ -99,7 +99,7 @@ function appendForm(host: Parameters<EditorRenderer>[0]): HTMLElement {
         return;
       }
       if (!validStreamId(id.value.trim())) {
-        toast("An entry id is `*`, a millisecond time, or `time-sequence` such as 1712345678901-0.");
+        toast("Entry id: `*`, a millisecond time, or `time-sequence`.");
         return;
       }
       const limit = maxLen.value.trim() === "" ? null : Number(maxLen.value);

@@ -13,7 +13,7 @@ export const READ_ONLY_BADGE = "read-only";
 
 /** What the edit notice says for an editable table: mutations are asynchronous, applied one by one, and guarded. */
 export const MUTATION_NOTICE =
-  "Edits in this table run as ClickHouse mutations (ALTER TABLE … UPDATE and DELETE FROM). They are asynchronous on the server: Fosta Studio waits for each one, applies them one after another without a transaction, and a failure part-way leaves the earlier changes applied. A row is matched by its sort key and the values you loaded, so a row that changed meanwhile is a conflict.";
+  "Edits are asynchronous mutations, applied one by one without a transaction; a row that changed since you loaded it is a conflict.";
 
 /** Whether the tree node marks a table the grid must not edit. */
 export function isReadOnlyNode(node: ObjectNode | null): boolean {

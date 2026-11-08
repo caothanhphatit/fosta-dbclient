@@ -13,17 +13,11 @@ import type { ViewFactory } from "../../core/views";
 import { TableView } from "../../features/table/tableView";
 import { isReadOnlyNode, MUTATION_NOTICE, readOnlyReason } from "./model";
 
-const NO_MUTATIONS =
-  "This table's engine has no mutations. ClickHouse can change rows only in MergeTree tables; add rows with an INSERT statement in a query tab.";
+const NO_MUTATIONS = "Only MergeTree tables can be edited; use INSERT in a query tab.";
 
 function notice(reason: string | null): HTMLElement {
   if (reason) return h("div", { class: "ch-notice ch-readonly", role: "note" }, h("strong", {}, "Read-only. "), reason);
-  return h(
-    "details",
-    { class: "ch-notice", role: "note" },
-    h("summary", {}, "Edits are asynchronous mutations, not transactions."),
-    h("p", {}, MUTATION_NOTICE),
-  );
+  return h("div", { class: "ch-notice", role: "note" }, MUTATION_NOTICE);
 }
 
 export const dataViewFactory: ViewFactory = (ctx): TabContent => {

@@ -165,7 +165,7 @@ export class ServerView implements TabContent {
       this.drawSlowlog(log);
     } catch (error) {
       if (this.disposed) return;
-      this.slow.replaceChildren(emptyHint("The slow log could not be read (the ACL may not allow SLOWLOG)."));
+      this.slow.replaceChildren(emptyHint("The slow log is unavailable (ACL?)."));
       showError(error, "Read SLOWLOG");
     }
   }

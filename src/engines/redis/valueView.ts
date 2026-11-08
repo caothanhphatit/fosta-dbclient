@@ -184,7 +184,7 @@ export class ValueView implements TabContent {
     const apply = button("Set TTL", () => {
       const ms = parseTtl(input.value);
       if (ms === null) {
-        toast("A TTL is a number with an optional unit: 90, 90s, 10m, 2h, 1d.");
+        toast("TTL: 90, 90s, 10m, 2h or 1d.");
         return;
       }
       void this.apply({ op: "expire", key: this.key, ttlMs: ms }, undefined, "TTL");
@@ -203,16 +203,16 @@ export class ValueView implements TabContent {
     const value = read.value;
     switch (value.type) {
       case "none":
-        return emptyHint("This key does not exist (any more). It may have expired or been deleted.");
+        return emptyHint("This key no longer exists.");
       case "json":
         return h(
           "div",
           { class: "rd-editor" },
-          h("div", { class: "rd-note" }, "A RedisJSON document: shown read-only here; change it with JSON.SET in the console."),
+          h("div", { class: "rd-note" }, "RedisJSON: read-only here; use JSON.SET in the console."),
           h("pre", { class: "rd-pre mono" }, JSON.stringify(value.data.value, null, 2)),
         );
       case "unsupported":
-        return emptyHint(`Keys of type ${value.data.typeName} have no editor yet. Use the console to work with them.`);
+        return emptyHint(`Keys of type ${value.data.typeName} have no editor; use the console.`);
       default: {
         const type = typeName(read.info.keyType);
         if (!EDITABLE_TYPES.has(type)) return emptyHint(`Keys of type ${type} have no editor.`);

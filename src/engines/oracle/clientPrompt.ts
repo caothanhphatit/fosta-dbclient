@@ -37,8 +37,8 @@ function instructions(web: boolean): HTMLElement {
       "li",
       {},
       web
-        ? "Unpack it on the server (for the Docker image, into the data volume, e.g. /data/oracle/instantclient_23_26) and enter that folder below, or add it to LD_LIBRARY_PATH and restart the server."
-        : "Unpack it and enter that folder below, or add it to PATH (Windows), LD_LIBRARY_PATH (Linux) or DYLD_LIBRARY_PATH (macOS) and restart Fosta Studio.",
+        ? "Unpack it on the server (Docker: into /data) and enter that folder below, or add it to LD_LIBRARY_PATH and restart."
+        : "Unpack it and enter that folder below, or add it to PATH and restart Fosta Studio.",
     ),
     h("li", {}, "On Linux the client also needs libaio (libaio1 or libaio1t64)."),
   );
@@ -62,7 +62,7 @@ export async function promptForClient(error: AppError, context: ConnectErrorCont
     ? h(
         "p",
         { class: "oracle-client-license" },
-        `Download fetches Instant Client Basic Light ${offer.version} from Oracle (download.oracle.com), checks it against a pinned checksum and installs it into Fosta Studio's data folder. It is Oracle's software, covered by the `,
+        `Downloads Instant Client Basic Light ${offer.version} from Oracle, verifies its checksum and installs it in the data folder. Oracle's software, under the `,
         link(offer.licenseUrl || LICENSE_URL, "Oracle Instant Client license"),
         ".",
         web ? " Linux servers also need libaio." : "",
@@ -77,7 +77,7 @@ export async function promptForClient(error: AppError, context: ConnectErrorCont
   });
   const folderField = context.saveProfile
     ? field("Instant Client folder", folder, `Or use a client that is already installed ${where}: the folder with ${web ? "libclntsh.so" : "oci.dll"}.`)
-    : h("p", { class: "field-hint" }, "To use a client that is already installed, set Advanced → Instant Client folder in this dialog.");
+    : h("p", { class: "field-hint" }, "Or set Advanced → Instant Client folder.");
 
   const showError = (text: string) => {
     feedback.hidden = false;

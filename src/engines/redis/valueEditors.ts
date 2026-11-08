@@ -22,7 +22,7 @@ export const stringEditor: EditorRenderer = (host, read) => {
     return h(
       "div",
       { class: "rd-editor" },
-      note(`Binary value, ${formatBytes(data.length)}. Showing the first ${Math.min(bytes.length, 2048)} bytes as hex; change it from the console.`),
+      note(`Binary value, ${formatBytes(data.length)}. Showing the first ${Math.min(bytes.length, 2048)} bytes as hex; edit it in the console.`),
       h("pre", { class: "rd-pre mono" }, hex),
     );
   }
@@ -80,7 +80,7 @@ export const stringEditor: EditorRenderer = (host, read) => {
   const canonical = data.format === "json" && !data.truncated && isCanonicalJson(rawText);
   const notes: HTMLElement[] = [];
   if (data.format === "json" && !data.truncated && !canonical) {
-    notes.push(note("This JSON is not in compact form or has numbers a double cannot hold exactly, so it is shown as stored: formatting it would rewrite it."));
+    notes.push(note("Shown as stored: formatting would rewrite this JSON."));
   }
   if (canonical) {
     const toggle = h("label", { class: "inline-field" }, h("input", { type: "checkbox" }), h("span", {}, "Pretty JSON"));
