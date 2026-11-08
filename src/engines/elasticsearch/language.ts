@@ -124,8 +124,9 @@ export async function consoleLanguage(): Promise<LanguageSupport> {
   return {
     id: "es-console",
     async editorExtensions(ctx?: LanguageContext): Promise<Extension[]> {
-      const cache = new NameCache(ctx?.connection);
-      return [consoleMode, EditorState.languageData.of(() => [{ autocomplete: completionSource(cache) }])];
+      // One source per editor: the autocompletion keeps a result only while the same source is still active.
+      const source = completionSource(new NameCache(ctx?.connection));
+      return [consoleMode, EditorState.languageData.of(() => [{ autocomplete: source }])];
     },
     statementAt: consoleStatementAt,
     format: async (text) => formatConsole(text),
