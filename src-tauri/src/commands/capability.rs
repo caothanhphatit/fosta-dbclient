@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-use super::data::gateway_context;
+use super::gateway_context;
 use crate::{
     error::AppResult,
     gateway::{self, Caller, Confirmation},

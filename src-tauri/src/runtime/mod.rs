@@ -2,7 +2,6 @@
 //! connections and sessions) and crash containment for every engine call.
 
 pub mod contain;
-pub mod legacy;
 pub mod manager;
 pub mod registry;
 

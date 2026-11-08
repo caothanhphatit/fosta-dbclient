@@ -1,6 +1,6 @@
 //! Query-tab sessions: open with a language, run (streaming), cancel, transactions, close.
 
-use super::data::gateway_context;
+use super::gateway_context;
 use crate::{
     contract::{Flow, RunRequest, RunSummary, SessionInfo, SessionOptions, StreamEvent, TransactionOp, TransactionState},
     error::AppResult,

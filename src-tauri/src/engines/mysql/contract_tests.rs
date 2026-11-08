@@ -460,6 +460,39 @@ async fn contract_mariadb_transactions_and_backstops() {
     tab.close().await;
 }
 
+/// The diagram's keys agree with `describe` (an independent catalog path): each table's primary key and each foreign key.
+async fn assert_graph_matches_descriptions(handle: &Handle, graph: &crate::contract::SchemaGraph, object: impl Fn(&str) -> ObjectRef) {
+    for table in graph.tables.iter().filter(|table| table.kind == "table") {
+        let target = object(&table.name);
+        let described = handle
+            .call(
+                "described",
+                |conn| async move { conn.describe(&target, &CallContext::default()).await },
+            )
+            .await
+            .unwrap();
+        let mut graph_keys: Vec<&str> = table.columns.iter().filter(|c| c.primary).map(|c| c.name.as_str()).collect();
+        let mut described_keys: Vec<&str> = described
+            .primary_key
+            .iter()
+            .flat_map(|key| key.columns.iter().map(String::as_str))
+            .collect();
+        graph_keys.sort_unstable();
+        described_keys.sort_unstable();
+        assert_eq!(graph_keys, described_keys, "{}", table.name);
+        for relation in graph.relations.iter().filter(|relation| relation.table == table.name) {
+            let referenced = relation.referenced_table.rsplit('.').next().unwrap_or_default();
+            assert!(
+                described.foreign_keys.iter().any(|key| key.columns == relation.columns
+                    && key.ref_table == referenced
+                    && key.ref_columns == relation.referenced_columns),
+                "{relation:?} not in {:?}",
+                described.foreign_keys
+            );
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs dev/compose/mariadb.yml"]
 async fn contract_mariadb_schema_graph() {
@@ -472,10 +505,7 @@ async fn contract_mariadb_schema_graph() {
         .unwrap();
     assert_eq!(graph.relations.len(), 4, "{:?}", graph.relations);
     assert!(graph.tables.iter().flat_map(|t| &t.columns).any(|c| c.primary));
-    // The same graph as the pre-contract driver's bulk path.
-    let legacy = manager.legacy_driver("shop").unwrap();
-    let old = crate::schema::schema_graph(legacy.as_ref(), "shop").await.unwrap();
-    assert_eq!(serde_json::to_value(&graph).unwrap(), serde_json::to_value(&old).unwrap());
+    assert_graph_matches_descriptions(&handle, &graph, shop_table).await;
     manager.disconnect("shop").await;
 }
 
@@ -504,7 +534,8 @@ async fn contract_mariadb_vector_operations() {
     assert_eq!(info["supported"], true);
     assert_eq!(info["columns"][0], serde_json::json!({ "name": "embedding", "dims": 4 }));
     assert_eq!(info["indexes"][0]["metric"], "cosine");
-    let key = serde_json::json!([{ "column": "id", "value": "1" }]);
+    // Key cells are typed values, as the grid holds them.
+    let key = serde_json::json!([{ "column": "id", "value": { "t": "int", "v": 1 } }]);
     let fetched = invoke(
         "vector.fetch",
         serde_json::json!({ "database": "shop", "table": "products", "column": "embedding", "key": key }),
@@ -522,6 +553,13 @@ async fn contract_mariadb_vector_operations() {
     .await
     .unwrap();
     assert_eq!(search["result"]["rows"].as_array().unwrap().len(), 3);
+    // Typed result sets: the distance is a float, the id an int.
+    let columns = search["result"]["columns"].as_array().unwrap();
+    assert_eq!(columns[0]["name"], "vec_distance");
+    assert_eq!(columns[0]["kind"]["kind"], "float");
+    assert_eq!(search["result"]["rows"][0][0]["t"], "float");
+    let id = columns.iter().position(|column| column["name"] == "id").unwrap();
+    assert_eq!(search["result"]["rows"][0][id]["t"], "int");
     assert_eq!(search["queryDims"], 4);
     assert!(search["sql"].as_str().unwrap().contains("VEC_DISTANCE_COSINE"));
     let health = invoke(
@@ -540,5 +578,154 @@ async fn contract_mariadb_vector_operations() {
     assert!(recall["recall"].as_f64().unwrap() > 0.0);
     let unknown = invoke("vector.drop", serde_json::json!({})).await.expect_err("unknown operation");
     assert_eq!(unknown.code(), Some(gateway::BLOCKED));
+    manager.disconnect("shop").await;
+}
+
+// --- The statement gateway on a live server (ported from live_tests.rs) ---------------------------------------------------
+
+const INJECTED_FILTER: &str = "1=0; DELETE FROM gate_probe; SELECT 1 WHERE 1";
+
+fn gate(preset: Preset) -> Context {
+    Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: "shop".into(),
+        connection_name: "shop".into(),
+        safety: SafetySettings::preset(preset),
+    }
+}
+
+fn raw_filter(text: &str) -> Filter {
+    Filter::Raw {
+        language: RawFilterLang::Sql,
+        text: text.to_owned(),
+    }
+}
+
+/// Creates `shop.gate_probe` with the given rows, outside the gateway (the test's own fixture).
+async fn gate_probe(handle: &Handle, rows: &str) {
+    let tab = session(handle).await;
+    let setup = format!("CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe; {rows}");
+    run(handle, &tab, setup.trim_end_matches("; "), RunOptions::default())
+        .await
+        .expect("setup");
+    tab.close().await;
+}
+
+async fn drop_gate_probe(handle: &Handle) {
+    let tab = session(handle).await;
+    run(handle, &tab, "DROP TABLE gate_probe", RunOptions::default())
+        .await
+        .expect("drop");
+    tab.close().await;
+}
+
+/// A filter that tries to stack statements is refused by the gateway, and even the engine alone cannot run it (browse
+/// queries are prepared statements); the probe row survives.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mariadb.yml"]
+async fn contract_mariadb_gateway_rejects_injected_filters() {
+    let (manager, handle) = shop().await;
+    gate_probe(&handle, "INSERT INTO gate_probe VALUES (1)").await;
+    let context = gate(Preset::Open);
+    let request = |filter: &str| {
+        let mut request = BrowseRequest::new(shop_table("gate_probe"), 10);
+        request.filter = raw_filter(filter);
+        request
+    };
+    let error = gateway::browse(&manager, &context, "shop", &request(INJECTED_FILTER))
+        .await
+        .expect_err("injected filter must fail");
+    assert_eq!(error.code(), Some(gateway::filter::INVALID_FILTER), "{error}");
+    let direct = request(INJECTED_FILTER);
+    let bypass = handle
+        .call("browsed", |conn| async move {
+            conn.tabular().unwrap().browse(&direct, &CallContext::default()).await
+        })
+        .await;
+    assert!(bypass.is_err(), "a prepared statement cannot carry a second statement");
+    let fine = gateway::browse(&manager, &context, "shop", &request("id = 1"))
+        .await
+        .expect("valid filter");
+    assert_eq!(fine.rows.len(), 1, "the probe row survived");
+    drop_gate_probe(&handle).await;
+    manager.disconnect("shop").await;
+}
+
+/// Read-only blocks writes; Guarded asks for a confirmation whose token runs the statement once; the rules' statement
+/// timeout reaches the server.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mariadb.yml"]
+async fn contract_mariadb_gateway_rules_and_confirmation() {
+    let (manager, handle) = shop().await;
+    gate_probe(&handle, "").await;
+    manager
+        .open_session("shop", "tab".into(), SessionOptions::default())
+        .await
+        .expect("session");
+    let request = |text: &str| RunRequest {
+        text: text.to_owned(),
+        database: Some("shop".into()),
+        offset: 0,
+    };
+    let insert = request("INSERT INTO gate_probe VALUES (7)");
+    let mut sink = CollectSink::default();
+
+    let read_only = gate(Preset::ReadOnly);
+    let blocked = gateway::run(&manager, &read_only, "tab", &insert, None, &mut sink)
+        .await
+        .expect_err("read-only blocks INSERT");
+    assert_eq!(blocked.code(), Some(gateway::BLOCKED), "{blocked}");
+    let mut counted = CollectSink::default();
+    gateway::run(
+        &manager,
+        &read_only,
+        "tab",
+        &request("SELECT COUNT(*) FROM gate_probe"),
+        None,
+        &mut counted,
+    )
+    .await
+    .expect("reads still run");
+    assert_eq!(counted.sets[0].rows[0][0], Value::Int(0));
+
+    let guarded = gate(Preset::Guarded);
+    let asked = gateway::run(&manager, &guarded, "tab", &insert, None, &mut sink)
+        .await
+        .expect_err("guarded asks first");
+    assert_eq!(asked.code(), Some(gateway::CONFIRMATION_REQUIRED));
+    let token = asked.payload().unwrap()["token"].as_str().unwrap().to_owned();
+    let confirmation = gateway::Confirmation { token, typed: None };
+    let mut inserted = CollectSink::default();
+    gateway::run(&manager, &guarded, "tab", &insert, Some(&confirmation), &mut inserted)
+        .await
+        .expect("runs with the token");
+    assert_eq!(inserted.sets[0].affected, Some(1));
+    let reused = gateway::run(&manager, &guarded, "tab", &insert, Some(&confirmation), &mut sink).await;
+    assert_eq!(
+        reused.unwrap_err().code(),
+        Some(gateway::CONFIRMATION_INVALID),
+        "tokens are single-use"
+    );
+
+    let mut slow = gate(Preset::Custom);
+    slow.safety.rules.write = gateway::rules::Action::Allow;
+    slow.safety.statement_timeout_secs = 1;
+    let started = std::time::Instant::now();
+    let timed_out = gateway::run(
+        &manager,
+        &slow,
+        "tab",
+        &request("SELECT SUM(a.seq * b.seq) FROM seq_1_to_100000 a, seq_1_to_100000 b"),
+        None,
+        &mut sink,
+    )
+    .await
+    .expect_err("max_statement_time stops the query");
+    assert_eq!(timed_out.code(), Some("TIMEOUT"), "{timed_out:?}");
+    assert!(started.elapsed() < Duration::from_secs(10));
+
+    manager.close_session("tab").await;
+    drop_gate_probe(&handle).await;
     manager.disconnect("shop").await;
 }

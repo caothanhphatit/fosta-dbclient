@@ -13,7 +13,6 @@ pub mod audit;
 pub mod commands;
 pub mod config;
 pub mod contract;
-pub mod drivers;
 pub mod embedding;
 pub mod engines;
 pub mod error;
@@ -23,15 +22,12 @@ pub mod gateway;
 pub mod history;
 mod job;
 pub mod lang;
-#[cfg(test)]
-mod live_tests;
 mod lock;
 pub mod logging;
 pub mod net;
 #[cfg(test)]
 mod perf_tests;
 pub mod runtime;
-pub mod schema;
 pub mod secrets;
 pub mod tasks;
 

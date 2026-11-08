@@ -1,21 +1,26 @@
 //! MariaDB vector tooling (VECTOR columns, MariaDB 11.7+), served as the engine operations `vector.info`,
 //! `vector.fetch`, `vector.search`, `vector.health` and `vector.recall` (`Connection::invoke`). Arguments and results are
-//! the JSON shapes of the vector commands; result sets are text cells like the old query results, with vectors
-//! summarised.
+//! the JSON shapes of the vector commands. Result sets are typed like query results (contract `ColumnInfo` and `Value`),
+//! with vector cells summarised; key cells are typed values as the grid holds them.
 
 use std::{
     collections::{HashMap, HashSet},
     time::Instant,
 };
 
-use mysql_async::{consts::ColumnType, prelude::*, Column, Conn, QueryResult, Row, Value};
+use mysql_async::{prelude::*, Column, Conn, QueryResult, Row, Value};
 use serde::{Deserialize, Serialize};
 
 use super::{
     catalog::{create_statement, qualified, quote_ident, text_rows},
-    values::{guess_vector_dims, plain_text, sql_type_name, vector_text as vector_literal, BINARY_CHARSET},
+    values::{
+        guess_vector_dims, plain_text, result_column, sql_type_name, to_param, to_value, vector_text as vector_literal, BINARY_CHARSET,
+    },
 };
-use crate::error::{AppError, AppResult};
+use crate::{
+    contract::{ColumnInfo, Value as Typed, ValueKind},
+    error::{AppError, AppResult},
+};
 
 pub use super::values::{decode_vector, parse_vector as parse_literal};
 
@@ -33,33 +38,19 @@ fn hex(bytes: &[u8]) -> String {
 /// The engine operations this module answers.
 pub const OPERATIONS: [&str; 5] = ["vector.info", "vector.fetch", "vector.search", "vector.health", "vector.recall"];
 
-/// A key cell of a row, as the grid sends it (`0x…` for binary columns).
+/// A key cell of a row: the column and its typed value, as the grid holds it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyCell {
     pub column: String,
-    pub value: Option<String>,
+    pub value: Typed,
 }
 
-/// A result column as the vector view reads it.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TextColumn {
-    pub name: String,
-    pub type_name: String,
-    pub numeric: bool,
-    pub binary: bool,
-    pub primary: bool,
-    pub vector_dims: Option<u32>,
-}
-
-/// A result set with text cells.
+/// A result set with typed columns and values.
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultSet {
-    pub columns: Vec<TextColumn>,
-    pub rows: Vec<Vec<Option<String>>>,
-    pub affected_rows: u64,
-    pub truncated: bool,
+    pub columns: Vec<ColumnInfo>,
+    pub rows: Vec<Vec<Typed>>,
 }
 
 const PREVIEW_VALUES: usize = 4;
@@ -241,110 +232,57 @@ impl VectorHint<'_> {
     }
 }
 
-fn is_numeric(column_type: ColumnType) -> bool {
-    use ColumnType::*;
-    matches!(
-        column_type,
-        MYSQL_TYPE_DECIMAL
-            | MYSQL_TYPE_NEWDECIMAL
-            | MYSQL_TYPE_TINY
-            | MYSQL_TYPE_SHORT
-            | MYSQL_TYPE_LONG
-            | MYSQL_TYPE_INT24
-            | MYSQL_TYPE_LONGLONG
-            | MYSQL_TYPE_FLOAT
-            | MYSQL_TYPE_DOUBLE
-            | MYSQL_TYPE_YEAR
-    )
-}
-
-fn text_column(column: &Column, hint: &VectorHint<'_>) -> TextColumn {
-    let column_type = column.column_type();
-    let vector_dims = hint.dims(column);
-    let binary_charset = column.character_set() == BINARY_CHARSET;
-    let byte_string = matches!(
-        column_type,
-        ColumnType::MYSQL_TYPE_STRING
-            | ColumnType::MYSQL_TYPE_VAR_STRING
-            | ColumnType::MYSQL_TYPE_VARCHAR
-            | ColumnType::MYSQL_TYPE_TINY_BLOB
-            | ColumnType::MYSQL_TYPE_BLOB
-            | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-            | ColumnType::MYSQL_TYPE_LONG_BLOB
-            | ColumnType::MYSQL_TYPE_BIT
-    );
-    TextColumn {
-        name: column.name_str().into_owned(),
-        type_name: if vector_dims.is_some() {
-            "vector".to_owned()
-        } else {
-            sql_type_name(column_type, binary_charset, column.flags()).to_owned()
-        },
-        numeric: is_numeric(column_type),
-        binary: vector_dims.is_none() && binary_charset && byte_string,
-        primary: column.flags().contains(mysql_async::consts::ColumnFlags::PRI_KEY_FLAG),
-        vector_dims,
+/// A result column with the vector dimensions from `hint` (a known VECTOR column, or none for a byte string that only
+/// looked like one).
+fn typed_column(column: &Column, hint: &VectorHint<'_>) -> ColumnInfo {
+    let mut info = result_column(column);
+    let dims = hint.dims(column);
+    if dims == info.hints.vector_dims {
+        return info;
     }
-}
-
-/// How a cell is shown.
-#[derive(Clone, Copy)]
-enum CellFormat {
-    Text,
-    Hex,
-    Vector,
-}
-
-impl CellFormat {
-    fn of(column: &TextColumn) -> Self {
-        if column.vector_dims.is_some() {
-            Self::Vector
-        } else if column.binary {
-            Self::Hex
-        } else {
-            Self::Text
-        }
+    if dims.is_some() {
+        info.kind = ValueKind::Other;
+        info.type_name = "vector".to_owned();
+        info.hints.binary = false;
+    } else {
+        info.kind = ValueKind::Bytes;
+        info.type_name = sql_type_name(column.column_type(), column.character_set() == BINARY_CHARSET, column.flags()).to_owned();
+        info.hints.binary = true;
     }
+    info.hints.vector_dims = dims;
+    info
 }
 
-fn cell_text(value: Value, format: CellFormat) -> Option<String> {
+/// A typed cell; a vector is shown as its summary.
+fn typed_cell(value: Value, column: &ColumnInfo) -> Typed {
     match value {
-        Value::Bytes(bytes) => Some(match format {
-            CellFormat::Vector => decode_vector(&bytes)
-                .map(|values| summarize(&values))
-                .unwrap_or_else(|| hex(&bytes)),
-            CellFormat::Hex => hex(&bytes),
-            CellFormat::Text => String::from_utf8(bytes).unwrap_or_else(|error| hex(error.as_bytes())),
-        }),
-        other => plain_text(other),
+        Value::Bytes(bytes) if column.hints.vector_dims.is_some() => match decode_vector(&bytes) {
+            Some(values) => Typed::Other {
+                type_name: "vector".to_owned(),
+                text: summarize(&values),
+            },
+            None => Typed::Bytes(bytes),
+        },
+        other => to_value(other, column),
     }
 }
 
-fn row_cells(row: Row, formats: &[CellFormat]) -> Vec<Option<String>> {
-    row.unwrap()
-        .into_iter()
-        .enumerate()
-        .map(|(index, value)| cell_text(value, formats.get(index).copied().unwrap_or(CellFormat::Text)))
-        .collect()
-}
-
-/// Every result set of a query, as text cells.
+/// Every result set of a query, typed.
 async fn read_result_sets<P: Protocol>(mut result: QueryResult<'_, 'static, P>, hint: &VectorHint<'_>) -> AppResult<Vec<ResultSet>> {
     let mut sets = Vec::new();
     while let Some(columns) = result.columns() {
-        let columns: Vec<TextColumn> = columns.iter().map(|column| text_column(column, hint)).collect();
-        let affected_rows = result.affected_rows();
-        let formats: Vec<CellFormat> = columns.iter().map(CellFormat::of).collect();
+        let columns: Vec<ColumnInfo> = columns.iter().map(|column| typed_column(column, hint)).collect();
         let mut rows = Vec::new();
         while let Some(row) = result.next().await? {
-            rows.push(row_cells(row, &formats));
+            rows.push(
+                row.unwrap()
+                    .into_iter()
+                    .zip(&columns)
+                    .map(|(value, column)| typed_cell(value, column))
+                    .collect(),
+            );
         }
-        sets.push(ResultSet {
-            columns,
-            rows,
-            affected_rows,
-            truncated: false,
-        });
+        sets.push(ResultSet { columns, rows });
     }
     // A failed later statement is held as a pending error that `columns()` does not report.
     result.next().await?;
@@ -370,17 +308,6 @@ async fn primary_key(conn: &mut Conn, database: &str, table: &str) -> AppResult<
     Ok(rows.iter().map(|row| row.text(0)).collect())
 }
 
-async fn binary_columns(conn: &mut Conn, database: &str, table: &str) -> AppResult<HashSet<String>> {
-    let rows = text_rows(
-        conn,
-        "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
-         AND DATA_TYPE IN ('binary', 'varbinary', 'tinyblob', 'blob', 'mediumblob', 'longblob', 'bit')",
-        (database.to_owned(), table.to_owned()),
-    )
-    .await?;
-    Ok(rows.iter().map(|row| row.text(0)).collect())
-}
-
 fn key_condition(key: &[KeyCell]) -> AppResult<String> {
     if key.is_empty() {
         return Err(AppError::new("Cannot identify the row"));
@@ -392,20 +319,8 @@ fn key_condition(key: &[KeyCell]) -> AppResult<String> {
         .join(" AND "))
 }
 
-fn bind_values(key: &[KeyCell], binary: &HashSet<String>) -> Vec<Value> {
-    key.iter()
-        .map(|cell| match &cell.value {
-            None => Value::NULL,
-            Some(text) => {
-                let decoded = if binary.contains(&cell.column) {
-                    crate::contract::value::unhex(text, false)
-                } else {
-                    None
-                };
-                Value::Bytes(decoded.unwrap_or_else(|| text.as_bytes().to_vec()))
-            }
-        })
-        .collect()
+fn bind_values(key: &[KeyCell]) -> Vec<Value> {
+    key.iter().map(|cell| to_param(&cell.value)).collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -593,14 +508,13 @@ async fn vector_indexes(conn: &mut Conn, database: &str, table: &str) -> AppResu
 }
 
 pub async fn fetch_vector(conn: &mut Conn, database: &str, table: &str, column: &str, key: &[KeyCell]) -> AppResult<Vec<f32>> {
-    let binary = binary_columns(conn, database, table).await?;
     let sql = format!(
         "SELECT {} FROM {} WHERE {} LIMIT 1",
         quote_ident(column),
         qualified(database, table),
         key_condition(key)?
     );
-    let row: Option<Row> = conn.exec_first(sql, bind_values(key, &binary)).await?;
+    let row: Option<Row> = conn.exec_first(sql, bind_values(key)).await?;
     match row.and_then(|row| row.unwrap().into_iter().next()) {
         Some(Value::Bytes(bytes)) => decode_vector(&bytes).ok_or_else(|| AppError::new("The value is not a valid vector")),
         Some(Value::NULL) => Err(AppError::new("This row has no vector (NULL)")),
@@ -778,7 +692,15 @@ fn first_set(sets: Vec<ResultSet>) -> ResultSet {
 
 fn index_in_plan(plan: &ResultSet) -> Option<String> {
     let key_column = plan.columns.iter().position(|column| column.name.eq_ignore_ascii_case("key"))?;
-    plan.rows.iter().find_map(|row| row.get(key_column).cloned().flatten())
+    plan.rows.iter().find_map(|row| row.get(key_column).and_then(Typed::display))
+}
+
+/// A key value as text, for comparing result keys.
+fn key_text(value: Value) -> Option<String> {
+    match value {
+        Value::Bytes(bytes) => Some(String::from_utf8(bytes).unwrap_or_else(|error| hex(error.as_bytes()))),
+        other => plain_text(other),
+    }
 }
 
 fn first_vector(row: Row) -> Option<Vec<f32>> {
@@ -795,9 +717,9 @@ async fn timed_keys(conn: &mut Conn, sql: String) -> AppResult<(HashSet<String>,
     let keys = rows
         .into_iter()
         .map(|row| {
-            row_cells(row, &[])
+            row.unwrap()
                 .into_iter()
-                .map(Option::unwrap_or_default)
+                .map(|value| key_text(value).unwrap_or_default())
                 .collect::<Vec<_>>()
                 .join(KEY_SEPARATOR)
         })
@@ -964,11 +886,11 @@ mod tests {
     fn search_arguments_keep_the_command_shape() {
         let args: SearchArgs = serde_json::from_value(serde_json::json!({
             "database": "shop", "table": "products", "column": "embedding",
-            "query": { "kind": "row", "key": [ { "column": "id", "value": "7" } ] },
+            "query": { "kind": "row", "key": [ { "column": "id", "value": { "t": "int", "v": 7 } } ] },
             "k": 5, "metric": "cosine", "filter": "stock > 0"
         }))
         .unwrap();
-        assert!(matches!(&args.query, SearchQuery::Row { key } if key[0].value.as_deref() == Some("7")));
+        assert!(matches!(&args.query, SearchQuery::Row { key } if key[0].value == Typed::Int(7)));
         assert_eq!(args.metric, Metric::Cosine);
         let vector: SearchQuery = serde_json::from_value(serde_json::json!({ "kind": "vector", "values": [0.5, 1.0] })).unwrap();
         assert!(matches!(vector, SearchQuery::Vector { values } if values == [0.5, 1.0]));
@@ -991,7 +913,14 @@ mod tests {
         );
         assert_eq!(vector_literal(&[0.5, 1.0]), "[0.5,1]");
         assert_eq!(summarize(&[3.0, 4.0]), "[2] ‖5.000‖ 3.0000, 4.0000");
-        assert_eq!(cell_text(Value::Bytes(vec![0xab, 1]), CellFormat::Hex).as_deref(), Some("0xAB01"));
+        assert_eq!(key_text(Value::Bytes(vec![0xab, 0xff])).as_deref(), Some("0xABFF"));
+        assert_eq!(
+            bind_values(&[KeyCell {
+                column: "id".into(),
+                value: Typed::Int(7)
+            }]),
+            [Value::Int(7)]
+        );
         assert!(ensure_dims(3, 4).is_err());
         let line = "VECTOR KEY idx_embedding (embedding) M='6' DISTANCE='cosine',";
         assert_eq!(option_value(line, "DISTANCE="), Some("cosine"));

@@ -7,8 +7,8 @@ import { capabilities } from "../../core/capabilities";
 import { api, errorText } from "../../core/api";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
-import { copyText, h, icon, iconButton, spacer, type IconName } from "../../core/dom";
-import { driverInfo, drivers } from "../../core/drivers";
+import { copyText, h, icon, iconButton, iconOrDefault, spacer, type IconName } from "../../core/dom";
+import { engineInfo, visibleEngines } from "../../core/engines";
 import { ModelSwitcher } from "./modelSwitcher";
 import type { AiActive, AiConnection, AppConfig, ChatContext, ChatEvent, ChatMessage, DriverId, UiAction } from "../../core/types";
 
@@ -274,7 +274,7 @@ export class AssistantPanel {
   private quickActions(context: AssistantContext): QuickAction[] {
     const sql = () => fence(context.editorText?.() ?? "", context.driver === "mongodb" ? "json" : "sql");
     const table = context.table ?? "this table";
-    const info = driverInfo(context.driver);
+    const info = engineInfo(context.driver);
     switch (context.kind) {
       case "query": {
         const actions: QuickAction[] = [
@@ -360,11 +360,11 @@ export class AssistantPanel {
 
   private translateMenu(): MenuItem[] {
     const context = this.host.context();
-    return drivers()
+    return visibleEngines()
       .filter((driver) => driver.id !== context.driver && driver.id !== "mariadb")
       .map((driver) => ({
         label: driver.id === "mongodb" ? "MongoDB (command / pipeline)" : driver.label,
-        icon: driver.icon,
+        icon: iconOrDefault(driver.icon, "database"),
         run: () => {
           const source = fence(context.editorText?.() ?? "", "sql");
           const target = driver.id === "mongodb" ? "a MongoDB command or aggregation pipeline" : driver.label;
@@ -481,16 +481,23 @@ function contextChip(context: AssistantContext): HTMLElement[] {
   if (!context.connectionId) {
     return [h("span", { class: "assistant-context-text muted" }, icon("plug"), "Not connected. Connect to get answers based on your schema.")];
   }
-  const info = driverInfo(context.driver);
+  const info = engineInfo(context.driver);
   const parts = [context.connectionName ?? "connection", context.database, context.table].filter(Boolean).join(" · ");
-  return [h("span", { class: "assistant-context-text", title: context.serverVersion ?? "" }, icon(info.icon, `driver-icon ${info.id}`), parts)];
+  return [
+    h(
+      "span",
+      { class: "assistant-context-text", title: context.serverVersion ?? "" },
+      icon(iconOrDefault(info.icon, "database"), `driver-icon ${info.id}`),
+      parts,
+    ),
+  ];
 }
 
 function chatContext(context: AssistantContext): ChatContext {
   return {
     connectionId: context.connectionId,
     connectionName: context.connectionName,
-    driverLabel: context.driver ? driverInfo(context.driver).label : undefined,
+    driverLabel: context.driver ? engineInfo(context.driver).label : undefined,
     serverVersion: context.serverVersion,
     database: context.database,
     table: context.table,

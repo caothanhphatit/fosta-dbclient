@@ -6,7 +6,7 @@ import { connectInfo, engineOf, hasCapability, type EngineInfo } from "../core/e
 import { showError } from "../core/errorPanel";
 import type { Navigator } from "../core/navigator";
 import type { TabContent, TabManager } from "../core/tabs";
-import type { CellValue, ConnectionProfile, TableTarget, TaskDef } from "../core/types";
+import type { ConnectionProfile, KeyCell, TableTarget, TaskDef } from "../core/types";
 import { nodeIcon, resolveView, type ViewContext, type ViewRegistration, type ViewRole } from "../core/views";
 import type { QueryHost, QueryView } from "../features/query/queryView";
 import { createLogView, type TasksPanel } from "../features/tasks/tasksPanel";
@@ -221,7 +221,7 @@ export class AppNavigation implements Navigator {
     void this.openQueryTab(connectionId, database, initialSql);
   }
 
-  openVectorSearch(target: TableTarget, column: string, seed?: CellValue[]): void {
+  openVectorSearch(target: TableTarget, column: string, seed?: KeyCell[]): void {
     const key = this.tabKey(target.connectionId, "vector-search", target.database, target.table);
     const existing = this.tabs.contentOf(key);
     if (existing instanceof VectorSearchView && seed) existing.setSeed(column, seed);

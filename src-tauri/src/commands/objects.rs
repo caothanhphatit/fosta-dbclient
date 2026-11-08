@@ -1,7 +1,7 @@
 //! The object tree, descriptions, browsing and editing of an open connection. Reads of metadata go to the engine
 //! directly (contained); browsing and edits go through the statement gateway, which applies the workspace's rules.
 
-use super::data::gateway_context;
+use super::gateway_context;
 use crate::{
     contract::{
         unsupported_capability, ApplyResult, BrowseRequest, CallContext, Capability, ObjectDescription, ObjectRef, Page, RowChangeSet,

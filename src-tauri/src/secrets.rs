@@ -397,4 +397,16 @@ mod tests {
         assert_eq!(store.accounts(), ["conn:c2:password"]);
         delete_in(&store, &SecretKey::AiKey("missing".into())).unwrap();
     }
+
+    /// The saved passwords of the local dev connections are readable from the OS keyring (this machine's setup).
+    #[test]
+    #[ignore = "reads this machine's keyring"]
+    fn live_saved_passwords_are_readable() {
+        for id in ["local-mariadb", "local-mssql", "local-mongo"] {
+            assert!(
+                contains(&SecretKey::connection(id, crate::contract::SecretSlot::Password)).expect("keyring"),
+                "no saved password for {id}"
+            );
+        }
+    }
 }

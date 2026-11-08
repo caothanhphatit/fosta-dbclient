@@ -1,15 +1,15 @@
 //! The statement gateway: every statement the app sends to a database on behalf of a
 //! caller — a query tab, a grid filter, a grid save, an import, "New database", or the
-//! assistant — passes through here before it reaches a [`Driver`](crate::drivers::Driver).
+//! assistant — passes through here before it reaches an engine [`Connection`](crate::contract::Connection).
 //!
-//! 1. The statement is classified ([`classify`]): SQL is parsed per dialect, MongoDB
-//!    commands are classified by name. Grid filters must be a single condition ([`filter`]).
+//! 1. The statement is classified by its engine (`Engine::classify`, helpers in [`classify`]): SQL is parsed per
+//!    dialect, other languages are classified by the engine's own rules. Grid filters must be a single condition ([`filter`]).
 //! 2. The workspace's rules ([`rules`]) give an [`Action`] per category: allow, confirm,
 //!    typed confirm or block. The assistant can only ever read metadata.
 //! 3. A confirmation is a structured `CONFIRMATION_REQUIRED` error with a one-time token
 //!    bound to the exact statement text and session; the UI asks the user and calls again
 //!    with the token. Blocked and confirmed operations go to the local audit log.
-//! 4. The rules also set engine-level backstops passed to the driver as [`Limits`]:
+//! 4. The rules also set engine-level backstops passed to the engine as [`Limits`]:
 //!    read-only sessions, statement timeouts and the result row limit.
 
 pub mod classify;
@@ -27,7 +27,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use self::{
-    classify::{classify_changes, Category, Classification, StatementInfo},
+    classify::{Category, Classification, StatementInfo},
     filter::{validate_raw_filter, INVALID_FILTER},
     rules::{Action, SafetySettings},
 };
@@ -38,7 +38,6 @@ use crate::{
         require, unsupported_capability, ApplyResult, BrowseRequest, CallContext, Capability, ClassifyInput, Filter, Limits, Page,
         ResultSink, RowChangeSet, RunRequest, RunSummary, TransactionOp, TransactionState,
     },
-    drivers::types::{BrowseRequest as OldBrowseRequest, QueryOutcome, RowChange as OldRowChange, TablePage},
     error::{AppError, AppResult},
     lock::lock,
     runtime::{ConnectionManager, Handle},
@@ -676,116 +675,11 @@ pub async fn invoke(
         .await
 }
 
-// --- The old commands (shims until the UI moves to the operations above) ------------------
-
-/// The old `browse_table`: validates the filter as one condition, then reads a page.
-pub async fn legacy_browse(db: &ConnectionManager, context: &Context, request: &OldBrowseRequest) -> AppResult<TablePage> {
-    check_filter(db, context, &request.connection_id, request.filter.as_deref())?;
-    let (request, limits) = (request.clone(), context.limits());
-    db.call_legacy(&request.connection_id.clone(), "read a page of rows", |driver| async move {
-        driver.browse_table(&request, &limits).await
-    })
-    .await
-}
-
-/// The old `apply_changes` from a grid save or an import.
-#[allow(clippy::too_many_arguments)]
-pub async fn legacy_apply_changes(
-    db: &ConnectionManager,
-    context: &Context,
-    caller: Caller,
-    database: &str,
-    table: &str,
-    changes: Vec<OldRowChange>,
-    import_id: Option<&str>,
-    confirmation: Option<&Confirmation>,
-) -> AppResult<u64> {
-    if !matches!(caller, Caller::GridSave | Caller::Import) {
-        return Err(AppError::new("Row changes come from a grid save or an import"));
-    }
-    let engine = db.handle(&context.connection_id)?.engine.id().to_owned();
-    let classification = classify_changes(table, &changes);
-    let import_run = import_id.filter(|id| caller == Caller::Import && !id.is_empty());
-    let text = match import_run {
-        Some(id) => format!("{database}\u{0}{table}\u{0}import:{id}"),
-        None => format!("{database}\u{0}{table}\u{0}{}", serde_json::to_string(&changes)?),
-    };
-    db.gateway.authorize(&Request {
-        caller,
-        context,
-        engine: &engine,
-        scope: &context.connection_id,
-        text: &text,
-        classification: &classification,
-        confirmation,
-        reusable: import_run.is_some(),
-    })?;
-    let (database, table) = (database.to_owned(), table.to_owned());
-    db.call_legacy(&context.connection_id, "saved row changes", |driver| async move {
-        driver.apply_changes(&database, &table, changes).await
-    })
-    .await
-}
-
-/// The old `run_sql` (whole result in one response) over [`run`]: the events are collected into the old shape.
-pub async fn run_query(
-    db: &ConnectionManager,
-    context: &Context,
-    session_id: &str,
-    database: Option<String>,
-    text: String,
-    confirmation: Option<&Confirmation>,
-) -> AppResult<QueryOutcome> {
-    let request = RunRequest { text, database, offset: 0 };
-    let mut sink = crate::contract::CollectSink::default();
-    let summary = run(db, context, session_id, &request, confirmation, &mut sink).await?;
-    let sets = sink
-        .sets
-        .into_iter()
-        .map(|set| crate::drivers::types::ResultSet {
-            columns: set
-                .columns
-                .iter()
-                .map(|column| crate::drivers::types::ColumnMeta {
-                    name: column.name.clone(),
-                    type_name: column.type_name.clone(),
-                    numeric: column.kind.is_numeric(),
-                    binary: column.hints.binary || matches!(column.kind, crate::contract::ValueKind::Bytes),
-                    primary: column.hints.primary,
-                    vector_dims: column.hints.vector_dims,
-                })
-                .collect(),
-            rows: set
-                .rows
-                .iter()
-                .map(|row| row.iter().map(crate::runtime::legacy::cell_of).collect())
-                .collect(),
-            affected_rows: set.affected.unwrap_or(0),
-            truncated: set.truncated,
-        })
-        .collect();
-    Ok(QueryOutcome {
-        sets,
-        elapsed_ms: summary.elapsed_ms,
-        transaction: summary.transaction,
-    })
-}
-
-/// The old `sql_transaction`.
-pub async fn legacy_transaction(
-    db: &ConnectionManager,
-    context: &Context,
-    session_id: &str,
-    op: TransactionOp,
-) -> AppResult<TransactionState> {
-    transaction(db, context, session_id, op).await
-}
-
 /// What an assistant tool may do. Every tool the model can call must be listed here; the
 /// assistant has no tool that runs a statement or changes data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssistantToolEffect {
-    /// Reads catalog metadata (names, columns, DDL) through the driver; never row data.
+    /// Reads catalog metadata (names, columns, DDL) through the engine contract; never row data.
     ReadMetadata,
     /// Asks the UI to open a view; the UI pre-fills it and runs nothing on its own.
     OpenView,

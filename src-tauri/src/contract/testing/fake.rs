@@ -147,6 +147,7 @@ impl Connection for FakeConnection {
     }
 
     async fn children(&self, request: &TreeRequest, _ctx: &CallContext) -> AppResult<TreeChildren> {
+        self.engine.record("children");
         let node = |id: &str, label: &str, kind: NodeKind, object: Option<ObjectRef>, expandable: bool| ObjectNode {
             key: NodeKey {
                 id: id.into(),
@@ -175,6 +176,7 @@ impl Connection for FakeConnection {
     }
 
     async fn describe(&self, object: &ObjectRef, _ctx: &CallContext) -> AppResult<ObjectDescription> {
+        self.engine.record("describe");
         let mut description = ObjectDescription::new(object.clone());
         description.columns = vec![
             ColumnInfo::result("id", "int", ValueKind::Int),
@@ -184,10 +186,16 @@ impl Connection for FakeConnection {
     }
 
     async fn open_session(&self, _options: &SessionOptions, _ctx: &CallContext) -> AppResult<OpenedSession> {
+        self.engine.record("open_session");
         Ok(OpenedSession {
             session: Arc::new(FakeSession { engine: self.engine }),
             canceller: None,
         })
+    }
+
+    async fn invoke(&self, name: &str, _args: serde_json::Value, _ctx: &CallContext) -> AppResult<serde_json::Value> {
+        self.engine.record("invoke");
+        Err(crate::contract::unsupported_capability(name))
     }
 
     fn tabular(&self) -> Option<&dyn TabularData> {
@@ -200,6 +208,7 @@ impl Connection for FakeConnection {
 #[async_trait]
 impl TabularData for FakeConnection {
     async fn browse(&self, _request: &BrowseRequest, _ctx: &CallContext) -> AppResult<Page> {
+        self.engine.record("browse");
         if self.engine.panics.browse.load(Ordering::Relaxed) {
             panic!("fake browse panicked");
         }
@@ -217,6 +226,7 @@ impl TabularData for FakeConnection {
     }
 
     async fn apply(&self, _changes: &RowChangeSet, _ctx: &CallContext) -> AppResult<ApplyResult> {
+        self.engine.record("apply");
         Ok(ApplyResult::default())
     }
 }
@@ -232,6 +242,7 @@ impl Session for FakeSession {
     }
 
     async fn run(&self, request: &RunRequest, _options: &RunOptions, sink: &mut dyn ResultSink) -> AppResult<()> {
+        self.engine.record("run");
         if self.engine.panics.run.load(Ordering::Relaxed) {
             panic!("fake run panicked");
         }

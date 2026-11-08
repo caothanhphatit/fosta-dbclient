@@ -107,4 +107,27 @@ mod tests {
         let missing = reveal(&exported.to_string_lossy()).expect_err("missing");
         assert!(missing.to_string().ends_with("no longer exists"), "{missing}");
     }
+
+    /// Writes into the real Downloads folder (twice, to check the " (2)" suffix), then cleans up.
+    #[test]
+    #[ignore = "writes into the real Downloads folder"]
+    fn live_save_download() {
+        let first = save_download(
+            "db-studio-selftest.csv",
+            b"a,b
+1,2
+",
+        )
+        .expect("save");
+        let second = save_download("db-studio-selftest.csv", b"x").expect("save again");
+        assert!(second.ends_with("db-studio-selftest (2).csv"), "{second}");
+        assert_eq!(
+            std::fs::read_to_string(&first).unwrap(),
+            "a,b
+1,2
+"
+        );
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
+    }
 }

@@ -1,4 +1,4 @@
-import type { AuthMethodId, Relation, SshConfig, TlsConfig } from "./contract";
+import type { AuthMethodId, ColumnInfo, SshConfig, TlsConfig, Value } from "./contract";
 
 export type Cell = string | null;
 
@@ -271,13 +271,6 @@ export interface TaskLogEvent {
   line: string;
 }
 
-export interface TableInfo {
-  name: string;
-  kind: "table" | "view";
-  rows: number | null;
-  comment: string;
-}
-
 export interface TableTarget {
   connectionId: string;
   driver: DriverId;
@@ -295,64 +288,12 @@ export interface ColumnMeta {
   vectorDims: number | null;
 }
 
-export interface ResultSet {
-  columns: ColumnMeta[];
-  rows: Cell[][];
-  affectedRows: number;
-  truncated: boolean;
-}
-
-export interface QueryOutcome {
-  sets: ResultSet[];
-  elapsedMs: number;
-  transaction: TransactionState;
-}
-
-export interface TablePage {
-  columns: ColumnMeta[];
-  rows: Cell[][];
-  total: number;
-  primaryKey: string[];
-  elapsedMs: number;
-}
-
-export interface ColumnDesign {
-  name: string;
-  columnType: string;
-  nullable: boolean;
-  key: string;
-  defaultValue: Cell;
-  extra: string;
-  comment: string;
-}
-
-export interface TableDesign {
-  columns: ColumnDesign[];
-  ddl: string;
-}
-
-export interface BrowseRequest {
-  connectionId: string;
-  database: string;
-  table: string;
-  offset: number;
-  limit: number;
-  orderBy: string | null;
-  descending: boolean;
-  filter: string | null;
-}
-
 export interface CellValue {
   column: string;
   value: Cell;
 }
 
 export type { Relation, SchemaColumn, SchemaGraph, SchemaTable } from "./contract";
-
-export interface TableRelations {
-  outgoing: Relation[];
-  incoming: Relation[];
-}
 
 export interface VectorIndex {
   name: string;
@@ -369,7 +310,19 @@ export interface VectorInfo {
 
 export type Metric = "auto" | "cosine" | "euclidean";
 
-export type QueryVector = { kind: "row"; key: CellValue[] } | { kind: "literal"; text: string } | { kind: "text"; text: string };
+/** A key cell of a row for the `vector_*` commands: the column and its typed value, as the grid holds it. */
+export interface KeyCell {
+  column: string;
+  value: Value;
+}
+
+/** A result set of a vector search or its plan: typed columns and values, like query results. */
+export interface VectorResultSet {
+  columns: ColumnInfo[];
+  rows: Value[][];
+}
+
+export type QueryVector = { kind: "row"; key: KeyCell[] } | { kind: "literal"; text: string } | { kind: "text"; text: string };
 
 export interface VectorSearchRequest {
   connectionId: string;
@@ -383,8 +336,8 @@ export interface VectorSearchRequest {
 }
 
 export interface VectorSearchResult {
-  result: ResultSet;
-  plan: ResultSet;
+  result: VectorResultSet;
+  plan: VectorResultSet;
   indexUsed: string | null;
   sql: string;
   runnableSql: string;
@@ -412,9 +365,6 @@ export interface RecallReport {
   annMs: number;
   exactMs: number;
 }
-
-export type RowChange =
-  { kind: "insert"; values: CellValue[] } | { kind: "update"; key: CellValue[]; values: CellValue[] } | { kind: "delete"; key: CellValue[] };
 
 /** One result set of a query run, as recorded in the history. */
 export interface HistoryResult {

@@ -36,7 +36,8 @@ engines-all = [
     "engine-redis",
     "engine-elastic",
 ]
-# MariaDB/MySQL, SQL Server and MongoDB clients stay required until their pre-contract drivers are removed.
+# The MariaDB/MySQL, SQL Server and MongoDB engine modules are always compiled (not feature-gated yet), so their clients
+# stay required and these three features only control registration.
 engine-mysql = []
 engine-mssql = []
 engine-mongo = []

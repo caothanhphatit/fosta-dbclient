@@ -145,7 +145,7 @@ fn refusals_hold_whatever_the_preset_and_the_assistant_only_reads() {
 async fn engine_operations_and_browse_go_through_the_engine() {
     let manager = ConnectionManager::default();
     let engine = FakeEngine::leak();
-    manager.insert("c", engine, engine.connection(), None);
+    manager.insert("c", engine, engine.connection());
     let open = context(Preset::Open);
     // The fake engine answers no operation: the gateway refuses it before the connection sees it.
     let error = invoke(&manager, &open, Caller::EngineView, "fake.op", json!({}), None)
@@ -188,7 +188,7 @@ async fn engine_operations_and_browse_go_through_the_engine() {
 async fn runs_stream_through_the_gateway_and_writes_need_confirmation() {
     let manager = ConnectionManager::default();
     let engine = FakeEngine::leak();
-    manager.insert("c", engine, engine.connection(), None);
+    manager.insert("c", engine, engine.connection());
     manager.open_session("c", "tab".into(), Default::default()).await.unwrap();
     let mut events = Vec::new();
     let mut sink = |event: crate::contract::StreamEvent| {

@@ -1,20 +1,28 @@
-//! MariaDB vector tooling and the embedding API it can call. The vector operations are engine operations
-//! (`vector.*`) run through the statement gateway; `vector_search` embeds a text query here first.
+//! Vector tooling and the embedding API it can call. The vector operations are engine operations (`vector.*`, answered
+//! by connections that advertise `Capability::Vector`) run through the statement gateway; `vector_search` embeds a text
+//! query here first. Arguments and results are JSON: typed key cells in, typed result sets out.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::gateway_context;
 use crate::{
     config::AppConfig,
-    contract::Capability,
+    contract::{self, Capability},
     embedding::{self, EmbeddingSettings},
-    engines::mysql::vector::{KeyCell, Metric, SearchArgs, SearchQuery},
     error::{AppError, AppResult},
     gateway::{self, Caller},
     secrets, AppState,
 };
 
 const EMBEDDING_PROBE: &str = "Fosta Studio embedding test";
+
+/// A key cell of a row: the column and its typed value, as the grid holds it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyCell {
+    pub column: String,
+    pub value: contract::Value,
+}
 
 /// The query vector as the vector view sends it.
 #[derive(Debug, Deserialize)]
@@ -34,13 +42,14 @@ pub struct VectorSearchRequest {
     pub column: String,
     pub query: QueryVector,
     pub k: u32,
-    pub metric: Metric,
+    /// `"auto"`, `"cosine"` or `"euclidean"`; the engine checks it.
+    pub metric: String,
     pub filter: Option<String>,
 }
 
 /// Runs one vector operation through the gateway, as an engine view.
 async fn invoke(state: &AppState, connection_id: &str, name: &str, args: Value) -> AppResult<Value> {
-    let context = super::data::gateway_context(state, connection_id)?;
+    let context = gateway_context(state, connection_id)?;
     gateway::invoke(&state.engines, &context, Caller::EngineView, name, args, None).await
 }
 
@@ -78,25 +87,23 @@ pub async fn fetch_vector(
 
 pub async fn vector_search(state: &AppState, request: VectorSearchRequest) -> AppResult<Value> {
     // The optional filter is spliced into the search query: it must be one condition, like a grid filter.
-    let context = super::data::gateway_context(state, &request.connection_id)?;
+    let context = gateway_context(state, &request.connection_id)?;
     gateway::check_filter(&state.engines, &context, &request.connection_id, request.filter.as_deref())?;
     let query = match request.query {
-        QueryVector::Row { key } => SearchQuery::Row { key },
-        QueryVector::Literal { text } => SearchQuery::Literal { text },
-        QueryVector::Text { text } => SearchQuery::Vector {
-            values: embed_text(state, &text).await?,
-        },
+        QueryVector::Row { key } => json!({ "kind": "row", "key": key }),
+        QueryVector::Literal { text } => json!({ "kind": "literal", "text": text }),
+        QueryVector::Text { text } => json!({ "kind": "vector", "values": embed_text(state, &text).await? }),
     };
-    let args = SearchArgs {
-        database: request.database,
-        table: request.table,
-        column: request.column,
-        query,
-        k: request.k,
-        metric: request.metric,
-        filter: request.filter,
-    };
-    invoke(state, &request.connection_id, "vector.search", serde_json::to_value(args)?).await
+    let args = json!({
+        "database": request.database,
+        "table": request.table,
+        "column": request.column,
+        "query": query,
+        "k": request.k,
+        "metric": request.metric,
+        "filter": request.filter,
+    });
+    invoke(state, &request.connection_id, "vector.search", args).await
 }
 
 pub async fn vector_health(

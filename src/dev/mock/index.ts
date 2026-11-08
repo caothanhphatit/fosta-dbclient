@@ -50,8 +50,6 @@ import type {
   Diagnostics,
   HistoryEntry,
   HistoryQuery,
-  BrowseRequest as OldBrowseRequest,
-  RowChange as OldRowChange,
   Workspace,
 } from "../../core/types";
 import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf } from "../../features/safety/safety";
@@ -59,7 +57,6 @@ import { chatRuns, deleteAiConnection, draftKey, fetchModels, probeChat, saveAiC
 import { checkTestPassword, deleteConnection, parseConnectionString, profiles, saveConnection } from "./connections";
 import { mockError, NOT_CONNECTED } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
-import * as legacy from "./legacy";
 import { VECTOR_DIMS } from "./shop";
 import { state } from "./state";
 import type { EngineMock, MockSession } from "./types";
@@ -209,19 +206,6 @@ async function run(sessionId: string, request: RunRequest, confirmation: Confirm
   }
 }
 
-async function runSqlLegacy(sessionId: string, sql: string, database: string | null, confirmation: Confirmation | null) {
-  const current = session(sessionId);
-  const { engine } = connection(current.connectionId);
-  gate(state.config, current.connectionId, "queryTab", classify(engine, sql), confirmation);
-  const controller = new AbortController();
-  current.running = controller;
-  try {
-    return await legacy.runSql(engine, sql, database, { session: current, signal: controller.signal });
-  } finally {
-    current.running = null;
-  }
-}
-
 // --- Contract operations --------------------------------------------------------------------------------------------------
 
 /** Mock-only cap on `tree_children` pages (`__fostaMock.setTreePageSize`), to show the tree's "Load more" row. */
@@ -274,8 +258,8 @@ function touchRow(connectionId: string, table: string, key: unknown, remove = fa
   return message;
 }
 
-/** The legacy vector commands, answered by MariaDB's `vector.*` operations where they have an equivalent. */
-function legacyVector(connectionId: string, command: string, payload: Record<string, unknown>): unknown {
+/** The `vector_*` commands, answered by the engine's `vector.*` operations like the backend does. */
+function vectorCommand(connectionId: string, command: string, payload: Record<string, unknown>): unknown {
   const { engine } = connection(connectionId);
   switch (command) {
     case "vector_info":
@@ -283,43 +267,11 @@ function legacyVector(connectionId: string, command: string, payload: Record<str
     case "fetch_vector":
       return engine.invoke?.("vector.fetch", payload) ?? [];
     case "vector_health":
-      return [
-        { label: "Dimensions", status: "ok", value: String(VECTOR_DIMS), detail: "Every sampled row has 4 values" },
-        { label: "NULL vectors", status: "ok", value: "0", detail: "No row is missing a vector" },
-        { label: "Zero vectors", status: "warn", value: "3", detail: "Cosine distance is undefined for all-zero vectors" },
-        { label: "Vector index", status: "info", value: "idx_embedding", detail: "cosine, M=6" },
-      ];
+      return engine.invoke?.("vector.health", payload) ?? [];
     case "index_recall":
       return engine.invoke?.("vector.recall", payload);
-    default: {
-      const request = payload.request as { connectionId: string; database: string; table: string; k: number; filter: string | null };
-      const page = legacy.browseTable(engine, { ...request, offset: 0, limit: request.k, orderBy: null, descending: false });
-      const distance = { name: "distance", typeName: "double", numeric: true, binary: false, primary: false, vectorDims: null };
-      const sql = "SELECT *, VEC_DISTANCE_COSINE(`embedding`, ?) AS distance FROM `products` ORDER BY distance LIMIT ?";
-      return {
-        result: {
-          columns: [...page.columns, distance],
-          rows: page.rows.map((row, index) => [...row, (0.05 + index * 0.031).toFixed(4)]),
-          affectedRows: 0,
-          truncated: false,
-        },
-        plan: {
-          columns: [
-            { ...distance, name: "type", typeName: "varchar", numeric: false },
-            { ...distance, name: "key", typeName: "varchar", numeric: false },
-          ],
-          rows: [["range", "idx_embedding"]],
-          affectedRows: 0,
-          truncated: false,
-        },
-        indexUsed: "idx_embedding",
-        sql,
-        runnableSql: sql.replace("?", "VEC_FromText('[0.12,-0.4,0.33,0.9]')").replace("?", String(request.k)),
-        elapsedMs: 4,
-        queryDims: VECTOR_DIMS,
-        primaryKey: page.primaryKey,
-      };
-    }
+    default:
+      return engine.invoke?.("vector.search", payload.request);
   }
 }
 
@@ -538,48 +490,19 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "run":
       return run(str("sessionId"), payload.request as RunRequest, confirmation, (payload.onEvent as Channel<StreamEvent> | undefined) ?? null);
     case "cancel_run":
-    case "cancel_sql":
       sessions.get(str("sessionId"))?.running?.abort();
       return null;
     case "transaction":
-    case "sql_transaction":
       return transaction(str("sessionId"), payload.op as TransactionOp);
 
-    // Old commands (until step 16)
-    case "list_databases":
-      return legacy.listDatabases(connection(str("connectionId")).engine);
-    case "list_tables":
-      return legacy.listTables(connection(str("connectionId")).engine, str("database"));
-    case "describe_table":
-      return legacy.describeTable(connection(str("connectionId")).engine, str("database"), str("table"));
-    case "browse_table": {
-      const request = payload.request as OldBrowseRequest;
-      return legacy.browseTable(connection(request.connectionId).engine, request);
-    }
-    case "apply_changes": {
-      const connectionId = str("connectionId");
-      const changes = payload.changes as OldRowChange[];
-      const table = str("table");
-      gate(
-        state.config,
-        connectionId,
-        payload.caller === "import" ? "import" : "gridSave",
-        [statementInfo("write", "CHANGES", [table], `${changes.length} change(s) to ${table}, each matched by its key`)],
-        confirmation,
-      );
-      return legacy.applyChanges(connection(connectionId).engine, str("database"), table, changes);
-    }
-    case "table_relations":
-      return legacy.tableRelations(connection(str("connectionId")).engine, str("database"), str("table"));
-    case "run_sql":
-      return runSqlLegacy(str("sessionId"), str("sql"), (payload.database as string | null) ?? null, confirmation);
+    // Vector tooling
     case "vector_info":
     case "fetch_vector":
     case "vector_search":
     case "vector_health":
     case "index_recall": {
       const request = payload.request as { connectionId?: string } | undefined;
-      return legacyVector(str("connectionId") || request?.connectionId || "", command, payload);
+      return vectorCommand(str("connectionId") || request?.connectionId || "", command, payload);
     }
     case "test_embedding":
       return VECTOR_DIMS;

@@ -1,5 +1,5 @@
 //! The connection manager: one map of open connections and one map of query sessions, every engine call run through
-//! crash containment. Replaces `drivers::DbManager`.
+//! crash containment.
 
 use std::{
     collections::HashMap,
@@ -24,7 +24,6 @@ use crate::{
         Canceller, ConnectInfo, ConnectRequest, ConnectSecrets, Connection, ConnectionSpec, Engine, Flow, ResultSink, RunOptions,
         RunRequest, RunSummary, Session, SessionInfo, SessionOptions, StreamEvent,
     },
-    drivers::Driver,
     error::{AppError, AppResult, NOT_CONNECTED},
     gateway::Gateway,
     lock::lock,
@@ -39,8 +38,6 @@ struct ConnEntry {
     conn: Arc<dyn Connection>,
     poisoned: Arc<AtomicBool>,
     info: ConnectInfo,
-    /// The pre-contract driver behind a legacy connection; the old commands use it until they are removed.
-    legacy: Option<Arc<dyn Driver>>,
     _tunnel: Option<net::TunnelGuard>,
 }
 
@@ -187,33 +184,15 @@ async fn open(spec: ConnectionSpec, secrets: ConnectSecrets) -> AppResult<(&'sta
     };
     let label = engine.descriptor().label.clone();
     let id = engine.id().to_owned();
-    let (legacy, wrapped) = (super::legacy::handles(&id), super::legacy::wrapped(&id));
-    let (conn, driver) = contained(&label, "connected", async move {
-        if wrapped {
-            let (conn, driver) = super::legacy::connect(&request).await?;
-            return Ok((conn, Some(driver)));
-        }
-        let conn = engine.connect(request.clone()).await?;
-        if !legacy {
-            return Ok((conn, None));
-        }
-        match super::legacy::open_driver(&request).await {
-            Ok(driver) => Ok((conn, Some(driver))),
-            Err(error) => {
-                conn.close().await;
-                Err(error)
-            }
-        }
-    })
-    .await
-    .map_err(|error| error.with_engine(&id))?;
+    let conn = contained(&label, "connected", engine.connect(request))
+        .await
+        .map_err(|error| error.with_engine(&id))?;
     let info = connect_info(engine, conn.as_ref());
     Ok((
         engine,
         Opened {
             conn,
             info,
-            legacy: driver,
             tunnel: prepared.tunnel,
         },
     ))
@@ -222,7 +201,6 @@ async fn open(spec: ConnectionSpec, secrets: ConnectSecrets) -> AppResult<(&'sta
 struct Opened {
     conn: Arc<dyn Connection>,
     info: ConnectInfo,
-    legacy: Option<Arc<dyn Driver>>,
     tunnel: Option<net::TunnelGuard>,
 }
 
@@ -252,7 +230,6 @@ impl ConnectionManager {
             conn: opened.conn,
             poisoned: Arc::default(),
             info: opened.info,
-            legacy: opened.legacy,
             _tunnel: opened.tunnel,
         };
         let previous = lock(&self.connections).insert(id.to_owned(), entry);
@@ -266,22 +243,14 @@ impl ConnectionManager {
     pub async fn probe(spec: ConnectionSpec, secrets: ConnectSecrets) -> AppResult<ConnectInfo> {
         let (_, opened) = open(spec, secrets).await?;
         opened.conn.close().await;
-        if let Some(driver) = opened.legacy {
-            driver.close().await;
-        }
         Ok(opened.info)
     }
 
     async fn close_entry(&self, entry: ConnEntry) {
         let conn = entry.conn;
-        // A wrapped legacy driver is closed by its connection; one next to a native connection is closed here.
-        let legacy = entry.legacy.filter(|_| !super::legacy::wrapped(entry.engine.id()));
         let label = entry.engine.descriptor().label.clone();
         let _ = contained(&label, "disconnected", async move {
             conn.close().await;
-            if let Some(driver) = legacy {
-                driver.close().await;
-            }
             Ok(())
         })
         .await;
@@ -408,45 +377,9 @@ impl ConnectionManager {
             .collect()
     }
 
-    // --- The pre-contract path, for the old commands until they are removed -------------------------------------------
-
-    /// The legacy driver of a connection (the assistant tools use it until they move to the contract).
-    pub fn legacy_driver(&self, connection_id: &str) -> AppResult<Arc<dyn Driver>> {
-        self.handle(connection_id)?;
-        lock(&self.connections)
-            .get(connection_id)
-            .and_then(|entry| entry.legacy.clone())
-            .ok_or_else(|| AppError::new("This connection does not support this operation in this build."))
-    }
-
-    /// The legacy driver's engine kind (classification of the old commands).
-    pub fn legacy_engine(&self, connection_id: &str) -> AppResult<crate::drivers::Engine> {
-        Ok(self.legacy_driver(connection_id)?.engine())
-    }
-
-    /// Runs one call on the legacy driver, contained like [`Handle::call`].
-    pub async fn call_legacy<T, F, Fut>(&self, connection_id: &str, what: &'static str, call: F) -> AppResult<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(Arc<dyn Driver>) -> Fut,
-        Fut: Future<Output = AppResult<T>> + Send + 'static,
-    {
-        let handle = self.handle(connection_id)?;
-        let driver = self.legacy_driver(connection_id)?;
-        handle.call(what, move |_| call(driver)).await
-    }
-
-    /// Registers a legacy driver directly (tests use fakes that record what they were asked to do).
-    #[cfg(test)]
-    pub fn insert_legacy(&self, id: &str, driver: Arc<dyn Driver>) {
-        let engine = super::legacy::engine_for(driver.engine());
-        let conn = super::legacy::wrap(Arc::clone(&driver), "test");
-        self.insert(id, engine, conn, Some(driver));
-    }
-
     /// Registers a connection directly (tests use fakes).
     #[cfg(test)]
-    pub fn insert(&self, id: &str, engine: &'static dyn Engine, conn: Arc<dyn Connection>, legacy: Option<Arc<dyn Driver>>) {
+    pub fn insert(&self, id: &str, engine: &'static dyn Engine, conn: Arc<dyn Connection>) {
         let info = connect_info(engine, conn.as_ref());
         lock(&self.connections).insert(
             id.to_owned(),
@@ -455,7 +388,6 @@ impl ConnectionManager {
                 conn,
                 poisoned: Arc::default(),
                 info,
-                legacy,
                 _tunnel: None,
             },
         );
@@ -487,8 +419,8 @@ mod tests {
         let manager = ConnectionManager::default();
         let bad = FakeEngine::leak();
         let good = FakeEngine::leak();
-        manager.insert("bad", bad, bad.connection(), None);
-        manager.insert("good", good, good.connection(), None);
+        manager.insert("bad", bad, bad.connection());
+        manager.insert("good", good, good.connection());
         bad.panics.browse.store(true, Ordering::Relaxed);
         let error = read(&manager, "bad").await.expect_err("panicked");
         assert!(is_crash(&error), "{error}");
@@ -506,7 +438,7 @@ mod tests {
     async fn sessions_run_through_the_manager_and_close_with_their_connection() {
         let manager = ConnectionManager::default();
         let engine = FakeEngine::leak();
-        manager.insert("c", engine, engine.connection(), None);
+        manager.insert("c", engine, engine.connection());
         let info = manager.open_session("c", "tab".into(), SessionOptions::default()).await.unwrap();
         assert_eq!(info.language, "sql");
         assert!(!info.cancellable);

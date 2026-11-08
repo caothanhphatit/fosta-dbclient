@@ -591,3 +591,22 @@ async fn contract_mongo_failed_apply_is_compensated() {
     never.filter = key_filter(3001);
     assert!(browse(&handle, never).await.rows.is_empty());
 }
+
+/// The diagram's data for `events` (ported from live_tests.rs): collections with their sampled fields, `_id` as the key,
+/// and no relations (MongoDB has no foreign keys).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mongo.yml"]
+async fn contract_mongo_schema_graph() {
+    let (manager, handle) = connect_as("graph", spec(), secrets()).await;
+    assert!(handle.conn.capabilities().contains(Capability::SchemaGraph));
+    let graph = handle
+        .call("read the schema", |conn| async move {
+            conn.schema_graph().unwrap().schema_graph("events", &CallContext::default()).await
+        })
+        .await
+        .unwrap();
+    assert!(!graph.tables.is_empty());
+    assert!(graph.relations.is_empty(), "{:?}", graph.relations);
+    assert!(graph.tables.iter().flat_map(|t| &t.columns).any(|c| c.primary && c.name == "_id"));
+    manager.disconnect("graph").await;
+}

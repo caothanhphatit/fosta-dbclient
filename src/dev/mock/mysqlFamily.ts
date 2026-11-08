@@ -2,12 +2,17 @@
  * The MariaDB and MySQL mocks: the shop and analytics databases, backtick quoting, MySQL error numbers, and the vector
  * operations MariaDB offers through `invoke_capability`.
  */
-import type { ConnectInfo, EngineDescriptor } from "../../core/contract";
+import type { ColumnInfo, ConnectInfo, EngineDescriptor } from "../../core/contract";
 import { builtin, MockCatalog, queryAction, viewAction, type CatalogStyle } from "./catalog";
 import { mockError } from "./errors";
 import { analyticsDatabase, mysqlSystemDatabases, shopDatabase, VECTOR_DIMS } from "./shop";
 import { classifySql, runSql, type SqlDialectMock } from "./sqlRun";
 import type { EngineMock } from "./types";
+
+/** A result-set column as the engine reports it (only the name and type are known). */
+function resultColumn(name: string, typeName: string, kind: "float" | "text"): ColumnInfo {
+  return { name, typeName, kind: { kind }, nullable: true, default: null, comment: null, identity: null, generated: null, hints: {} };
+}
 
 export function mysqlFamily(descriptor: EngineDescriptor, order: number, flavor: "MariaDB" | "MySQL", version: string, label: string): EngineMock {
   const engine = descriptor.id;
@@ -68,11 +73,33 @@ export function mysqlFamily(descriptor: EngineDescriptor, order: number, flavor:
         exactTotal: false,
         columns: null,
       });
+      // Like the engine: vector columns are left out of the select list, the distance comes first.
+      const kept = page.columns.flatMap((column, index) => (column.hints.vectorDims == null ? [index] : []));
+      const target = "`shop`.`products`";
+      const selectList = kept.map((index) => `\`${page.columns[index]?.name}\``).join(", ");
+      const statement = (vector: string) =>
+        `SELECT VEC_DISTANCE_COSINE(\`embedding\`, ${vector}) AS \`vec_distance\`, ${selectList} FROM ${target} ` +
+        `ORDER BY VEC_DISTANCE_COSINE(\`embedding\`, ${vector}) LIMIT ${k}`;
       return {
-        columns: page.columns,
-        rows: page.rows.map((row, index) => [...row, { t: "float", v: 0.05 + index * 0.031 }]),
+        result: {
+          columns: [resultColumn("vec_distance", "double", "float"), ...kept.map((index) => page.columns[index]!)],
+          rows: page.rows.map((row, position) => [{ t: "float", v: 0.05 + position * 0.031 }, ...kept.map((index) => row[index] ?? { t: "null", v: null })]),
+        },
+        plan: {
+          columns: [resultColumn("type", "varchar", "text"), resultColumn("key", "varchar", "text")],
+          rows: [
+            [
+              { t: "text", v: "range" },
+              { t: "text", v: "idx_embedding" },
+            ],
+          ],
+        },
         indexUsed: "idx_embedding",
+        sql: statement("VEC_FromText(?)"),
+        runnableSql: statement("VEC_FromText('[0.12,-0.4,0.33,0.9]')"),
         elapsedMs: 4,
+        queryDims: VECTOR_DIMS,
+        primaryKey: page.keyColumns,
       };
     },
     "vector.health": () => [

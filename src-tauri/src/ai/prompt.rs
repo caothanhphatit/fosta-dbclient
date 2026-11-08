@@ -1,7 +1,7 @@
 //! The system prompt: fixed rules plus what the UI shares about where the user is.
 
-use super::ChatContext;
-use crate::runtime::ConnectionManager;
+use super::{catalog, ChatContext};
+use crate::{contract::CallContext, runtime::ConnectionManager};
 
 const MAX_TABLES_IN_PROMPT: usize = 400;
 const MAX_EDITOR_CHARS: usize = 6000;
@@ -58,25 +58,32 @@ Context:\n",
 }
 
 async fn table_listing(db: &ConnectionManager, context: &ChatContext, database: &str) -> Option<String> {
-    let driver = db.legacy_driver(context.connection_id.as_ref()?).ok()?;
-    let tables = driver.list_tables(database).await.ok()?;
-    if tables.is_empty() {
-        return Some(format!("- {database} has no tables yet.\n"));
+    let handle = db.handle(context.connection_id.as_ref()?).ok()?;
+    let objects = catalog::objects(&handle, &CallContext::default(), database).await.ok()?;
+    if objects.is_empty() {
+        return Some(format!(
+            "- {database} has no tables yet.
+"
+        ));
     }
-    let shown: Vec<String> = tables
+    let shown: Vec<String> = objects
         .iter()
         .take(MAX_TABLES_IN_PROMPT)
-        .map(|table| match table.rows {
-            Some(rows) => format!("{} ({}, ~{rows} rows)", table.name, table.kind),
-            None => format!("{} ({})", table.name, table.kind),
+        .map(|object| match &object.detail {
+            Some(detail) => format!("{} ({}, {detail})", object.label, object.kind),
+            None => format!("{} ({})", object.label, object.kind),
         })
         .collect();
-    let more = if tables.len() > shown.len() {
-        format!(" … and {} more", tables.len() - shown.len())
+    let more = if objects.len() > shown.len() {
+        format!(" … and {} more", objects.len() - shown.len())
     } else {
         String::new()
     };
-    Some(format!("- Tables in {database}: {}{more}\n", shown.join(", ")))
+    Some(format!(
+        "- Tables in {database}: {}{more}
+",
+        shown.join(", ")
+    ))
 }
 
 pub(super) fn truncate(text: &str, limit: usize) -> String {

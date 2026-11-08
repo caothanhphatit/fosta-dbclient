@@ -472,7 +472,40 @@ async fn contract_mssql_statement_timeout() {
     tab.close().await;
 }
 
-/// The diagram's data: the expected foreign keys, the same tables and keys as the pre-contract driver's bulk path.
+/// The diagram's keys agree with `describe` (an independent catalog path): each table's primary key and each foreign key.
+async fn assert_graph_matches_descriptions(handle: &Handle, graph: &crate::contract::SchemaGraph, object: impl Fn(&str) -> ObjectRef) {
+    for table in graph.tables.iter().filter(|table| table.kind == "table") {
+        let target = object(&table.name);
+        let described = handle
+            .call(
+                "described",
+                |conn| async move { conn.describe(&target, &CallContext::default()).await },
+            )
+            .await
+            .unwrap();
+        let mut graph_keys: Vec<&str> = table.columns.iter().filter(|c| c.primary).map(|c| c.name.as_str()).collect();
+        let mut described_keys: Vec<&str> = described
+            .primary_key
+            .iter()
+            .flat_map(|key| key.columns.iter().map(String::as_str))
+            .collect();
+        graph_keys.sort_unstable();
+        described_keys.sort_unstable();
+        assert_eq!(graph_keys, described_keys, "{}", table.name);
+        for relation in graph.relations.iter().filter(|relation| relation.table == table.name) {
+            let referenced = relation.referenced_table.rsplit('.').next().unwrap_or_default();
+            assert!(
+                described.foreign_keys.iter().any(|key| key.columns == relation.columns
+                    && key.ref_table == referenced
+                    && key.ref_columns == relation.referenced_columns),
+                "{relation:?} not in {:?}",
+                described.foreign_keys
+            );
+        }
+    }
+}
+
+/// The diagram's data: the expected foreign keys, and keys that agree with `describe`.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs dev/compose/mssql.yml"]
 async fn contract_mssql_schema_graph() {
@@ -485,37 +518,11 @@ async fn contract_mssql_schema_graph() {
         .unwrap();
     assert_eq!(graph.relations.len(), 3, "{:?}", graph.relations);
     assert!(graph.tables.iter().flat_map(|t| &t.columns).any(|c| c.primary));
-    let legacy = manager.legacy_driver("erp").unwrap();
-    let old = crate::schema::schema_graph(legacy.as_ref(), "ERP").await.unwrap();
-    let names = |tables: &[crate::contract::SchemaTable]| tables.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
-    assert_eq!(names(&graph.tables), names(&old.tables));
-    let links = |graph: &crate::contract::SchemaGraph| {
-        let mut links: Vec<_> = graph
-            .relations
-            .iter()
-            .map(|r| {
-                (
-                    r.table.clone(),
-                    r.columns.clone(),
-                    r.referenced_table.clone(),
-                    r.referenced_columns.clone(),
-                )
-            })
-            .collect();
-        links.sort();
-        links
-    };
-    assert_eq!(links(&graph), links(&old));
-    for (new, legacy) in graph.tables.iter().zip(&old.tables) {
-        let keys = |table: &crate::contract::SchemaTable| {
-            table
-                .columns
-                .iter()
-                .map(|c| (c.name.clone(), c.primary, c.nullable))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(keys(new), keys(legacy), "{}", new.name);
-    }
+    assert_graph_matches_descriptions(&handle, &graph, |name| match name.split_once('.') {
+        Some((schema, name)) => table("ERP", schema, name),
+        None => table("ERP", "dbo", name),
+    })
+    .await;
     manager.disconnect("erp").await;
 }
 
@@ -681,4 +688,48 @@ async fn contract_mssql_original_values_without_rowversion() {
     .await
     .unwrap();
     tab.close().await;
+}
+
+/// A filter that tries to stack statements is refused by the gateway (ported from live_tests.rs); the probe row survives.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mssql.yml"]
+async fn contract_mssql_gateway_rejects_injected_filters() {
+    use crate::gateway::{self, rules::Preset, rules::SafetySettings, Context};
+    let (manager, handle) = erp().await;
+    let tab = session(&handle).await;
+    run(
+        &handle,
+        &tab,
+        "IF OBJECT_ID('dbo.gate_probe') IS NULL CREATE TABLE dbo.gate_probe (id INT PRIMARY KEY); \
+         DELETE FROM dbo.gate_probe; INSERT INTO dbo.gate_probe VALUES (1)",
+        "ERP",
+        RunOptions::default(),
+    )
+    .await
+    .expect("setup");
+    let context = Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: "erp".into(),
+        connection_name: "erp".into(),
+        safety: SafetySettings::preset(Preset::Open),
+    };
+    let request = |filter: &str| {
+        let mut request = BrowseRequest::new(table("ERP", "dbo", "gate_probe"), 10);
+        request.filter = raw(filter);
+        request
+    };
+    let error = gateway::browse(&manager, &context, "erp", &request("1=0; DELETE FROM gate_probe; SELECT 1 WHERE 1"))
+        .await
+        .expect_err("injected filter must fail");
+    assert_eq!(error.code(), Some(gateway::filter::INVALID_FILTER), "{error}");
+    let fine = gateway::browse(&manager, &context, "erp", &request("id = 1"))
+        .await
+        .expect("valid filter");
+    assert_eq!(fine.rows.len(), 1, "the probe row survived");
+    run(&handle, &tab, "DROP TABLE dbo.gate_probe", "ERP", RunOptions::default())
+        .await
+        .expect("drop");
+    tab.close().await;
+    manager.disconnect("erp").await;
 }

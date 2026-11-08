@@ -28,7 +28,6 @@ import type {
   AppConfig,
   Capabilities,
   Caller,
-  CellValue,
   ChatEvent,
   ChatRequest,
   Confirmation,
@@ -38,6 +37,7 @@ import type {
   HealthCheck,
   HistoryEntry,
   HistoryQuery,
+  KeyCell,
   RecallReport,
   SchemaGraph,
   TaskDef,
@@ -111,7 +111,6 @@ export const api = {
   completionSchema: (connectionId: string, database: string) => invoke<CompletionSchema>("completion_schema", { connectionId, database }),
   formatSql: (dialect: SqlDialectId | null, text: string) => invoke<string>("format_sql", { dialect, text }),
 
-  // --- Pre-contract commands (removed in step 16, once every view uses the ones above) ---
   schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),
   createDatabase: (connectionId: string, name: string, firstCollection: string | null, confirmation: Confirmation | null = null) =>
     invoke<void>("create_database", { connectionId, name, firstCollection, confirmation }),
@@ -126,8 +125,9 @@ export const api = {
   saveWorkspace: (workspace: WorkspaceMeta, relaxConfirmation: string | null = null) => invoke<AppConfig>("save_workspace", { workspace, relaxConfirmation }),
   setActiveWorkspace: (id: string) => invoke<AppConfig>("set_active_workspace", { id }),
   deleteWorkspace: (id: string) => invoke<AppConfig>("delete_workspace", { id }),
+  // Vector tooling: engine `vector.*` operations behind typed commands (typed key cells in, typed result sets out).
   vectorInfo: (connectionId: string, database: string, table: string) => invoke<VectorInfo>("vector_info", { connectionId, database, table }),
-  fetchVector: (connectionId: string, database: string, table: string, column: string, key: CellValue[]) =>
+  fetchVector: (connectionId: string, database: string, table: string, column: string, key: KeyCell[]) =>
     invoke<number[]>("fetch_vector", { connectionId, database, table, column, key }),
   vectorSearch: (request: VectorSearchRequest) => invoke<VectorSearchResult>("vector_search", { request }),
   vectorHealth: (connectionId: string, database: string, table: string, column: string, sample: number) =>

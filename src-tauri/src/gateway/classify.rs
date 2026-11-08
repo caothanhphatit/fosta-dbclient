@@ -1,37 +1,9 @@
-//! Statement classification for the gateway. The SQL classifier lives in `engines::common::sqlclassify` and the
-//! MongoDB command classifier in `engines::mongo::classify` (engines classify their own statements with them); both
-//! are re-exported here. The old `apply_changes` command's row changes are writes to one table.
-
-use crate::drivers::types::RowChange;
+//! Statement classification for the gateway. Engines classify their own statements (`Engine::classify`); the shared SQL
+//! classifier and parser (`engines::common::sqlclassify`, used by every SQL engine and by the grid filter check) are
+//! re-exported here.
 
 pub use crate::contract::classify::{Category, Classification, StatementInfo};
 pub use crate::engines::common::sqlclassify::{classify_sql, dialect_for, excerpt, normalise_executable_comments, parse};
-pub use crate::engines::mongo::classify::classify_mongo;
-
-/// Grid saves and imports (the old `apply_changes` command): the app builds `INSERT` / `UPDATE … WHERE key LIMIT 1` /
-/// `DELETE … WHERE key LIMIT 1` from these, so they are writes to one table.
-pub fn classify_changes(table: &str, changes: &[RowChange]) -> Classification {
-    let count = |wanted: fn(&RowChange) -> bool| changes.iter().filter(|change| wanted(change)).count();
-    let parts = [
-        ("INSERT", count(|change| matches!(change, RowChange::Insert { .. }))),
-        ("UPDATE", count(|change| matches!(change, RowChange::Update { .. }))),
-        ("DELETE", count(|change| matches!(change, RowChange::Delete { .. }))),
-    ];
-    Classification {
-        statements: parts
-            .iter()
-            .filter(|(_, count)| *count > 0)
-            .map(|(kind, count)| StatementInfo {
-                category: Category::Write,
-                kind: (*kind).to_owned(),
-                tables: vec![table.to_owned()],
-                excerpt: format!("{kind} {count} row(s) of {table}, each matched by its key"),
-                reason: None,
-                refused: None,
-            })
-            .collect(),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -178,23 +150,5 @@ mod tests {
         assert_eq!(unknown.category, Category::Unknown);
         assert!(unknown.reason.unwrap().contains("treated like a write"));
         assert!(classify_sql(SqlDialectId::MariaDb, "  ").statements.is_empty());
-    }
-
-    #[test]
-    fn grid_changes_are_writes_to_one_table() {
-        use crate::drivers::types::CellValue;
-        let cell = |value: &str| CellValue {
-            column: "id".into(),
-            value: Some(value.into()),
-        };
-        let changes = vec![
-            RowChange::Insert { values: vec![cell("1")] },
-            RowChange::Delete { key: vec![cell("2")] },
-            RowChange::Delete { key: vec![cell("3")] },
-        ];
-        let classification = classify_changes("orders", &changes);
-        assert_eq!(classification.categories(), [Category::Write]);
-        assert_eq!(classification.statements.len(), 2);
-        assert_eq!(classification.tables(), ["orders"]);
     }
 }

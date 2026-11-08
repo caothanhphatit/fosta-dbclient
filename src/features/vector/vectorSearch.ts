@@ -4,13 +4,14 @@ import { toast } from "../../core/dialogs";
 import { clamp, copyText, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
 import { capabilityOf } from "../../core/engines";
 import { DataGrid, gridSetup } from "../grid/grid";
-import { keyCells, textResultData } from "./vectorRows";
+import { keyCells } from "./vectorRows";
 import type { Navigator } from "../../core/navigator";
 import { RecordPanel } from "../table/recordPanel";
 import { makeSplitter } from "../../core/splitter";
 import { describeKey } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
-import type { CellValue, Metric, QueryVector, TableTarget, VectorInfo, VectorSearchResult } from "../../core/types";
+import { displayValue } from "../../core/values";
+import type { KeyCell, Metric, QueryVector, TableTarget, VectorInfo, VectorSearchResult } from "../../core/types";
 
 type SourceKind = QueryVector["kind"];
 
@@ -44,11 +45,11 @@ export class VectorSearchView implements TabContent {
   private readonly record: RecordPanel;
   private readonly searchButton: HTMLButtonElement;
   private source: SourceKind;
-  private seed: CellValue[] | null;
+  private seed: KeyCell[] | null;
   private last: VectorSearchResult | null = null;
   private info: VectorInfo | null = null;
 
-  constructor(target: TableTarget, column: string, navigator: Navigator, seed: CellValue[] | null) {
+  constructor(target: TableTarget, column: string, navigator: Navigator, seed: KeyCell[] | null) {
     this.target = target;
     this.navigator = navigator;
     this.seed = seed;
@@ -109,7 +110,7 @@ export class VectorSearchView implements TabContent {
     void this.loadColumns(column);
   }
 
-  setSeed(column: string, seed: CellValue[]): void {
+  setSeed(column: string, seed: KeyCell[]): void {
     this.seed = seed;
     this.source = "row";
     this.columnSelect.value = column;
@@ -162,7 +163,12 @@ export class VectorSearchView implements TabContent {
     const current = SOURCES.find((source) => source.kind === this.source);
     this.queryText.hidden = this.source === "row";
     this.queryText.placeholder = this.source === "text" ? "What are employees entitled to for annual leave?" : "[0.0123, -0.0456, …]";
-    const seedText = this.seed ? `Query vector from row: ${describeKey(this.seed, "mysql")}` : "No row selected yet.";
+    const seedText = this.seed
+      ? `Query vector from row: ${describeKey(
+          this.seed.map((cell) => ({ column: cell.column, value: displayValue(cell.value) })),
+          "mysql",
+        )}`
+      : "No row selected yet.";
     this.sourceHint.replaceChildren(this.source === "row" ? seedText : (current?.hint ?? ""));
     if (this.source === "text")
       this.sourceHint.append(
@@ -208,7 +214,7 @@ export class VectorSearchView implements TabContent {
 
   private showResult(result: VectorSearchResult): void {
     this.last = result;
-    const { columns, rows } = textResultData(result.result.columns, result.result.rows);
+    const { columns, rows } = result.result;
     const { connectionId, database, table } = this.target;
     this.grid.load({
       ...gridSetup(columns, rows),
@@ -239,8 +245,7 @@ export class VectorSearchView implements TabContent {
     this.planGrid?.dispose();
     const plan = new DataGrid();
     this.planGrid = plan;
-    const planData = textResultData(result.plan.columns, result.plan.rows);
-    plan.load(gridSetup(planData.columns, planData.rows));
+    plan.load(gridSetup(result.plan.columns, result.plan.rows));
     this.planHost.replaceChildren(h("div", { class: "section-title" }, "EXPLAIN"), plan.element);
   }
 

@@ -8,7 +8,6 @@
 pub mod ai;
 pub mod capability;
 pub mod connections;
-pub mod data;
 pub mod diagnostics;
 pub mod engines;
 pub mod files;
@@ -26,9 +25,15 @@ use serde_json::Value;
 use crate::{
     config::AppConfig,
     error::{AppError, AppResult},
+    gateway::Context,
     tasks::TaskStatus,
     AppState, Capabilities,
 };
+
+/// The gateway context (workspace, connection, rules) of a saved connection.
+pub(crate) fn gateway_context(state: &AppState, connection_id: &str) -> AppResult<Context> {
+    state.config.read(|config| Context::for_connection(config, connection_id))
+}
 
 pub fn get_config(state: &AppState) -> AppConfig {
     state.config.snapshot()
@@ -98,25 +103,6 @@ macro_rules! for_each_command {
             [sync] format_sql(dialect: Option<$crate::contract::SqlDialectId>, text: String)
                 -> $crate::error::AppResult<String> = $crate::commands::lang::format_sql;
 
-            // Pre-contract commands, kept until the UI has moved to the ones above.
-            [async] list_databases(connection_id: String) -> $crate::error::AppResult<Vec<String>> = $crate::commands::data::list_databases;
-            [async] list_tables(connection_id: String, database: String)
-                -> $crate::error::AppResult<Vec<$crate::drivers::types::TableInfo>> = $crate::commands::data::list_tables;
-            [async] describe_table(connection_id: String, database: String, table: String)
-                -> $crate::error::AppResult<$crate::drivers::types::TableDesign> = $crate::commands::data::describe_table;
-            [async] browse_table(request: $crate::drivers::types::BrowseRequest)
-                -> $crate::error::AppResult<$crate::drivers::types::TablePage> = $crate::commands::data::browse_table;
-            [async] apply_changes(connection_id: String, database: String, table: String, changes: Vec<$crate::drivers::types::RowChange>,
-                caller: Option<$crate::gateway::Caller>, import_id: Option<String>, confirmation: Option<$crate::gateway::Confirmation>)
-                -> $crate::error::AppResult<u64> = $crate::commands::data::apply_changes;
-            [async] table_relations(connection_id: String, database: String, table: String)
-                -> $crate::error::AppResult<$crate::drivers::relations::TableRelations> = $crate::commands::data::table_relations;
-            [async] run_sql(session_id: String, database: Option<String>, sql: String, confirmation: Option<$crate::gateway::Confirmation>)
-                -> $crate::error::AppResult<$crate::drivers::types::QueryOutcome> = $crate::commands::data::run_sql;
-            [async] cancel_sql(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::data::cancel_sql;
-            [async] sql_transaction(session_id: String, op: $crate::drivers::types::TransactionOp)
-                -> $crate::error::AppResult<$crate::drivers::types::TransactionState> = $crate::commands::data::sql_transaction;
-
             [sync] task_statuses() -> Vec<$crate::tasks::TaskStatus> = $crate::commands::tasks::task_statuses;
             [sync] task_logs(id: String) -> Vec<String> = $crate::commands::tasks::task_logs;
             [sync] start_task(id: String) -> $crate::error::AppResult<()> = $crate::commands::tasks::start_task;
@@ -133,7 +119,7 @@ macro_rules! for_each_command {
 
             [async] vector_info(connection_id: String, database: String, table: String)
                 -> $crate::error::AppResult<serde_json::Value> = $crate::commands::vector::vector_info;
-            [async] fetch_vector(connection_id: String, database: String, table: String, column: String, key: Vec<$crate::engines::mysql::vector::KeyCell>)
+            [async] fetch_vector(connection_id: String, database: String, table: String, column: String, key: Vec<$crate::commands::vector::KeyCell>)
                 -> $crate::error::AppResult<Vec<f32>> = $crate::commands::vector::fetch_vector;
             [async] vector_search(request: $crate::commands::vector::VectorSearchRequest)
                 -> $crate::error::AppResult<serde_json::Value> = $crate::commands::vector::vector_search;
