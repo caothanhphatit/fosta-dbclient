@@ -32,6 +32,7 @@ import { connectionDialog } from "./features/connections/connectionDialog";
 import { ConnectionTree } from "./features/connections/tree";
 import { TasksPanel } from "./features/tasks/tasksPanel";
 import { embeddingDialog } from "./features/vector/embeddingDialog";
+import { setConfirmationConfigSink } from "./features/safety/confirmationDialog";
 import { connectionSafety, relaxedFromBaseline, safetyLabel, safetyOf, writesBlocked } from "./features/safety/safety";
 import { workspaceDialog } from "./features/workspaces/workspaceDialog";
 import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./features/workspaces/workspaceRail";
@@ -360,6 +361,7 @@ async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
+  setConfirmationConfigSink(applyConfig);
   if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
     // Browser-only preview (`npm run dev`): a mock backend with sample data.
     const { installDevMock } = await import("./dev/mock");

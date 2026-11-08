@@ -4,7 +4,10 @@ use crate::{
     audit::{AuditEntry, Outcome},
     config::{AppConfig, WorkspaceMeta},
     error::{AppError, AppResult},
-    gateway::rules::{relaxations, SafetySettings, PRODUCTION_ICON},
+    gateway::{
+        classify::Category,
+        rules::{relaxations, SafetySettings, PRODUCTION_ICON},
+    },
     secrets, AppState,
 };
 
@@ -50,6 +53,53 @@ pub fn save_workspace(state: &AppState, workspace: WorkspaceMeta, relax_confirma
             detail: changes.join("; "),
             ..AuditEntry::default()
         });
+    }
+    Ok(config)
+}
+
+/// The confirmation dialog's "Don't ask again": stops asking for plain confirmations of
+/// `categories` on this connection's rules (its own override, else its workspace's). Typed
+/// confirmations keep asking, and a Production workspace always asks. Recorded in the audit log.
+pub fn skip_confirmations(state: &AppState, connection_id: String, categories: Vec<Category>) -> AppResult<AppConfig> {
+    let mut relaxed = None;
+    let config = state.config.update(|config| {
+        let workspace = config
+            .workspaces
+            .iter_mut()
+            .find(|workspace| workspace.connections.iter().any(|profile| profile.id == connection_id))
+            .ok_or_else(|| AppError::new(format!("Connection '{connection_id}' no longer exists")))?;
+        if workspace.icon == PRODUCTION_ICON {
+            return Err(AppError::new(
+                "A Production workspace always asks. Change its rules in the workspace settings instead.",
+            ));
+        }
+        let Some(index) = workspace.connections.iter().position(|profile| profile.id == connection_id) else {
+            return Ok(());
+        };
+        let own = workspace.connections[index].safety.clone();
+        let before = own.clone().unwrap_or_else(|| workspace.safety());
+        let Some(after) = before.without_confirmation(&categories) else {
+            return Ok(());
+        };
+        relaxed = Some(AuditEntry {
+            caller: "settings".to_owned(),
+            workspace_id: workspace.id.clone(),
+            workspace: workspace.name.clone(),
+            category: "rules".to_owned(),
+            statement: format!("{:?} → {:?} (don't ask again)", before.preset, after.preset),
+            outcome: Some(Outcome::Relaxed),
+            detail: relaxations(&before.effective(), &after.effective()).join("; "),
+            ..AuditEntry::default()
+        });
+        if own.is_some() {
+            workspace.connections[index].safety = Some(after);
+        } else {
+            workspace.safety = Some(after);
+        }
+        Ok(())
+    })?;
+    if let Some(entry) = relaxed {
+        state.engines.gateway.audit(entry);
     }
     Ok(config)
 }

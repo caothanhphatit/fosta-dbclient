@@ -66,7 +66,7 @@ export function openConflictDialog(options: ConflictDialogOptions): void {
     h(
       "p",
       { class: "conflict-note" },
-      `Nothing was saved. Per row: Overwrite saves your version of that row now; Take theirs drops your edit and shows the row as it is now. ${others}`,
+      `Per row: Overwrite saves your version of that row now; Take theirs drops your edit and shows the row as it is now. ${others}`,
     ),
     ...sections,
   );

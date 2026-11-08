@@ -28,7 +28,7 @@ export const ACTIONS: SafetyAction[] = ["allow", "confirm", "typed", "block"];
 export const PRESET_LABELS: Record<SafetyPreset, string> = { open: "Open", guarded: "Guarded", readOnly: "Read-only", custom: "Custom" };
 
 export const PRESET_DESCRIPTIONS: Record<SafetyPreset, string> = {
-  open: "Everything runs without asking.",
+  open: "Everything runs; DROP, TRUNCATE and UPDATE/DELETE without WHERE ask once first (the dialog can stop asking).",
   guarded: "Writes and DDL need a confirmation; destructive and administrative statements need the table or workspace name typed. 60 s statement timeout.",
   readOnly: "Only reads run. Sessions are read-only where the engine supports it. 60 s statement timeout.",
   custom: "Choose per category, plus multi-statement runs, timeout and row limit.",
@@ -57,7 +57,7 @@ export const ACTION_LABELS: Record<SafetyAction, string> = { allow: "Allow", con
 const STRICTNESS: Record<SafetyAction, number> = { allow: 0, confirm: 1, typed: 2, block: 3 };
 
 const PRESET_RULES: Record<Exclude<SafetyPreset, "custom">, CategoryRules> = {
-  open: { read: "allow", write: "allow", ddl: "allow", destructive: "allow", admin: "allow" },
+  open: { read: "allow", write: "allow", ddl: "allow", destructive: "confirm", admin: "allow" },
   guarded: { read: "allow", write: "confirm", ddl: "confirm", destructive: "typed", admin: "typed" },
   readOnly: { read: "allow", write: "block", ddl: "block", destructive: "block", admin: "block" },
 };
@@ -101,6 +101,33 @@ export function newWorkspaceSafety(icon: string): SafetySettings {
 
 export function safetyOf(workspace: Pick<WorkspaceMeta, "icon" | "safety">): SafetySettings {
   return workspace.safety ?? defaultSafety(workspace.icon);
+}
+
+/**
+ * The confirmation dialog's "Don't ask again" (mirrors `SafetySettings::without_confirmation`): Custom rules with every
+ * category in `categories` that asks for a plain confirmation allowed. Null when nothing would change.
+ */
+export function withoutConfirmation(settings: SafetySettings, categories: readonly StatementCategory[]): SafetySettings | null {
+  const effective = effectiveRules(settings);
+  const rules = { ...effective.rules };
+  let changed = false;
+  for (const category of categories) {
+    if (category === "transaction") continue;
+    const key: keyof CategoryRules = category === "unknown" ? "write" : category;
+    if (rules[key] === "confirm") {
+      rules[key] = "allow";
+      changed = true;
+    }
+  }
+  if (!changed) return null;
+  return {
+    preset: "custom",
+    rules,
+    allowMultiStatement: effective.allowMultiStatement,
+    statementTimeoutSecs: effective.statementTimeoutSecs,
+    maxRows: effective.maxRows,
+    baseline: settings.baseline,
+  };
 }
 
 /** The rules a connection runs under: its own override, else its workspace's. Null when it is not in any workspace. */
@@ -210,6 +237,7 @@ export function gatewayProblem(error: unknown): GatewayProblem | null {
     caller: problem.caller ?? "queryTab",
     workspace: problem.workspace ?? "",
     connection: problem.connection ?? "",
+    connectionId: problem.connectionId ?? "",
     preset: problem.preset ?? "custom",
     level: problem.level ?? (code === "BLOCKED" ? "block" : "confirm"),
     token: problem.token ?? null,
@@ -225,10 +253,15 @@ export function typedMatches(problem: GatewayProblem, typed: string): boolean {
   return problem.expected === null || typed.trim() === problem.expected;
 }
 
+/** "Destructive" or "Write, DDL": what a confirmation is asked for; null when only reads are involved. */
+export function askedCategories(problem: GatewayProblem): string | null {
+  const labels = problem.categories.filter((category) => category !== "read" && category !== "transaction").map((category) => CATEGORY_LABELS[category]);
+  return labels.length > 0 ? labels.join(", ") : null;
+}
+
 /** Why the dialog asks, in one sentence. */
 export function confirmationReason(problem: GatewayProblem): string {
-  const categories = problem.categories.filter((category) => category !== "read" && category !== "transaction").map((category) => CATEGORY_LABELS[category]);
-  const what = categories.length > 0 ? categories.join(", ") : "These";
+  const what = askedCategories(problem) ?? "These";
   const rules = `${PRESET_LABELS[problem.preset]} rules of workspace ${problem.workspace}`;
   return problem.level === "typed"
     ? `${what} statements need a typed confirmation under the ${rules}.`

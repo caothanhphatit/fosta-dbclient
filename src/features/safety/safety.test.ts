@@ -15,6 +15,7 @@ import {
   transactionButtons,
   transactionLabel,
   typedMatches,
+  withoutConfirmation,
   writesBlocked,
 } from "./safety";
 import type { ConnectionProfile, SafetySettings, Workspace } from "../../core/types";
@@ -23,8 +24,21 @@ describe("presets", () => {
   it("map categories like the backend", () => {
     expect(effectiveRules(presetSettings("guarded")).rules).toEqual({ read: "allow", write: "confirm", ddl: "confirm", destructive: "typed", admin: "typed" });
     expect(effectiveRules(presetSettings("readOnly")).rules.write).toBe("block");
+    expect(effectiveRules(presetSettings("open")).rules).toEqual({ read: "allow", write: "allow", ddl: "allow", destructive: "confirm", admin: "allow" });
     expect(effectiveRules(presetSettings("open")).statementTimeoutSecs).toBe(0);
     expect(effectiveRules(presetSettings("guarded")).statementTimeoutSecs).toBe(60);
+  });
+
+  it("don't ask again allows only the plain confirmations asked for", () => {
+    const open = withoutConfirmation(presetSettings("open"), ["destructive"]);
+    expect(open?.preset).toBe("custom");
+    expect(open?.baseline).toBe("open");
+    expect(open?.rules.destructive).toBe("allow");
+    expect(withoutConfirmation(open!, ["destructive"])).toBeNull();
+    const guarded = withoutConfirmation(presetSettings("guarded"), ["unknown", "destructive", "transaction"]);
+    expect(guarded?.rules).toEqual({ read: "allow", write: "allow", ddl: "confirm", destructive: "typed", admin: "typed" });
+    expect(guarded?.statementTimeoutSecs).toBe(60);
+    expect(withoutConfirmation(presetSettings("readOnly"), ["write"])).toBeNull();
   });
 
   it("custom uses the stored matrix and clamps the row limit", () => {

@@ -121,6 +121,8 @@ macro_rules! for_each_command {
 
             [sync] save_workspace(workspace: $crate::config::WorkspaceMeta, relax_confirmation: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::save_workspace;
+            [sync] skip_confirmations(connection_id: String, categories: Vec<$crate::gateway::classify::Category>)
+                -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::skip_confirmations;
             [sync] set_active_workspace(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::set_active_workspace;
             [async] delete_workspace(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::delete_workspace;
 

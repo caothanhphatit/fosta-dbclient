@@ -132,6 +132,7 @@ struct Problem<'a> {
     caller: Caller,
     workspace: &'a str,
     connection: &'a str,
+    connection_id: &'a str,
     preset: rules::Preset,
     /// `confirm` or `typed` for confirmations, `block` when blocked.
     level: Action,
@@ -257,6 +258,7 @@ impl Gateway {
                 caller: request.caller,
                 workspace: &request.context.workspace_name,
                 connection: &request.context.connection_name,
+                connection_id: &request.context.connection_id,
                 preset: request.context.safety.preset,
                 level: Action::Block,
                 token: None,
@@ -349,6 +351,7 @@ impl Gateway {
                 caller: request.caller,
                 workspace: &request.context.workspace_name,
                 connection: &request.context.connection_name,
+                connection_id: &request.context.connection_id,
                 preset: request.context.safety.preset,
                 level,
                 token: Some(token),
@@ -761,11 +764,27 @@ mod tests {
     }
 
     #[test]
-    fn open_allows_everything_and_read_only_blocks_writes() {
+    fn open_asks_only_for_destructive_and_read_only_blocks_writes() {
         let (gateway, path) = gateway();
         let open = context(Preset::Open);
-        for sql in ["SELECT 1", "DELETE FROM t", "DROP TABLE t", "GRANT ALL ON *.* TO x"] {
+        for sql in [
+            "SELECT 1",
+            "DELETE FROM t WHERE id = 1",
+            "CREATE TABLE u (id int)",
+            "GRANT ALL ON *.* TO x",
+        ] {
             assert!(ask(&gateway, &open, sql, None).is_ok(), "{sql}");
+        }
+        for sql in ["DELETE FROM t", "DROP TABLE t"] {
+            let error = ask(&gateway, &open, sql, None).unwrap_err();
+            assert_eq!(error.code(), Some(CONFIRMATION_REQUIRED), "{sql}");
+            let payload = error.payload().unwrap();
+            assert_eq!(payload["level"], "confirm", "{sql}: a plain confirmation, no typing");
+            assert_eq!(
+                payload["connectionId"],
+                open.connection_id.as_str(),
+                "the dialog's don't-ask-again needs it"
+            );
         }
         let read_only = context(Preset::ReadOnly);
         assert!(ask(&gateway, &read_only, "SELECT * FROM t", None).is_ok());

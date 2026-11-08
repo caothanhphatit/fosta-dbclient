@@ -41,6 +41,7 @@ import type {
   KeyCell,
   RecallReport,
   SchemaGraph,
+  StatementCategory,
   TaskDef,
   TaskLogEvent,
   TaskStatus,
@@ -131,6 +132,8 @@ export const api = {
   deleteTask: (id: string) => invoke<AppConfig>("delete_task", { id }),
   /** Relaxing a Production workspace needs its name in `relaxConfirmation`. */
   saveWorkspace: (workspace: WorkspaceMeta, relaxConfirmation: string | null = null) => invoke<AppConfig>("save_workspace", { workspace, relaxConfirmation }),
+  /** The confirmation dialog's "Don't ask again": plain confirmations of these categories stop on this connection's rules. */
+  skipConfirmations: (connectionId: string, categories: StatementCategory[]) => invoke<AppConfig>("skip_confirmations", { connectionId, categories }),
   setActiveWorkspace: (id: string) => invoke<AppConfig>("set_active_workspace", { id }),
   deleteWorkspace: (id: string) => invoke<AppConfig>("delete_workspace", { id }),
   // Vector tooling: engine `vector.*` operations behind typed commands (typed key cells in, typed result sets out).

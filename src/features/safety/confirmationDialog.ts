@@ -4,12 +4,31 @@
  * token); the user sees this dialog, and the same call is made again with the token (and,
  * for a typed confirmation, the table or workspace name the user typed).
  */
-import { field, openModal, textInput } from "../../core/dialogs";
+import { api } from "../../core/api";
+import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs";
 import { h } from "../../core/dom";
-import type { Confirmation, GatewayProblem } from "../../core/types";
-import { CATEGORY_LABELS, confirmationReason, gatewayProblem, typedMatches } from "./safety";
+import { errorText } from "../../core/errors";
+import type { AppConfig, Confirmation, GatewayProblem } from "../../core/types";
+import { askedCategories, CATEGORY_LABELS, confirmationReason, gatewayProblem, typedMatches } from "./safety";
 
 const MAX_LISTED = 12;
+
+/** Where the dialog sends the config after "Don't ask again" changed the rules (set once by the app shell). */
+let applyConfig: (config: AppConfig) => void = () => undefined;
+
+export function setConfirmationConfigSink(sink: (config: AppConfig) => void): void {
+  applyConfig = sink;
+}
+
+/** Stops asking for these categories on the connection's rules; a failure is shown but does not stop the run. */
+async function skipFromNowOn(problem: GatewayProblem): Promise<void> {
+  try {
+    applyConfig(await api.skipConfirmations(problem.connectionId, problem.categories));
+    toast(`${askedCategories(problem) ?? "These"} statements no longer ask in ${problem.workspace}. Change it in the workspace settings.`, "info");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
 
 /** Shows what will run and why it needs a confirmation; resolves with the answer, or null when cancelled. */
 export function askConfirmation(problem: GatewayProblem): Promise<Confirmation | null> {
@@ -17,6 +36,8 @@ export function askConfirmation(problem: GatewayProblem): Promise<Confirmation |
     let answer: Confirmation | null = null;
     const typed = problem.level === "typed";
     const input = textInput("", { class: "input mono", placeholder: problem.expected ?? "", "aria-label": "Confirmation text" });
+    const skip =
+      !typed && problem.connectionId ? checkbox(`Don't ask again for ${askedCategories(problem) ?? "these"} statements in ${problem.workspace}`, false) : null;
     const listed = problem.statements.slice(0, MAX_LISTED);
     const more = problem.statements.length - listed.length;
     const body = h(
@@ -47,6 +68,7 @@ export function askConfirmation(problem: GatewayProblem): Promise<Confirmation |
         more > 0 ? h("li", { class: "statement-item muted" }, `…and ${more} more statement(s)`) : null,
       ),
       typed && problem.expected ? field(`Type ${problem.expected} to confirm`, input, "The confirmation is used once, for exactly these statements.") : null,
+      skip?.element ?? null,
     );
     openModal(
       typed ? "Type to confirm" : "Confirm statements",
@@ -57,9 +79,10 @@ export function askConfirmation(problem: GatewayProblem): Promise<Confirmation |
           label: typed ? "Run anyway" : "Run",
           primary: true,
           danger: typed,
-          run: () => {
+          run: async () => {
             if (!problem.token) return;
             if (typed && !typedMatches(problem, input.value)) throw new Error(`Type ${problem.expected ?? ""} exactly to confirm`);
+            if (skip?.input.checked) await skipFromNowOn(problem);
             answer = { token: problem.token, typed: typed ? input.value.trim() : null };
           },
         },

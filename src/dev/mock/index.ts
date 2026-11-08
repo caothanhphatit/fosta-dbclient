@@ -50,9 +50,10 @@ import type {
   Diagnostics,
   HistoryEntry,
   HistoryQuery,
+  StatementCategory,
   Workspace,
 } from "../../core/types";
-import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf } from "../../features/safety/safety";
+import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf, withoutConfirmation } from "../../features/safety/safety";
 import { chatRuns, deleteAiConnection, draftKey, fetchModels, probeChat, saveAiConnection, setAiActive, streamChat } from "./ai";
 import { checkTestPassword, deleteConnection, parseConnectionString, profiles, saveConnection } from "./connections";
 import { mockError, NOT_CONNECTED } from "./errors";
@@ -321,6 +322,16 @@ function rowCap(sender: { emit(event: StreamEvent): void; end(): void }, limit: 
   };
 }
 
+function skipConfirmations(connectionId: string, categories: StatementCategory[]) {
+  const workspace = state.config.workspaces.find((item) => item.connections.some((profile) => profile.id === connectionId));
+  if (!workspace) throw mockError("NOT_FOUND", `Connection '${connectionId}' no longer exists`);
+  if (workspace.icon === PRODUCTION_ICON) throw mockError("BLOCKED", "A Production workspace always asks. Change its rules in the workspace settings instead.");
+  const after = withoutConfirmation(safetyOf(workspace), categories);
+  if (after)
+    state.config = { ...state.config, workspaces: state.config.workspaces.map((item) => (item.id === workspace.id ? { ...item, safety: after } : item)) };
+  return state.config;
+}
+
 function saveWorkspace(meta: Workspace, relaxConfirmation: unknown) {
   const config = state.config;
   const existing = config.workspaces.find((item) => item.id === meta.id);
@@ -382,6 +393,8 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       return state.config;
     case "save_workspace":
       return saveWorkspace(payload.workspace as Workspace, payload.relaxConfirmation);
+    case "skip_confirmations":
+      return skipConfirmations(String(payload.connectionId), payload.categories as StatementCategory[]);
     case "delete_workspace":
       state.config = { ...state.config, workspaces: state.config.workspaces.filter((item) => item.id !== payload.id) };
       if (state.config.activeWorkspace === payload.id) state.config.activeWorkspace = state.config.workspaces[0].id;

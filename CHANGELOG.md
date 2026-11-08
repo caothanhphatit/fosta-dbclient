@@ -48,7 +48,8 @@ First public release for Windows, plus a web edition for Docker.
   error badge and version).
 - **Statement gateway with safety rules on every engine**: every statement the app runs is classified as read, write, DDL, destructive
   or administrative, then checked against the workspace's preset (Open, Guarded, Read-only or Custom). Risky statements ask for
-  confirmation, destructive ones ask you to type the object or workspace name, Production workspaces start read-only, and blocked,
+  confirmation (even Open asks once before DROP, TRUNCATE or UPDATE/DELETE without WHERE, with a "Don't ask again" box), Guarded
+  makes destructive ones ask you to type the object or workspace name, Production workspaces start read-only, and blocked,
   confirmed and relaxed operations go to a local audit log.
 - **AI agent** (`Ctrl+Shift+A`) with the provider of your choice (Fosta, OpenAI, Gemini, Claude or any OpenAI-compatible endpoint such
   as Ollama) and your own key. It looks up tables, columns and relations on every ready engine, writes and explains queries, fixes

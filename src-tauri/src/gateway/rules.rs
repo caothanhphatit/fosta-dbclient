@@ -16,7 +16,7 @@ const GUARDED_TIMEOUT_SECS: u32 = 60;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Preset {
-    /// Everything allowed (the behaviour before the gateway existed).
+    /// Everything runs; destructive statements ask once (the dialog can stop asking).
     #[default]
     Open,
     /// Writes and DDL need a confirmation; destructive and administrative statements a typed one.
@@ -53,7 +53,7 @@ impl CategoryRules {
         read: Action::Allow,
         write: Action::Allow,
         ddl: Action::Allow,
-        destructive: Action::Allow,
+        destructive: Action::Confirm,
         admin: Action::Allow,
     };
     const GUARDED: Self = Self {
@@ -178,6 +178,40 @@ impl SafetySettings {
         })
     }
 
+    /// The confirmation dialog's "Don't ask again": these rules as a Custom setting with every
+    /// category in `categories` that asks for a plain confirmation allowed. Typed confirmations
+    /// and blocks stay. None when nothing would change.
+    pub fn without_confirmation(&self, categories: &[Category]) -> Option<Self> {
+        let effective = self.effective();
+        let mut rules = effective.rules.clone();
+        let mut changed = false;
+        for category in categories {
+            let slot = match category {
+                Category::Transaction => continue,
+                Category::Read => &mut rules.read,
+                Category::Write | Category::Unknown => &mut rules.write,
+                Category::Ddl => &mut rules.ddl,
+                Category::Destructive => &mut rules.destructive,
+                Category::Admin => &mut rules.admin,
+            };
+            if *slot == Action::Confirm {
+                *slot = Action::Allow;
+                changed = true;
+            }
+        }
+        if !changed {
+            return None;
+        }
+        Some(Self {
+            preset: Preset::Custom,
+            rules,
+            allow_multi_statement: effective.allow_multi_statement,
+            statement_timeout_secs: effective.statement_timeout_secs,
+            max_rows: effective.max_rows,
+            baseline: self.baseline,
+        })
+    }
+
     pub fn effective(&self) -> Effective {
         let (rules, timeout) = match self.preset {
             Preset::Open => (CategoryRules::OPEN, 0),
@@ -292,7 +326,41 @@ mod tests {
         let open = SafetySettings::preset(Preset::Open).effective();
         assert!(!open.read_only());
         assert_eq!(open.statement_timeout_secs, 0);
-        assert!(Category::ALL.iter().all(|category| open.rules.action(*category) == Action::Allow));
+        assert_eq!(
+            open.rules.action(Category::Destructive),
+            Action::Confirm,
+            "Open asks once before DROP or DELETE without WHERE"
+        );
+        assert!(Category::ALL
+            .iter()
+            .filter(|category| **category != Category::Destructive)
+            .all(|category| open.rules.action(*category) == Action::Allow));
+    }
+
+    #[test]
+    fn dont_ask_again_allows_only_plain_confirmations() {
+        let open = SafetySettings::preset(Preset::Open);
+        let skipped = open.without_confirmation(&[Category::Destructive]).expect("destructive asked");
+        assert_eq!(skipped.preset, Preset::Custom);
+        assert_eq!(skipped.baseline, Some(Preset::Open), "the relaxed badge still compares with Open");
+        assert!(Category::ALL
+            .iter()
+            .all(|category| skipped.effective().rules.action(*category) == Action::Allow));
+        assert_eq!(skipped.without_confirmation(&[Category::Destructive]), None, "nothing left to skip");
+
+        let guarded = SafetySettings::preset(Preset::Guarded);
+        let skipped = guarded
+            .without_confirmation(&[Category::Write, Category::Destructive, Category::Transaction])
+            .expect("writes asked");
+        let rules = skipped.effective().rules;
+        assert_eq!(rules.write, Action::Allow);
+        assert_eq!(rules.ddl, Action::Confirm, "only the categories that asked");
+        assert_eq!(rules.destructive, Action::Typed, "typed confirmations keep asking");
+        assert_eq!(skipped.effective().statement_timeout_secs, 60, "the preset's timeout is kept");
+        assert_eq!(
+            SafetySettings::preset(Preset::ReadOnly).without_confirmation(&[Category::Write]),
+            None
+        );
     }
 
     #[test]

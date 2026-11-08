@@ -89,6 +89,7 @@ export interface GatewayProblem {
   caller: Caller;
   workspace: string;
   connection: string;
+  connectionId: string;
   preset: SafetyPreset;
   level: SafetyAction;
   token: string | null;

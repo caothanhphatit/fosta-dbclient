@@ -29,6 +29,7 @@ function problemOf(
     caller,
     workspace: workspace.name,
     connection: workspace.connections.find((profile) => profile.id === connectionId)?.name ?? connectionId,
+    connectionId,
     preset: settings.preset,
     level,
     token: level === "block" ? null : `mock-${Date.now().toString(16)}`,

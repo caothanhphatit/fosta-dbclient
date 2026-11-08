@@ -56,9 +56,11 @@ PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle. It 
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
 - **Vector tools** (MariaDB 11.7+ only): embedding search, column/index health checks, ANN recall versus exact search.
 - **Safety rules per workspace**: a statement gateway on every engine. Every statement the app runs (query tabs, grid filters and
-  edits, imports, console requests, new databases) is parsed and classified as read, write, DDL, destructive or administrative, then checked against the workspace's rules: _Open_, _Guarded_
-  (confirm writes and DDL, type the table or workspace name for destructive and administrative statements), _Read-only_ (reads only, with
-  read-only sessions on MariaDB/MySQL) or _Custom_. A workspace marked Production starts Read-only. Grid filters must be a single
+  edits, imports, console requests, new databases) is parsed and classified as read, write, DDL, destructive or administrative, then checked against the workspace's rules: _Open_ (everything runs;
+  DROP, TRUNCATE and UPDATE/DELETE without WHERE ask once first), _Guarded_ (confirm writes and DDL, type the table or workspace name for destructive and administrative statements), _Read-only_ (reads only, with
+  read-only sessions on MariaDB/MySQL) or _Custom_. A workspace marked Production starts Read-only. A plain confirmation has a
+  _Don't ask again_ box that stops asking for that kind of statement in the workspace (typed confirmations and Production
+  workspaces always ask). Grid filters must be a single
   condition. Relaxing rules shows what becomes possible; relaxed workspaces carry a warning badge, and blocked, confirmed and relaxed
   operations are recorded in `fosta-studio-audit.jsonl` on this machine. Statement timeouts apply on every engine that supports them.
   For production databases, also connect with a read-only login.
