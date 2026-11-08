@@ -49,6 +49,11 @@ export function shellMenus(host: MenuHost): ShellMenus {
   function settingsMenu(): MenuItem[] {
     return [
       { label: "LLM providers…", icon: "sparkle", run: () => void host.configureAssistant() },
+      {
+        label: "Allow the assistant to run read-only queries",
+        icon: host.config()?.assistantReadQueries !== false ? "check" : undefined,
+        run: () => void setAssistantReadQueries(host.config()?.assistantReadQueries === false),
+      },
       { label: "Embedding API…", icon: "vector", run: () => void host.configureEmbedding() },
       "separator",
       {
@@ -77,6 +82,24 @@ export function shellMenus(host: MenuHost): ShellMenus {
       await signOut();
     } catch (error) {
       showError(error, "Sign out");
+    }
+  }
+
+  /**
+   * Settings → Assistant: whether the assistant may run read-only queries itself (at most 50 rows, never a change). Off by
+   * default in Read-only and Production workspaces; each workspace can override it (Edit workspace).
+   */
+  async function setAssistantReadQueries(enabled: boolean): Promise<void> {
+    if (enabled) {
+      const message =
+        "Let the assistant run read-only queries itself (one statement at a time, at most 50 rows, 10 seconds)? The rows it reads are sent to your AI provider. Read-only and Production workspaces stay off unless you allow them under Edit workspace.";
+      if (!(await confirmDialog(message, "Allow"))) return;
+    }
+    try {
+      applyConfig(await api.setAssistantReadQueries(enabled));
+      setStatus(enabled ? "The assistant may run read-only queries; their rows are sent to your AI provider" : "The assistant no longer runs queries");
+    } catch (error) {
+      showError(error, "Change the assistant setting");
     }
   }
 

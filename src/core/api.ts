@@ -99,9 +99,17 @@ export const api = {
   openSession: (connectionId: string, sessionId: string, options: SessionOptions | null = null) =>
     invoke<SessionInfo>("open_session", { connectionId, sessionId, options }),
   closeSession: (sessionId: string) => invoke<void>("close_session", { sessionId }),
-  /** Streams `StreamEvent`s (statement, columns, row batches, done, notices) through `onEvent`; resolves with the summary. */
-  run: (sessionId: string, request: RunRequest, onEvent: (event: StreamEvent) => void, confirmation: Confirmation | null = null) =>
-    invokeStreaming<RunSummary, StreamEvent>("run", { sessionId, request, confirmation }, "onEvent", onEvent),
+  /**
+   * Streams `StreamEvent`s (statement, columns, row batches, done, notices) through `onEvent`; resolves with the summary.
+   * `maxRows` keeps fewer rows per result set than the workspace rules allow (never more).
+   */
+  run: (
+    sessionId: string,
+    request: RunRequest,
+    onEvent: (event: StreamEvent) => void,
+    confirmation: Confirmation | null = null,
+    maxRows: number | null = null,
+  ) => invokeStreaming<RunSummary, StreamEvent>("run", { sessionId, request, confirmation, maxRows }, "onEvent", onEvent),
   cancelRun: (sessionId: string) => invoke<void>("cancel_run", { sessionId }),
   /** Begin / commit / rollback / auto-commit of a session; resolves with the engine-reported state. */
   transaction: (sessionId: string, op: TransactionOp) => invoke<TransactionState>("transaction", { sessionId, op }),
@@ -165,6 +173,8 @@ export const api = {
   historyDelete: (ids: string[]) => invoke<number>("history_delete", { ids }),
   historyClear: () => invoke<void>("history_clear"),
   setQueryHistory: (enabled: boolean) => invoke<AppConfig>("set_query_history", { enabled }),
+  /** Settings → "Allow the assistant to run read-only queries". */
+  setAssistantReadQueries: (enabled: boolean) => invoke<AppConfig>("set_assistant_read_queries", { enabled }),
   /** App version, OS, open connections, recent errors and the log folder, for bug reports. */
   diagnostics: () => invoke<Diagnostics>("diagnostics"),
   setDebugLogging: (enabled: boolean) => invoke<AppConfig>("set_debug_logging", { enabled }),

@@ -14,9 +14,7 @@ const FILES: Record<string, string> = Object.fromEntries(
 );
 
 /** Known debt: shared code that still compares engine ids. Entries may only be removed, never added. */
-const ENGINE_ID_COMPARISONS: Record<string, number> = {
-  "features/assistant/assistantPanel.ts": 7,
-};
+const ENGINE_ID_COMPARISONS: Record<string, number> = {};
 
 /** Engine packages that build on another one (OpenSearch is an Elasticsearch fork with the same wire API). */
 const ENGINE_REUSE = new Set(["opensearch -> elasticsearch"]);

@@ -95,8 +95,25 @@ function unknownEngine(id: string): EngineInfo {
     },
     languages: [],
     filter: { structured: false, raw: null, placeholder: "Filter" },
+    assistant: { testData: "statements", prompts: [], translateFrom: false, translateTo: null, translateLabel: null },
     unknown: true,
   };
+}
+
+/**
+ * The language of an assistant code block tagged `fence` ("sql", "json", "redis"; empty for an untagged block, which
+ * gets the default language), or null when the engine has none for it.
+ */
+export function languageForFence(source: Pick<EngineDescriptor, "languages">, fence: string): LanguageSpec | null {
+  const tag = fence.trim().toLowerCase();
+  if (!tag) return defaultLanguage(source);
+  return source.languages.find((language) => language.fences.includes(tag)) ?? null;
+}
+
+/** Whether any engine of this build writes or runs code blocks tagged `fence` (an untagged block counts). */
+export function isKnownFence(fence: string): boolean {
+  const tag = fence.trim().toLowerCase();
+  return !tag || descriptors.some((descriptor) => descriptor.languages.some((language) => language.fences.includes(tag)));
 }
 
 /** The language a new query session uses (the engine's default, else its first). */

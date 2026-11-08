@@ -171,7 +171,7 @@ fn build(flavor: Flavor) -> EngineDescriptor {
         },
         assistant: AssistantHints {
             test_data: "a _bulk request".into(),
-            translate_to: Some(format!("a {} search request (Query DSL)", flavor.label())),
+            translate_to: Some(format!("an {} search request (Query DSL)", flavor.label())),
             ..AssistantHints::default()
         },
     }

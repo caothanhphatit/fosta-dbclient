@@ -182,12 +182,19 @@ function classify(engine: EngineMock, text: string) {
   return engine.classify ? engine.classify(text) : splitStatements(text).map(({ from, to }) => statementInfo("unknown", "STATEMENT", [], text.slice(from, to)));
 }
 
-async function run(sessionId: string, request: RunRequest, confirmation: Confirmation | null, channel: Channel<StreamEvent> | null): Promise<RunSummary> {
+async function run(
+  sessionId: string,
+  request: RunRequest,
+  confirmation: Confirmation | null,
+  channel: Channel<StreamEvent> | null,
+  maxRows: number | null = null,
+): Promise<RunSummary> {
   const current = session(sessionId);
   const { engine } = connection(current.connectionId);
   const runner = need(engine, "run", "queries");
   gate(state.config, current.connectionId, "queryTab", classify(engine, request.text), confirmation);
-  const sender = channel ? channelEmitter(channel) : null;
+  const channelSender = channel ? channelEmitter(channel) : null;
+  const sender = channelSender && maxRows ? rowCap(channelSender, maxRows) : channelSender;
   const controller = new AbortController();
   current.running = controller;
   const started = performance.now();
@@ -290,6 +297,30 @@ function listHistory(query: HistoryQuery): HistoryEntry[] {
     .slice(0, query.limit || 200);
 }
 
+/** Like the backend's `max_rows`: keeps the first `limit` rows of each result set and marks it truncated. */
+function rowCap(sender: { emit(event: StreamEvent): void; end(): void }, limit: number) {
+  const seen = new Map<number, number>();
+  const cut = new Set<number>();
+  return {
+    end: () => sender.end(),
+    emit(event: StreamEvent) {
+      if (event.event === "rows") {
+        const already = seen.get(event.index) ?? 0;
+        const room = Math.max(0, limit - already);
+        if (event.rows.length > room) cut.add(event.index);
+        seen.set(event.index, already + Math.min(room, event.rows.length));
+        if (room > 0) sender.emit({ ...event, rows: event.rows.slice(0, room) });
+        return;
+      }
+      if (event.event === "done" && seen.has(event.index)) {
+        sender.emit({ ...event, rows: seen.get(event.index) ?? 0, truncated: event.truncated || cut.has(event.index) });
+        return;
+      }
+      sender.emit(event);
+    },
+  };
+}
+
 function saveWorkspace(meta: Workspace, relaxConfirmation: unknown) {
   const config = state.config;
   const existing = config.workspaces.find((item) => item.id === meta.id);
@@ -304,10 +335,15 @@ function saveWorkspace(meta: Workspace, relaxConfirmation: unknown) {
     ? {
         ...config,
         workspaces: config.workspaces.map((item) =>
-          item.id === meta.id ? { ...item, name: meta.name, color: meta.color, icon: meta.icon, safety: after } : item,
+          item.id === meta.id
+            ? { ...item, name: meta.name, color: meta.color, icon: meta.icon, safety: after, assistantQueries: meta.assistantQueries ?? item.assistantQueries }
+            : item,
         ),
       }
-    : { ...config, workspaces: [...config.workspaces, { ...meta, safety: after, connections: [], tasks: [] }] };
+    : {
+        ...config,
+        workspaces: [...config.workspaces, { ...meta, safety: after, assistantQueries: meta.assistantQueries ?? "default", connections: [], tasks: [] }],
+      };
   return state.config;
 }
 
@@ -397,6 +433,9 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "set_debug_logging":
       state.config = { ...state.config, debugLogging: Boolean(payload.enabled) };
       return state.config;
+    case "set_assistant_read_queries":
+      state.config = { ...state.config, assistantReadQueries: Boolean(payload.enabled) };
+      return state.config;
     case "diagnostics":
       return diagnostics();
 
@@ -483,7 +522,13 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       sessions.delete(str("sessionId"));
       return null;
     case "run":
-      return run(str("sessionId"), payload.request as RunRequest, confirmation, (payload.onEvent as Channel<StreamEvent> | undefined) ?? null);
+      return run(
+        str("sessionId"),
+        payload.request as RunRequest,
+        confirmation,
+        (payload.onEvent as Channel<StreamEvent> | undefined) ?? null,
+        (payload.maxRows as number | null | undefined) ?? null,
+      );
     case "cancel_run":
       sessions.get(str("sessionId"))?.running?.abort();
       return null;

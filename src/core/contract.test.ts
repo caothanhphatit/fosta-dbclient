@@ -157,7 +157,15 @@ const columnInfo = obj<C.ColumnInfo>({
 const keyInfo = obj<C.KeyInfo>({ name: nul("string"), columns: arr("string") });
 const field = obj<C.Field>({ column: "string", value: "value" });
 const transactionState = obj<C.TransactionState>({ supported: "boolean", open: "boolean", autoCommit: "boolean", failed: "boolean" });
-const languageSpec = obj<C.LanguageSpec>({ id: "string", label: "string", editor: "string", dialect: nul("string"), default: "boolean", hint: "string" });
+const languageSpec = obj<C.LanguageSpec>({
+  id: "string",
+  label: "string",
+  editor: "string",
+  dialect: nul("string"),
+  default: "boolean",
+  hint: "string",
+  fences: arr("string"),
+});
 const capabilities = arr(
   lit(
     "tree",
@@ -343,6 +351,13 @@ const SHAPES: Record<string, Shape> = {
     }),
     languages: arr(languageSpec),
     filter: obj<C.FilterSupport>({ structured: "boolean", raw: nul("string"), placeholder: "string" }),
+    assistant: obj<C.AssistantHints>({
+      testData: "string",
+      prompts: arr(obj<C.AssistantPrompt>({ label: "string", icon: "string", prompt: "string" })),
+      translateFrom: "boolean",
+      translateTo: nul("string"),
+      translateLabel: nul("string"),
+    }),
   }),
   "connect-info": obj<C.ConnectInfo>({
     engine: "string",

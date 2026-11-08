@@ -142,7 +142,12 @@ export interface WorkspaceMeta {
   icon: string;
   /** Statement rules; always present in a loaded config, omitted to keep the current ones. */
   safety?: SafetySettings;
+  /** Overrides "Allow the assistant to run read-only queries" here; always present in a loaded config. */
+  assistantQueries?: AssistantQueries;
 }
+
+/** A workspace's choice for the assistant's read-only queries: follow the setting, or always / never allow them. */
+export type AssistantQueries = "default" | "allow" | "deny";
 
 /** A workspace groups the connections and startup tasks of one environment. */
 export interface Workspace extends WorkspaceMeta {
@@ -214,6 +219,8 @@ export interface AppConfig {
   queryHistory: boolean;
   /** Debug-level entries in the application log (Settings → Debug logging). */
   debugLogging?: boolean;
+  /** Settings → "Allow the assistant to run read-only queries" (default on; Read-only and Production workspaces off). */
+  assistantReadQueries?: boolean;
   /** Settings file version; 2 since the engine contract. */
   configVersion?: number;
   /** Set once after startup when the settings file could not be read and was set aside. */
@@ -254,7 +261,20 @@ export type UiAction =
   | { kind: "openTable"; database: string; table: string; suggestedFilter: string | null }
   | { kind: "openQuery"; database: string | null; sql: string };
 
-export type ChatEvent = { type: "text"; text: string } | { type: "tool"; label: string } | { type: "action"; action: UiAction } | { type: "done" };
+/** A read-only query the assistant ran (`run_read_query`): what it sent and what it got, cells as text. */
+export interface ChatQuery {
+  statement: string;
+  database: string | null;
+  columns: string[];
+  rows: string[][];
+  truncated: boolean;
+  elapsedMs: number;
+  /** The gateway refused it, or the engine failed. */
+  error: string | null;
+}
+
+export type ChatEvent =
+  { type: "text"; text: string } | { type: "tool"; label: string } | { type: "action"; action: UiAction } | ({ type: "query" } & ChatQuery) | { type: "done" };
 
 export type TaskState = "stopped" | "starting" | "running" | "restarting" | "failed";
 

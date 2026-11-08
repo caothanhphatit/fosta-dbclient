@@ -474,6 +474,29 @@ export interface LanguageSpec {
   dialect: SqlDialectId | null;
   default: boolean;
   hint: string;
+  /** Code-fence tags in assistant replies: the assistant writes the first; a block with any of them runs in this language. */
+  fences: string[];
+}
+
+/** A quick action the assistant panel offers for an engine (prefilled in the composer). */
+export interface AssistantPrompt {
+  label: string;
+  /** An `IconName` from `core/dom.ts`. */
+  icon: string;
+  prompt: string;
+}
+
+/** What the assistant panel says and offers for an engine, so it never compares engine ids. */
+export interface AssistantHints {
+  /** How test data is written: "INSERT statements", "an insertMany command". */
+  testData: string;
+  prompts: AssistantPrompt[];
+  /** Query tabs of this engine offer "Translate to…". */
+  translateFrom: boolean;
+  /** "Translate this to …"; null leaves the engine out of the menu. */
+  translateTo: string | null;
+  /** The menu label; the engine label when null. */
+  translateLabel: string | null;
 }
 
 export interface FilterSupport {
@@ -494,6 +517,7 @@ export interface EngineDescriptor {
   connection: ConnectionForm;
   languages: LanguageSpec[];
   filter: FilterSupport;
+  assistant: AssistantHints;
 }
 
 export interface ServerInfo {

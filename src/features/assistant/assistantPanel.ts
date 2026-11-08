@@ -1,14 +1,16 @@
-import { capabilities } from "../../core/capabilities";
 /**
- * The assistant panel: a chat docked on the right of the workspace. The model
- * writes queries; it never runs them. Every code block it produces carries
- * "Insert" and "New tab" buttons so the user runs the SQL from the editor.
+ * The assistant panel: a chat docked on the right of the workspace. Every code block the model writes carries "Run"
+ * (the user's own run through the workspace rules, results under the block), "Insert" and "New tab". Where the user
+ * allows it, the model also runs read-only queries itself; each shows as an expandable tool call. What the panel offers
+ * per engine (code-fence tags, quick prompts, translation targets) comes from the engine descriptors.
  */
 import { api, errorText } from "../../core/api";
+import { capabilities } from "../../core/capabilities";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
 import { copyText, h, icon, iconButton, iconOrDefault, spacer, type IconName } from "../../core/dom";
-import { engineInfo, visibleEngines } from "../../core/engines";
+import { capabilityOf, defaultLanguage, engineInfo, isKnownFence, languageForFence, visibleEngines, type EngineInfo } from "../../core/engines";
+import { ChatRun, queryToolCall } from "./chatRun";
 import { ModelSwitcher } from "./modelSwitcher";
 import type { AiActive, AiConnection, AppConfig, ChatContext, ChatEvent, ChatMessage, DriverId, UiAction } from "../../core/types";
 
@@ -46,8 +48,8 @@ export interface AssistantHost {
 interface QuickAction {
   label: string;
   icon: IconName;
-  /** `send` goes straight to the model; `prefill` puts a template in the composer. */
-  mode: "send" | "prefill";
+  /** `send` goes straight to the model; `prefill` puts a template in the composer; `translate` opens the target menu. */
+  mode: "send" | "prefill" | "translate";
   prompt: () => string;
 }
 
@@ -57,7 +59,6 @@ interface Conversation {
 }
 
 const MAX_HISTORY = 30;
-const INSERTABLE = new Set(["sql", "json", "mongodb", "mysql", "tsql", "mariadb", ""]);
 const CODE_FENCE = /^```([\w+-]*)\s*$/;
 
 export class AssistantPanel {
@@ -126,7 +127,11 @@ export class AssistantPanel {
         {},
         `Connect Fosta, OpenAI, Gemini, Claude (Anthropic), Ollama or any OpenAI-compatible endpoint with your key. The key stays in ${capabilities().secretStore}; requests go straight from ${capabilities().edition === "web" ? "the Fosta Studio server" : "this computer"} to the provider.`,
       ),
-      h("p", {}, "The assistant sees table and column names, your editor text and errors. It writes queries; you run them."),
+      h(
+        "p",
+        {},
+        "The assistant sees table and column names, your editor text and errors. It writes queries you run with one click; where you allow it (Settings), it also runs read-only queries itself, and the rows it reads are sent to your provider.",
+      ),
       configureButton,
     );
     this.chat = h(
@@ -207,7 +212,9 @@ export class AssistantPanel {
     this.activeRequest = id;
     this.setBusy(true);
     let reply = "";
-    const render = () => body.replaceChildren(...this.renderMarkdown(reply));
+    let pendingTool: HTMLElement | null = null;
+    // Code blocks run against the connection the question was about, even if the user moves on.
+    const render = () => body.replaceChildren(...this.renderMarkdown(reply, context));
     body.append(h("span", { class: "chat-cursor" }));
     try {
       const request = { id, messages: this.conversation.messages.slice(-MAX_HISTORY), context: chatContext(context) };
@@ -216,7 +223,15 @@ export class AssistantPanel {
           reply += event.text;
           render();
         } else if (event.type === "tool") {
-          bubble.before(h("div", { class: "chat-tool" }, icon("search"), event.label));
+          pendingTool = h("div", { class: "chat-tool" }, icon("search"), event.label);
+          bubble.before(pendingTool);
+          this.scrollToEnd();
+        } else if (event.type === "query") {
+          // The result of the tool call announced just before.
+          const call = queryToolCall(event);
+          if (pendingTool) pendingTool.replaceWith(call);
+          else bubble.before(call);
+          pendingTool = null;
           this.scrollToEnd();
         } else if (event.type === "action") {
           this.host.perform(event.action);
@@ -250,7 +265,7 @@ export class AssistantPanel {
   private append(message: ChatMessage): void {
     this.conversation.messages.push(message);
     const bubble = this.bubble(message.role);
-    bubble.querySelector(".chat-body")!.append(...this.renderMarkdown(message.content));
+    bubble.querySelector(".chat-body")!.append(...this.renderMarkdown(message.content, this.host.context()));
     this.scrollToEnd();
   }
 
@@ -272,9 +287,10 @@ export class AssistantPanel {
   // --- Quick actions -----------------------------------------------------
 
   private quickActions(context: AssistantContext): QuickAction[] {
-    const sql = () => fence(context.editorText?.() ?? "", context.driver === "mongodb" ? "json" : "sql");
-    const table = context.table ?? "this table";
     const info = engineInfo(context.driver);
+    const sql = () => fence(context.editorText?.() ?? "", defaultLanguage(info)?.fences[0] ?? "");
+    const table = context.table ?? "this table";
+    const prompts = enginePrompts(info);
     switch (context.kind) {
       case "query": {
         const actions: QuickAction[] = [
@@ -294,11 +310,8 @@ export class AssistantPanel {
             prompt: () => `This failed with:\n${context.lastError?.()}\n\n${sql()}\nFix it and explain the cause in one sentence.`,
           });
         }
-        if (context.driver === "mongodb") {
-          actions.push({ label: "Aggregation pipeline", icon: "layers", mode: "prefill", prompt: () => "Write an aggregation pipeline that " });
-        } else {
-          actions.push({ label: "Translate to…", icon: "globe", mode: "prefill", prompt: () => "" });
-        }
+        actions.push(...prompts);
+        if (info.assistant.translateFrom) actions.push({ label: "Translate to…", icon: "globe", mode: "translate", prompt: () => "" });
         return actions;
       }
       case "table":
@@ -313,7 +326,7 @@ export class AssistantPanel {
             label: "Test data",
             icon: "table",
             mode: "send",
-            prompt: () => `Generate 20 rows of realistic test data for ${table} as ${info.id === "mongodb" ? "an insertMany command" : "INSERT statements"}.`,
+            prompt: () => `Generate 20 rows of realistic test data for ${table} as ${info.assistant.testData}.`,
           },
           { label: "Query this table", icon: "query", mode: "prefill", prompt: () => `Write a query on ${table} that ` },
         ];
@@ -328,12 +341,7 @@ export class AssistantPanel {
           { label: "Explain the log", icon: "logs", mode: "send", prompt: () => "Explain what this log says, briefly." },
         ];
       case "connection":
-        return [
-          { label: "Write a query", icon: "query", mode: "prefill", prompt: () => "Write a query that " },
-          ...(context.driver === "mongodb"
-            ? [{ label: "Aggregation pipeline", icon: "layers" as IconName, mode: "prefill" as const, prompt: () => "Write an aggregation pipeline that " }]
-            : []),
-        ];
+        return [{ label: "Write a query", icon: "query", mode: "prefill", prompt: () => "Write a query that " }, ...prompts];
       default:
         return [];
     }
@@ -342,7 +350,7 @@ export class AssistantPanel {
   private actionChip(action: QuickAction): HTMLElement {
     const chip = h("button", { class: "chat-chip", type: "button" }, icon(action.icon), action.label);
     chip.addEventListener("click", (event) => {
-      if (action.label === "Translate to…") {
+      if (action.mode === "translate") {
         showContextMenu(event, this.translateMenu());
         return;
       }
@@ -360,22 +368,22 @@ export class AssistantPanel {
 
   private translateMenu(): MenuItem[] {
     const context = this.host.context();
+    const source = engineInfo(context.driver);
     return visibleEngines()
-      .filter((driver) => driver.id !== context.driver && driver.id !== "mariadb")
-      .map((driver) => ({
-        label: driver.id === "mongodb" ? "MongoDB (command / pipeline)" : driver.label,
-        icon: iconOrDefault(driver.icon, "database"),
+      .filter((target) => target.id !== source.id && target.assistant.translateTo !== null)
+      .map((target) => ({
+        label: target.assistant.translateLabel ?? target.label,
+        icon: iconOrDefault(target.icon, "database"),
         run: () => {
-          const source = fence(context.editorText?.() ?? "", "sql");
-          const target = driver.id === "mongodb" ? "a MongoDB command or aggregation pipeline" : driver.label;
-          this.ask(`Translate this to ${target}, keeping the same result. Mention anything without a direct equivalent:\n${source}`);
+          const code = fence(context.editorText?.() ?? "", defaultLanguage(source)?.fences[0] ?? "");
+          this.ask(`Translate this to ${target.assistant.translateTo}, keeping the same result. Mention anything without a direct equivalent:\n${code}`);
         },
       }));
   }
 
   // --- Markdown-lite -----------------------------------------------------
 
-  private renderMarkdown(text: string): HTMLElement[] {
+  private renderMarkdown(text: string, context: AssistantContext): HTMLElement[] {
     const nodes: HTMLElement[] = [];
     const lines = text.split("\n");
     let paragraph: string[] = [];
@@ -401,7 +409,7 @@ export class AssistantPanel {
           code.push(lines[index]);
           index += 1;
         }
-        nodes.push(this.codeBlock(code.join("\n"), language));
+        nodes.push(this.codeBlock(code.join("\n"), language, context));
         continue;
       }
       const bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
@@ -436,17 +444,35 @@ export class AssistantPanel {
     return nodes;
   }
 
-  private codeBlock(code: string, language: string): HTMLElement {
-    const insertable = INSERTABLE.has(language);
-    const bar = h("div", { class: "chat-code-bar" }, h("span", { class: "chat-code-lang" }, language || "code"), spacer());
-    if (insertable) {
+  /**
+   * A code block. Run appears when the block's fence names a language of the open connection (an untagged block runs in
+   * the default language); Insert and New tab for any fence an engine of this build knows.
+   */
+  private codeBlock(code: string, fenceTag: string, context: AssistantContext): HTMLElement {
+    const bar = h("div", { class: "chat-code-bar" }, h("span", { class: "chat-code-lang" }, fenceTag || "code"), spacer());
+    const block = h("div", { class: "chat-code" }, bar, h("pre", {}, h("code", {}, code)));
+    const connectionId = context.connectionId;
+    const language = connectionId && capabilityOf(connectionId, "query") ? languageForFence(engineInfo(context.driver), fenceTag) : null;
+    if (connectionId && language && code.trim()) {
+      const run = new ChatRun(
+        code,
+        { connectionId, database: context.database ?? null, language },
+        {
+          openQuery: (text) => this.host.openQuery(text),
+          resized: () => this.scrollToEnd(),
+        },
+      );
+      block.append(run.element);
+      bar.append(codeButton("play", "Run", `Run on ${context.connectionName ?? "the connection"} (the workspace rules apply)`, () => void run.run()));
+    }
+    if (isKnownFence(fenceTag)) {
       bar.append(
         codeButton("edit", "Insert", "Insert into the active query editor", () => this.host.insertSql(code)),
         codeButton("query", "New tab", "Open in a new query tab", () => this.host.openQuery(code)),
       );
     }
     bar.append(codeButton("copy", "Copy", "Copy to clipboard", () => void copyText(code).then(() => toast("Copied"))));
-    return h("div", { class: "chat-code" }, bar, h("pre", {}, h("code", {}, code)));
+    return block;
   }
 }
 
@@ -471,6 +497,16 @@ function inline(text: string): (HTMLElement | string)[] {
   }
   if (last < text.length) parts.push(text.slice(last));
   return parts;
+}
+
+/** The engine's own quick prompts (prefilled in the composer). */
+function enginePrompts(info: EngineInfo): QuickAction[] {
+  return info.assistant.prompts.map((prompt) => ({
+    label: prompt.label,
+    icon: iconOrDefault(prompt.icon, "sparkle"),
+    mode: "prefill",
+    prompt: () => prompt.prompt,
+  }));
 }
 
 function fence(code: string, language: string): string {
