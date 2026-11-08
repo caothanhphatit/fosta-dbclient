@@ -1,0 +1,396 @@
+/* Redis views: key browser, value editors, server view. Colours and spacing come from the shared tokens. */
+
+.rd-toolbar {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rd-pattern {
+  min-width: 260px;
+  flex: 1 1 260px;
+  max-width: 520px;
+}
+
+.rd-filter {
+  min-width: 220px;
+}
+
+.rd-scroll {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+}
+
+.rd-pad {
+  padding: 12px 16px 24px;
+}
+
+.rd-status {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.rd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.rd-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--grid-head);
+  color: var(--fg-2);
+  font-weight: 600;
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-table td {
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--grid-line);
+  vertical-align: top;
+}
+
+.rd-key-row {
+  cursor: pointer;
+}
+
+.rd-key-row:hover,
+.rd-key-row:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+
+.rd-prefix {
+  color: var(--fg-3);
+}
+
+.rd-ttl-cell {
+  color: var(--warning);
+  white-space: nowrap;
+}
+
+.rd-memory-col {
+  display: none;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.rd-keys-view.with-memory .rd-memory-col {
+  display: table-cell;
+}
+
+.rd-type {
+  display: inline-block;
+  min-width: 52px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+  background: var(--surface-3);
+  color: var(--fg-2);
+}
+
+.rd-type.type-string {
+  background: color-mix(in srgb, var(--ws-blue) 16%, transparent);
+  color: var(--ws-blue);
+}
+
+.rd-type.type-hash {
+  background: color-mix(in srgb, var(--ws-green) 16%, transparent);
+  color: var(--ws-green);
+}
+
+.rd-type.type-list {
+  background: color-mix(in srgb, var(--ws-orange) 18%, transparent);
+  color: var(--ws-orange);
+}
+
+.rd-type.type-set {
+  background: color-mix(in srgb, var(--ws-purple) 16%, transparent);
+  color: var(--ws-purple);
+}
+
+.rd-type.type-zset {
+  background: color-mix(in srgb, var(--ws-pink) 16%, transparent);
+  color: var(--ws-pink);
+}
+
+.rd-type.type-stream {
+  background: color-mix(in srgb, var(--ws-teal) 18%, transparent);
+  color: var(--ws-teal);
+}
+
+.rd-footer {
+  padding: 8px 10px;
+}
+
+.rd-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Value view */
+
+.rd-value {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rd-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px 4px;
+}
+
+.rd-keyname {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  padding: 0 14px 8px;
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.rd-ttl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rd-ttl-value {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.rd-ttl-input {
+  width: 120px;
+}
+
+.rd-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 14px 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--warning);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  font-size: 13px;
+}
+
+.rd-banner[hidden] {
+  display: none;
+}
+
+.rd-banner-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.rd-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  min-height: 0;
+  padding: 0 14px 20px;
+}
+
+.rd-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rd-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.rd-textarea {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--editor-bg);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.45;
+  tab-size: 2;
+}
+
+.rd-textarea:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.rd-pre {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.rd-note {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.rd-cell-input {
+  width: 100%;
+  border-color: transparent;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 2px 6px;
+}
+
+.rd-cell-input:hover:not(.readonly) {
+  border-color: var(--border-strong);
+}
+
+.rd-cell-input:focus {
+  background: var(--surface);
+}
+
+.rd-score {
+  width: 140px;
+  text-align: right;
+}
+
+.rd-remove {
+  color: var(--fg-3);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.rd-remove:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.rd-summary {
+  display: flex;
+  gap: 16px;
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.rd-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.rd-field b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.rd-append {
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.rd-field-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.rd-field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.rd-field-row .input {
+  flex: 1 1 0;
+}
+
+.rd-id {
+  width: 180px;
+}
+
+/* Server view */
+
+.rd-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.rd-card {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.rd-card-label {
+  color: var(--fg-2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rd-card-value {
+  margin-top: 2px;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.rd-section {
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.rd-section > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-weight: 600;
+  text-transform: capitalize;
+}
