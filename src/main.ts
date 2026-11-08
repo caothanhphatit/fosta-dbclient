@@ -6,7 +6,7 @@
 import "./styles.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { assistantContext as buildAssistantContext, isQueryView, taskLogContext } from "./app/assistantContext";
-import { AppNavigation } from "./app/navigation";
+import { AppNavigation, preloadQueryView } from "./app/navigation";
 import { welcomeScreen } from "./app/welcome";
 import { api, errorText } from "./core/api";
 import { capabilities, hideUnsupported, loadCapabilities } from "./core/capabilities";
@@ -531,6 +531,7 @@ async function bootstrap(): Promise<void> {
   suppressBrowserContextMenu();
   guardWindowClose();
   revealWindowAfterFirstPaint();
+  preloadQueryView();
   try {
     applyConfig(await api.getConfig());
     if (supported.tasks) await tasksPanel.init();

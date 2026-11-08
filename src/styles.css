@@ -161,6 +161,12 @@ body.resizing-x * {
   cursor: col-resize !important;
 }
 
+/* The query editor's chunk is loading after Ctrl+T; what is typed meanwhile is kept. */
+body.loading-editor,
+body.loading-editor * {
+  cursor: progress !important;
+}
+
 body.resizing-y,
 body.resizing-y * {
   cursor: row-resize !important;

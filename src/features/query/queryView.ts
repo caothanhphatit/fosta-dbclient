@@ -249,6 +249,12 @@ export class QueryView implements TabContent {
     return selectedOrAllText(this.editor);
   }
 
+  /** Appends text typed while the editor was loading, with the cursor after it. */
+  appendTyped(text: string): void {
+    const end = this.editor.state.doc.length;
+    this.editor.dispatch({ changes: { from: end, insert: text }, selection: { anchor: end + text.length } });
+  }
+
   /** Replaces the selection (or appends when nothing is selected) and focuses the editor. */
   insertText(text: string): void {
     const { state } = this.editor;

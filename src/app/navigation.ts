@@ -8,6 +8,19 @@ import { TableView } from "../features/table/tableView";
 import { createLogView, type TasksPanel } from "../features/tasks/tasksPanel";
 import { VectorHealthView } from "../features/vector/vectorHealth";
 import { VectorSearchView } from "../features/vector/vectorSearch";
+import { captureTyping } from "./typingBuffer";
+
+/** The query view chunk (CodeMirror). Loaded on first use, or ahead of it by `preloadQueryView`. */
+function loadQueryView(): Promise<typeof import("../features/query/queryView")> {
+  return import("../features/query/queryView");
+}
+
+/** Fetches the query view chunk while the app is idle, so the first Ctrl+T opens the editor at once. */
+export function preloadQueryView(): void {
+  const load = () => void loadQueryView().catch(() => undefined);
+  if ("requestIdleCallback" in window) window.requestIdleCallback(load, { timeout: 5000 });
+  else setTimeout(load, 2000);
+}
 
 export interface NavigationHost {
   /** Tab keys start with the workspace id, so each workspace keeps its own tabs. */
@@ -134,7 +147,15 @@ export class AppNavigation implements Navigator {
 
   /** The query view pulls in CodeMirror, so it is loaded on first use (its own chunk). */
   private async openQueryTab(connectionId: string, database: string | null, initialSql: string): Promise<void> {
-    const { QueryView } = await import("../features/query/queryView");
+    // Typing that starts before the chunk arrives goes into the new editor instead of being lost.
+    const stopCapture = captureTyping();
+    let typed = "";
+    let QueryView: typeof import("../features/query/queryView").QueryView;
+    try {
+      ({ QueryView } = await loadQueryView());
+    } finally {
+      typed = stopCapture();
+    }
     const driver = this.host.driverOf(connectionId) ?? "mariadb";
     this.queryCounter += 1;
     this.tabs.open({
@@ -149,6 +170,7 @@ export class AppNavigation implements Navigator {
           openQuery: (id, db, sql) => this.openQuery(id, db, sql),
         });
         view.onChanged = () => this.host.queryChanged(view);
+        if (typed) view.appendTyped(typed);
         return view;
       },
     });
