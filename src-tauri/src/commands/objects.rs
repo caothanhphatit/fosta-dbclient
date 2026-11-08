@@ -12,7 +12,7 @@ use crate::{
     AppState,
 };
 
-fn metadata_context(state: &AppState, connection_id: &str) -> CallContext {
+pub(crate) fn metadata_context(state: &AppState, connection_id: &str) -> CallContext {
     let limits = gateway_context(state, connection_id)
         .map(|context| context.limits())
         .unwrap_or_default();

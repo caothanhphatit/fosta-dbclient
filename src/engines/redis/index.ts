@@ -9,6 +9,8 @@ import type { EngineUiModule } from "../index";
 const redis: EngineUiModule = {
   id: "redis",
   register: () => undefined,
+  // The console language: command and option completion with arity hints, one command per line.
+  languages: { redis: async () => (await import("../../lang/redis/support")).createRedisLanguage() },
 };
 
 export default redis;

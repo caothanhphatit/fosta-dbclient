@@ -38,7 +38,7 @@ const editorTheme = EditorView.theme({
 export interface EditorCommands {
   /** Ctrl+Enter / F9: the selection, or everything. */
   run(): void;
-  /** Ctrl+Shift+Enter: the statement under the cursor. */
+  /** Ctrl+Shift+Enter: the selection, or the statement under the cursor. */
   runStatement(): void;
   /** Shift+Alt+F. */
   format(): void;

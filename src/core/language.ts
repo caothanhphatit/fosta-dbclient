@@ -4,7 +4,10 @@
  * (`EngineUiModule.languages`); `defaultLanguageSupport` / `sqlLanguageSupport` are the fallbacks.
  */
 import type { Extension } from "@codemirror/state";
-import { collectObjects, type ConnectionApi } from "./connectionApi";
+import { SchemaCache } from "../lang/schemaCache";
+import { statementAt as sqlStatementAt } from "../lang/sql/split";
+import { api } from "./api";
+import type { ConnectionApi } from "./connectionApi";
 import type { LanguageSpec, SqlDialectId } from "./contract";
 
 export interface LanguageContext {
@@ -20,7 +23,7 @@ export interface TextRange {
 
 export interface LanguageSupport {
   id: string;
-  editorExtensions(ctx: LanguageContext): Promise<Extension[]>;
+  editorExtensions(ctx?: LanguageContext): Promise<Extension[]>;
   /** The statement around `offset` (trimmed, without its terminator). */
   statementAt(text: string, offset: number): TextRange;
   format?(text: string): Promise<string>;
@@ -122,49 +125,36 @@ export function defaultLanguageSupport(id = "text", options: SplitOptions = {}):
   };
 }
 
-const SQL_SPLIT: Partial<Record<SqlDialectId, SplitOptions>> = {
-  mariaDb: { hashComments: true },
-  mySql: { hashComments: true },
-  msSql: { bracketIdentifiers: true },
-};
-
 /**
- * Table, view and collection names of the context database for the editor to complete, from the object tree; empty
- * without a connection or database. The completion work (M9) replaces this with `completion_schema`.
- */
-async function relationNames(ctx: LanguageContext): Promise<string[]> {
-  if (!ctx.connection || !ctx.database) return [];
-  return (await collectObjects(ctx.connection, ctx.database)).map((node) => node.label);
-}
-
-/**
- * SQL with CodeMirror's SQL mode for the dialect (loaded on first use), completing keywords and the context database's
- * table names; `format` when a formatter is given.
+ * SQL from the language library (`src/lang`): highlighting for the dialect, completion from `completion_schema` for the
+ * context database (tables, columns, joins along foreign keys), the dialect-aware statement splitter, and `format`
+ * (the given formatter, else the backend `format_sql`). CodeMirror's SQL package loads on first use.
  */
 export function sqlLanguageSupport(dialect: SqlDialectId | null, format?: (text: string) => Promise<string>): LanguageSupport {
-  const options = (dialect && SQL_SPLIT[dialect]) || {};
+  const langDialect = dialect ?? "generic";
+  const schema = new SchemaCache();
+  let language: Promise<LanguageSupport> | null = null;
+  const load = () =>
+    (language ??= import("../lang/sql/support").then(({ createSqlLanguage }) =>
+      createSqlLanguage({
+        dialect: langDialect,
+        schema,
+        format: (_dialect, text, options) => (format ? format(text) : api.formatSql(dialect, text, options ?? null)),
+      }),
+    ));
   return {
     id: "sql",
     editorExtensions: async (ctx) => {
-      const [lang, tables] = await Promise.all([import("@codemirror/lang-sql"), relationNames(ctx)]);
-      const dialects: Partial<Record<SqlDialectId, typeof lang.StandardSQL>> = {
-        mariaDb: lang.MariaSQL,
-        mySql: lang.MySQL,
-        msSql: lang.MSSQL,
-        postgres: lang.PostgreSQL,
-        sqlite: lang.SQLite,
-        oracle: lang.PLSQL,
-      };
-      return [
-        lang.sql({
-          dialect: (dialect && dialects[dialect]) || lang.StandardSQL,
-          upperCaseKeywords: true,
-          schema: Object.fromEntries(tables.map((table) => [table, []])),
-        }),
-      ];
+      const connection = ctx?.connection;
+      const database = ctx?.database;
+      if (connection && database) void schema.load(() => connection.completionSchema(database));
+      return (await load()).editorExtensions(ctx);
     },
-    statementAt: (text, offset) => statementAt(text, offset, options),
-    format,
+    statementAt: (text, offset) => sqlStatementAt(langDialect, text, offset),
+    format: async (text) => {
+      const support = await load();
+      return support.format ? support.format(text) : text;
+    },
   };
 }
 

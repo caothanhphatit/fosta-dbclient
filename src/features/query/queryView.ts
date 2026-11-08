@@ -4,7 +4,8 @@
  * - `openSession(sessionId, { language, database })`; the `SessionInfo` decides whether Stop (`cancellable`) and the
  *   transaction controls (`transaction.supported`) are shown. No engine ids are compared here.
  * - The editor's language comes from the injected `languageSupport` (`LanguageSupport.editorExtensions`, `statementAt`
- *   for "Run statement", `format` for "Format"), so completion and formatter work plugs in without editing this file.
+ *   for "Run statement" through `currentStatement`, `format` for "Format" through `formatInEditor`; SQL comes from the
+ *   language library in `src/lang`).
  * - `run` streams `StreamEvent`s into `RunResults`; the result tabs and their row counts update while rows arrive.
  */
 import type { EditorView } from "@codemirror/view";
@@ -28,6 +29,7 @@ import { clamp, formatNumber, h, icon, iconOrDefault, secondaryTool, separator, 
 import { defaultLanguage, hasCapability } from "../../core/engines";
 import { renderError, showError } from "../../core/errorPanel";
 import { statementAt, type LanguageSupport } from "../../core/language";
+import { currentStatement, formatInEditor } from "../../lang/editor";
 import { makeSplitter } from "../../core/splitter";
 import { dialectOf } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
@@ -171,7 +173,7 @@ export class QueryView implements TabContent {
     });
     this.runButton = toolButton("play", "Run", () => void this.run("selection"), "Run the selection, or everything when nothing is selected (Ctrl+Enter)");
     this.statementButton = secondaryTool(
-      toolButton("chevron", "Run statement", () => void this.run("statement"), "Run the statement under the cursor (Ctrl+Shift+Enter)"),
+      toolButton("chevron", "Run statement", () => void this.run("statement"), "Run the selection, or the statement under the cursor (Ctrl+Shift+Enter)"),
     );
     this.stopButton = toolButton("stop", "Stop", () => void this.cancel(), "Cancel the running query");
     this.stopButton.disabled = true;
@@ -370,25 +372,19 @@ export class QueryView implements TabContent {
     await this.loadLanguage();
   }
 
+  /** Formats the selection, or everything, with the language's formatter (else the backend `format_sql`). */
   private async format(): Promise<void> {
     const { state } = this.editor;
     const range = state.selection.main;
-    const from = range.empty ? 0 : range.from;
-    const to = range.empty ? state.doc.length : range.to;
-    const text = state.sliceDoc(from, to);
+    const text = range.empty ? state.doc.toString() : state.sliceDoc(range.from, range.to);
     if (!text.trim()) return;
+    const support = this.support?.format ? this.support : { format: (input: string) => api.formatSql(this.dialect(), input) };
     try {
-      const formatted = this.support?.format ? await this.support.format(text) : await api.formatSql(this.dialect(), text);
-      // The text changed while the formatter ran: do not overwrite the edit.
-      if (this.disposed || this.editor.state.sliceDoc(from, to) !== text) return;
-      if (formatted === text) {
+      const changed = await formatInEditor(this.editor, support);
+      // Unchanged, or the text changed while the formatter ran (the edit is kept).
+      if (!changed && !this.disposed && this.editor.state.doc.toString() === state.doc.toString()) {
         toast(`The ${this.language.label} formatter left the text unchanged`);
-        return;
       }
-      this.editor.dispatch({
-        changes: { from, to, insert: formatted },
-        selection: range.empty ? undefined : { anchor: from, head: from + formatted.length },
-      });
     } catch (error) {
       showError(error, "Format the query");
     }
@@ -543,17 +539,16 @@ export class QueryView implements TabContent {
     return text ? { text, offset: (selection.empty ? 0 : selection.from) + (raw.length - raw.trimStart().length) } : null;
   }
 
-  /** The statement under the cursor, as the language splits statements. */
+  /** The selection, else the statement under the cursor as the language splits statements. */
   private statementTarget(): RunTarget | null {
-    const doc = this.editor.state.doc.toString();
-    const cursor = this.editor.state.selection.main.head;
-    const range = this.support ? this.support.statementAt(doc, cursor) : statementAt(doc, cursor);
-    const text = doc.slice(range.from, range.to);
-    if (!text.trim()) {
+    const split = (text: string, offset: number) => (this.support ? this.support.statementAt(text, offset) : statementAt(text, offset));
+    const current = currentStatement(this.editor.state, split);
+    const text = current?.text.trim() ?? "";
+    if (!current || !text) {
       toast("There is no statement at the cursor");
       return null;
     }
-    return { text, offset: range.from };
+    return { text, offset: current.from + (current.text.length - current.text.trimStart().length) };
   }
 
   private async run(mode: "selection" | "statement"): Promise<void> {

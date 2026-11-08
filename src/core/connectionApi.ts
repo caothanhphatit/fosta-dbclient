@@ -36,7 +36,8 @@ export interface ConnectionApi {
   transaction(sessionId: string, op: TransactionOp): Promise<TransactionState>;
   invokeCapability<T = unknown>(name: string, args?: unknown, confirmation?: Confirmation | null): Promise<T>;
   schemaGraph(database: string): Promise<SchemaGraph>;
-  completionSchema(database: string): Promise<CompletionSchema>;
+  /** Tables, columns and keys of `database` for completion; without one, only the database names. */
+  completionSchema(database: string | null): Promise<CompletionSchema>;
   createDatabase(name: string, firstCollection: string | null, confirmation?: Confirmation | null): Promise<void>;
 }
 

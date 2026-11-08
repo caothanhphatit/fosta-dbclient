@@ -52,7 +52,7 @@ export interface EngineMock {
   /** Engine operations (`invoke_capability`); undefined for an unknown name. */
   invoke?(name: string, args: unknown): unknown;
   schemaGraph?(database: string): SchemaGraph;
-  completion?(database: string): CompletionSchema;
+  completion?(database: string | null): CompletionSchema;
   createDatabase?(name: string, firstCollection: string | null): void;
   /** Mock-only: "someone else" edits (or deletes) a row, to provoke a `CONFLICT` on the next save. */
   touchRow?(table: string, key: unknown, remove: boolean, column?: string): string;

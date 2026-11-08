@@ -459,7 +459,8 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     }
     case "completion_schema": {
       const { engine } = connection(str("connectionId"));
-      return engine.completion?.(str("database")) ?? { database: str("database"), objects: [] };
+      const database = (payload.database as string | null) ?? null;
+      return engine.completion?.(database) ?? { databases: [], schemas: [], tables: [] };
     }
     case "create_database": {
       const connectionId = str("connectionId");
@@ -471,7 +472,7 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "invoke_capability":
       return invokeCapability(str("connectionId"), str("name"), payload.args ?? null);
     case "format_sql":
-      // Like the backend until a formatter is wired: the text unchanged.
+      // The backend formatter is Rust (src-tauri/src/lang); the browser mock leaves the text unchanged.
       return str("text");
 
     // Contract: sessions

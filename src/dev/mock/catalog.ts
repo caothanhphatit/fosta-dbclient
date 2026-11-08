@@ -890,14 +890,27 @@ export class MockCatalog {
     };
   }
 
-  completion(database: string): CompletionSchema {
+  completion(database: string | null): CompletionSchema {
+    const tables = database ? this.tablesOf(database) : [];
+    const schemas = [...new Set(tables.map((table) => table.spec.schema).filter((schema): schema is string => Boolean(schema)))];
     return {
-      database,
-      objects: this.tablesOf(database).map((table) => ({
-        name: table.spec.name,
-        schema: table.spec.schema ?? null,
-        kind: table.spec.kind,
-        columns: table.spec.columns.map((item) => item.name),
+      databases: this.databases.map((item) => item.name),
+      schemas,
+      defaultSchema: schemas[0],
+      tables: tables.map(({ spec }) => ({
+        name: spec.name,
+        schema: spec.schema ?? undefined,
+        kind: spec.kind,
+        columns: spec.columns.map((column) => {
+          const key = (spec.foreignKeys ?? []).find((fk) => fk.columns.includes(column.name));
+          const ref = key?.refColumns[key.columns.indexOf(column.name)];
+          return {
+            name: column.name,
+            type: column.typeName,
+            pk: spec.key.includes(column.name),
+            fk: key && ref ? { table: key.refTable, column: ref, schema: key.refSchema ?? undefined } : undefined,
+          };
+        }),
       })),
     };
   }

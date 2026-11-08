@@ -11,7 +11,7 @@
 //! - [`http`]: HTTP client, error mapping and Server-Sent Events parsing
 
 mod anthropic;
-mod catalog;
+pub(crate) mod catalog;
 mod http;
 mod openai;
 mod prompt;

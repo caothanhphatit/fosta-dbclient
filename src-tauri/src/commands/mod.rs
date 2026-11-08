@@ -105,9 +105,9 @@ macro_rules! for_each_command {
             [async] invoke_capability(connection_id: String, name: String, args: Option<serde_json::Value>,
                 confirmation: Option<$crate::gateway::Confirmation>)
                 -> $crate::error::AppResult<serde_json::Value> = $crate::commands::capability::invoke_capability;
-            [async] completion_schema(connection_id: String, database: String)
-                -> $crate::error::AppResult<$crate::commands::lang::CompletionSchema> = $crate::commands::lang::completion_schema;
-            [sync] format_sql(dialect: Option<$crate::contract::SqlDialectId>, text: String)
+            [async] completion_schema(connection_id: String, database: Option<String>)
+                -> $crate::error::AppResult<$crate::lang::CompletionSchema> = $crate::commands::lang::completion_schema;
+            [sync] format_sql(dialect: Option<$crate::contract::SqlDialectId>, text: String, options: Option<$crate::lang::FormatOptions>)
                 -> $crate::error::AppResult<String> = $crate::commands::lang::format_sql;
 
             [sync] task_statuses() -> Vec<$crate::tasks::TaskStatus> = $crate::commands::tasks::task_statuses;

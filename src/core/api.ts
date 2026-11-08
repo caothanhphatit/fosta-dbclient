@@ -1,3 +1,4 @@
+import type { CompletionSchema, FormatOptions } from "../lang/types";
 import type {
   ApplyResult,
   BrowseRequest as ObjectBrowseRequest,
@@ -57,11 +58,8 @@ export interface ParsedConnectionString {
   password: string | null;
 }
 
-/** `completion_schema`: the names the editor completes for one database. */
-export interface CompletionSchema {
-  database: string;
-  objects: { name: string; schema: string | null; kind: string; columns: string[] }[];
-}
+/** `completion_schema`: what the editor completes for one database (the language library's shape). */
+export type { CompletionSchema, FormatOptions } from "../lang/types";
 
 export const api = {
   getConfig: () => invoke<AppConfig>("get_config"),
@@ -110,8 +108,8 @@ export const api = {
   /** An engine-specific operation (`vector.search`, `redis.scan`, …); the gateway refuses names the engine does not know. */
   invokeCapability: <T = unknown>(connectionId: string, name: string, args: unknown = null, confirmation: Confirmation | null = null) =>
     invoke<T>("invoke_capability", { connectionId, name, args, confirmation }),
-  completionSchema: (connectionId: string, database: string) => invoke<CompletionSchema>("completion_schema", { connectionId, database }),
-  formatSql: (dialect: SqlDialectId | null, text: string) => invoke<string>("format_sql", { dialect, text }),
+  completionSchema: (connectionId: string, database: string | null) => invoke<CompletionSchema>("completion_schema", { connectionId, database }),
+  formatSql: (dialect: SqlDialectId | null, text: string, options: FormatOptions | null = null) => invoke<string>("format_sql", { dialect, text, options }),
 
   schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),
   createDatabase: (connectionId: string, name: string, firstCollection: string | null, confirmation: Confirmation | null = null) =>
