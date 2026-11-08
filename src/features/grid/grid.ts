@@ -3,81 +3,40 @@
  * per column kind (validated with `parseInput` before an edit is accepted), copy / paste, and pending edits that become
  * contract `RowChange`s (`changeSet.ts`). Query results and design tables use it read-only.
  */
-import { buildChanges, isEditableColumn, type BuiltChange, type PendingRow } from "./changeSet";
+import { buildChanges, isEditableColumn, type BuiltChange } from "./changeSet";
 import { openCellEditor } from "./cellEditor";
-import { editText, isJsonKind, KIND_HINTS, pastedValue, splitPasted } from "./cellValue";
-import { columnCondition, FILTER_HELP, FILTER_OPERATORS, matchesFilter, parseFilterText, withOperator, type ColumnFilters } from "./columnFilter";
+import { filterRow } from "./gridFilterRow";
+import { pasteBlock } from "./gridPaste";
+import { beginBoolEdit, beginTextEdit, type InlineEditHost } from "./inlineEdit";
+import { isJsonKind } from "./cellValue";
+import { matchesFilter, type ColumnFilters } from "./columnFilter";
 import { openColumnsPopover } from "./columnsPopover";
 import { nearestVisibleColumn, normalizeHidden, setColumnHidden, stepVisibleColumn, visibleColumnIndexes } from "./columnVisibility";
-import type { ColumnInfo, Field, FilterOp, Value } from "../../core/contract";
+import type { ColumnInfo, Field, Value } from "../../core/contract";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
 import { clamp, copyText, h, icon } from "../../core/dom";
 import { EXPORT_LABELS, exportRows, type ExportFormat } from "../importExport/exporters";
-import type { SqlDialect } from "../../core/sql";
-import { displayValue, isNumericKind, parseInput, valuesEqual } from "../../core/values";
+import { displayValue, isNumericKind, valuesEqual } from "../../core/values";
+import {
+  EXPORT_FORMATS,
+  MOVES,
+  NULL,
+  TEXT_KINDS,
+  TYPE_LABELS,
+  preview,
+  rowState,
+  rowText,
+  typeKind,
+  gridSetup,
+  type GridRow,
+  type GridSetup,
+  type Position,
+} from "./gridModel";
+export { gridSetup, type GridSetup, type SortState } from "./gridModel";
 import "./grid-virtual.css";
 import "./grid-tools.css";
 
-export interface SortState {
-  column: string;
-  descending: boolean;
-}
-
-export interface GridSetup {
-  columns: ColumnInfo[];
-  rows: Value[][];
-  /** `Page.rowVersions`: one per row, sent back with updates and deletes. */
-  rowVersions: Value[] | null;
-  editable: boolean;
-  /** Why a non-editable grid is read-only, shown in the cell editor (e.g. a Read-only workspace). */
-  readOnlyReason: string | null;
-  /** Columns that identify a row (`Page.keyColumns`); empty: every comparable column. */
-  keyColumns: string[];
-  rowOffset: number;
-  sort: SortState | null;
-  onSort: ((column: string) => void) | null;
-  tableName: string | null;
-  /** How "Copy as INSERT statements" quotes names and values. */
-  dialect: SqlDialect;
-  onSelect: ((row: Value[] | null) => void) | null;
-  extraMenu: ((row: Value[]) => MenuItem[]) | null;
-  columnFilters: ColumnFilters;
-  onColumnFilter: ((filters: ColumnFilters) => void) | null;
-  /** Set while the column filters do not apply (the raw filter box is in use); the boxes are shown disabled with it. */
-  filtersPaused: string | null;
-  clientFilter: boolean;
-  /** Column names not drawn; their data, filters and edits are kept. */
-  hiddenColumns: string[];
-  /** Called when the user hides or shows columns (the table view saves the choice). */
-  onHiddenColumns: ((hidden: string[]) => void) | null;
-  /** Loads all components of a vector cell for the cell editor (table views only). */
-  loadVector: ((row: Value[], column: ColumnInfo) => Promise<number[]>) | null;
-}
-
-interface GridRow extends PendingRow {
-  original: Value[] | null;
-  current: Value[];
-  deleted: boolean;
-  version: Value | null;
-  touched: Set<number>;
-  /** Set once a cell was edited; untouched rows skip the comparison. */
-  edited: boolean;
-  /** Gone from the server (resolved in the conflict dialog): not drawn and not saved. */
-  removed: boolean;
-  element: HTMLTableRowElement | null;
-}
-
-interface Position {
-  row: number;
-  column: number;
-}
-
-type RowState = "clean" | "modified" | "new" | "deleted";
-
-const NULL: Value = { t: "null", v: null };
-const PREVIEW_LIMIT = 300;
-const FILTER_DEBOUNCE_MS = 350;
 const TOOLTIP_THRESHOLD = 60;
 /** Rows rendered beyond the viewport on each side. */
 const OVERSCAN = 12;
@@ -88,94 +47,6 @@ const DEFAULT_VIEWPORT = 800;
 /** Row height (26px cell incl. its 1px border), refined by measuring once. */
 let rowHeight = 26;
 let rowHeightMeasured = false;
-const MOVES: Record<string, Position> = {
-  ArrowUp: { row: -1, column: 0 },
-  ArrowDown: { row: 1, column: 0 },
-  ArrowLeft: { row: 0, column: -1 },
-  ArrowRight: { row: 0, column: 1 },
-};
-
-/** The short mark of each operator on the filter boxes' operator button. */
-const OPERATOR_MARKS: Record<FilterOp, string> = {
-  contains: "≈",
-  notContains: "!≈",
-  startsWith: "^",
-  endsWith: "$",
-  eq: "=",
-  ne: "≠",
-  lt: "<",
-  le: "≤",
-  gt: ">",
-  ge: "≥",
-  between: "..",
-  in: "in",
-  notIn: "!in",
-  like: "~",
-  notLike: "!~",
-  isNull: "∅",
-  isNotNull: "!∅",
-};
-
-export function gridSetup(columns: ColumnInfo[], rows: Value[][], dialect: SqlDialect = "ansi"): GridSetup {
-  return {
-    columns,
-    rows,
-    rowVersions: null,
-    editable: false,
-    readOnlyReason: null,
-    keyColumns: [],
-    rowOffset: 0,
-    sort: null,
-    onSort: null,
-    tableName: null,
-    dialect,
-    onSelect: null,
-    extraMenu: null,
-    columnFilters: {},
-    onColumnFilter: null,
-    filtersPaused: null,
-    clientFilter: false,
-    hiddenColumns: [],
-    onHiddenColumns: null,
-    loadVector: null,
-  };
-}
-
-const EXPORT_FORMATS: ExportFormat[] = ["csv", "json", "markdown", "insert"];
-
-type TypeKind = "number" | "text" | "date" | "bool" | "json" | "binary" | "vector";
-
-const TYPE_LABELS: Record<TypeKind, string> = { number: "123", text: "abc", date: "date", bool: "bool", json: "json", binary: "bin", vector: "vec" };
-
-/** Coarse family of a column's kind, for the badge under its name. */
-function typeKind(column: ColumnInfo): TypeKind {
-  if (column.hints.vectorDims != null) return "vector";
-  switch (column.kind.kind) {
-    case "int":
-    case "float":
-    case "decimal":
-      return "number";
-    case "bool":
-      return "bool";
-    case "date":
-    case "time":
-    case "timestamp":
-    case "timestampTz":
-    case "interval":
-      return "date";
-    case "json":
-    case "document":
-    case "array":
-      return "json";
-    case "bytes":
-    case "objectId":
-      return "binary";
-    default:
-      return column.hints.binary ? "binary" : "text";
-  }
-}
-
-const TEXT_KINDS = new Set(["text", "other", "interval"]);
 
 export class DataGrid {
   readonly element: HTMLElement;
@@ -580,77 +451,13 @@ export class DataGrid {
   }
 
   private filterRow(): HTMLTableRowElement {
-    const paused = this.setup.filtersPaused;
-    const cells = this.displayed.map((index) => {
-      const column = this.setup.columns[index];
-      if (column.hints.vectorDims != null) return h("th", { class: "filter-cell" });
-      const text = this.filters[column.name] ?? "";
-      const condition = text ? columnCondition(column, text) : null;
-      const invalid = condition instanceof Error;
-      const input = h("input", {
-        class: `column-filter${text ? " active" : ""}${invalid ? " invalid" : ""}`,
-        value: text,
-        placeholder:
-          TEXT_KINDS.has(column.kind.kind) || isJsonKind(column.kind) || column.kind.kind === "bytes" ? "filter" : (KIND_HINTS[column.kind.kind] ?? "filter"),
-        title: paused ?? (invalid ? `${condition.message} (not applied)` : FILTER_HELP),
-        spellcheck: "false",
-        disabled: paused !== null,
-        "data-column": column.name,
-      });
-      let pending: ReturnType<typeof setTimeout> | null = null;
-      const apply = (value: string) => {
-        if (pending) clearTimeout(pending);
-        pending = null;
-        this.applyColumnFilter(column.name, value);
-      };
-      input.addEventListener("keydown", (event) => {
-        event.stopPropagation();
-        if (event.key === "Enter") apply(input.value);
-        else if (event.key === "Escape") apply("");
-      });
-      // Filters apply as you type, after a short pause, so Enter is optional.
-      input.addEventListener("input", () => {
-        if (pending) clearTimeout(pending);
-        pending = setTimeout(() => apply(input.value), FILTER_DEBOUNCE_MS);
-      });
-      const op = parseFilterText(text, column.kind)?.op ?? null;
-      const opButton = h(
-        "button",
-        { class: `filter-op${op ? " active" : ""}`, type: "button", title: "Choose an operator", disabled: paused !== null, tabIndex: -1 },
-        op ? OPERATOR_MARKS[op] : icon("filter"),
-      );
-      opButton.addEventListener("click", (event) => showContextMenu(event, this.operatorMenu(column, input, op, apply)));
-      return h("th", { class: "filter-cell" }, h("div", { class: "filter-wrap" }, opButton, input));
+    return filterRow({
+      columns: this.setup.columns,
+      displayed: this.displayed,
+      filters: this.filters,
+      paused: this.setup.filtersPaused,
+      apply: (column, text) => this.applyColumnFilter(column, text),
     });
-    return h(
-      "tr",
-      { class: `filter-row${paused ? " paused" : ""}` },
-      h("th", { class: "row-number filter-cell", title: paused ?? FILTER_HELP }, icon("filter")),
-      ...cells,
-    );
-  }
-
-  private operatorMenu(column: ColumnInfo, input: HTMLInputElement, current: FilterOp | null, apply: (text: string) => void): MenuItem[] {
-    const plainOp = TEXT_KINDS.has(column.kind.kind) || isJsonKind(column.kind) || column.kind.kind === "bytes" ? "contains" : "eq";
-    return FILTER_OPERATORS.map((item) => ({
-      label: `${item.label}   ${item.op === plainOp ? "x" : item.syntax}`,
-      icon: item.op === current ? "check" : undefined,
-      run: () => {
-        const text = withOperator(input.value, item.op);
-        input.value = text;
-        const parsed = parseFilterText(text, column.kind);
-        const complete =
-          parsed !== null && (parsed.values.length === 0 ? item.op === "isNull" || item.op === "isNotNull" : parsed.values.every((value) => value !== ""));
-        if (complete) {
-          apply(text);
-          return;
-        }
-        // Wait for the value: put the cursor where it goes.
-        input.focus();
-        const at = item.op === "endsWith" ? Math.max(0, text.length - 1) : text.length;
-        input.setSelectionRange(at, at);
-      },
-    }));
   }
 
   private restoreFilterFocus(): void {
@@ -924,31 +731,12 @@ export class DataGrid {
    */
   pasteText(position: Position, text: string): void {
     if (!this.setup.editable) return;
-    const block = splitPasted(text);
-    const errors: string[] = [];
-    let pasted = 0;
-    const startRow = this.visiblePosition.get(position.row) ?? 0;
-    const startColumn = this.displayed.indexOf(position.column);
-    block.forEach((fields, rowOffset) => {
-      const rowIndex = this.visible[startRow + rowOffset];
-      const row = rowIndex === undefined ? undefined : this.rows[rowIndex];
-      if (!row || row.deleted) return;
-      fields.forEach((field, columnOffset) => {
-        const columnIndex = this.displayed[startColumn + columnOffset];
-        const column = columnIndex === undefined ? undefined : this.setup.columns[columnIndex];
-        if (!column || !isEditableColumn(column)) return;
-        const value = pastedValue(column.kind, field);
-        if (value instanceof Error) {
-          errors.push(`${column.name}: ${value.message}`);
-          return;
-        }
-        row.current[columnIndex] = value;
-        row.touched.add(columnIndex);
-        row.edited = true;
-        pasted += 1;
-      });
-      this.refreshRow(rowIndex);
-    });
+    const { pasted, errors, changedRows } = pasteBlock(
+      { columns: this.setup.columns, rows: this.rows, visible: this.visible, visiblePosition: this.visiblePosition, displayed: this.displayed },
+      position,
+      text,
+    );
+    for (const rowIndex of changedRows) this.refreshRow(rowIndex);
     if (pasted > 0) {
       const selected = this.selection ? this.rows[this.selection.row] : null;
       if (selected) this.setup.onSelect?.(selected.current);
@@ -981,147 +769,32 @@ export class DataGrid {
       return;
     }
     if (column.kind.kind === "bool") {
-      this.beginBoolEdit(position, row, cell, value, initial);
+      beginBoolEdit(this.inlineHost(), position, row, cell, value, initial);
       return;
     }
-    const startText = editText(value);
-    const input = h("input", {
-      class: "cell-editor",
-      value: initial ?? startText,
-      spellcheck: "false",
-      placeholder: value.t === "null" && initial === undefined ? "NULL" : (KIND_HINTS[column.kind.kind] ?? ""),
-    });
-    let finished = false;
-    /** The typed value, or an Error that keeps the editor open. */
-    const parsed = (): Value | Error => (column.kind.kind === "text" ? { t: "text", v: input.value } : parseInput(column.kind, input.value));
-    const markInvalid = (error: Error | null) => {
-      input.classList.toggle("invalid", error !== null);
-      input.title = error?.message ?? "";
-    };
-    const finish = (commit: boolean, next: Position | null, refocus: boolean) => {
-      if (finished) return;
-      const untouched = initial === undefined && input.value === startText;
-      // An empty box on a NULL cell that was only opened and left stays NULL.
-      const leftNull = value.t === "null" && initial === undefined && input.value === "";
-      if (commit && !untouched && !leftNull) {
-        const result = parsed();
-        if (result instanceof Error) {
-          // Enter / Tab keep the editor open on invalid input; leaving it (blur, scrolling away) drops the edit.
-          if (refocus) {
-            markInvalid(result);
-            toast(result.message, "error");
-            return;
-          }
-          toast(`Not changed: ${result.message}`, "error");
-          commit = false;
-        } else if (!valuesEqual(result, value)) {
-          row.current[position.column] = result;
-          row.touched.add(position.column);
-          row.edited = true;
-        }
-      }
-      finished = true;
-      this.editing = false;
-      this.editingRow = null;
-      this.commitEdit = null;
-      this.refreshRow(position.row);
-      if (refocus) this.element.focus({ preventScroll: true });
-      if (next) this.select(next);
-      if (commit && this.selection?.row === position.row) this.setup.onSelect?.(row.current);
-      this.onChange();
-    };
-    input.addEventListener("input", () => {
-      if (input.classList.contains("invalid")) {
-        const result = parsed();
-        markInvalid(result instanceof Error ? result : null);
-      }
-    });
-    input.addEventListener("keydown", (event) => {
-      event.stopPropagation();
-      if (event.key === "Enter" && event.shiftKey) {
-        // Continue in the large editor with what was typed so far.
-        event.preventDefault();
-        finish(true, null, true);
-        if (finished) this.openEditor(position);
-      } else if (event.key === "Enter") finish(true, { row: position.row + 1, column: position.column }, true);
-      else if (event.key === "Escape") finish(false, null, true);
-      else if (event.key === "Tab") {
-        event.preventDefault();
-        finish(true, { row: position.row, column: stepVisibleColumn(this.displayed, position.column, event.shiftKey ? -1 : 1) }, true);
-      }
-    });
-    input.addEventListener("blur", () => finish(true, null, false));
-    this.editing = true;
-    this.editingRow = position.row;
-    this.commitEdit = () => finish(true, null, false);
-    cell.classList.add("editing");
-    cell.replaceChildren(input);
-    input.focus();
-    if (initial === undefined) input.select();
+    beginTextEdit(this.inlineHost(), position, row, cell, column, value, initial);
   }
 
-  /** Booleans edit as a checkbox in the cell: Space toggles, Enter / Tab keep, Esc cancels; t/f/1/0/y/n set it. */
-  private beginBoolEdit(position: Position, row: GridRow, cell: HTMLElement, value: Value, initial?: string): void {
-    const start = value.t === "bool" ? value.v : false;
-    const box = h("input", { type: "checkbox", class: "cell-editor-check", checked: start });
-    const typed = initial?.toLowerCase();
-    if (typed && "t1y".includes(typed)) box.checked = true;
-    else if (typed && "f0n".includes(typed)) box.checked = false;
-    else if (typed === " ") box.checked = !start;
-    let finished = false;
-    const finish = (commit: boolean, next: Position | null, refocus: boolean) => {
-      if (finished) return;
-      finished = true;
-      this.editing = false;
-      this.editingRow = null;
-      this.commitEdit = null;
-      const changed = value.t !== "bool" || value.v !== box.checked;
-      if (commit && changed) {
-        row.current[position.column] = { t: "bool", v: box.checked };
-        row.touched.add(position.column);
-        row.edited = true;
-      }
-      this.refreshRow(position.row);
-      if (refocus) this.element.focus({ preventScroll: true });
-      if (next) this.select(next);
-      if (commit && changed && this.selection?.row === position.row) this.setup.onSelect?.(row.current);
-      this.onChange();
+  private inlineHost(): InlineEditHost {
+    return {
+      displayed: () => this.displayed,
+      begin: (row, commit) => {
+        this.editing = true;
+        this.editingRow = row;
+        this.commitEdit = commit;
+      },
+      end: () => {
+        this.editing = false;
+        this.editingRow = null;
+        this.commitEdit = null;
+      },
+      refreshRow: (index) => this.refreshRow(index),
+      focusGrid: () => this.element.focus({ preventScroll: true }),
+      select: (position) => this.select(position),
+      selectedRow: () => this.selection?.row,
+      rowSelected: (values) => this.setup.onSelect?.(values),
+      changed: () => this.onChange(),
+      openLargeEditor: (position) => this.openEditor(position),
     };
-    box.addEventListener("keydown", (event) => {
-      event.stopPropagation();
-      const key = event.key.toLowerCase();
-      if (event.key === "Enter") finish(true, { row: position.row + 1, column: position.column }, true);
-      else if (event.key === "Escape") finish(false, null, true);
-      else if (event.key === "Tab") {
-        event.preventDefault();
-        finish(true, { row: position.row, column: stepVisibleColumn(this.displayed, position.column, event.shiftKey ? -1 : 1) }, true);
-      } else if (key.length === 1 && "t1y".includes(key)) box.checked = true;
-      else if (key.length === 1 && "f0n".includes(key)) box.checked = false;
-    });
-    box.addEventListener("blur", () => finish(true, null, false));
-    this.editing = true;
-    this.editingRow = position.row;
-    this.commitEdit = () => finish(true, null, false);
-    cell.classList.add("editing");
-    cell.replaceChildren(h("label", { class: "cell-check" }, box, h("span", {}, "true")));
-    box.focus();
   }
-}
-
-function rowState(row: GridRow): RowState {
-  if (row.removed) return "clean";
-  const original = row.original;
-  if (!original) return "new";
-  if (row.deleted) return "deleted";
-  if (!row.edited) return "clean";
-  return row.current.some((value, index) => !valuesEqual(value, original[index] ?? NULL)) ? "modified" : "clean";
-}
-
-/** A row as tab-separated text, NULL spelled out (what Paste reads back). */
-function rowText(row: Value[]): string {
-  return row.map((value) => displayValue(value) ?? "NULL").join("\t");
-}
-
-function preview(value: string): string {
-  return value.length > PREVIEW_LIMIT ? `${value.slice(0, PREVIEW_LIMIT)}…` : value;
 }
