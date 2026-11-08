@@ -199,14 +199,17 @@ pub fn validate_raw_filter(language: RawFilterLang, dialect: Option<SqlDialectId
     }
 }
 
-/// Elasticsearch Query DSL: a JSON object, and no scripts (`script`, `script_score`, `runtime_mappings`).
+/// Elasticsearch Query DSL: a JSON object, and nothing that runs code or smuggles a query past this check
+/// (`script`, any `*_script` key such as `script_score` or `minimum_should_match_script`, `runtime_mappings`, `wrapper`).
 pub fn validate_es_filter(filter: &str) -> AppResult<()> {
     let value: serde_json::Value =
         serde_json::from_str(filter).map_err(|error| reject(filter, format!("The filter is not valid JSON: {error}")))?;
     if !value.is_object() {
         return Err(reject(filter, "The filter must be a JSON object (a Query DSL query)."));
     }
-    if let Some(key) = find_key(&value, &["script", "script_score", "runtime_mappings"]) {
+    if let Some(key) = find_key(&value, &|key| {
+        key == "script" || key.ends_with("_script") || key.starts_with("script_") || key == "runtime_mappings" || key == "wrapper"
+    }) {
         return Err(reject(
             filter,
             format!("'{key}' is not allowed in a filter: it runs code on the cluster."),
@@ -215,14 +218,11 @@ pub fn validate_es_filter(filter: &str) -> AppResult<()> {
     Ok(())
 }
 
-fn find_key<'a>(value: &'a serde_json::Value, denied: &[&str]) -> Option<&'a str> {
+fn find_key<'a>(value: &'a serde_json::Value, denied: &dyn Fn(&str) -> bool) -> Option<&'a str> {
     match value {
-        serde_json::Value::Object(map) => map.iter().find_map(|(key, inner)| {
-            denied
-                .contains(&key.as_str())
-                .then_some(key.as_str())
-                .or_else(|| find_key(inner, denied))
-        }),
+        serde_json::Value::Object(map) => map
+            .iter()
+            .find_map(|(key, inner)| denied(key).then_some(key.as_str()).or_else(|| find_key(inner, denied))),
         serde_json::Value::Array(items) => items.iter().find_map(|item| find_key(item, denied)),
         _ => None,
     }
@@ -260,6 +260,15 @@ mod tests {
         );
         assert_eq!(script.unwrap_err().code(), Some(INVALID_FILTER));
         assert!(validate_raw_filter(RawFilterLang::EsQueryDsl, None, "[1]").is_err());
+        for smuggled in [
+            r#"{ "wrapper": { "query": "eyJtYXRjaF9hbGwiOnt9fQ==" } }"#,
+            r#"{ "terms_set": { "tags": { "terms": ["a"], "minimum_should_match_script": { "source": "1" } } } }"#,
+            r#"{ "function_score": { "script_score": { "script": "1" } } }"#,
+            r#"{ "bool": { "must": [ { "match_all": {} } ] }, "runtime_mappings": {} }"#,
+        ] {
+            let error = validate_raw_filter(RawFilterLang::EsQueryDsl, None, smuggled).unwrap_err();
+            assert_eq!(error.code(), Some(INVALID_FILTER), "{smuggled}");
+        }
         assert!(validate_raw_filter(RawFilterLang::Sql, Some(SqlDialectId::Postgres), "total > 10 AND name ILIKE 'a%'").is_ok());
         assert!(validate_raw_filter(RawFilterLang::Sql, Some(SqlDialectId::Sqlite), "1=1; DROP TABLE t").is_err());
     }
