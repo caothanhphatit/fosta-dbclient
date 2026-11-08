@@ -14,7 +14,7 @@ import { sqlDialect, type SqlDialect } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
 import type { HistoryEntry, QueryOutcome, ResultSet, TransactionOp, TransactionState } from "../../core/types";
 import { withConfirmation } from "../safety/confirmationDialog";
-import { IDLE_TRANSACTION_MINUTES, idleReminderDue, transactionButtons, transactionLabel } from "../safety/safety";
+import { commitsOpenTransaction, IDLE_TRANSACTION_MINUTES, idleReminderDue, transactionButtons, transactionLabel } from "../safety/safety";
 
 interface ResultPanel {
   title: string;
@@ -316,6 +316,13 @@ export class QueryView implements TabContent {
   private async run(): Promise<void> {
     const sql = selectedOrAllText(this.editor).trim();
     if (!sql || this.running) return;
+    if (commitsOpenTransaction(this.driver, sql, this.transaction)) {
+      const proceed = await confirmDialog(
+        "This runs DDL (or a new BEGIN), which commits the open transaction first on MariaDB/MySQL; Rollback will not undo the earlier changes. Run anyway?",
+        "Commit and run",
+      );
+      if (!proceed) return;
+    }
     const database = this.databaseSelect.value || null;
     const startedAt = Date.now();
     // Time spent in the confirmation dialog is not query time, and Stop is only usable while a statement runs.

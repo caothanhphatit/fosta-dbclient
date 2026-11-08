@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  commitsOpenTransaction,
   confirmationReason,
   connectionSafety,
   defaultSafety,
@@ -101,6 +102,16 @@ describe("transactions", () => {
     expect(transactionLabel({ supported: false, open: false, autoCommit: true })).toBe("Transactions: not supported");
     expect(transactionLabel({ supported: true, open: true, autoCommit: false })).toBe("Transaction open");
     expect(transactionLabel({ supported: true, open: false, autoCommit: true })).toBe("Auto-commit");
+  });
+
+  it("warns before DDL commits an open MySQL transaction", () => {
+    const open = { supported: true, open: true, autoCommit: true };
+    expect(commitsOpenTransaction("mariadb", "ALTER TABLE t ADD c INT", open)).toBe(true);
+    expect(commitsOpenTransaction("mysql", "UPDATE t SET a = 1;\n  create index i on t (a)", open)).toBe(true);
+    expect(commitsOpenTransaction("mariadb", "-- drop table t\nSELECT 1", open)).toBe(false);
+    expect(commitsOpenTransaction("mariadb", "UPDATE t SET note = 'drop'", open)).toBe(false);
+    expect(commitsOpenTransaction("mariadb", "DROP TABLE t", { ...open, open: false })).toBe(false);
+    expect(commitsOpenTransaction("mssql", "DROP TABLE t", open)).toBe(false);
   });
 
   it("disables Begin while a transaction is open", () => {

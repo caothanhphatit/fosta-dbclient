@@ -242,6 +242,16 @@ export function transactionLabel(state: TransactionState | null): string {
 }
 
 /**
+ * True when running `sql` would silently commit the open transaction: on MySQL/MariaDB every DDL statement (and
+ * START TRANSACTION / BEGIN) ends the current transaction first. A plain keyword check, so it errs on asking.
+ */
+export function commitsOpenTransaction(driver: string, sql: string, state: TransactionState | null): boolean {
+  if (state?.open !== true || (driver !== "mariadb" && driver !== "mysql")) return false;
+  const withoutComments = sql.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(--|#)[^\n]*/g, " ");
+  return /(^|;)\s*(create|alter|drop|truncate|rename|start\s+transaction|begin)\b/i.test(withoutComments);
+}
+
+/**
  * Which transaction buttons are usable. Begin is disabled while a transaction is open: on MySQL/MariaDB a second
  * START TRANSACTION silently commits the open one, and on SQL Server it nests.
  */
