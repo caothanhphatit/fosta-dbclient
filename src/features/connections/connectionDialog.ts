@@ -1,8 +1,10 @@
+import { showError } from "../../core/errorPanel";
 import { capabilities, localhostHint } from "../../core/capabilities";
 import { api, errorText } from "../../core/api";
 import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs";
 import { h, icon } from "../../core/dom";
-import { describeServer, driverInfo, DRIVERS, type DriverInfo } from "../../core/drivers";
+import { describeServer, driverInfo, drivers, type DriverInfo } from "../../core/drivers";
+import { engineInfo } from "../../core/engines";
 import type { AppConfig, ConnectionProfile } from "../../core/types";
 import {
   CONNECTION_STRING_EXAMPLES,
@@ -28,7 +30,8 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
   return new Promise((resolve) => {
     let saved: AppConfig | null = null;
     const id = existing?.id ?? crypto.randomUUID();
-    let driver = driverInfo(existing?.driver);
+    // A new connection starts on the first engine offered; a saved one keeps its own (an unknown id stays marked unknown).
+    let driver = existing ? driverInfo(existing.driver) : (drivers()[0] ?? driverInfo(undefined));
     let previousDriver = driver;
     const name = textInput(existing?.name ?? "", { placeholder: "e.g. Staging replica" });
     const host = textInput(existing?.host ?? (capabilities().inContainer ? "host.docker.internal" : "127.0.0.1"));
@@ -94,7 +97,7 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       for (const button of modeButtons) button.classList.toggle("active", button.dataset.mode === mode);
       paramsSection.hidden = mode !== "params";
       stringField.hidden = mode !== "string";
-      stringHint.textContent = `e.g. ${CONNECTION_STRING_EXAMPLES[driver.id]}. A password in the string goes to ${capabilities().secretStore}, not into the config file.`;
+      stringHint.textContent = `e.g. ${CONNECTION_STRING_EXAMPLES[driver.id] ?? engineInfo(driver.id).connection.url?.example ?? ""}. A password in the string goes to ${capabilities().secretStore}, not into the config file.`;
     };
     const switchMode = (next: "params" | "string") => {
       if (next === mode) return;
@@ -105,7 +108,7 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
         try {
           applyParsed(parseConnectionString(driver.id, connectionString.value));
         } catch (error) {
-          toast(errorText(error), "error");
+          showError(error, "Read the connection string");
           return;
         }
       }
@@ -154,7 +157,7 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       renderMode();
     };
 
-    const cards = DRIVERS.map((info) => {
+    const cards = drivers().map((info) => {
       const card = h(
         "button",
         { class: `driver-card${info.id === driver.id ? " active" : ""}`, type: "button", "data-driver": info.id, title: info.label },
@@ -252,7 +255,7 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
               }
               throw error;
             });
-            toast(`Connection OK · ${describeServer(profile, info.server.version)}`, "success");
+            toast(`Connection OK · ${describeServer(info)}`, "success");
             return false;
           },
         },

@@ -16,7 +16,7 @@ src/                     TypeScript UI (no framework, bundled by Vite)
   core/                  shared building blocks: IPC client (api.ts), types, DOM helpers, dialogs, tabs, theme, SQL helpers
   features/<area>/       one folder per feature (connections, workspaces, tasks, grid, table, query, design,
                          diagram, vector, assistant, importExport), each with its own dialogs
-  dev/devMock.ts         in-browser mock backend for `npm run dev`
+  dev/mock/              in-browser mock backend for `npm run dev` (one module per engine)
   styles.css             all styles
 src-tauri/src/           Rust backend
   lib.rs                 the shared backend: AppState, Capabilities, module list
@@ -60,7 +60,7 @@ deploy/                  docker-compose.yml for the web edition (Dockerfile at t
 ```powershell
 npm install
 npm run tauri dev      # desktop app with hot reload
-npm run dev            # UI only, in a browser, against the mock backend (src/dev/devMock.ts)
+npm run dev            # UI only, in a browser, against the mock backend (src/dev/mock/)
 npm run tauri build -- --no-bundle   # portable src-tauri\target\release\fosta-studio.exe
 ```
 

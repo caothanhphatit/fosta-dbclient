@@ -1,8 +1,10 @@
 import { api, errorCode, errorText, PASSWORD_REQUIRED } from "../../core/api";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
-import { promptPassword, toast } from "../../core/dialogs";
+import { promptPassword } from "../../core/dialogs";
 import { copyText, formatCompact, h, icon, type IconName } from "../../core/dom";
-import { describeServer, driverOf } from "../../core/drivers";
+import { driverOf } from "../../core/drivers";
+import { describeServer, setConnectInfo } from "../../core/engines";
+import { showError } from "../../core/errorPanel";
 import { databaseDialog } from "./databaseDialog";
 import type { AppConfig, ConnectionProfile, TableInfo, TableTarget } from "../../core/types";
 
@@ -158,11 +160,12 @@ export class ConnectionTree {
     node.message = null;
     this.render();
     try {
-      const version = (await api.connect(node.profile.id, password)).server.version;
+      const info = await api.connect(node.profile.id, password);
+      setConnectInfo(node.profile.id, info);
       node.state = "connected";
-      node.version = version;
+      node.version = info.server.version;
       node.expanded = true;
-      this.host.status(`Connected to ${node.profile.name} · ${describeServer(node.profile, version)}`);
+      this.host.status(`Connected to ${node.profile.name} · ${describeServer(info)}`);
       await this.loadDatabases(node);
     } catch (error) {
       const message = errorText(error);
@@ -171,7 +174,7 @@ export class ConnectionTree {
       node.message = needsPassword ? null : message;
       this.render();
       if (needsPassword) await this.askPasswordAndConnect(node);
-      else toast(`${node.profile.name}: ${message}`, "error");
+      else showError(error, `Connect to ${node.profile.name}`);
     }
   }
 
@@ -188,11 +191,12 @@ export class ConnectionTree {
     try {
       await api.disconnect(node.profile.id);
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, `Disconnect ${node.profile.name}`);
     }
     node.state = "idle";
     node.expanded = false;
     node.databases = null;
+    setConnectInfo(node.profile.id, null);
     this.host.connectionClosed(node.profile.id);
     this.host.status(`Disconnected from ${node.profile.name}`);
     this.render();
@@ -205,7 +209,7 @@ export class ConnectionTree {
       node.databases = names.map((name): DatabaseNode => previous.get(name) ?? { name, expanded: false, loading: false, tables: null });
       for (const database of node.databases.filter((item) => item.expanded)) void this.loadTables(node, database);
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, `List databases of ${node.profile.name}`);
     }
     this.render();
   }
@@ -228,7 +232,7 @@ export class ConnectionTree {
     try {
       database.tables = await api.listTables(node.profile.id, database.name);
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, `List ${driverOf(node.profile).objectsLabel} of ${database.name}`);
     } finally {
       database.loading = false;
       this.render();

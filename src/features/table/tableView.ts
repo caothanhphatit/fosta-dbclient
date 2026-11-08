@@ -1,4 +1,5 @@
-import { api, errorText } from "../../core/api";
+import { showError } from "../../core/errorPanel";
+import { api } from "../../core/api";
 import { combinedCondition, combinedJsonFilter, type ColumnFilters } from "../grid/columnFilter";
 import { driverInfo, type DriverInfo } from "../../core/drivers";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
@@ -403,7 +404,7 @@ export class TableView implements TabContent {
       });
       this.pageInfo.textContent = describePage(offset, page.rows.length, page.total, page.elapsedMs);
     } catch (error) {
-      if (this.loads.isCurrent(ticket)) toast(errorText(error), "error");
+      if (this.loads.isCurrent(ticket)) showError(error, `Read rows of ${this.target.database}.${this.target.table}`);
     } finally {
       if (this.loads.isCurrent(ticket)) this.element.classList.remove("busy");
     }
@@ -427,7 +428,7 @@ export class TableView implements TabContent {
       toast(`Saved ${changes.length} change(s), ${affected} row(s) affected`, "success");
       await this.reload({ force: true });
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Save changes");
     }
   }
 

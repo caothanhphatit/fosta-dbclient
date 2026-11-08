@@ -69,6 +69,16 @@ const ICONS = {
 
 export type IconName = keyof typeof ICONS;
 
+/** Whether `name` (an engine descriptor's or tree node's icon) is one of the icons above. */
+export function isIconName(name: string): name is IconName {
+  return Object.prototype.hasOwnProperty.call(ICONS, name);
+}
+
+/** `name` when it is a known icon, else `fallback`. */
+export function iconOrDefault(name: string | null | undefined, fallback: IconName): IconName {
+  return name && isIconName(name) ? name : fallback;
+}
+
 export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attributes: Record<string, unknown> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
   const element = document.createElement(tag);
   for (const [name, value] of Object.entries(attributes)) setAttribute(element, name, value);
@@ -135,7 +145,19 @@ export function spacer(): HTMLElement {
 }
 
 export async function copyText(text: string): Promise<void> {
-  await navigator.clipboard.writeText(text);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    // No async clipboard (a plain-http web edition) or no permission: the selection-based copy still works.
+    const area = h("textarea", { class: "clipboard-fallback", readonly: true, "aria-hidden": "true" });
+    area.value = text;
+    area.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
+    document.body.append(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    if (!copied) throw error;
+  }
 }
 
 export function clamp(value: number, min: number, max: number): number {

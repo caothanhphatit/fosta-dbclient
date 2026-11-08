@@ -151,7 +151,8 @@ body {
 .app-main {
   display: grid;
   flex: 1;
-  grid-template-rows: auto 1fr auto;
+  /* toolbar, workspace, error panel (when shown), status bar */
+  grid-template-rows: auto 1fr auto auto;
   min-width: 0;
   min-height: 0;
 }
@@ -1846,6 +1847,196 @@ pre.field-value.text {
 .status-version {
   flex-shrink: 0;
   color: var(--fg-3);
+}
+
+/* Errors: the inline block (core/errorPanel.ts renderError) and the app-level panel -------------------- */
+
+.error-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--danger-soft) 55%, var(--surface));
+  color: var(--fg);
+  font: 12.5px/1.5 var(--font-ui);
+  user-select: text;
+}
+
+.error-block.compact {
+  gap: 3px;
+  padding: 6px 10px;
+}
+
+.error-block-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.error-block-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--danger);
+}
+
+.error-code {
+  font: 600 11.5px var(--font-mono);
+  color: var(--danger);
+}
+
+.error-engine,
+.error-context {
+  overflow: hidden;
+  color: var(--fg-2);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.error-engine {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.error-message {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.error-block.compact .error-message {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.error-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 12px;
+  padding-top: 4px;
+  border-top: 1px dashed color-mix(in srgb, var(--danger) 25%, var(--border));
+}
+
+.error-row {
+  display: contents;
+}
+
+.error-label {
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+
+.error-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.error-statement,
+.error-extra {
+  font: 12px var(--font-mono);
+}
+
+.error-jump,
+.error-more {
+  font: inherit;
+  text-align: left;
+}
+
+.error-more {
+  align-self: flex-start;
+  font-size: 11.5px;
+}
+
+.error-copy {
+  flex-shrink: 0;
+}
+
+.error-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: min(40vh, 320px);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 -2px 8px rgba(15, 23, 42, 0.06);
+}
+
+.error-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.error-panel-title {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.error-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  overflow: auto;
+}
+
+.error-panel-entry {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 8px;
+}
+
+.error-time {
+  padding-top: 7px;
+  color: var(--fg-3);
+  font: 11px var(--font-mono);
+}
+
+.error-dismiss {
+  margin-top: 3px;
+}
+
+.error-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 7px 0 4px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--danger);
+  font: 600 11px var(--font-ui);
+  cursor: pointer;
+}
+
+.error-badge .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.error-badge.unseen {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.error-badge:hover {
+  border-color: var(--danger);
 }
 
 /* ---------------------------------------------------------------------------

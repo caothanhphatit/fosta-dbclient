@@ -1,5 +1,5 @@
-import { api, errorText } from "../../core/api";
-import { toast } from "../../core/dialogs";
+import { showError } from "../../core/errorPanel";
+import { api } from "../../core/api";
 import { copyText, h, spacer, toolButton } from "../../core/dom";
 import { DataGrid, gridSetup, textColumn } from "../grid/grid";
 import type { TabContent } from "../../core/tabs";
@@ -50,7 +50,7 @@ export class DesignView implements TabContent {
       this.grid.load({ ...gridSetup(DESIGN_COLUMNS, rows), clientFilter: true });
       this.ddl.textContent = design.ddl;
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Load the table design");
     }
   }
 }

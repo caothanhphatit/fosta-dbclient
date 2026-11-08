@@ -1,5 +1,5 @@
-import { api, errorText } from "../../core/api";
-import { toast } from "../../core/dialogs";
+import { showError } from "../../core/errorPanel";
+import { api } from "../../core/api";
 import { copyText, h, icon, iconButton } from "../../core/dom";
 import type { Navigator } from "../../core/navigator";
 import { equalsFilter, rowKey, sqlDialect } from "../../core/sql";
@@ -78,7 +78,7 @@ export class RecordPanel {
         details.replaceChildren(sparkline(values), h("div", { class: "vector-stats" }, describeVector(values)));
         return values;
       } catch (error) {
-        toast(errorText(error), "error");
+        showError(error, "Load the record");
         return null;
       }
     };

@@ -4,13 +4,17 @@
  * config. Opening tabs lives in `app/navigation.ts`.
  */
 import "./styles.css";
+import { errorPanelBadge, errorPanelElement, showError } from "./core/errorPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { assistantContext as buildAssistantContext, isQueryView, taskLogContext } from "./app/assistantContext";
 import { copyDiagnostics, openLogFolder, setDebugLogging } from "./app/diagnostics";
 import { AppNavigation, preloadQueryView } from "./app/navigation";
 import { welcomeScreen } from "./app/welcome";
-import { api, errorText } from "./core/api";
+import { api } from "./core/api";
 import { capabilities, hideUnsupported, loadCapabilities } from "./core/capabilities";
+import { loadEngines } from "./core/engines";
+// Shared view registrations and the lazy engine UI modules (`src/engines/`).
+import "./engines";
 import { isTauri, signOut } from "./core/transport";
 import { showContextMenu, type MenuItem } from "./core/contextMenu";
 import { confirmDialog, isModalOpen, toast } from "./core/dialogs";
@@ -305,7 +309,7 @@ async function confirmSignOut(): Promise<void> {
   try {
     await signOut();
   } catch (error) {
-    toast(errorText(error), "error");
+    showError(error, "Sign out");
   }
 }
 
@@ -315,7 +319,7 @@ async function setQueryHistory(enabled: boolean): Promise<void> {
     applyConfig(await api.setQueryHistory(enabled));
     setStatus(enabled ? "Query history is on" : "Query history is off; new runs are not recorded");
   } catch (error) {
-    toast(errorText(error), "error");
+    showError(error, "Change query history");
   }
 }
 
@@ -325,7 +329,7 @@ async function clearQueryHistory(): Promise<void> {
     await api.historyClear();
     toast("Query history cleared", "success");
   } catch (error) {
-    toast(errorText(error), "error");
+    showError(error, "Clear the query history");
   }
 }
 
@@ -389,7 +393,7 @@ async function deleteConnection(profile: ConnectionProfile): Promise<void> {
     navigation.closeConnectionTabs(profile.id);
     applyConfig(await api.deleteConnection(profile.id));
   } catch (error) {
-    toast(errorText(error), "error");
+    showError(error, "Delete connection");
   }
 }
 
@@ -400,7 +404,7 @@ async function switchWorkspace(id: string): Promise<void> {
     await tasksPanel.refreshStatuses();
     setStatus(`Workspace: ${workspace?.name ?? id}`);
   } catch (error) {
-    toast(errorText(error), "error");
+    showError(error, "Switch workspace");
   }
 }
 
@@ -427,7 +431,7 @@ async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
     applyConfig(await api.deleteWorkspace(target.id));
     setStatus(`Deleted workspace ${target.name}`);
   } catch (error) {
-    toast(errorText(error), "error");
+    showError(error, "Delete workspace");
   }
 }
 
@@ -483,8 +487,8 @@ function buildLayout(): void {
   }
   area.classList.toggle("with-assistant", remembered === "open");
   const version = h("span", { class: "status-version", title: "Fosta Studio version" }, `v${__APP_VERSION__}`);
-  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), safetyStatus, taskSummary, version);
-  const main = h("div", { class: "app-main" }, toolbar, area, statusBar);
+  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), errorPanelBadge(), safetyStatus, taskSummary, version);
+  const main = h("div", { class: "app-main" }, toolbar, area, errorPanelElement(), statusBar);
   (document.getElementById("app") ?? document.body).append(rail.element, main);
 }
 
@@ -531,10 +535,17 @@ function revealWindowAfterFirstPaint(): void {
 async function bootstrap(): Promise<void> {
   if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
     // Browser-only preview (`npm run dev`): a mock backend with sample data.
-    const { installDevMock } = await import("./dev/devMock");
+    const { installDevMock } = await import("./dev/mock");
     installDevMock();
   }
-  const supported = await loadCapabilities();
+  // Engine descriptors drive the connection dialog, the tree and the views; load them before the UI is built.
+  const [supported] = await Promise.all([
+    loadCapabilities(),
+    loadEngines().catch((error: unknown) => {
+      queueMicrotask(() => showError(error, "Load the engine list"));
+      return [];
+    }),
+  ]);
   initTheme();
   onThemeChange(() => rail.refreshTheme());
   buildLayout();
@@ -551,7 +562,7 @@ async function bootstrap(): Promise<void> {
     if (config.startupNotice) toast(config.startupNotice, "info");
     if (supported.tasks) await tasksPanel.init();
   } catch (error) {
-    toast(errorText(error), "error");
+    showError(error, "Load the configuration");
   }
 }
 

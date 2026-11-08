@@ -5,9 +5,9 @@
  * are remembered per database. MongoDB has no foreign keys, so links are
  * inferred from field names such as userId → users (drawn dashed).
  */
-import { api, errorText } from "../../core/api";
+import { showError } from "../../core/errorPanel";
+import { api } from "../../core/api";
 import { showContextMenu } from "../../core/contextMenu";
-import { toast } from "../../core/dialogs";
 import { copyText, formatCompact, h, icon, iconButton, separator, spacer, toolButton } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
 import type { Navigator } from "../../core/navigator";
@@ -223,7 +223,7 @@ export class DiagramView implements TabContent {
       });
     } catch (error) {
       this.info.textContent = "";
-      toast(errorText(error), "error");
+      showError(error, "Load the diagram");
     }
   }
 
@@ -738,7 +738,13 @@ export class DiagramView implements TabContent {
   }
 
   private openData(table: SchemaTable): void {
-    this.navigator.openTable({ connectionId: this.connectionId, driver: this.driver, database: this.database, table: table.name, kind: table.kind });
+    this.navigator.openTable({
+      connectionId: this.connectionId,
+      driver: this.driver,
+      database: this.database,
+      table: table.name,
+      kind: table.kind === "view" ? "view" : "table",
+    });
   }
 }
 
@@ -821,6 +827,6 @@ async function saveFile(name: string, text: string | null, base64: string | null
   try {
     savedDialog("Diagram saved", await api.saveDownload(name, text, base64));
   } catch (error) {
-    toast(errorText(error), "error");
+    showError(error, "Save the diagram");
   }
 }

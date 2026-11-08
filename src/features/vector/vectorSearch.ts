@@ -1,3 +1,4 @@
+import { showError } from "../../core/errorPanel";
 import { api, errorText } from "../../core/api";
 import { toast } from "../../core/dialogs";
 import { clamp, copyText, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
@@ -124,7 +125,7 @@ export class VectorSearchView implements TabContent {
       this.describeIndex(info);
       if (this.seed) void this.search();
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Vector search");
     }
   }
 

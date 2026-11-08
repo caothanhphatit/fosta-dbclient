@@ -8,7 +8,7 @@ import { api, errorText } from "../../core/api";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
 import { copyText, h, icon, iconButton, spacer, type IconName } from "../../core/dom";
-import { driverInfo, DRIVERS } from "../../core/drivers";
+import { driverInfo, drivers } from "../../core/drivers";
 import { ModelSwitcher } from "./modelSwitcher";
 import type { AiActive, AiConnection, AppConfig, ChatContext, ChatEvent, ChatMessage, DriverId, UiAction } from "../../core/types";
 
@@ -360,15 +360,17 @@ export class AssistantPanel {
 
   private translateMenu(): MenuItem[] {
     const context = this.host.context();
-    return DRIVERS.filter((driver) => driver.id !== context.driver && driver.id !== "mariadb").map((driver) => ({
-      label: driver.id === "mongodb" ? "MongoDB (command / pipeline)" : driver.label,
-      icon: driver.icon,
-      run: () => {
-        const source = fence(context.editorText?.() ?? "", "sql");
-        const target = driver.id === "mongodb" ? "a MongoDB command or aggregation pipeline" : driver.label;
-        this.ask(`Translate this to ${target}, keeping the same result. Mention anything without a direct equivalent:\n${source}`);
-      },
-    }));
+    return drivers()
+      .filter((driver) => driver.id !== context.driver && driver.id !== "mariadb")
+      .map((driver) => ({
+        label: driver.id === "mongodb" ? "MongoDB (command / pipeline)" : driver.label,
+        icon: driver.icon,
+        run: () => {
+          const source = fence(context.editorText?.() ?? "", "sql");
+          const target = driver.id === "mongodb" ? "a MongoDB command or aggregation pipeline" : driver.label;
+          this.ask(`Translate this to ${target}, keeping the same result. Mention anything without a direct equivalent:\n${source}`);
+        },
+      }));
   }
 
   // --- Markdown-lite -----------------------------------------------------

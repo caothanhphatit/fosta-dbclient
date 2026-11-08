@@ -232,7 +232,7 @@ app, so a `kubectl port-forward` never outlives Fosta Studio.
 
 ## The dev mock
 
-`src/dev/devMock.ts` replaces the Tauri IPC with `mockIPC` when the UI runs in a plain browser (`npm run dev`, no `__TAURI_INTERNALS__`).
+`src/dev/mock/` (a command router plus one module per engine in `src/dev/mock/engines/`) replaces the Tauri IPC with `mockIPC` when the UI runs in a plain browser (`npm run dev`, no `__TAURI_INTERNALS__`).
 It answers the same commands with sample workspaces, tables and results, so the UI can be reviewed without a database. `main.ts`
 imports it dynamically behind `import.meta.env.DEV`, so it is not part of the production bundle. Because it installs
 `__TAURI_INTERNALS__`, `core/transport.ts` routes calls to it rather than to the web server.
@@ -254,7 +254,7 @@ imports it dynamically behind `import.meta.env.DEV`, so it is not part of the pr
    `connectionString.test.ts`. Passwords must come back separately, never inside `options`.
 5. **Dialect details**: check identifier quoting in filters (`core/sql.ts`, `features/grid/columnFilter.ts`), the assistant's hints in
    `ai/prompt.rs`, and the export/import paths if the engine needs different SQL.
-6. **Dev mock**: give `src/dev/devMock.ts` a sample connection so the UI can be previewed.
+6. **Dev mock**: add `src/dev/mock/engines/<id>.ts` (descriptor, sample data, tree/browse/run) and a sample connection in `src/dev/mock/state.ts` so the UI can be previewed.
 7. **Test data and live tests**: add a container and seed data to `dev/`, and a `live_<engine>` test in `src-tauri/src/live_tests.rs`
    that exercises listing, describing, browsing with a filter and a query.
 8. **Docs**: list the engine in both READMEs.

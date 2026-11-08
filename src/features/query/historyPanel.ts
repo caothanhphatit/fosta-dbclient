@@ -3,7 +3,8 @@
  * "All connections" filter, status, relative time, duration and the first line of SQL. Selecting an
  * entry shows its full text; double-click or Insert puts it into the editor without running it.
  */
-import { api, errorText } from "../../core/api";
+import { showError } from "../../core/errorPanel";
+import { api } from "../../core/api";
 import { confirmDialog, toast } from "../../core/dialogs";
 import { copyText, h, icon, iconButton, type IconName } from "../../core/dom";
 import type { HistoryEntry } from "../../core/types";
@@ -111,7 +112,7 @@ export class HistoryPanel {
       if (!entries.some((entry) => entry.id === this.selectedId)) this.selectedId = null;
       this.renderList();
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Load the query history");
     }
   }
 
@@ -127,7 +128,7 @@ export class HistoryPanel {
       this.hasMore = more.length >= PAGE_SIZE;
       this.renderList();
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Load more history");
     }
   }
 
@@ -274,7 +275,7 @@ export class HistoryPanel {
       this.selectedId = this.entries[Math.min(index, this.entries.length - 1)]?.id ?? null;
       this.renderList();
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Delete history entries");
     }
   }
 
@@ -288,7 +289,7 @@ export class HistoryPanel {
       this.renderList();
       toast("Query history cleared", "success");
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Clear the query history");
     }
   }
 }

@@ -1,3 +1,4 @@
+import type { SqlDialectId } from "./contract";
 import type { Cell, CellValue, ColumnMeta } from "./types";
 
 /**
@@ -13,6 +14,19 @@ export function sqlDialect(driver: string): SqlDialect {
     case "mysql":
       return "mysql";
     case "mssql":
+      return "tsql";
+    default:
+      return "ansi";
+  }
+}
+
+/** The quoting rules of an engine descriptor's `sqlDialect` (prefer this to `sqlDialect(driver)`, which compares ids). */
+export function dialectOf(id: SqlDialectId | null | undefined): SqlDialect {
+  switch (id) {
+    case "mariaDb":
+    case "mySql":
+      return "mysql";
+    case "msSql":
       return "tsql";
     default:
       return "ansi";

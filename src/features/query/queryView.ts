@@ -1,5 +1,8 @@
 import type { EditorView } from "@codemirror/view";
 import { api, errorText } from "../../core/api";
+import type { ErrorPosition } from "../../core/contract";
+import { renderError, showError } from "../../core/errorPanel";
+import { positionOffset } from "../../core/errors";
 import { confirmDialog, toast } from "../../core/dialogs";
 import { clamp, formatNumber, h, icon, secondaryTool, separator, spacer, toolButton } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
@@ -170,7 +173,7 @@ export class QueryView implements TabContent {
       const done: Partial<Record<TransactionOp, string>> = { begin: "Transaction started", commit: "Committed", rollback: "Rolled back" };
       if (op !== "status") toast(done[op] ?? transactionLabel(state), "success");
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Transaction");
       this.showTransaction(this.transaction);
       void this.refreshTransaction();
     }
@@ -231,9 +234,12 @@ export class QueryView implements TabContent {
     if (!idleReminderDue(this.transactionOpenedAt, this.transactionRemindedAt, now)) return;
     this.transactionRemindedAt = now;
     const minutes = Math.max(Math.round((now - (this.transactionOpenedAt ?? now)) / 60_000), IDLE_TRANSACTION_MINUTES);
-    toast(
-      `A query tab on ${this.host.connectionName(this.connectionId)} has had a transaction open for ${minutes} minutes. Commit or roll back to release its locks.`,
-      "error",
+    showError(
+      {
+        code: "TRANSACTION_IDLE",
+        message: `A query tab on ${this.host.connectionName(this.connectionId)} has had a transaction open for ${minutes} minutes. Commit or roll back to release its locks.`,
+      },
+      "Open transaction",
     );
   }
 
@@ -296,7 +302,7 @@ export class QueryView implements TabContent {
       this.onChanged?.();
       await this.loadSchema();
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "List databases");
     }
   }
 
@@ -309,12 +315,16 @@ export class QueryView implements TabContent {
         tables.map((table) => table.name),
       );
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Load table names for completion");
     }
   }
 
   private async run(): Promise<void> {
-    const sql = selectedOrAllText(this.editor).trim();
+    const raw = selectedOrAllText(this.editor);
+    const sql = raw.trim();
+    // Where the text that runs starts in the editor, so an error position can be shown there.
+    const selection = this.editor.state.selection.main;
+    const base = (selection.empty ? 0 : selection.from) + (raw.length - raw.trimStart().length);
     if (!sql || this.running) return;
     if (commitsOpenTransaction(this.driver, sql, this.transaction)) {
       const proceed = await confirmDialog(
@@ -343,7 +353,9 @@ export class QueryView implements TabContent {
       this.record({ sql, database, startedAt, durationMs: outcome.elapsedMs, results: summarizeSets(outcome.sets), error: null });
     } catch (error) {
       this.lastError = errorText(error);
-      this.showPanels([{ title: "Messages", element: messageList([{ text: this.lastError, kind: "error" }]) }]);
+      const block = renderError(error, { onJump: (position) => this.jumpTo(sql, base, position) });
+      this.showPanels([{ title: "Messages", element: h("div", { class: "messages" }, block) }]);
+      showError(error, `Query on ${this.host.connectionName(this.connectionId)}`, { reveal: false });
       this.record({ sql, database, startedAt, durationMs: timer.elapsed(), results: [], error: this.lastError });
       void this.refreshTransaction();
     } finally {
@@ -353,6 +365,15 @@ export class QueryView implements TabContent {
   }
 
   /** Adds a run to the query history in the background; never blocks or fails the run. */
+  /** Moves the cursor to an error position reported for `text`, which started at `base` in the editor. */
+  private jumpTo(text: string, base: number, position: ErrorPosition): void {
+    const offset = positionOffset(text, position);
+    if (offset === null) return;
+    const anchor = Math.min(base + offset, this.editor.state.doc.length);
+    this.editor.dispatch({ selection: { anchor }, scrollIntoView: true });
+    this.editor.focus();
+  }
+
   private record(run: Pick<HistoryEntry, "sql" | "database" | "startedAt" | "durationMs" | "results" | "error">): void {
     if (!this.host.historyEnabled()) return;
     const entry: HistoryEntry = {
@@ -370,7 +391,7 @@ export class QueryView implements TabContent {
       .catch((error: unknown) => {
         if (historyFailureReported) return;
         historyFailureReported = true;
-        toast(`The query ran, but it could not be added to the history: ${errorText(error)}`, "error");
+        showError(error, "The query ran, but it could not be added to the history");
       });
   }
 
@@ -380,7 +401,7 @@ export class QueryView implements TabContent {
       await api.cancelSql(this.sessionId);
       toast("Cancel requested");
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Cancel the query");
     }
   }
 

@@ -354,13 +354,14 @@ export interface SchemaColumn {
 
 export interface SchemaTable {
   name: string;
-  kind: "table" | "view";
+  /** Rust `contract::SchemaTable.kind`: "table" and "view" today; engines may report other object kinds. */
+  kind: "table" | "view" | (string & {});
   rows: number | null;
   comment: string;
   columns: SchemaColumn[];
 }
 
-/** Everything the ER diagram draws for one database. */
+/** Everything the ER diagram draws for one database (Rust `contract::SchemaGraph`, returned by `schema_graph`). */
 export interface SchemaGraph {
   tables: SchemaTable[];
   relations: Relation[];

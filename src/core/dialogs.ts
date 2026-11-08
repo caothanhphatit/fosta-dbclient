@@ -1,5 +1,5 @@
+import { showError } from "./errorPanel";
 import { capabilities } from "./capabilities";
-import { errorText } from "./api";
 import { h } from "./dom";
 import { ModalStack } from "./modalStack";
 
@@ -98,7 +98,7 @@ function actionButton(action: ModalAction, close: () => void): HTMLButtonElement
       const keepOpen = (await action.run()) === false;
       if (!keepOpen) close();
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, action.label);
     } finally {
       button.disabled = false;
     }

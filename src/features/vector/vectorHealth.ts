@@ -1,5 +1,5 @@
+import { showError } from "../../core/errorPanel";
 import { api, errorText } from "../../core/api";
-import { toast } from "../../core/dialogs";
 import { formatNumber, h, separator, spacer, toolButton } from "../../core/dom";
 import type { TabContent } from "../../core/tabs";
 import type { CheckStatus, HealthCheck, RecallReport, TableTarget } from "../../core/types";
@@ -64,7 +64,7 @@ export class VectorHealthView implements TabContent {
       );
       await this.runChecks();
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Vector health check");
     }
   }
 

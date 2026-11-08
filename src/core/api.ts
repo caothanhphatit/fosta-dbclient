@@ -1,4 +1,26 @@
-import type { ConnectInfo, SecretSlot } from "./contract";
+import type {
+  ApplyResult,
+  BrowseRequest as ObjectBrowseRequest,
+  ConnectInfo,
+  ConnectionSpec,
+  EngineDescriptor,
+  ObjectDescription,
+  ObjectRef,
+  Page,
+  RowChangeSet,
+  RunRequest,
+  RunSummary,
+  SecretSlot,
+  SessionInfo,
+  SessionOptions,
+  SqlDialectId,
+  StreamEvent,
+  TransactionOp as SessionTransactionOp,
+  TransactionState as SessionTransactionState,
+  TreeChildren,
+  TreeRequest,
+} from "./contract";
+import { errorCode as codeOf, errorText as textOf } from "./errors";
 import { downloadInBrowser, invoke, invokeStreaming, isTauri, listen, type UnlistenFn } from "./transport";
 import type {
   AiConnection,
@@ -38,6 +60,18 @@ import type {
 
 export const PASSWORD_REQUIRED = "PASSWORD_REQUIRED";
 
+/** `parse_connection_string`: the profile fields a connection string sets, and its password (never stored in the profile). */
+export interface ParsedConnectionString {
+  spec: ConnectionSpec;
+  password: string | null;
+}
+
+/** `completion_schema`: the names the editor completes for one database. */
+export interface CompletionSchema {
+  database: string;
+  objects: { name: string; schema: string | null; kind: string; columns: string[] }[];
+}
+
 export const api = {
   getConfig: () => invoke<AppConfig>("get_config"),
   /** `secrets` holds other slots (SSH password, API key…); `password` stays for the password slot. */
@@ -51,6 +85,38 @@ export const api = {
   testConnection: (profile: ConnectionProfile, password: string | null) => invoke<ConnectInfo>("test_connection", { profile, password }),
   connect: (id: string, password: string | null) => invoke<ConnectInfo>("connect", { id, password }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
+
+  // --- Engine contract (views get the per-connection ones through `connectionApi.ts`) ---
+  /** Every engine this build knows, planned ones included (`core/engines.ts` caches them). */
+  engineDescriptors: () => invoke<EngineDescriptor[]>("engine_descriptors"),
+  parseConnectionString: (engine: string, text: string) => invoke<ParsedConnectionString>("parse_connection_string", { engine, text }),
+  treeChildren: (connectionId: string, request: TreeRequest) => invoke<TreeChildren>("tree_children", { connectionId, request }),
+  describeObject: (connectionId: string, object: ObjectRef) => invoke<ObjectDescription>("describe_object", { connectionId, object }),
+  browseObject: (connectionId: string, request: ObjectBrowseRequest) => invoke<Page>("browse_object", { connectionId, request }),
+  /**
+   * Row edits from a grid save or an import. Updates and deletes carry `original` (and `version`); a changed row fails the
+   * whole set with a `CONFLICT` error. Batches of one import share `importId` and are confirmed once.
+   */
+  applyEdits: (
+    connectionId: string,
+    changes: RowChangeSet,
+    caller: Caller = "gridSave",
+    confirmation: Confirmation | null = null,
+    importId: string | null = null,
+  ) => invoke<ApplyResult>("apply_edits", { connectionId, changes, caller, confirmation, importId }),
+  /** Streams `StreamEvent`s (statement, columns, row batches, done, notices) through `onEvent`; resolves with the summary. */
+  run: (sessionId: string, request: RunRequest, onEvent: (event: StreamEvent) => void, confirmation: Confirmation | null = null) =>
+    invokeStreaming<RunSummary, StreamEvent>("run", { sessionId, request, confirmation }, "onEvent", onEvent),
+  cancelRun: (sessionId: string) => invoke<void>("cancel_run", { sessionId }),
+  /** Begin / commit / rollback / auto-commit of a session; resolves with the engine-reported state. */
+  transaction: (sessionId: string, op: SessionTransactionOp) => invoke<SessionTransactionState>("transaction", { sessionId, op }),
+  /** An engine-specific operation (`vector.search`, `redis.scan`, …); the gateway refuses names the engine does not know. */
+  invokeCapability: <T = unknown>(connectionId: string, name: string, args: unknown = null, confirmation: Confirmation | null = null) =>
+    invoke<T>("invoke_capability", { connectionId, name, args, confirmation }),
+  completionSchema: (connectionId: string, database: string) => invoke<CompletionSchema>("completion_schema", { connectionId, database }),
+  formatSql: (dialect: SqlDialectId | null, text: string) => invoke<string>("format_sql", { dialect, text }),
+
+  // --- Pre-contract commands (removed in step 16, once every view uses the ones above) ---
   listDatabases: (connectionId: string) => invoke<string[]>("list_databases", { connectionId }),
   schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),
   createDatabase: (connectionId: string, name: string, firstCollection: string | null, confirmation: Confirmation | null = null) =>
@@ -68,7 +134,9 @@ export const api = {
     confirmation: Confirmation | null = null,
     importId: string | null = null,
   ) => invoke<number>("apply_changes", { connectionId, database, table, changes, caller, confirmation, importId }),
-  openSession: (connectionId: string, sessionId: string) => invoke<void>("open_session", { connectionId, sessionId }),
+  /** Opens a query session; `options` picks the language and database (defaults: the engine's default language). */
+  openSession: (connectionId: string, sessionId: string, options: SessionOptions | null = null) =>
+    invoke<SessionInfo>("open_session", { connectionId, sessionId, options }),
   closeSession: (sessionId: string) => invoke<void>("close_session", { sessionId }),
   runSql: (sessionId: string, database: string | null, sql: string, confirmation: Confirmation | null = null) =>
     invoke<QueryOutcome>("run_sql", { sessionId, database, sql, confirmation }),
@@ -141,15 +209,11 @@ export function onTaskLog(handler: (event: TaskLogEvent) => void): Promise<Unlis
   return listen<TaskLogEvent>("task-log", handler);
 }
 
-/** Structured backend errors (e.g. from the statement gateway) are objects with a `code` and a `message`. */
+/** Structured backend errors (e.g. from the statement gateway) are objects with a `code` and a `message`; see `core/errors.ts`. */
 export function errorCode(error: unknown): string | null {
-  if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return error.code;
-  return null;
+  return codeOf(error);
 }
 
 export function errorText(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") return error.message;
-  return JSON.stringify(error);
+  return textOf(error);
 }

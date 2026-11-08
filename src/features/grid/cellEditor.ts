@@ -5,6 +5,7 @@
  *
  * Keys stay inside the dialog: Esc closes without saving, Ctrl+Enter saves.
  */
+import { showError } from "../../core/errorPanel";
 import { registerModal, toast } from "../../core/dialogs";
 import { copyText, h, icon } from "../../core/dom";
 import type { Cell, ColumnMeta } from "../../core/types";
@@ -212,7 +213,7 @@ export function openCellEditor(options: CellEditorOptions): void {
       })
       .catch((error: unknown) => {
         textarea.value = value;
-        toast(error instanceof Error ? error.message : String(error), "error");
+        showError(error, "Load the vector");
         refresh();
       });
   }

@@ -1,6 +1,7 @@
-import { api, errorText, onTaskLog, onTaskStatus } from "../../core/api";
+import { showError } from "../../core/errorPanel";
+import { api, onTaskLog, onTaskStatus } from "../../core/api";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
-import { confirmDialog, toast } from "../../core/dialogs";
+import { confirmDialog } from "../../core/dialogs";
 import { h, icon, iconButton, spacer, toolButton } from "../../core/dom";
 import { taskDialog } from "./taskDialog";
 import { formatArgs } from "../../core/shell";
@@ -69,7 +70,7 @@ export class TasksPanel {
       for (const status of await api.taskStatuses()) this.statuses.set(status.id, status);
       this.render();
     } catch (error) {
-      toast(errorText(error), "error");
+      showError(error, "Read task statuses");
     }
   }
 
@@ -166,7 +167,7 @@ export function createLogView(task: TaskDef, panel: TasksPanel): LogTabContent {
       output.textContent = lines.map((line) => `${line}\n`).join("");
       output.scrollTop = output.scrollHeight;
     })
-    .catch((error) => toast(errorText(error), "error"));
+    .catch((error) => showError(error, `Read the log of ${task.name}`));
   const toolbar = h(
     "div",
     { class: "toolbar" },
@@ -184,7 +185,7 @@ async function attempt(action: () => Promise<unknown>): Promise<void> {
   try {
     await action();
   } catch (error) {
-    toast(errorText(error), "error");
+    showError(error, "Startup task");
   }
 }
 
