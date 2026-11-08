@@ -4,25 +4,26 @@
  * config. Opening tabs lives in `app/navigation.ts`.
  */
 import "./styles.css";
-import { errorPanelBadge, errorPanelElement, showError } from "./core/errorPanel";
+import { showError } from "./core/errorPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { assistantContext as buildAssistantContext, isQueryView, taskLogContext } from "./app/assistantContext";
-import { copyDiagnostics, openLogFolder, setDebugLogging } from "./app/diagnostics";
 import { AppNavigation, preloadQueryView } from "./app/navigation";
 import { welcomeScreen } from "./app/welcome";
+import { buildLayout, ASSISTANT_STORAGE_KEY } from "./app/layout";
+import { shellMenus } from "./app/menus";
+import { guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
 import { api } from "./core/api";
-import { capabilities, hideUnsupported, loadCapabilities } from "./core/capabilities";
+import { hideUnsupported, loadCapabilities } from "./core/capabilities";
 import { loadEngines } from "./core/engines";
 // Shared view registrations and the lazy engine UI modules (`src/engines/`).
 import "./engines";
-import { isTauri, signOut } from "./core/transport";
-import { showContextMenu, type MenuItem } from "./core/contextMenu";
-import { confirmDialog, isModalOpen, toast } from "./core/dialogs";
-import { bigButton, clamp, h, icon, iconButton, separator, spacer, type IconName } from "./core/dom";
-import { makeSplitter } from "./core/splitter";
+import { isTauri } from "./core/transport";
+import { showContextMenu } from "./core/contextMenu";
+import { confirmDialog, toast } from "./core/dialogs";
+import { h, icon, iconButton } from "./core/dom";
 import { TabManager } from "./core/tabs";
-import { describeTheme, initTheme, onThemeChange, setTheme, themePreference, toggleTheme, type ThemePreference } from "./core/theme";
-import type { AiConnection, AppConfig, Capabilities, ConnectionProfile, UiAction, Workspace, WorkspaceMeta } from "./core/types";
+import { describeTheme, initTheme, onThemeChange, toggleTheme } from "./core/theme";
+import type { AiConnection, AppConfig, ConnectionProfile, UiAction, Workspace, WorkspaceMeta } from "./core/types";
 import { aiDialog } from "./features/assistant/aiDialog";
 import { AssistantPanel, type AssistantContext } from "./features/assistant/assistantPanel";
 import { connectionDialog } from "./features/connections/connectionDialog";
@@ -32,18 +33,6 @@ import { embeddingDialog } from "./features/vector/embeddingDialog";
 import { connectionSafety, relaxedFromBaseline, safetyLabel, safetyOf, writesBlocked } from "./features/safety/safety";
 import { workspaceDialog } from "./features/workspaces/workspaceDialog";
 import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./features/workspaces/workspaceRail";
-
-const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
-  { value: "light", label: "Light" },
-  { value: "dark", label: "Dark" },
-  { value: "system", label: "Follow system" },
-];
-
-const SIDEBAR_MIN = 220;
-const SIDEBAR_MAX = 640;
-const ASSISTANT_MIN = 300;
-const ASSISTANT_MAX = 720;
-const ASSISTANT_STORAGE_KEY = "db-studio.assistant";
 
 const statusText = h("span", { class: "status-text" }, "Ready");
 const taskSummary = h("span", { class: "status-tasks" });
@@ -60,6 +49,17 @@ const tabs = new TabManager(welcome);
 let currentConfig: AppConfig | null = null;
 let workspace: Workspace | null = null;
 let workspaceArea: HTMLElement | null = null;
+
+const menus = shellMenus({
+  config: () => currentConfig,
+  applyConfig,
+  setStatus,
+  configureAssistant,
+  configureEmbedding,
+  editWorkspace,
+  createWorkspace,
+  deleteWorkspace: (current) => deleteWorkspace(current),
+});
 
 const navigation = new AppNavigation(tabs, {
   workspaceId,
@@ -100,8 +100,8 @@ const rail = new WorkspaceRail({
     setStatus(describeTheme());
     toast(describeTheme());
   },
-  openSettings: (event) => showContextMenu(event, settingsMenu()),
-  openThemeMenu: (event) => showContextMenu(event, themeMenu()),
+  openSettings: (event) => showContextMenu(event, menus.settingsMenu()),
+  openThemeMenu: (event) => showContextMenu(event, menus.themeMenu()),
 });
 
 const tree = new ConnectionTree({
@@ -246,103 +246,14 @@ function renderSafetyStatus(current: Workspace): void {
     : `Safety rules of ${current.name}: ${label}`;
 }
 
-/** Closing the window rolls back open transactions; ask first. */
-function guardWindowClose(): void {
-  // The browser preview (dev mock) has no window to guard.
-  if (!("__TAURI_INTERNALS__" in window)) return;
-  void getCurrentWindow().onCloseRequested(async (event) => {
-    const open = tabs.contents().filter((content) => isQueryView(content) && content.hasOpenTransaction()).length;
-    if (open === 0) return;
-    const message = `${open} query tab(s) have an open transaction. Closing Fosta Studio rolls them back, so uncommitted changes are lost. Close anyway?`;
-    if (!(await confirmDialog(message, "Close"))) event.preventDefault();
-  });
-}
-
 function renderWorkspaceHeader(current: Workspace): void {
   const menuButton = iconButton("more", "Workspace options", () => undefined);
-  menuButton.addEventListener("click", (event) => showContextMenu(event, workspaceMenu(current)));
+  menuButton.addEventListener("click", (event) => showContextMenu(event, menus.workspaceMenu(current)));
   workspaceHeader.replaceChildren(
     h("span", { class: `ws-dot color-${workspaceColor(current.color)}` }, icon(workspaceIcon(current.icon))),
     h("span", { class: "ws-name", title: current.name }, current.name),
     menuButton,
   );
-}
-
-function workspaceMenu(current: Workspace): MenuItem[] {
-  const count = currentConfig?.workspaces.length ?? 1;
-  return [
-    { label: "Edit workspace…", icon: "edit", run: () => void editWorkspace(current) },
-    { label: "New workspace…", icon: "plus", run: () => void createWorkspace() },
-    "separator",
-    { label: "Delete workspace", icon: "trash", danger: true, disabled: count <= 1, run: () => void deleteWorkspace(current) },
-  ];
-}
-
-function settingsMenu(): MenuItem[] {
-  return [
-    { label: "LLM providers…", icon: "sparkle", run: () => void configureAssistant() },
-    { label: "Embedding API…", icon: "vector", run: () => void configureEmbedding() },
-    "separator",
-    {
-      label: "Record query history",
-      icon: currentConfig?.queryHistory !== false ? "check" : undefined,
-      run: () => void setQueryHistory(currentConfig?.queryHistory === false),
-    },
-    { label: "Clear query history…", icon: "trash", run: () => void clearQueryHistory() },
-    "separator",
-    {
-      label: "Debug logging",
-      icon: currentConfig?.debugLogging ? "check" : undefined,
-      run: () => void setDebugLogging(!currentConfig?.debugLogging, applyConfig),
-    },
-    { label: "Copy diagnostics", icon: "copy", run: () => void copyDiagnostics() },
-    { label: "Open log folder", icon: "logs", run: () => void openLogFolder() },
-    ...(capabilities().edition === "web" ? (["separator", { label: "Sign out…", icon: "key", run: () => void confirmSignOut() }] as MenuItem[]) : []),
-  ];
-}
-
-/** Web edition only: there is one access token per server, so signing out ends every browser's session. */
-async function confirmSignOut(): Promise<void> {
-  const message = "Sign out of Fosta Studio? This signs out every browser using this server; sign in again with the access token.";
-  if (!(await confirmDialog(message, "Sign out"))) return;
-  try {
-    await signOut();
-  } catch (error) {
-    showError(error, "Sign out");
-  }
-}
-
-/** History stays on this machine (fosta-studio-history.jsonl next to the app); turning it off keeps old entries. */
-async function setQueryHistory(enabled: boolean): Promise<void> {
-  try {
-    applyConfig(await api.setQueryHistory(enabled));
-    setStatus(enabled ? "Query history is on" : "Query history is off; new runs are not recorded");
-  } catch (error) {
-    showError(error, "Change query history");
-  }
-}
-
-async function clearQueryHistory(): Promise<void> {
-  if (!(await confirmDialog("Delete the whole query history of every connection on this machine?", "Delete"))) return;
-  try {
-    await api.historyClear();
-    toast("Query history cleared", "success");
-  } catch (error) {
-    showError(error, "Clear the query history");
-  }
-}
-
-/** Right-click menu of the theme button: the one place to pick "follow system". */
-function themeMenu(): MenuItem[] {
-  const current = themePreference();
-  return THEME_OPTIONS.map((option) => ({
-    label: option.label,
-    icon: option.value === current ? ("check" as IconName) : undefined,
-    run: () => {
-      setTheme(option.value);
-      setStatus(describeTheme());
-    },
-  }));
 }
 
 function setStatus(message: string): void {
@@ -434,103 +345,6 @@ async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
   }
 }
 
-function buildLayout(): void {
-  const toolbar = h(
-    "header",
-    { class: "app-toolbar" },
-    bigButton("plug", "Connection", () => void editConnection(null), "New connection (Ctrl+N)"),
-    bigButton("query", "Query", newQueryFromSelection, "New query (Ctrl+T)"),
-    bigButton("diagram", "Diagram", diagramFromSelection, "ER diagram of the selected database"),
-    bigButton("refresh", "Refresh", () => tree.refreshSelected(), "Reload the selected database"),
-    separator(),
-    withRequirement(
-      bigButton("task", "Task", () => void tasksPanel.edit(null), "New startup task"),
-      "tasks",
-    ),
-    bigButton("vector", "Embedding", () => void configureEmbedding(), "Embedding API for vector search"),
-    spacer(),
-    bigButton("sparkle", "Assistant", toggleAssistant, "Chat with your database (Ctrl+Shift+A)"),
-  );
-  const sidebar = h(
-    "aside",
-    { class: "sidebar" },
-    workspaceHeader,
-    h(
-      "div",
-      { class: "panel-header" },
-      h("span", {}, "Connections"),
-      iconButton("plus", "New connection", () => void editConnection(null)),
-    ),
-    tree.element,
-    withRequirement(tasksPanel.element, "tasks"),
-  );
-  const sidebarSplitter = h("div", { class: "splitter-x" });
-  const assistantSplitter = h("div", { class: "splitter-x assistant-splitter" });
-  const area = h("main", { class: "workspace" }, sidebar, sidebarSplitter, tabs.element, assistantSplitter, assistant.element);
-  workspaceArea = area;
-  let sidebarWidth = 290;
-  makeSplitter(sidebarSplitter, "x", (delta) => {
-    sidebarWidth = clamp(sidebarWidth + delta, SIDEBAR_MIN, SIDEBAR_MAX);
-    area.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
-  });
-  let assistantWidth = 380;
-  makeSplitter(assistantSplitter, "x", (delta) => {
-    assistantWidth = clamp(assistantWidth - delta, ASSISTANT_MIN, ASSISTANT_MAX);
-    area.style.setProperty("--assistant-width", `${assistantWidth}px`);
-  });
-  let remembered: string | null = null;
-  try {
-    remembered = localStorage.getItem(ASSISTANT_STORAGE_KEY);
-  } catch {
-    // Fall through: closed by default.
-  }
-  area.classList.toggle("with-assistant", remembered === "open");
-  const version = h("span", { class: "status-version", title: "Fosta Studio version" }, `v${__APP_VERSION__}`);
-  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), errorPanelBadge(), safetyStatus, taskSummary, version);
-  const main = h("div", { class: "app-main" }, toolbar, area, errorPanelElement(), statusBar);
-  (document.getElementById("app") ?? document.body).append(rail.element, main);
-}
-
-function installShortcuts(): void {
-  document.addEventListener("keydown", (event) => {
-    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
-    const key = event.key.toLowerCase();
-    // Shortcuts would act behind an open dialog (or stack a second one); keep the browser's own meaning off too.
-    if (isModalOpen()) {
-      if (/^[1-9nt]$/.test(key) && !event.shiftKey) event.preventDefault();
-      return;
-    }
-    if (key >= "1" && key <= "9" && !event.shiftKey) {
-      const target = currentConfig?.workspaces[Number(key) - 1];
-      if (target) {
-        event.preventDefault();
-        void switchWorkspace(target.id);
-      }
-    } else if (key === "n" && !event.shiftKey) {
-      event.preventDefault();
-      void editConnection(null);
-    } else if (key === "t" && !event.shiftKey) {
-      event.preventDefault();
-      newQueryFromSelection();
-    } else if (key === "a" && event.shiftKey) {
-      event.preventDefault();
-      toggleAssistant();
-    }
-  });
-}
-
-function suppressBrowserContextMenu(): void {
-  document.addEventListener("contextmenu", (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("input, textarea, .cm-editor")) return;
-    event.preventDefault();
-  });
-}
-
-function revealWindowAfterFirstPaint(): void {
-  if (isTauri()) requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show()));
-}
-
 async function bootstrap(): Promise<void> {
   if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
     // Browser-only preview (`npm run dev`): a mock backend with sample data.
@@ -547,12 +361,33 @@ async function bootstrap(): Promise<void> {
   ]);
   initTheme();
   onThemeChange(() => rail.refreshTheme());
-  buildLayout();
+  workspaceArea = buildLayout({
+    workspaceHeader,
+    statusText,
+    safetyStatus,
+    taskSummary,
+    tree,
+    tasksPanel,
+    tabs,
+    assistant,
+    rail,
+    newConnection: () => void editConnection(null),
+    newQuery: newQueryFromSelection,
+    newDiagram: diagramFromSelection,
+    configureEmbedding: () => void configureEmbedding(),
+    toggleAssistant,
+  });
   hideUnsupported(document);
   hideUnsupported(welcome);
-  installShortcuts();
+  installShortcuts({
+    config: () => currentConfig,
+    switchWorkspace: (id) => void switchWorkspace(id),
+    newConnection: () => void editConnection(null),
+    newQuery: newQueryFromSelection,
+    toggleAssistant,
+  });
   suppressBrowserContextMenu();
-  guardWindowClose();
+  guardWindowClose(tabs);
   revealWindowAfterFirstPaint();
   preloadQueryView();
   try {
@@ -563,12 +398,6 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     showError(error, "Load the configuration");
   }
-}
-
-/** Marks an element as needing a capability; `hideUnsupported` hides it when the edition lacks it. */
-function withRequirement<T extends HTMLElement>(element: T, capability: keyof Capabilities): T {
-  element.dataset.requires = capability;
-  return element;
 }
 
 void bootstrap();
