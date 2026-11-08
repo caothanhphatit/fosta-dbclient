@@ -298,6 +298,10 @@ pub struct PageToken {
     pub from: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after: Option<Vec<Json>>,
+    /// Open a point in time when this page is requested (set by the page before, which opened none, so a grid that is
+    /// only looked at does not leave point-in-time contexts behind).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub open_pit: bool,
 }
 
 impl PageToken {
@@ -320,7 +324,7 @@ pub async fn browse(engine: &EsEngine, request: &BrowseRequest) -> AppResult<Pag
     let started = Instant::now();
     let target = resolve(engine, &request.object.name).await?;
     let limit = request.limit.clamp(1, MAX_RESULT_WINDOW - 1);
-    let token = match &request.after {
+    let mut token = match &request.after {
         Some(after) => PageToken::from_keyset(after)?,
         None => PageToken {
             from: Some(request.offset),
@@ -350,6 +354,9 @@ pub async fn browse(engine: &EsEngine, request: &BrowseRequest) -> AppResult<Pag
     // ties, so the page that switches to the point in time continues the order of the pages before it.
     if sort.is_empty() {
         sort.push(json!("_doc"));
+    }
+    if token.open_pit && token.pit.is_none() {
+        token.pit = Some(engine.open_point_in_time(&target.name, PIT_KEEP_ALIVE).await?);
     }
     let path = match &token.pit {
         Some(pit) => {
@@ -457,8 +464,8 @@ async fn next_token(
     if token.pit.is_some() {
         return Ok(last_sort.map(|after| PageToken {
             pit,
-            from: None,
             after: Some(after),
+            ..PageToken::default()
         }));
     }
     let next = offset.map(|offset| offset + limit);
@@ -482,11 +489,10 @@ async fn next_token(
     // No total order without a key: continue in a point in time, ordered by `_shard_doc`.
     if engine.features().point_in_time {
         if let Some(next) = next.filter(|next| next + limit < MAX_RESULT_WINDOW) {
-            let id = engine.open_point_in_time(&target.name, PIT_KEEP_ALIVE).await?;
             return Ok(Some(PageToken {
-                pit: Some(id),
                 from: Some(next),
-                after: None,
+                open_pit: true,
+                ..PageToken::default()
             }));
         }
     }
@@ -624,7 +630,15 @@ mod tests {
             pit: Some("abc".into()),
             from: None,
             after: Some(vec![json!(10), json!(3)]),
+            open_pit: false,
         };
+        let pending = PageToken {
+            from: Some(1000),
+            open_pit: true,
+            ..PageToken::default()
+        };
+        assert_eq!(PageToken::from_keyset(&pending.to_keyset()).unwrap(), pending);
+        assert!(!serde_json::to_string(&token).unwrap().contains("open_pit"));
         let keyset = token.to_keyset();
         assert_eq!(keyset.len(), 1);
         assert_eq!(PageToken::from_keyset(&keyset).unwrap(), token);
