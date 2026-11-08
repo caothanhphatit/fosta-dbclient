@@ -48,7 +48,8 @@ impl AppState {
     /// Loads the config and the query history from the data directory and starts the active workspace's
     /// auto-start tasks. `executor` runs background work; `events` carries task events to the UI.
     pub fn new(capabilities: Capabilities, executor: tokio::runtime::Handle, events: Arc<dyn EventEmitter>) -> AppResult<Self> {
-        let config = config::ConfigStore::load()?;
+        // In a container 127.0.0.1 is the container itself, so a first start there seeds no connection.
+        let config = config::ConfigStore::load(!capabilities.in_container)?;
         let tasks = Arc::new(tasks::TaskManager::new(executor, events, capabilities.tasks));
         tasks.start_auto(&config.snapshot().active().tasks);
         Ok(Self {

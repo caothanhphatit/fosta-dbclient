@@ -73,6 +73,8 @@ pub fn router(server: Server) -> Router {
         .route("/invoke/{command}", post(api::invoke))
         .route("/events", get(api::events))
         .route("/logout", post(logout))
+        // Unknown API paths are a JSON 404 (after the session check), not the UI's index.html with 200.
+        .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(Arc::clone(&server), require_session))
         .layer(middleware::from_fn_with_state(Arc::clone(&server), check_csrf))
         .route("/login", post(login))
@@ -217,16 +219,35 @@ async fn require_session_for_pages(State(server): State<Arc<Server>>, request: R
         return next.run(request).await;
     }
     if request.method() == Method::GET && (path == "/" || path.ends_with(".html")) {
-        return login_page(StatusCode::UNAUTHORIZED, None);
+        let message = query_param(request.uri().query(), "error").and_then(|code| login_error(&code));
+        return login_page(StatusCode::UNAUTHORIZED, message);
     }
     error_response(StatusCode::UNAUTHORIZED, "Sign in first")
 }
 
+/// Messages for `/?error=…`: a failed sign-in redirects there (303), so reloading the page does not post the form again.
+fn login_error(code: &str) -> Option<&'static str> {
+    match code {
+        "invalid" => Some("That access token is not valid."),
+        "missing" => Some("Enter the access token."),
+        "throttled" => Some("Too many failed attempts. Try again in a few minutes."),
+        _ => None,
+    }
+}
+
+fn login_failed(code: &str) -> Response {
+    Redirect::to(&format!("/?error={code}")).into_response()
+}
+
 fn query_token(query: Option<&str>) -> Option<String> {
+    query_param(query, "token")
+}
+
+fn query_param(query: Option<&str>, name: &str) -> Option<String> {
     query?
         .split('&')
         .filter_map(|pair| pair.split_once('='))
-        .find(|(key, _)| *key == "token")
+        .find(|(key, _)| *key == name)
         .map(|(_, value)| percent_decode(value))
 }
 
@@ -276,18 +297,19 @@ async fn login(State(server): State<Arc<Server>>, request: Request) -> Response 
     }
     let client = client_ip(&request);
     if !server.auth.may_attempt(client) {
-        return login_page(
-            StatusCode::TOO_MANY_REQUESTS,
-            Some("Too many failed attempts. Try again in a few minutes."),
-        );
+        return login_failed("throttled");
     }
     let Ok(Form(form)) = Form::<LoginForm>::from_request(request, &()).await else {
-        return login_page(StatusCode::BAD_REQUEST, Some("Enter the access token."));
+        return login_failed("missing");
     };
     if !server.auth.check_token(client, &form.token) {
-        return login_page(StatusCode::UNAUTHORIZED, Some("That access token is not valid."));
+        return login_failed("invalid");
     }
     signed_in(&server.auth)
+}
+
+async fn api_not_found(request: Request) -> Response {
+    error_response(StatusCode::NOT_FOUND, &format!("No such API endpoint: {}", request.uri().path()))
 }
 
 /// `POST /api/logout`: ends every session (one token per server, so every browser is signed out).
@@ -434,5 +456,22 @@ mod tests {
         assert_eq!(query_token(Some("a=1")), None);
         assert_eq!(query_token(None), None);
         assert_eq!(percent_decode("%zz%4"), "%zz%4");
+    }
+
+    #[test]
+    fn failed_sign_ins_redirect_to_a_page_that_names_the_problem() {
+        let response = login_failed("invalid");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers()[header::LOCATION], "/?error=invalid");
+        assert_eq!(login_error("invalid"), Some("That access token is not valid."));
+        assert_eq!(login_error("<script>"), None);
+    }
+
+    #[tokio::test]
+    async fn unknown_api_paths_are_a_json_404() {
+        let request = Request::builder().uri("/api/config").body(axum::body::Body::empty()).unwrap();
+        let response = api_not_found(request).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
     }
 }

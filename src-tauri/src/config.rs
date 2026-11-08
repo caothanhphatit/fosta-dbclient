@@ -216,8 +216,12 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    fn starter() -> Self {
+    /// The config of a first start: one workspace, plus a local MariaDB connection when `local_connection`.
+    fn starter(local_connection: bool) -> Self {
         let mut config = Self::default();
+        if !local_connection {
+            return config;
+        }
         config.workspaces[0].connections.push(ConnectionProfile {
             id: "local-mariadb".into(),
             name: "Local MariaDB".into(),
@@ -416,12 +420,12 @@ pub struct ConfigStore {
 }
 
 impl ConfigStore {
-    pub fn load() -> AppResult<Self> {
+    pub fn load(local_connection: bool) -> AppResult<Self> {
         let path = config_path()?;
         let current = if path.exists() {
             serde_json::from_str(&fs::read_to_string(&path)?)?
         } else {
-            let starter = AppConfig::starter();
+            let starter = AppConfig::starter(local_connection);
             write_config(&path, &starter)?;
             starter
         };
@@ -532,6 +536,14 @@ fn write_config(path: &Path, config: &AppConfig) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn containers_start_without_a_localhost_connection() {
+        let desktop = AppConfig::starter(true);
+        assert_eq!(desktop.workspaces[0].connections[0].host, "127.0.0.1");
+        let container = AppConfig::starter(false);
+        assert!(container.workspaces.iter().all(|workspace| workspace.connections.is_empty()));
+    }
 
     #[test]
     fn legacy_files_are_moved_once_and_never_overwrite() {

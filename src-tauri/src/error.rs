@@ -77,7 +77,20 @@ macro_rules! convert_from {
     };
 }
 
-convert_from!(std::io::Error, serde_json::Error, mysql_async::Error, mongodb::error::Error, reqwest::Error);
+convert_from!(std::io::Error, serde_json::Error, mongodb::error::Error, reqwest::Error);
+
+impl From<mysql_async::Error> for AppError {
+    fn from(error: mysql_async::Error) -> Self {
+        // mysql_async nests its I/O errors, so the text reads "Input/output error: Input/output error: …".
+        let text = error.to_string();
+        const PREFIX: &str = "Input/output error: ";
+        let mut rest = text.as_str();
+        while rest.starts_with(PREFIX) && rest[PREFIX.len()..].starts_with(PREFIX) {
+            rest = &rest[PREFIX.len()..];
+        }
+        Self::new(rest)
+    }
+}
 
 /// Shown with SQL Server TLS failures: the usual cause is the self-signed certificate of a local or dev server.
 pub const MSSQL_TLS_HINT: &str = "The server's TLS certificate is not trusted by this machine (SQL Server uses a self-signed certificate unless one \
@@ -133,6 +146,13 @@ mod tests {
         assert_eq!(value["code"], "X");
         assert_eq!(value["message"], "Needs a confirmation");
         assert_eq!(error.to_string(), "Needs a confirmation");
+    }
+
+    #[test]
+    fn mysql_io_errors_say_input_output_error_once() {
+        let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "Connection refused (os error 111)");
+        let error = AppError::from(mysql_async::Error::Io(mysql_async::IoError::Io(io)));
+        assert_eq!(error.to_string(), "Input/output error: Connection refused (os error 111)");
     }
 
     #[test]
