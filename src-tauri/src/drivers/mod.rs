@@ -119,11 +119,19 @@ pub async fn open(profile: &ConnectionProfile, password: &str) -> AppResult<(Arc
             let (driver, version) = MongoConnection::open(profile, password).await?;
             Ok((Arc::new(driver), version))
         }
-        _ => {
+        "mariadb" | "mysql" => {
             let (driver, version) = MysqlConnection::open(profile, password).await?;
             Ok((Arc::new(driver), version))
         }
+        other => Err(unknown_driver(other)),
     }
+}
+
+/// A profile whose driver this build does not know (a typo in fosta-studio.json, or a newer app's engine).
+fn unknown_driver(driver: &str) -> AppError {
+    AppError::new(format!(
+        "Unknown database type '{driver}'. This version supports mariadb, mysql, mssql and mongodb; edit the connection to pick one."
+    ))
 }
 
 /// "Test connection": opens, reads the version and closes again.
@@ -211,5 +219,28 @@ impl DbManager {
     #[cfg(test)]
     pub fn insert_driver(&self, connection_id: &str, driver: Arc<dyn Driver>) {
         lock(&self.connections).insert(connection_id.to_owned(), driver);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unknown_driver_ids_are_refused_instead_of_opening_mysql() {
+        let profile = ConnectionProfile {
+            id: "x".into(),
+            name: "x".into(),
+            driver: "postgress".into(),
+            host: "127.0.0.1".into(),
+            port: 1,
+            user: String::new(),
+            database: None,
+            save_password: false,
+            options: Default::default(),
+            safety: None,
+        };
+        let error = open(&profile, "").await.err().expect("refused");
+        assert!(error.to_string().starts_with("Unknown database type 'postgress'"), "{error}");
     }
 }
