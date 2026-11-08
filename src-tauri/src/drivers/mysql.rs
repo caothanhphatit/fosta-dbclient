@@ -236,7 +236,7 @@ impl Driver for MysqlConnection {
             (database.to_owned(),),
         )
         .await?;
-        Ok(rows
+        let mut tables: Vec<TableInfo> = rows
             .iter()
             .map(|row| TableInfo {
                 name: row.text(0),
@@ -244,7 +244,20 @@ impl Driver for MysqlConnection {
                 rows: row_estimate(row.optional(2), row.optional(4)),
                 comment: row.text(3),
             })
-            .collect())
+            .collect();
+        // InnoDB statistics can claim 0 rows (and an empty page) long after a bulk load. A cheap EXISTS
+        // tells a really empty table from a stale estimate, which then shows as unknown.
+        let zero: Vec<usize> = (0..tables.len())
+            .filter(|&index| tables[index].kind == "table" && tables[index].rows == Some(0))
+            .take(MAX_EMPTY_PROBES)
+            .collect();
+        for index in zero {
+            let probe = format!("SELECT EXISTS(SELECT 1 FROM {})", qualified(database, &tables[index].name));
+            if let Ok(Some(1_i64)) = conn.query_first::<i64, _>(probe).await {
+                tables[index].rows = None;
+            }
+        }
+        Ok(tables)
     }
 
     async fn describe_table(&self, database: &str, table: &str) -> AppResult<TableDesign> {
@@ -633,6 +646,9 @@ fn sql_type_name(column_type: ColumnType, binary: bool, flags: ColumnFlags) -> &
         _ => "unknown",
     }
 }
+
+/// Tables reporting 0 rows that `list_tables` checks for data; beyond that a 0 is shown as reported.
+const MAX_EMPTY_PROBES: usize = 32;
 
 /// Size of one InnoDB page: what an empty table reports as `DATA_LENGTH`.
 const EMPTY_TABLE_BYTES: u64 = 16 * 1024;

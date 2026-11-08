@@ -141,6 +141,10 @@ async fn live_mariadb() {
     create_and_drop(driver.as_ref(), "studio_scratch", None, None, "DROP DATABASE `studio_scratch`").await;
     let relations = driver.table_relations("shop", "products").await.expect("relations");
     assert!(!relations.outgoing.is_empty() && !relations.incoming.is_empty());
+    // A table with rows never shows a stale "~0" estimate (InnoDB statistics lag after the bulk seed).
+    let tables = driver.list_tables("shop").await.expect("tables");
+    let order_items = tables.iter().find(|table| table.name == "order_items").expect("order_items");
+    assert_ne!(order_items.rows, Some(0), "order_items holds rows");
     // Declared SQL types on table pages and SQL type names in query results, not wire types (long, newdecimal).
     let page = driver
         .browse_table(&browse("shop", "order_items", None), &Limits::default())
