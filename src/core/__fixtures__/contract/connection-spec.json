@@ -1,0 +1,21 @@
+{
+  "engine": "mssql",
+  "host": "localhost",
+  "port": 1433,
+  "user": "sa",
+  "database": "master",
+  "file": null,
+  "url": null,
+  "options": {},
+  "tls": {
+    "mode": "require",
+    "caFile": null,
+    "clientCertFile": null,
+    "clientKeyFile": null,
+    "serverName": null,
+    "acceptInvalidCerts": true,
+    "pinnedSha256": null
+  },
+  "ssh": null,
+  "auth": null
+}

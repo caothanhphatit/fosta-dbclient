@@ -1,0 +1,83 @@
+{
+  "code": "CONFLICT",
+  "object": {
+    "database": "shop",
+    "schema": null,
+    "name": "orders",
+    "kind": "table"
+  },
+  "conflicts": [
+    {
+      "index": 1,
+      "op": "update",
+      "key": [
+        {
+          "column": "id",
+          "value": {
+            "t": "int",
+            "v": 1
+          }
+        }
+      ],
+      "original": [
+        {
+          "column": "status",
+          "value": {
+            "t": "text",
+            "v": "PAID"
+          }
+        }
+      ],
+      "current": [
+        {
+          "column": "id",
+          "value": {
+            "t": "int",
+            "v": 1
+          }
+        },
+        {
+          "column": "status",
+          "value": {
+            "t": "text",
+            "v": "CANCELLED"
+          }
+        }
+      ],
+      "attempted": [
+        {
+          "column": "status",
+          "value": {
+            "t": "text",
+            "v": "SHIPPED"
+          }
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "op": "delete",
+      "key": [
+        {
+          "column": "id",
+          "value": {
+            "t": "int",
+            "v": 2
+          }
+        }
+      ],
+      "original": [
+        {
+          "column": "status",
+          "value": {
+            "t": "text",
+            "v": "PAID"
+          }
+        }
+      ],
+      "current": null,
+      "attempted": []
+    }
+  ],
+  "message": "Nothing was saved: 1 row(s) were changed by someone else and 1 row(s) no longer exist since they were loaded from shop.orders."
+}

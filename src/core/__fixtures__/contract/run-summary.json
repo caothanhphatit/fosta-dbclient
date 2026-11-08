@@ -1,0 +1,11 @@
+{
+  "statements": 1,
+  "elapsedMs": 3,
+  "stopped": false,
+  "transaction": {
+    "supported": true,
+    "open": true,
+    "autoCommit": false,
+    "failed": false
+  }
+}

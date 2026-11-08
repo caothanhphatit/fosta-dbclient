@@ -41,7 +41,6 @@ use crate::{
 };
 
 const NEEDS_MYSQL: &str = "This feature needs a MariaDB or MySQL connection";
-const DEFAULT_MAX_ROWS: usize = 1000;
 
 /// The engine behind a driver: picks the SQL dialect and the engine-level backstops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,26 +51,7 @@ pub enum Engine {
     MongoDb,
 }
 
-/// Engine-level backstops set by the workspace's safety rules (see `crate::gateway`).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Limits {
-    /// Rows kept per result set in query tabs.
-    pub max_rows: usize,
-    /// Statement timeout in seconds; 0 = none.
-    pub timeout_secs: u32,
-    /// Put sessions in read-only mode where the engine has one.
-    pub read_only: bool,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            max_rows: DEFAULT_MAX_ROWS,
-            timeout_secs: 0,
-            read_only: false,
-        }
-    }
-}
+pub use crate::contract::limits::Limits;
 
 /// Statements the app sends to a database go through `crate::gateway` first, which checks
 /// them against the workspace's rules; drivers only execute.

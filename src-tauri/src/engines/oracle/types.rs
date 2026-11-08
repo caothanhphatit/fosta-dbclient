@@ -130,6 +130,8 @@ pub fn to_bind(v: &Value) -> Box<dyn ToSql> {
         | Value::Interval(_)
         | Value::Json(_)
         | Value::Array(_)
+        | Value::ObjectId(_)
+        | Value::Document(_)
         | Value::Other { .. } => Box::new(v.display().unwrap_or_default()),
     }
 }

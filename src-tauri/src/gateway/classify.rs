@@ -7,9 +7,8 @@
 //! which the rules treat like a write, and MySQL `/*! … */` comments (which the server
 //! executes) are classified as code.
 
-use std::{collections::BTreeSet, ops::ControlFlow};
+use std::ops::ControlFlow;
 
-use serde::Serialize;
 use sqlparser::{
     ast::{visit_relations, visit_statements, ObjectName, Query, Set, SetExpr, Statement, TransactionAccessMode, TransactionMode},
     dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect},
@@ -20,92 +19,7 @@ use crate::drivers::{types::RowChange, Engine};
 
 const EXCERPT_CHARS: usize = 240;
 
-/// What a statement can do, from harmless to dangerous. `Ord` follows that severity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Category {
-    /// SELECT, SHOW, EXPLAIN, USE, session SET, MongoDB find/aggregate/count…
-    Read,
-    /// BEGIN / COMMIT / ROLLBACK / SAVEPOINT / autocommit: always allowed.
-    Transaction,
-    /// INSERT, UPDATE, DELETE (with WHERE), MERGE, REPLACE, procedure calls.
-    Write,
-    /// SQL that could not be parsed; treated like a write.
-    Unknown,
-    /// CREATE / ALTER / RENAME (without dropping anything).
-    Ddl,
-    /// DROP, TRUNCATE, UPDATE/DELETE without WHERE, ALTER … DROP.
-    Destructive,
-    /// Users, grants, KILL, server-wide settings.
-    Admin,
-}
-
-impl Category {
-    #[cfg(test)]
-    pub const ALL: [Category; 7] = [
-        Category::Read,
-        Category::Transaction,
-        Category::Write,
-        Category::Unknown,
-        Category::Ddl,
-        Category::Destructive,
-        Category::Admin,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Category::Read => "Read",
-            Category::Transaction => "Transaction",
-            Category::Write => "Write",
-            Category::Unknown => "Unparsed",
-            Category::Ddl => "DDL",
-            Category::Destructive => "Destructive",
-            Category::Admin => "Administrative",
-        }
-    }
-}
-
-/// One classified statement, as shown in the confirmation dialog and written to the audit log.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StatementInfo {
-    pub category: Category,
-    /// Short statement kind, e.g. `DELETE`, `DROP TABLE`, `find`.
-    pub kind: String,
-    /// Tables or collections it touches, as written.
-    pub tables: Vec<String>,
-    pub excerpt: String,
-    /// Why it got this category when that is not obvious ("DELETE without WHERE").
-    pub reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Classification {
-    pub statements: Vec<StatementInfo>,
-}
-
-impl Classification {
-    pub fn single(info: StatementInfo) -> Self {
-        Self { statements: vec![info] }
-    }
-
-    /// Distinct categories, most severe last.
-    pub fn categories(&self) -> Vec<Category> {
-        let set: BTreeSet<Category> = self.statements.iter().map(|statement| statement.category).collect();
-        set.into_iter().collect()
-    }
-
-    pub fn tables(&self) -> Vec<String> {
-        let mut tables: Vec<String> = Vec::new();
-        for table in self.statements.iter().flat_map(|statement| &statement.tables) {
-            if !tables.contains(table) {
-                tables.push(table.clone());
-            }
-        }
-        tables
-    }
-}
+pub use crate::contract::classify::{Category, Classification, StatementInfo};
 
 pub fn dialect_for(engine: Engine) -> Box<dyn Dialect> {
     match engine {
@@ -157,6 +71,7 @@ pub fn classify_sql(engine: Engine, text: &str) -> Classification {
                 tables: Vec::new(),
                 excerpt: excerpt(text),
                 reason: Some(reason),
+                refused: None,
             })
         }
     }
@@ -215,6 +130,7 @@ fn classify_statement(statement: &Statement) -> StatementInfo {
         tables: tables_of(statement),
         excerpt: excerpt(&statement.to_string()),
         reason,
+        refused: None,
     }
 }
 
@@ -490,6 +406,7 @@ pub fn classify_changes(table: &str, changes: &[RowChange]) -> Classification {
                 tables: vec![table.to_owned()],
                 excerpt: format!("{kind} {count} row(s) of {table}, each matched by its key"),
                 reason: None,
+                refused: None,
             })
             .collect(),
     }
@@ -545,6 +462,7 @@ pub fn classify_mongo(text: &str) -> Classification {
                 tables: Vec::new(),
                 excerpt: excerpt(text),
                 reason: Some(format!("Not a JSON command ({error})")),
+                refused: None,
             })
         }
     };
@@ -555,6 +473,7 @@ pub fn classify_mongo(text: &str) -> Classification {
             tables: Vec::new(),
             excerpt: excerpt(text),
             reason: Some("A MongoDB command is a JSON object whose first key is the command name".to_owned()),
+            refused: None,
         });
     };
     let tables = target.as_str().map(|collection| vec![collection.to_owned()]).unwrap_or_default();
@@ -565,6 +484,7 @@ pub fn classify_mongo(text: &str) -> Classification {
         tables,
         excerpt: excerpt(text),
         reason,
+        refused: None,
     })
 }
 

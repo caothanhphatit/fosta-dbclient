@@ -251,6 +251,7 @@ async fn live_engine_clickhouse_streaming_limit_cancel_timeout() {
     let s = e.open_session().unwrap();
     assert_eq!(s.transaction_state(), TxState::Unsupported);
     let opts = RunOptions {
+        read_only: false,
         row_limit: 1000,
         batch_size: 300,
         timeout: None,
@@ -302,6 +303,7 @@ async fn live_engine_clickhouse_streaming_limit_cancel_timeout() {
 
     // Timeout.
     let timed = RunOptions {
+        read_only: false,
         timeout: Some(Duration::from_millis(500)),
         ..opts.clone()
     };

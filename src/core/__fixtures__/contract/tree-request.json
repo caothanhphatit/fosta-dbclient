@@ -1,0 +1,15 @@
+{
+  "parent": {
+    "id": "db:shop/folder:tables/table:orders",
+    "kind": "table",
+    "object": {
+      "database": "shop",
+      "schema": null,
+      "name": "orders",
+      "kind": "table"
+    }
+  },
+  "cursor": "c2",
+  "limit": 500,
+  "filter": null
+}

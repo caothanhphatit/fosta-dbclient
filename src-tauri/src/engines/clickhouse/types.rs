@@ -130,7 +130,7 @@ pub fn read(v: &Json, ty: &str) -> Value {
                 _ => other(),
             }
         }
-        ValueKind::Bytes | ValueKind::TimestampTz | ValueKind::Other => other(),
+        ValueKind::Bytes | ValueKind::TimestampTz | ValueKind::ObjectId | ValueKind::Document | ValueKind::Other => other(),
     }
 }
 

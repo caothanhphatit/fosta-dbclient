@@ -334,6 +334,7 @@ fn describe_sync(c: &Connection, obj: &ObjectRef) -> Result<ObjectDescription> {
                 pk.push((pkpos, name.clone()));
             }
             d.columns.push(ColumnInfo {
+                hints: Default::default(),
                 kind: types::kind_of(&decl),
                 name,
                 type_name: decl,
@@ -400,6 +401,7 @@ fn describe_sync(c: &Connection, obj: &ObjectRef) -> Result<ObjectDescription> {
             let (id, table, from, to, on_update, on_delete) = r.map_err(map_err)?;
             if id != last_id {
                 d.foreign_keys.push(ForeignKeyInfo {
+                    ref_database: None,
                     name: None,
                     columns: Vec::new(),
                     ref_schema: Some(schema.to_owned()),

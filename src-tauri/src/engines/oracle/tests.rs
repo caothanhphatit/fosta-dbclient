@@ -311,6 +311,7 @@ async fn live_engine_oracle_streaming_limit_cancel_timeout() {
     let Some(e) = engine().await else { return };
     let s = e.open_session().await.unwrap();
     let opts = RunOptions {
+        read_only: false,
         row_limit: 1000,
         batch_size: 250,
         timeout: None,
@@ -336,6 +337,7 @@ async fn live_engine_oracle_streaming_limit_cancel_timeout() {
     c.await.unwrap();
     assert_eq!(err.kind, ErrorKind::Cancelled, "{err}");
     let timed = RunOptions {
+        read_only: false,
         timeout: Some(Duration::from_millis(500)),
         ..opts.clone()
     };

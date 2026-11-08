@@ -1,0 +1,51 @@
+[
+  {
+    "event": "statement",
+    "index": 0,
+    "sql": "SELECT 1"
+  },
+  {
+    "event": "columns",
+    "index": 0,
+    "columns": [
+      {
+        "name": "1",
+        "typeName": "bigint",
+        "kind": {
+          "kind": "int"
+        },
+        "nullable": true,
+        "default": null,
+        "comment": null,
+        "identity": null,
+        "generated": null,
+        "hints": {}
+      }
+    ]
+  },
+  {
+    "event": "rows",
+    "index": 0,
+    "rows": [
+      [
+        {
+          "t": "int",
+          "v": 1
+        }
+      ]
+    ]
+  },
+  {
+    "event": "done",
+    "index": 0,
+    "affected": null,
+    "rows": 1,
+    "truncated": false,
+    "elapsedMs": 2
+  },
+  {
+    "event": "notice",
+    "index": 0,
+    "text": "1 row affected"
+  }
+]

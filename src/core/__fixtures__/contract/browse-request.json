@@ -1,0 +1,33 @@
+{
+  "object": {
+    "database": "shop",
+    "schema": null,
+    "name": "orders",
+    "kind": "table"
+  },
+  "filter": {
+    "kind": "conditions",
+    "conditions": [
+      {
+        "column": "status",
+        "op": "eq",
+        "values": [
+          "PAID"
+        ]
+      }
+    ],
+    "matchAny": false
+  },
+  "sort": [
+    {
+      "column": "id",
+      "descending": false
+    }
+  ],
+  "offset": 0,
+  "limit": 200,
+  "after": null,
+  "estimateTotal": true,
+  "exactTotal": false,
+  "columns": null
+}

@@ -397,6 +397,7 @@ async fn live_engine_postgres_streaming_limit_cancel_timeout() {
     let e = engine().await;
     let s = e.open_session().await.unwrap();
     let opts = RunOptions {
+        read_only: false,
         row_limit: 1000,
         batch_size: 250,
         timeout: None,
@@ -435,6 +436,7 @@ async fn live_engine_postgres_streaming_limit_cancel_timeout() {
 
     // Statement timeout.
     let timed = RunOptions {
+        read_only: false,
         timeout: Some(Duration::from_millis(300)),
         ..opts.clone()
     };

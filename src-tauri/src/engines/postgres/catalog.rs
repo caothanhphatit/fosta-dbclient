@@ -295,6 +295,7 @@ async fn columns_of(c: &Client, relid: u32) -> Result<Vec<ColumnInfo>> {
             };
             let is_generated = generated == "s";
             ColumnInfo {
+                hints: Default::default(),
                 name: r.get(0),
                 type_name: r.get(1),
                 kind,
@@ -394,6 +395,7 @@ async fn describe_relation(c: &Client, obj: &ObjectRef, schema: &str) -> Result<
                 columns: cols,
             }),
             "f" => d.foreign_keys.push(ForeignKeyInfo {
+                ref_database: None,
                 name: Some(name),
                 columns: cols,
                 ref_schema: r.get(4),

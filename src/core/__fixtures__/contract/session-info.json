@@ -1,0 +1,11 @@
+{
+  "sessionId": "s1",
+  "language": "sql",
+  "transaction": {
+    "supported": true,
+    "open": true,
+    "autoCommit": false,
+    "failed": false
+  },
+  "cancellable": true
+}

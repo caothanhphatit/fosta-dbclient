@@ -328,6 +328,7 @@ async fn live_engine_sqlite_streaming_limit_cancel_timeout() {
 
     // Several result sets, batches and the row limit on an endless query.
     let opts = RunOptions {
+        read_only: false,
         row_limit: 1000,
         batch_size: 100,
         timeout: None,
@@ -370,6 +371,7 @@ async fn live_engine_sqlite_streaming_limit_cancel_timeout() {
 
     // Timeout.
     let opts = RunOptions {
+        read_only: false,
         timeout: Some(std::time::Duration::from_millis(300)),
         ..RunOptions::default()
     };

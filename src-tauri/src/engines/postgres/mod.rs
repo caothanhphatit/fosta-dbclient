@@ -300,24 +300,31 @@ pub(crate) fn map_err(e: tokio_postgres::Error) -> EngineError {
                 EngineError::cancelled()
             };
         }
-        let mut msg = db.message().to_owned();
-        if let Some(d) = db.detail() {
-            msg.push_str(". ");
-            msg.push_str(d);
-        }
-        if let Some(h) = db.hint() {
-            msg.push_str(". Hint: ");
-            msg.push_str(h);
-        }
+        let msg = db.message().to_owned();
+        let detail = match (db.detail(), db.where_()) {
+            (Some(d), Some(w)) => Some(format!(
+                "{d}
+Where: {w}"
+            )),
+            (Some(d), None) => Some(d.to_owned()),
+            (None, Some(w)) => Some(format!("Where: {w}")),
+            (None, None) => None,
+        };
+        let position = match db.position() {
+            Some(tokio_postgres::error::ErrorPosition::Original(p)) => Some(p.saturating_sub(1)),
+            _ => None,
+        };
         let kind = if code.starts_with("28") || code.starts_with("3D") || code.starts_with("08") {
             ErrorKind::Connect
         } else {
             ErrorKind::Server
         };
         return EngineError {
-            message: msg,
             code: Some(code),
-            kind,
+            detail,
+            hint: db.hint().map(str::to_owned),
+            position,
+            ..EngineError::new(kind, msg)
         };
     }
     if e.is_closed() {

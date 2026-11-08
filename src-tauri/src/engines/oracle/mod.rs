@@ -188,9 +188,8 @@ pub(crate) fn map_err(e: oracle::Error) -> EngineError {
             _ => ErrorKind::Server,
         };
         return EngineError {
-            message,
             code: Some(code),
-            kind,
+            ..EngineError::new(kind, message)
         };
     }
     if text.contains("DPI-1080") || text.contains("DPI-1010") {
@@ -575,6 +574,7 @@ fn describe_relation(c: &Connection, d: &mut ObjectDescription, owner: &str) -> 
         let virt = g(10) == "YES";
         let default = r[8].clone().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
         d.columns.push(ColumnInfo {
+            hints: Default::default(),
             kind: types::kind_by_name(&dt, prec, scale),
             name: g(0),
             type_name,
@@ -635,6 +635,7 @@ fn describe_relation(c: &Connection, d: &mut ObjectDescription, owner: &str) -> 
                 columns: split(&r[5]),
             }),
             _ => d.foreign_keys.push(ForeignKeyInfo {
+                ref_database: None,
                 name: cname,
                 columns: split(&r[5]),
                 ref_schema: r[3].clone(),

@@ -1,0 +1,112 @@
+{
+  "object": {
+    "database": "shop",
+    "schema": null,
+    "name": "orders",
+    "kind": "table"
+  },
+  "comment": null,
+  "columns": [
+    {
+      "name": "id",
+      "typeName": "int(11)",
+      "kind": {
+        "kind": "int"
+      },
+      "nullable": false,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {
+        "primary": true
+      }
+    },
+    {
+      "name": "status",
+      "typeName": "varchar(20)",
+      "kind": {
+        "kind": "text"
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {}
+    },
+    {
+      "name": "tags",
+      "typeName": "json",
+      "kind": {
+        "kind": "array",
+        "of": {
+          "kind": "text"
+        }
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {}
+    }
+  ],
+  "primaryKey": {
+    "name": "PRIMARY",
+    "columns": [
+      "id"
+    ]
+  },
+  "uniqueKeys": [],
+  "foreignKeys": [
+    {
+      "name": "fk_customer",
+      "columns": [
+        "customer_id"
+      ],
+      "refDatabase": null,
+      "refSchema": null,
+      "refTable": "customers",
+      "refColumns": [
+        "id"
+      ],
+      "onUpdate": null,
+      "onDelete": "CASCADE"
+    }
+  ],
+  "referencedBy": [
+    {
+      "name": "fk_order",
+      "database": "shop",
+      "schema": null,
+      "table": "order_items",
+      "columns": [
+        "order_id"
+      ],
+      "refColumns": [
+        "id"
+      ]
+    }
+  ],
+  "indexes": [
+    {
+      "name": "PRIMARY",
+      "columns": [
+        "id"
+      ],
+      "unique": true,
+      "primary": true,
+      "method": "BTREE",
+      "definition": null
+    }
+  ],
+  "rowEstimate": 8000,
+  "ddl": "CREATE TABLE orders (…)",
+  "extra": [
+    [
+      "engine",
+      "InnoDB"
+    ]
+  ]
+}

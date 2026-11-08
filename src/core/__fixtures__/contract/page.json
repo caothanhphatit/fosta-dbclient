@@ -1,0 +1,86 @@
+{
+  "columns": [
+    {
+      "name": "id",
+      "typeName": "int(11)",
+      "kind": {
+        "kind": "int"
+      },
+      "nullable": false,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {
+        "primary": true
+      }
+    },
+    {
+      "name": "status",
+      "typeName": "varchar(20)",
+      "kind": {
+        "kind": "text"
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {}
+    },
+    {
+      "name": "tags",
+      "typeName": "json",
+      "kind": {
+        "kind": "array",
+        "of": {
+          "kind": "text"
+        }
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {}
+    }
+  ],
+  "rows": [
+    [
+      {
+        "t": "int",
+        "v": 1
+      },
+      {
+        "t": "text",
+        "v": "PAID"
+      },
+      {
+        "t": "null",
+        "v": null
+      }
+    ]
+  ],
+  "hasMore": true,
+  "keyColumns": [
+    "id"
+  ],
+  "nextKeyset": [
+    {
+      "t": "int",
+      "v": 1
+    }
+  ],
+  "total": {
+    "value": 8000,
+    "exact": false
+  },
+  "statement": "SELECT … WHERE `status` = ? ORDER BY `id` LIMIT 200",
+  "elapsedMs": 4,
+  "rowVersions": [
+    {
+      "t": "bytes",
+      "v": "0x00000000000007d1"
+    }
+  ]
+}

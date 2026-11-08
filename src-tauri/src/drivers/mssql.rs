@@ -99,6 +99,7 @@ async fn transaction_state(client: &mut TdsClient) -> TransactionState {
                 supported: true,
                 open: open.parse::<i64>().unwrap_or(0) > 0,
                 auto_commit: auto_commit != "0",
+                failed: false,
             }
         }
         Err(_) => TransactionState::unsupported(),

@@ -316,7 +316,14 @@ pub fn server_error(text: &str) -> EngineError {
         Some("516" | "192" | "193" | "194" | "81") => ErrorKind::Connect,
         _ => ErrorKind::Server,
     };
-    EngineError { message, code, kind }
+    EngineError {
+        message,
+        code,
+        kind,
+        detail: None,
+        hint: None,
+        position: None,
+    }
 }
 
 /// Splits a `JSONCompactEachRowWithNamesAndTypes` body into the header and rows as bytes arrive.
@@ -577,6 +584,7 @@ impl ChEngine {
                 in_pk.push(c[0].clone());
             }
             d.columns.push(ColumnInfo {
+                hints: Default::default(),
                 kind: types::kind_of(&c[1]),
                 nullable: types::is_nullable(&c[1]),
                 name: c[0].clone(),

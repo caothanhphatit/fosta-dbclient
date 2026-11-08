@@ -1,0 +1,78 @@
+{
+  "object": {
+    "database": "shop",
+    "schema": null,
+    "name": "orders",
+    "kind": "table"
+  },
+  "changes": [
+    {
+      "op": "insert",
+      "values": [
+        {
+          "column": "status",
+          "value": {
+            "t": "text",
+            "v": "NEW"
+          }
+        }
+      ]
+    },
+    {
+      "op": "update",
+      "key": [
+        {
+          "column": "id",
+          "value": {
+            "t": "int",
+            "v": 1
+          }
+        }
+      ],
+      "values": [
+        {
+          "column": "status",
+          "value": {
+            "t": "text",
+            "v": "SHIPPED"
+          }
+        }
+      ],
+      "original": [
+        {
+          "column": "status",
+          "value": {
+            "t": "text",
+            "v": "PAID"
+          }
+        }
+      ]
+    },
+    {
+      "op": "delete",
+      "key": [
+        {
+          "column": "id",
+          "value": {
+            "t": "int",
+            "v": 2
+          }
+        }
+      ],
+      "original": [
+        {
+          "column": "status",
+          "value": {
+            "t": "text",
+            "v": "PAID"
+          }
+        }
+      ],
+      "version": {
+        "t": "bytes",
+        "v": "0x00000000000007d2"
+      },
+      "force": true
+    }
+  ]
+}

@@ -12,6 +12,7 @@ pub mod ai;
 pub mod audit;
 pub mod commands;
 pub mod config;
+pub mod contract;
 pub mod drivers;
 pub mod embedding;
 pub mod engines;

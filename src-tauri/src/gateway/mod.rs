@@ -518,6 +518,7 @@ pub async fn create_database(
         tables: Vec::new(),
         excerpt: format!("CREATE DATABASE {name}"),
         reason: None,
+        refused: None,
     });
     let text = format!("{name}\u{0}{}", first_collection.unwrap_or_default());
     db.gateway.authorize(&Request {
@@ -574,6 +575,7 @@ pub async fn transaction(db: &DbManager, context: &Context, session_id: &str, op
         tables: Vec::new(),
         excerpt: format!("{op:?}"),
         reason: None,
+        refused: None,
     });
     db.gateway.authorize(&Request {
         caller: Caller::Transaction,

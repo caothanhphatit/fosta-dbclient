@@ -185,6 +185,7 @@ impl MysqlConnection {
                 supported: true,
                 open: open > 0,
                 auto_commit: auto_commit != 0,
+                failed: false,
             },
             _ => TransactionState::unsupported(),
         }

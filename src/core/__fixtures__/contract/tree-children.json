@@ -1,0 +1,85 @@
+{
+  "nodes": [
+    {
+      "key": {
+        "id": "db:shop/folder:tables/table:orders",
+        "kind": "table",
+        "object": {
+          "database": "shop",
+          "schema": null,
+          "name": "orders",
+          "kind": "table"
+        }
+      },
+      "label": "orders",
+      "kind": "table",
+      "icon": "table",
+      "object": {
+        "database": "shop",
+        "schema": null,
+        "name": "orders",
+        "kind": "table"
+      },
+      "detail": "~8k rows",
+      "badges": [
+        {
+          "text": "system",
+          "tone": "neutral"
+        }
+      ],
+      "expandable": false,
+      "defaultView": "data",
+      "actions": [
+        {
+          "id": "design",
+          "label": "Design",
+          "icon": null,
+          "target": {
+            "kind": "view",
+            "role": "design"
+          },
+          "danger": false,
+          "separatorBefore": false
+        },
+        {
+          "id": "truncate",
+          "label": "Truncate…",
+          "icon": null,
+          "target": {
+            "kind": "query",
+            "template": "TRUNCATE TABLE {qualified}"
+          },
+          "danger": true,
+          "separatorBefore": true
+        },
+        {
+          "id": "copy",
+          "label": "Copy name",
+          "icon": null,
+          "target": {
+            "kind": "builtin",
+            "name": "copyName"
+          },
+          "danger": false,
+          "separatorBefore": false
+        },
+        {
+          "id": "info",
+          "label": "Server info",
+          "icon": null,
+          "target": {
+            "kind": "capability",
+            "name": "redis.info",
+            "args": {
+              "section": "server"
+            }
+          },
+          "danger": false,
+          "separatorBefore": false
+        }
+      ]
+    }
+  ],
+  "nextCursor": "c3",
+  "totalHint": 1200
+}

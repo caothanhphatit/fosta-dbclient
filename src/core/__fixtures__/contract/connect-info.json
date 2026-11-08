@@ -1,0 +1,38 @@
+{
+  "engine": "mariadb",
+  "server": {
+    "product": "MariaDB",
+    "version": "11.8.2-MariaDB",
+    "label": "MariaDB 11.8.2",
+    "flavor": null
+  },
+  "capabilities": [
+    "tree",
+    "browseRows",
+    "editRows",
+    "query"
+  ],
+  "languages": [
+    {
+      "id": "sql",
+      "label": "SQL",
+      "editor": "sql",
+      "dialect": "mariaDb",
+      "default": true,
+      "hint": "Ctrl+Enter runs the query."
+    }
+  ],
+  "connectionActions": [
+    {
+      "id": "refresh",
+      "label": "Refresh",
+      "icon": null,
+      "target": {
+        "kind": "builtin",
+        "name": "refresh"
+      },
+      "danger": false,
+      "separatorBefore": false
+    }
+  ]
+}
