@@ -72,7 +72,7 @@ pub async fn describe_table(state: &AppState, connection_id: String, database: S
 
 pub async fn browse_table(state: &AppState, request: BrowseRequest) -> AppResult<TablePage> {
     let context = gateway_context(state, &request.connection_id)?;
-    gateway::browse(&state.engines, &context, &request).await
+    gateway::legacy_browse(&state.engines, &context, &request).await
 }
 
 /// Saves grid edits (`caller` "gridSave", the default) or imported rows ("import"; batches of
@@ -90,7 +90,7 @@ pub async fn apply_changes(
 ) -> AppResult<u64> {
     let context = gateway_context(state, &connection_id)?;
     let caller = caller.unwrap_or(Caller::GridSave);
-    gateway::apply_changes(
+    gateway::legacy_apply_changes(
         &state.engines,
         &context,
         caller,
@@ -139,5 +139,5 @@ pub async fn cancel_sql(state: &AppState, session_id: String) -> AppResult<()> {
 /// Begin / Commit / Rollback / auto-commit on / off / status for a query tab's session.
 pub async fn sql_transaction(state: &AppState, session_id: String, op: TransactionOp) -> AppResult<TransactionState> {
     let context = gateway_context(state, &state.engines.session_connection(&session_id)?)?;
-    gateway::transaction(&state.engines, &context, &session_id, op).await
+    gateway::legacy_transaction(&state.engines, &context, &session_id, op).await
 }

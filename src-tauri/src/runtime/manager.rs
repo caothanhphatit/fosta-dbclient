@@ -8,8 +8,10 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+use tokio::sync::mpsc;
 
 use serde::Serialize;
 
@@ -19,7 +21,8 @@ use super::{
 };
 use crate::{
     contract::{
-        Canceller, ConnectInfo, ConnectRequest, ConnectSecrets, Connection, ConnectionSpec, Engine, Session, SessionInfo, SessionOptions,
+        Canceller, ConnectInfo, ConnectRequest, ConnectSecrets, Connection, ConnectionSpec, Engine, Flow, ResultSink, RunOptions,
+        RunRequest, RunSummary, Session, SessionInfo, SessionOptions, StreamEvent,
     },
     drivers::Driver,
     error::{AppError, AppResult, NOT_CONNECTED},
@@ -79,6 +82,87 @@ impl Handle {
             self.poisoned.store(true, Ordering::Relaxed);
         }
         outcome.map_err(|error| error.with_engine(self.engine.id()))
+    }
+
+    /// Runs a session's statements in their own task (contained like [`call`](Self::call)) and forwards the events to
+    /// `sink` as they come (the row limit bounds what is buffered). When `sink` answers `Stop` (the client went away),
+    /// the engine's sink answers `Stop` too and the run ends at the next batch.
+    pub async fn run(
+        &self,
+        session: Arc<dyn Session>,
+        request: RunRequest,
+        options: RunOptions,
+        sink: &mut dyn ResultSink,
+    ) -> AppResult<RunSummary> {
+        struct ChannelSink {
+            tx: mpsc::UnboundedSender<StreamEvent>,
+            stop: Arc<AtomicBool>,
+        }
+        impl ResultSink for ChannelSink {
+            fn event(&mut self, event: StreamEvent) -> Flow {
+                if self.stop.load(Ordering::Relaxed) {
+                    return Flow::Stop;
+                }
+                match self.tx.send(event) {
+                    Ok(()) if !self.stop.load(Ordering::Relaxed) => Flow::Continue,
+                    _ => Flow::Stop,
+                }
+            }
+        }
+        let started = Instant::now();
+        let (tx, mut rx) = mpsc::unbounded_channel::<StreamEvent>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut engine_sink = ChannelSink {
+            tx,
+            stop: Arc::clone(&stop),
+        };
+        let task_session = Arc::clone(&session);
+        let label = self.engine.descriptor().label.clone();
+        let run = contained(&label, "ran statements", async move {
+            task_session.run(&request, &options, &mut engine_sink).await
+        });
+        tokio::pin!(run);
+        let mut statements = 0;
+        let mut stopped = false;
+        let outcome = loop {
+            tokio::select! {
+                biased;
+                event = rx.recv() => match event {
+                    Some(event) => {
+                        if matches!(event, StreamEvent::Statement { .. }) {
+                            statements += 1;
+                        }
+                        if sink.event(event) == Flow::Stop {
+                            stopped = true;
+                            stop.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    None => break (&mut run).await,
+                },
+                outcome = &mut run => {
+                    // Drain what the engine sent before it finished.
+                    while let Ok(event) = rx.try_recv() {
+                        if matches!(event, StreamEvent::Statement { .. }) {
+                            statements += 1;
+                        }
+                        if !stopped && sink.event(event) == Flow::Stop {
+                            stopped = true;
+                        }
+                    }
+                    break outcome;
+                }
+            }
+        };
+        if outcome.as_ref().err().is_some_and(is_crash) {
+            self.poisoned.store(true, Ordering::Relaxed);
+        }
+        outcome.map_err(|error| error.with_engine(self.engine.id()))?;
+        Ok(RunSummary {
+            statements,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            stopped,
+            transaction: session.transaction_state().await,
+        })
     }
 }
 

@@ -14,7 +14,7 @@ use sqlparser::{
 
 use super::classify::{dialect_for, parse};
 use crate::{
-    drivers::Engine,
+    contract::{RawFilterLang, SqlDialectId},
     error::{AppError, AppResult},
 };
 
@@ -57,7 +57,7 @@ fn reject(filter: &str, message: impl Into<String>) -> AppError {
 }
 
 /// Checks a grid filter for a SQL engine; `Ok` means it is one boolean expression.
-pub fn validate_sql_filter(engine: Engine, filter: &str) -> AppResult<()> {
+pub fn validate_sql_filter(engine: SqlDialectId, filter: &str) -> AppResult<()> {
     let text = filter.trim();
     if text.is_empty() {
         return Ok(());
@@ -128,7 +128,7 @@ pub fn validate_sql_filter(engine: Engine, filter: &str) -> AppResult<()> {
 
 /// Comments and `;` are never part of a condition. MySQL runs the inside of `/*! … */`, which the
 /// tokenizer expands, so those are caught on the raw text.
-fn reject_comments_and_separators(engine: Engine, text: &str) -> Result<(), String> {
+fn reject_comments_and_separators(engine: SqlDialectId, text: &str) -> Result<(), String> {
     if text.contains("/*!") || text.contains("/*M!") {
         return Err("Comments are not allowed in a filter.".to_owned());
     }
@@ -189,11 +189,42 @@ fn find_denied_operator(value: &serde_json::Value) -> Option<&'static str> {
     }
 }
 
-pub fn validate_filter(engine: Engine, filter: Option<&str>) -> AppResult<()> {
-    match (engine, filter) {
-        (_, None) => Ok(()),
-        (Engine::MongoDb, Some(filter)) => validate_mongo_filter(filter),
-        (engine, Some(filter)) => validate_sql_filter(engine, filter),
+/// Checks a raw filter in the engine's filter language: SQL must be one condition (parsed in the engine's dialect),
+/// MongoDB and Elasticsearch filters must be a JSON object without code-running operators.
+pub fn validate_raw_filter(language: RawFilterLang, dialect: Option<SqlDialectId>, text: &str) -> AppResult<()> {
+    match language {
+        RawFilterLang::Sql => validate_sql_filter(dialect.unwrap_or(SqlDialectId::Generic), text),
+        RawFilterLang::MongoJson => validate_mongo_filter(text),
+        RawFilterLang::EsQueryDsl => validate_es_filter(text),
+    }
+}
+
+/// Elasticsearch Query DSL: a JSON object, and no scripts (`script`, `script_score`, `runtime_mappings`).
+pub fn validate_es_filter(filter: &str) -> AppResult<()> {
+    let value: serde_json::Value =
+        serde_json::from_str(filter).map_err(|error| reject(filter, format!("The filter is not valid JSON: {error}")))?;
+    if !value.is_object() {
+        return Err(reject(filter, "The filter must be a JSON object (a Query DSL query)."));
+    }
+    if let Some(key) = find_key(&value, &["script", "script_score", "runtime_mappings"]) {
+        return Err(reject(
+            filter,
+            format!("'{key}' is not allowed in a filter: it runs code on the cluster."),
+        ));
+    }
+    Ok(())
+}
+
+fn find_key<'a>(value: &'a serde_json::Value, denied: &[&str]) -> Option<&'a str> {
+    match value {
+        serde_json::Value::Object(map) => map.iter().find_map(|(key, inner)| {
+            denied
+                .contains(&key.as_str())
+                .then_some(key.as_str())
+                .or_else(|| find_key(inner, denied))
+        }),
+        serde_json::Value::Array(items) => items.iter().find_map(|item| find_key(item, denied)),
+        _ => None,
     }
 }
 
@@ -201,15 +232,15 @@ pub fn validate_filter(engine: Engine, filter: Option<&str>) -> AppResult<()> {
 mod tests {
     use super::*;
 
-    const SQL_ENGINES: [Engine; 3] = [Engine::MariaDb, Engine::MySql, Engine::SqlServer];
+    const SQL_ENGINES: [SqlDialectId; 3] = [SqlDialectId::MariaDb, SqlDialectId::MySql, SqlDialectId::MsSql];
 
-    fn ok(engine: Engine, filter: &str) {
+    fn ok(engine: SqlDialectId, filter: &str) {
         if let Err(error) = validate_sql_filter(engine, filter) {
             panic!("{engine:?} rejected {filter:?}: {error}");
         }
     }
 
-    fn rejected(engine: Engine, filter: &str) -> String {
+    fn rejected(engine: SqlDialectId, filter: &str) -> String {
         match validate_sql_filter(engine, filter) {
             Ok(()) => panic!("{engine:?} accepted {filter:?}"),
             Err(error) => {
@@ -217,6 +248,20 @@ mod tests {
                 error.to_string()
             }
         }
+    }
+
+    #[test]
+    fn es_filters_are_objects_without_scripts() {
+        assert!(validate_raw_filter(RawFilterLang::EsQueryDsl, None, r#"{ "term": { "status": "paid" } }"#).is_ok());
+        let script = validate_raw_filter(
+            RawFilterLang::EsQueryDsl,
+            None,
+            r#"{ "bool": { "filter": [ { "script": { "script": "1" } } ] } }"#,
+        );
+        assert_eq!(script.unwrap_err().code(), Some(INVALID_FILTER));
+        assert!(validate_raw_filter(RawFilterLang::EsQueryDsl, None, "[1]").is_err());
+        assert!(validate_raw_filter(RawFilterLang::Sql, Some(SqlDialectId::Postgres), "total > 10 AND name ILIKE 'a%'").is_ok());
+        assert!(validate_raw_filter(RawFilterLang::Sql, Some(SqlDialectId::Sqlite), "1=1; DROP TABLE t").is_err());
     }
 
     #[test]
@@ -229,11 +274,14 @@ mod tests {
             ok(engine, "created_at >= '2026-01-01' AND note IS NULL");
             ok(engine, "name = 'it''s -- not a comment; really'");
         }
-        ok(Engine::MariaDb, "`category_id` = 3 AND JSON_VALUE(attributes, '$.color') = 'oak'");
-        ok(Engine::SqlServer, "[Status] = N'paid' AND YEAR(InvoiceDate) = 2026");
+        ok(
+            SqlDialectId::MariaDb,
+            "`category_id` = 3 AND JSON_VALUE(attributes, '$.color') = 'oak'",
+        );
+        ok(SqlDialectId::MsSql, "[Status] = N'paid' AND YEAR(InvoiceDate) = 2026");
         // What the grid's column filters build for SQL Server (src/core/sql.ts, tsql dialect).
         ok(
-            Engine::SqlServer,
+            SqlDialectId::MsSql,
             "([Status] LIKE N'%a[[]b%') AND ([Amount] > 5) AND ([Note] IS NULL)",
         );
     }
@@ -251,7 +299,7 @@ mod tests {
             rejected(engine, "DELETE FROM t");
             rejected(engine, "1=1) OR (1=1");
         }
-        for engine in [Engine::MariaDb, Engine::MySql] {
+        for engine in [SqlDialectId::MariaDb, SqlDialectId::MySql] {
             rejected(engine, "1=1 /*! ; DROP TABLE t */");
             rejected(engine, "1=1 /*M! ; DROP TABLE t */");
             rejected(engine, "1=1 # hash comment");

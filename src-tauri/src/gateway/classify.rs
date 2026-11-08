@@ -11,34 +11,38 @@ use std::ops::ControlFlow;
 
 use sqlparser::{
     ast::{visit_relations, visit_statements, ObjectName, Query, Set, SetExpr, Statement, TransactionAccessMode, TransactionMode},
-    dialect::{Dialect, GenericDialect, MsSqlDialect, MySqlDialect},
+    dialect::{ClickHouseDialect, Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect},
     parser::Parser,
 };
 
-use crate::drivers::{types::RowChange, Engine};
+use crate::{contract::SqlDialectId, drivers::types::RowChange};
 
 const EXCERPT_CHARS: usize = 240;
 
 pub use crate::contract::classify::{Category, Classification, StatementInfo};
 
-pub fn dialect_for(engine: Engine) -> Box<dyn Dialect> {
-    match engine {
-        Engine::MariaDb | Engine::MySql => Box::new(MySqlDialect {}),
-        Engine::SqlServer => Box::new(MsSqlDialect {}),
-        Engine::MongoDb => Box::new(GenericDialect {}),
+/// The sqlparser dialect for an engine's SQL; Oracle and anything else parse with the generic one.
+pub fn dialect_for(dialect: SqlDialectId) -> Box<dyn Dialect> {
+    match dialect {
+        SqlDialectId::MariaDb | SqlDialectId::MySql => Box::new(MySqlDialect {}),
+        SqlDialectId::MsSql => Box::new(MsSqlDialect {}),
+        SqlDialectId::Postgres => Box::new(PostgreSqlDialect {}),
+        SqlDialectId::Sqlite => Box::new(SQLiteDialect {}),
+        SqlDialectId::ClickHouse => Box::new(ClickHouseDialect {}),
+        SqlDialectId::Oracle | SqlDialectId::Generic => Box::new(GenericDialect {}),
     }
 }
 
 /// MariaDB's `/*M! … */` comments run like MySQL's `/*! … */`; the parser only knows the latter.
-pub(super) fn normalise_executable_comments(engine: Engine, text: &str) -> String {
+pub(super) fn normalise_executable_comments(engine: SqlDialectId, text: &str) -> String {
     match engine {
-        Engine::MariaDb | Engine::MySql => text.replace("/*M!", "/*!"),
+        SqlDialectId::MariaDb | SqlDialectId::MySql => text.replace("/*M!", "/*!"),
         _ => text.to_owned(),
     }
 }
 
 /// Parses `text` in the engine's dialect, falling back to the generic one.
-pub(super) fn parse(engine: Engine, text: &str) -> Result<Vec<Statement>, String> {
+pub(super) fn parse(engine: SqlDialectId, text: &str) -> Result<Vec<Statement>, String> {
     let text = normalise_executable_comments(engine, text);
     match Parser::parse_sql(dialect_for(engine).as_ref(), &text) {
         Ok(statements) => Ok(statements),
@@ -47,7 +51,7 @@ pub(super) fn parse(engine: Engine, text: &str) -> Result<Vec<Statement>, String
 }
 
 /// Classifies SQL typed in a query tab (or built by the app).
-pub fn classify_sql(engine: Engine, text: &str) -> Classification {
+pub fn classify_sql(engine: SqlDialectId, text: &str) -> Classification {
     if text.trim().is_empty() {
         return Classification::default();
     }
@@ -387,7 +391,7 @@ pub(super) fn excerpt(text: &str) -> String {
     }
 }
 
-/// Grid saves and imports: the app builds `INSERT` / `UPDATE … WHERE key LIMIT 1` /
+/// Grid saves and imports (the old `apply_changes` command): the app builds `INSERT` / `UPDATE … WHERE key LIMIT 1` /
 /// `DELETE … WHERE key LIMIT 1` from these, so they are writes to one table.
 pub fn classify_changes(table: &str, changes: &[RowChange]) -> Classification {
     let count = |wanted: fn(&RowChange) -> bool| changes.iter().filter(|change| wanted(change)).count();
@@ -570,7 +574,7 @@ fn mongo_updates_everything(command: &serde_json::Value) -> bool {
 mod tests {
     use super::*;
 
-    fn categories(engine: Engine, sql: &str) -> Vec<Category> {
+    fn categories(engine: SqlDialectId, sql: &str) -> Vec<Category> {
         classify_sql(engine, sql)
             .statements
             .iter()
@@ -578,7 +582,7 @@ mod tests {
             .collect()
     }
 
-    fn one(engine: Engine, sql: &str) -> StatementInfo {
+    fn one(engine: SqlDialectId, sql: &str) -> StatementInfo {
         let classification = classify_sql(engine, sql);
         assert_eq!(classification.statements.len(), 1, "{sql}: {classification:?}");
         classification.statements[0].clone()
@@ -586,26 +590,26 @@ mod tests {
 
     #[test]
     fn reads_on_every_dialect() {
-        for engine in [Engine::MariaDb, Engine::MySql, Engine::SqlServer] {
+        for engine in [SqlDialectId::MariaDb, SqlDialectId::MySql, SqlDialectId::MsSql] {
             assert_eq!(categories(engine, "SELECT * FROM orders WHERE id = 1"), [Category::Read]);
             assert_eq!(
                 categories(engine, "SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id"),
                 [Category::Read]
             );
         }
-        assert_eq!(categories(Engine::MariaDb, "SHOW TABLES"), [Category::Read]);
-        assert_eq!(categories(Engine::MariaDb, "EXPLAIN SELECT 1"), [Category::Read]);
-        assert_eq!(categories(Engine::MariaDb, "USE shop"), [Category::Read]);
+        assert_eq!(categories(SqlDialectId::MariaDb, "SHOW TABLES"), [Category::Read]);
+        assert_eq!(categories(SqlDialectId::MariaDb, "EXPLAIN SELECT 1"), [Category::Read]);
+        assert_eq!(categories(SqlDialectId::MariaDb, "USE shop"), [Category::Read]);
         assert_eq!(
-            categories(Engine::SqlServer, "SELECT TOP 5 * FROM sales.Invoices"),
+            categories(SqlDialectId::MsSql, "SELECT TOP 5 * FROM sales.Invoices"),
             [Category::Read]
         );
-        assert_eq!(categories(Engine::SqlServer, "SET NOCOUNT ON"), [Category::Read]);
+        assert_eq!(categories(SqlDialectId::MsSql, "SET NOCOUNT ON"), [Category::Read]);
     }
 
     #[test]
     fn writes_ddl_destructive_and_admin() {
-        let maria = Engine::MariaDb;
+        let maria = SqlDialectId::MariaDb;
         assert_eq!(one(maria, "INSERT INTO t (a) VALUES (1)").category, Category::Write);
         let replace = one(maria, "REPLACE INTO t (a) VALUES (1)");
         assert_eq!((replace.category, replace.kind.as_str()), (Category::Write, "REPLACE"));
@@ -628,21 +632,21 @@ mod tests {
         assert_eq!(one(maria, "KILL 42").category, Category::Admin);
         assert_eq!(one(maria, "SET GLOBAL max_connections = 10").category, Category::Admin);
         assert_eq!(one(maria, "CREATE USER 'x'@'%' IDENTIFIED BY 'y'").category, Category::Admin);
-        assert_eq!(one(Engine::SqlServer, "DROP TABLE dbo.Orders").category, Category::Destructive);
+        assert_eq!(one(SqlDialectId::MsSql, "DROP TABLE dbo.Orders").category, Category::Destructive);
         assert_eq!(
             one(
-                Engine::SqlServer,
+                SqlDialectId::MsSql,
                 "MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET t.a = s.a;"
             )
             .category,
             Category::Write
         );
-        assert_eq!(one(Engine::SqlServer, "EXEC sp_who").category, Category::Write);
+        assert_eq!(one(SqlDialectId::MsSql, "EXEC sp_who").category, Category::Write);
     }
 
     #[test]
     fn session_settings_and_transactions() {
-        let maria = Engine::MariaDb;
+        let maria = SqlDialectId::MariaDb;
         assert_eq!(one(maria, "SET @x = 1").category, Category::Read);
         assert_eq!(one(maria, "SET NAMES utf8mb4").category, Category::Read);
         assert_eq!(one(maria, "SET autocommit = 0").category, Category::Transaction);
@@ -655,13 +659,13 @@ mod tests {
         for sql in ["START TRANSACTION", "BEGIN", "COMMIT", "ROLLBACK", "SAVEPOINT a"] {
             assert_eq!(one(maria, sql).category, Category::Transaction, "{sql}");
         }
-        assert_eq!(categories(Engine::SqlServer, "BEGIN TRANSACTION"), [Category::Transaction]);
-        assert_eq!(categories(Engine::SqlServer, "COMMIT TRANSACTION"), [Category::Transaction]);
+        assert_eq!(categories(SqlDialectId::MsSql, "BEGIN TRANSACTION"), [Category::Transaction]);
+        assert_eq!(categories(SqlDialectId::MsSql, "COMMIT TRANSACTION"), [Category::Transaction]);
     }
 
     #[test]
     fn comments_multi_statements_and_executable_comments() {
-        let maria = Engine::MariaDb;
+        let maria = SqlDialectId::MariaDb;
         assert_eq!(categories(maria, "-- just a note\nSELECT 1 /* inline */"), [Category::Read]);
         assert_eq!(categories(maria, "# hash comment\nSELECT 1"), [Category::Read]);
         assert_eq!(
@@ -678,35 +682,38 @@ mod tests {
 
     #[test]
     fn ctes_and_select_into() {
-        let mssql = Engine::SqlServer;
+        let mssql = SqlDialectId::MsSql;
         let cte_delete = one(
             mssql,
             "WITH old AS (SELECT id FROM t WHERE y < 2000) DELETE FROM t WHERE id IN (SELECT id FROM old)",
         );
         assert!(cte_delete.category >= Category::Write, "{cte_delete:?}");
         assert_eq!(
-            one(Engine::MariaDb, "WITH x AS (SELECT 1 AS a) SELECT * FROM x").category,
+            one(SqlDialectId::MariaDb, "WITH x AS (SELECT 1 AS a) SELECT * FROM x").category,
             Category::Read
         );
         assert_eq!(one(mssql, "SELECT * INTO archive FROM orders").category, Category::Ddl);
         assert_eq!(one(mssql, "SELECT * INTO #tmp FROM orders").category, Category::Write);
-        assert_eq!(one(Engine::MariaDb, "SELECT COUNT(*) INTO @n FROM orders").category, Category::Read);
-        let outfile = one(Engine::MariaDb, "SELECT * FROM orders INTO OUTFILE '/tmp/x.csv'");
+        assert_eq!(
+            one(SqlDialectId::MariaDb, "SELECT COUNT(*) INTO @n FROM orders").category,
+            Category::Read
+        );
+        let outfile = one(SqlDialectId::MariaDb, "SELECT * FROM orders INTO OUTFILE '/tmp/x.csv'");
         assert!(outfile.category >= Category::Write, "{outfile:?}");
         // EXPLAIN only plans; EXPLAIN ANALYZE runs the statement.
-        assert_eq!(one(Engine::MariaDb, "EXPLAIN DELETE FROM t").category, Category::Read);
+        assert_eq!(one(SqlDialectId::MariaDb, "EXPLAIN DELETE FROM t").category, Category::Read);
         assert_eq!(
-            one(Engine::MariaDb, "EXPLAIN ANALYZE DELETE FROM t").category,
+            one(SqlDialectId::MariaDb, "EXPLAIN ANALYZE DELETE FROM t").category,
             Category::Destructive
         );
     }
 
     #[test]
     fn unparseable_sql_is_unknown() {
-        let unknown = one(Engine::MariaDb, "FROBNICATE the database");
+        let unknown = one(SqlDialectId::MariaDb, "FROBNICATE the database");
         assert_eq!(unknown.category, Category::Unknown);
         assert!(unknown.reason.unwrap().contains("treated like a write"));
-        assert!(classify_sql(Engine::MariaDb, "  ").statements.is_empty());
+        assert!(classify_sql(SqlDialectId::MariaDb, "  ").statements.is_empty());
     }
 
     #[test]

@@ -39,8 +39,7 @@ pub async fn fetch_vector(
 pub async fn vector_search(state: &AppState, request: VectorSearchRequest) -> AppResult<VectorSearchResult> {
     // The optional filter is spliced into the search query: it must be one condition, like a grid filter.
     let context = super::data::gateway_context(state, &request.connection_id)?;
-    let engine = state.engines.legacy_engine(&request.connection_id)?;
-    gateway::check_filter(&state.engines, &context, engine, request.filter.as_deref())?;
+    gateway::check_filter(&state.engines, &context, &request.connection_id, request.filter.as_deref())?;
     let mut conn = state.engines.mysql_conn(&request.connection_id).await?;
     let query = match &request.query {
         QueryVector::Row { key } => vector::fetch_vector(&mut conn, &request.database, &request.table, &request.column, key).await?,

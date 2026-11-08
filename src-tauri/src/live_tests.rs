@@ -590,7 +590,7 @@ async fn probe_rows(manager: &ConnectionManager, connection_id: &str, database: 
         connection_id: connection_id.into(),
         ..browse(database, "gate_probe", None)
     };
-    gateway::browse(manager, &gate(connection_id, Preset::Open), &request)
+    gateway::legacy_browse(manager, &gate(connection_id, Preset::Open), &request)
         .await
         .expect("browse probe")
         .total
@@ -624,7 +624,7 @@ async fn live_gateway_rejects_injected_filters() {
             connection_id: id.into(),
             ..browse(database, "gate_probe", Some(INJECTED_FILTER))
         };
-        let error = gateway::browse(&manager, &context, &injected)
+        let error = gateway::legacy_browse(&manager, &context, &injected)
             .await
             .expect_err("injected filter must fail");
         assert_eq!(error.code(), Some(gateway::filter::INVALID_FILTER), "{error}");
@@ -644,7 +644,10 @@ async fn live_gateway_rejects_injected_filters() {
             connection_id: id.into(),
             ..browse(database, "gate_probe", Some("id = 1"))
         };
-        assert_eq!(gateway::browse(&manager, &context, &fine).await.expect("valid filter").total, 1);
+        assert_eq!(
+            gateway::legacy_browse(&manager, &context, &fine).await.expect("valid filter").total,
+            1
+        );
         println!("{}: injected filter rejected with: {error}", profile.driver);
         setup(&manager, id, database, "DROP TABLE gate_probe").await;
         manager.disconnect(id).await;
@@ -775,22 +778,22 @@ async fn live_transactions() {
         let context = gate(id, Preset::Open);
         let run = |sql: &'static str| gateway::run_query(&manager, &context, "tx", Some(database.into()), sql.into(), None);
 
-        let idle = gateway::transaction(&manager, &context, "tx", TransactionOp::Status)
+        let idle = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Status)
             .await
             .expect("status");
         assert!(idle.supported && !idle.open && idle.auto_commit, "{}: {idle:?}", profile.driver);
-        let begun = gateway::transaction(&manager, &context, "tx", TransactionOp::Begin)
+        let begun = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Begin)
             .await
             .expect("begin");
         assert!(begun.open, "{}: begin opens a transaction", profile.driver);
         let inserted = run("INSERT INTO gate_probe VALUES (1)").await.expect("insert");
         assert!(inserted.transaction.open, "still open after the run");
         // A second Begin must be refused, not commit (MySQL) or nest (SQL Server) the open one.
-        let nested = gateway::transaction(&manager, &context, "tx", TransactionOp::Begin)
+        let nested = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Begin)
             .await
             .expect_err("nested begin refused");
         assert_eq!(nested.to_string(), drivers::types::TRANSACTION_ALREADY_OPEN, "{}", profile.driver);
-        let rolled = gateway::transaction(&manager, &context, "tx", TransactionOp::Rollback)
+        let rolled = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Rollback)
             .await
             .expect("rollback");
         assert!(!rolled.open);
@@ -799,16 +802,16 @@ async fn live_transactions() {
         assert!(!count.transaction.open);
 
         // Auto-commit off: the first write opens a transaction implicitly.
-        let manual = gateway::transaction(&manager, &context, "tx", TransactionOp::AutoCommitOff)
+        let manual = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::AutoCommitOff)
             .await
             .expect("autocommit off");
         assert!(!manual.auto_commit && !manual.open, "{}: {manual:?}", profile.driver);
         let pending = run("INSERT INTO gate_probe VALUES (2)").await.expect("insert");
         assert!(pending.transaction.open, "{}: implicit transaction", profile.driver);
-        gateway::transaction(&manager, &context, "tx", TransactionOp::Commit)
+        gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Commit)
             .await
             .expect("commit");
-        let back = gateway::transaction(&manager, &context, "tx", TransactionOp::AutoCommitOn)
+        let back = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::AutoCommitOn)
             .await
             .expect("autocommit on");
         assert!(back.auto_commit && !back.open);
@@ -860,7 +863,9 @@ async fn live_gateway_mongo() {
         connection_id: "gate-mongo".into(),
         ..browse("events", "clicks", Some(r#"{ "$where": "sleep(100) || true" }"#))
     };
-    let error = gateway::browse(&manager, &read_only, &request).await.expect_err("$where rejected");
+    let error = gateway::legacy_browse(&manager, &read_only, &request)
+        .await
+        .expect_err("$where rejected");
     assert_eq!(error.code(), Some(gateway::filter::INVALID_FILTER));
     manager.close_session("m").await;
     manager.disconnect("gate-mongo").await;

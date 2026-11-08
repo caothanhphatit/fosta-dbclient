@@ -13,6 +13,8 @@
 //!    read-only sessions, statement timeouts and the result row limit.
 
 pub mod classify;
+#[cfg(test)]
+mod engine_tests;
 pub mod filter;
 pub mod rules;
 
@@ -25,20 +27,21 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use self::{
-    classify::{classify_changes, classify_mongo, classify_sql, Category, Classification, StatementInfo},
-    filter::{validate_filter, INVALID_FILTER},
+    classify::{classify_changes, Category, Classification, StatementInfo},
+    filter::{validate_raw_filter, INVALID_FILTER},
     rules::{Action, SafetySettings},
 };
 use crate::{
     audit::{AuditEntry, AuditLog, Outcome},
     config::AppConfig,
-    drivers::{
-        types::{BrowseRequest, QueryOutcome, RowChange, TablePage, TransactionOp, TransactionState},
-        Engine, Limits,
+    contract::{
+        require, unsupported_capability, ApplyResult, BrowseRequest, CallContext, Capability, ClassifyInput, Filter, Limits, Page,
+        ResultSink, RowChangeSet, RunRequest, RunSummary, TransactionOp, TransactionState,
     },
+    drivers::types::{BrowseRequest as OldBrowseRequest, QueryOutcome, RowChange as OldRowChange, TablePage},
     error::{AppError, AppResult},
     lock::lock,
-    runtime::ConnectionManager,
+    runtime::{ConnectionManager, Handle},
 };
 
 pub const CONFIRMATION_REQUIRED: &str = "CONFIRMATION_REQUIRED";
@@ -61,6 +64,8 @@ pub enum Caller {
     Transaction,
     /// Changes to the rules themselves (audit only).
     Settings,
+    /// An engine view calling an engine-specific operation (`invoke_capability`).
+    EngineView,
 }
 
 impl Caller {
@@ -148,6 +153,8 @@ struct Pending {
 struct Request<'a> {
     caller: Caller,
     context: &'a Context,
+    /// The engine id, for the audit log.
+    engine: &'a str,
     /// Session id for query tabs, connection id otherwise: tokens are bound to it.
     scope: &'a str,
     /// The exact statement text (or a canonical form of the grid changes).
@@ -193,6 +200,10 @@ impl Gateway {
     fn authorize(&self, request: &Request<'_>) -> AppResult<()> {
         let effective = request.context.safety.effective();
         let statements = &request.classification.statements;
+        // Hard refusals (an unknown engine operation, a command the console cannot run) hold whatever the rules say.
+        if let Some(why) = request.classification.refusal() {
+            return Err(self.block(request, format!("Refused: {why}.")));
+        }
         if request.caller == Caller::QueryTab && !effective.allow_multi_statement && statements.len() > 1 {
             return Err(self.block(
                 request,
@@ -421,6 +432,7 @@ fn audit_entry(request: &Request<'_>, outcome: Outcome, detail: &str) -> AuditEn
         workspace: request.context.workspace_name.clone(),
         connection_id: request.context.connection_id.clone(),
         connection: request.context.connection_name.clone(),
+        engine: request.engine.to_owned(),
         category,
         statement: request
             .classification
@@ -434,12 +446,240 @@ fn audit_entry(request: &Request<'_>, outcome: Outcome, detail: &str) -> AuditEn
     }
 }
 
-// --- Gated operations: what the Tauri commands call -------------------------------------
+// --- Gated operations: what the commands call -------------------------------------------
 
-/// `browse_table`: validates the filter as one condition, then reads a page.
-pub async fn browse(db: &ConnectionManager, context: &Context, request: &BrowseRequest) -> AppResult<TablePage> {
-    let engine = db.legacy_engine(&request.connection_id)?;
-    check_filter(db, context, engine, request.filter.as_deref())?;
+/// A filter the gateway refused, in the audit log.
+fn audit_filter(mgr: &ConnectionManager, context: &Context, engine: &str, text: &str, error: &AppError) {
+    if error.code() == Some(INVALID_FILTER) {
+        mgr.gateway.audit(AuditEntry {
+            caller: Caller::GridFilter.id(),
+            workspace_id: context.workspace_id.clone(),
+            workspace: context.workspace_name.clone(),
+            connection_id: context.connection_id.clone(),
+            connection: context.connection_name.clone(),
+            engine: engine.to_owned(),
+            category: "filter".to_owned(),
+            statement: text.to_owned(),
+            outcome: Some(Outcome::Blocked),
+            detail: error.to_string(),
+            ..AuditEntry::default()
+        });
+    }
+}
+
+/// Checks a browse filter: the engine's own check, then raw text in the engine's filter language (one SQL condition, a
+/// JSON object without code-running operators). Rejections are audited.
+pub fn check_browse_filter(mgr: &ConnectionManager, context: &Context, handle: &Handle, filter: &Filter) -> AppResult<()> {
+    let descriptor = handle.engine.descriptor();
+    let checked = handle.engine.validate_filter(filter).and_then(|()| match filter {
+        Filter::Raw { language, text } => validate_raw_filter(*language, descriptor.sql_dialect, text),
+        _ => Ok(()),
+    });
+    checked.inspect_err(|error| {
+        let text = match filter {
+            Filter::Raw { text, .. } => text.clone(),
+            other => serde_json::to_string(other).unwrap_or_default(),
+        };
+        audit_filter(mgr, context, handle.engine.id(), &text, error);
+    })
+}
+
+/// Validates a raw filter typed for the old browse command or the vector search (one condition / JSON object).
+pub fn check_filter(mgr: &ConnectionManager, context: &Context, connection_id: &str, filter: Option<&str>) -> AppResult<()> {
+    let Some(text) = filter.filter(|text| !text.trim().is_empty()) else {
+        return Ok(());
+    };
+    let handle = mgr.handle(connection_id)?;
+    let descriptor = handle.engine.descriptor();
+    let language = descriptor.filter.raw.ok_or_else(|| unsupported_capability("filters"))?;
+    validate_raw_filter(language, descriptor.sql_dialect, text)
+        .inspect_err(|error| audit_filter(mgr, context, handle.engine.id(), text, error))
+}
+
+/// `browse_object`: validates the filter, then reads a page with the rules' limits.
+pub async fn browse(mgr: &ConnectionManager, context: &Context, connection_id: &str, request: &BrowseRequest) -> AppResult<Page> {
+    let handle = mgr.handle(connection_id)?;
+    require(handle.conn.capabilities(), Capability::BrowseRows)?;
+    check_browse_filter(mgr, context, &handle, &request.filter)?;
+    let (request, ctx) = (request.clone(), CallContext::new(context.limits()));
+    handle
+        .call("read a page of rows", |conn| async move {
+            let tabular = conn.tabular().ok_or_else(|| unsupported_capability("browsing rows"))?;
+            tabular.browse(&request, &ctx).await
+        })
+        .await
+}
+
+/// `apply_edits` from a grid save or an import: classified by the engine, confirmed per the rules, applied in one
+/// transaction where the engine has them, each update and delete guarded by its concurrency check.
+pub async fn apply_edits(
+    mgr: &ConnectionManager,
+    context: &Context,
+    caller: Caller,
+    set: &RowChangeSet,
+    import_id: Option<&str>,
+    confirmation: Option<&Confirmation>,
+) -> AppResult<ApplyResult> {
+    if !matches!(caller, Caller::GridSave | Caller::Import) {
+        return Err(AppError::new("Row changes come from a grid save or an import"));
+    }
+    let handle = mgr.handle(&context.connection_id)?;
+    require(handle.conn.capabilities(), Capability::EditRows)?;
+    let classification = handle.engine.classify(&ClassifyInput::Changes(set));
+    // An import run is confirmed once for all of its batches; a grid save for its exact changes.
+    let import_run = import_id.filter(|id| caller == Caller::Import && !id.is_empty());
+    let object = serde_json::to_string(&set.object)?;
+    let text = match import_run {
+        Some(id) => format!("{object}\u{0}import:{id}"),
+        None => serde_json::to_string(set)?,
+    };
+    mgr.gateway.authorize(&Request {
+        caller,
+        context,
+        engine: handle.engine.id(),
+        scope: &context.connection_id,
+        text: &text,
+        classification: &classification,
+        confirmation,
+        reusable: import_run.is_some(),
+    })?;
+    let (set, ctx) = (set.clone(), CallContext::new(context.limits()));
+    handle
+        .call("saved row changes", |conn| async move {
+            let tabular = conn.tabular().ok_or_else(|| unsupported_capability("editing rows"))?;
+            tabular.apply(&set, &ctx).await
+        })
+        .await
+}
+
+/// `run` from a query tab: classified by the engine in the session's language, checked against the rules, then run with
+/// the limits, streaming into `sink`.
+pub async fn run(
+    mgr: &ConnectionManager,
+    context: &Context,
+    session_id: &str,
+    request: &RunRequest,
+    confirmation: Option<&Confirmation>,
+    sink: &mut dyn ResultSink,
+) -> AppResult<RunSummary> {
+    let (handle, session) = mgr.session(session_id)?;
+    let classification = handle.engine.classify(&ClassifyInput::Statement {
+        language: session.language(),
+        text: &request.text,
+    });
+    let binding = format!("{}\u{0}{}", request.database.as_deref().unwrap_or_default(), request.text);
+    mgr.gateway.authorize(&Request {
+        caller: Caller::QueryTab,
+        context,
+        engine: handle.engine.id(),
+        scope: session_id,
+        text: &binding,
+        classification: &classification,
+        confirmation,
+        reusable: false,
+    })?;
+    tracing::debug!(session = session_id, statement = %crate::logging::statement_excerpt(&request.text), "run");
+    handle.run(session, request.clone(), context.limits().run_options(), sink).await
+}
+
+/// Begin / Commit / Rollback / auto-commit from the query toolbar: always allowed, even in a Read-only workspace (Begin
+/// then opens a read-only transaction where the engine has one).
+pub async fn transaction(mgr: &ConnectionManager, context: &Context, session_id: &str, op: TransactionOp) -> AppResult<TransactionState> {
+    let (handle, session) = mgr.session(session_id)?;
+    let classification = handle.engine.classify(&ClassifyInput::Transaction(op));
+    mgr.gateway.authorize(&Request {
+        caller: Caller::Transaction,
+        context,
+        engine: handle.engine.id(),
+        scope: session_id,
+        text: "",
+        classification: &classification,
+        confirmation: None,
+        reusable: false,
+    })?;
+    let options = context.limits().run_options();
+    handle
+        .call("changed the transaction state", move |_| async move {
+            session.transaction(op, &options).await
+        })
+        .await
+}
+
+/// "New database…" (DDL).
+pub async fn create_database(
+    mgr: &ConnectionManager,
+    context: &Context,
+    name: &str,
+    first_collection: Option<&str>,
+    confirmation: Option<&Confirmation>,
+) -> AppResult<()> {
+    let handle = mgr.handle(&context.connection_id)?;
+    require(handle.conn.capabilities(), Capability::CreateDatabase)?;
+    let classification = handle.engine.classify(&ClassifyInput::CreateDatabase { name });
+    let text = format!("{name}\u{0}{}", first_collection.unwrap_or_default());
+    mgr.gateway.authorize(&Request {
+        caller: Caller::CreateDatabase,
+        context,
+        engine: handle.engine.id(),
+        scope: &context.connection_id,
+        text: &text,
+        classification: &classification,
+        confirmation,
+        reusable: false,
+    })?;
+    let (name, first_collection, ctx) = (
+        name.to_owned(),
+        first_collection.map(str::to_owned),
+        CallContext::new(context.limits()),
+    );
+    handle
+        .call("created a database", |conn| async move {
+            let admin = conn.admin().ok_or_else(|| unsupported_capability("creating databases"))?;
+            admin.create_database(&name, first_collection.as_deref(), &ctx).await
+        })
+        .await
+}
+
+/// `invoke_capability` from an engine view (or a read-only assistant tool): the engine classifies the operation by name;
+/// an unclassified name is refused whatever the rules.
+pub async fn invoke(
+    mgr: &ConnectionManager,
+    context: &Context,
+    caller: Caller,
+    name: &str,
+    args: serde_json::Value,
+    confirmation: Option<&Confirmation>,
+) -> AppResult<serde_json::Value> {
+    if !matches!(caller, Caller::EngineView | Caller::Assistant) {
+        return Err(AppError::new("Engine operations come from an engine view or the assistant"));
+    }
+    let handle = mgr.handle(&context.connection_id)?;
+    let classification = handle.engine.classify(&ClassifyInput::Capability { name, args: &args });
+    let binding = format!("{name}\u{0}{}", serde_json::to_string(&args)?);
+    mgr.gateway.authorize(&Request {
+        caller,
+        context,
+        engine: handle.engine.id(),
+        scope: &context.connection_id,
+        text: &binding,
+        classification: &classification,
+        confirmation,
+        reusable: false,
+    })?;
+    let (name, ctx) = (name.to_owned(), CallContext::new(context.limits()));
+    handle
+        .call(
+            "ran an engine operation",
+            |conn| async move { conn.invoke(&name, args, &ctx).await },
+        )
+        .await
+}
+
+// --- The old commands (shims until the UI moves to the operations above) ------------------
+
+/// The old `browse_table`: validates the filter as one condition, then reads a page.
+pub async fn legacy_browse(db: &ConnectionManager, context: &Context, request: &OldBrowseRequest) -> AppResult<TablePage> {
+    check_filter(db, context, &request.connection_id, request.filter.as_deref())?;
     let (request, limits) = (request.clone(), context.limits());
     db.call_legacy(&request.connection_id.clone(), "read a page of rows", |driver| async move {
         driver.browse_table(&request, &limits).await
@@ -447,43 +687,23 @@ pub async fn browse(db: &ConnectionManager, context: &Context, request: &BrowseR
     .await
 }
 
-/// Validates a grid (or vector-search) filter and audits a rejection.
-pub fn check_filter(db: &ConnectionManager, context: &Context, engine: Engine, filter: Option<&str>) -> AppResult<()> {
-    validate_filter(engine, filter).inspect_err(|error| {
-        if error.code() == Some(INVALID_FILTER) {
-            db.gateway.audit(AuditEntry {
-                caller: Caller::GridFilter.id(),
-                workspace_id: context.workspace_id.clone(),
-                workspace: context.workspace_name.clone(),
-                connection_id: context.connection_id.clone(),
-                connection: context.connection_name.clone(),
-                category: "filter".to_owned(),
-                statement: filter.unwrap_or_default().to_owned(),
-                outcome: Some(Outcome::Blocked),
-                detail: error.to_string(),
-                ..AuditEntry::default()
-            });
-        }
-    })
-}
-
-/// `apply_changes` from a grid save or an import.
+/// The old `apply_changes` from a grid save or an import.
 #[allow(clippy::too_many_arguments)]
-pub async fn apply_changes(
+pub async fn legacy_apply_changes(
     db: &ConnectionManager,
     context: &Context,
     caller: Caller,
     database: &str,
     table: &str,
-    changes: Vec<RowChange>,
+    changes: Vec<OldRowChange>,
     import_id: Option<&str>,
     confirmation: Option<&Confirmation>,
 ) -> AppResult<u64> {
     if !matches!(caller, Caller::GridSave | Caller::Import) {
         return Err(AppError::new("Row changes come from a grid save or an import"));
     }
+    let engine = db.handle(&context.connection_id)?.engine.id().to_owned();
     let classification = classify_changes(table, &changes);
-    // An import run is confirmed once for all of its batches; a grid save for its exact changes.
     let import_run = import_id.filter(|id| caller == Caller::Import && !id.is_empty());
     let text = match import_run {
         Some(id) => format!("{database}\u{0}{table}\u{0}import:{id}"),
@@ -492,6 +712,7 @@ pub async fn apply_changes(
     db.gateway.authorize(&Request {
         caller,
         context,
+        engine: &engine,
         scope: &context.connection_id,
         text: &text,
         classification: &classification,
@@ -505,40 +726,7 @@ pub async fn apply_changes(
     .await
 }
 
-/// "New database…" (DDL).
-pub async fn create_database(
-    db: &ConnectionManager,
-    context: &Context,
-    name: &str,
-    first_collection: Option<&str>,
-    confirmation: Option<&Confirmation>,
-) -> AppResult<()> {
-    let classification = Classification::single(StatementInfo {
-        category: Category::Ddl,
-        kind: "CREATE DATABASE".to_owned(),
-        tables: Vec::new(),
-        excerpt: format!("CREATE DATABASE {name}"),
-        reason: None,
-        refused: None,
-    });
-    let text = format!("{name}\u{0}{}", first_collection.unwrap_or_default());
-    db.gateway.authorize(&Request {
-        caller: Caller::CreateDatabase,
-        context,
-        scope: &context.connection_id,
-        text: &text,
-        classification: &classification,
-        confirmation,
-        reusable: false,
-    })?;
-    let (name, first_collection) = (name.to_owned(), first_collection.map(str::to_owned));
-    db.call_legacy(&context.connection_id, "created a database", |driver| async move {
-        driver.create_database(&name, first_collection.as_deref()).await
-    })
-    .await
-}
-
-/// `run_sql` from a query tab: classified, checked against the rules, then run with the limits.
+/// The old `run_sql`: classified by the engine, checked against the rules, then run with the limits.
 pub async fn run_query(
     db: &ConnectionManager,
     context: &Context,
@@ -547,12 +735,22 @@ pub async fn run_query(
     text: String,
     confirmation: Option<&Confirmation>,
 ) -> AppResult<QueryOutcome> {
-    let engine = db.legacy_engine(&db.session_connection(session_id)?)?;
-    let classification = classify_for(engine, &text);
+    let handle = db.handle(&db.session_connection(session_id)?)?;
+    let language = handle
+        .engine
+        .descriptor()
+        .default_language()
+        .map(|l| l.id.clone())
+        .unwrap_or_default();
+    let classification = handle.engine.classify(&ClassifyInput::Statement {
+        language: &language,
+        text: &text,
+    });
     let binding = format!("{}\u{0}{text}", database.as_deref().unwrap_or_default());
     db.gateway.authorize(&Request {
         caller: Caller::QueryTab,
         context,
+        engine: handle.engine.id(),
         scope: session_id,
         text: &binding,
         classification: &classification,
@@ -567,20 +765,19 @@ pub async fn run_query(
     .await
 }
 
-/// Begin / Commit / Rollback / auto-commit from the query toolbar: always allowed, even in a
-/// Read-only workspace (Begin then opens a read-only transaction where the engine has one).
-pub async fn transaction(db: &ConnectionManager, context: &Context, session_id: &str, op: TransactionOp) -> AppResult<TransactionState> {
-    let classification = Classification::single(StatementInfo {
-        category: Category::Transaction,
-        kind: format!("{op:?}").to_uppercase(),
-        tables: Vec::new(),
-        excerpt: format!("{op:?}"),
-        reason: None,
-        refused: None,
-    });
+/// The old `sql_transaction`.
+pub async fn legacy_transaction(
+    db: &ConnectionManager,
+    context: &Context,
+    session_id: &str,
+    op: TransactionOp,
+) -> AppResult<TransactionState> {
+    let handle = db.handle(&db.session_connection(session_id)?)?;
+    let classification = handle.engine.classify(&ClassifyInput::Transaction(op));
     db.gateway.authorize(&Request {
         caller: Caller::Transaction,
         context,
+        engine: handle.engine.id(),
         scope: session_id,
         text: "",
         classification: &classification,
@@ -592,13 +789,6 @@ pub async fn transaction(db: &ConnectionManager, context: &Context, session_id: 
         driver.transaction(&session, op, &limits).await
     })
     .await
-}
-
-pub fn classify_for(engine: Engine, text: &str) -> Classification {
-    match engine {
-        Engine::MongoDb => classify_mongo(text),
-        _ => classify_sql(engine, text),
-    }
 }
 
 /// What an assistant tool may do. Every tool the model can call must be listed here; the
@@ -639,10 +829,11 @@ mod tests {
     }
 
     fn ask(gateway: &Gateway, context: &Context, sql: &str, confirmation: Option<&Confirmation>) -> AppResult<()> {
-        let classification = classify_sql(Engine::MariaDb, sql);
+        let classification = classify::classify_sql(crate::contract::SqlDialectId::MariaDb, sql);
         gateway.authorize(&Request {
             caller: Caller::QueryTab,
             context,
+            engine: "mariadb",
             scope: "session-1",
             text: sql,
             classification: &classification,
@@ -714,10 +905,11 @@ mod tests {
         );
         // Bound to the session too.
         let (token, _) = token_of(&ask(&gateway, &guarded, sql, None).unwrap_err());
-        let classification = classify_sql(Engine::MariaDb, sql);
+        let classification = classify::classify_sql(crate::contract::SqlDialectId::MariaDb, sql);
         let elsewhere = gateway.authorize(&Request {
             caller: Caller::QueryTab,
             context: &guarded,
+            engine: "mariadb",
             scope: "session-2",
             text: sql,
             classification: &classification,
@@ -773,10 +965,11 @@ mod tests {
         );
         let open = context(Preset::Open);
         for (sql, allowed) in [("SELECT 1", true), ("DELETE FROM t WHERE id = 1", false)] {
-            let classification = classify_sql(Engine::MariaDb, sql);
+            let classification = classify::classify_sql(crate::contract::SqlDialectId::MariaDb, sql);
             let outcome = gateway.authorize(&Request {
                 caller: Caller::Assistant,
                 context: &open,
+                engine: "mariadb",
                 scope: "c",
                 text: sql,
                 classification: &classification,
@@ -792,10 +985,11 @@ mod tests {
     fn an_import_run_is_confirmed_once_for_all_batches() {
         let (gateway, path) = gateway();
         let guarded = context(Preset::Guarded);
-        let classification = classify_sql(Engine::MariaDb, "INSERT INTO t VALUES (1)");
+        let classification = classify::classify_sql(crate::contract::SqlDialectId::MariaDb, "INSERT INTO t VALUES (1)");
         let request = |text: &'static str, reusable: bool, confirmation: Option<&'static Confirmation>| Request {
             caller: Caller::Import,
             context: &guarded,
+            engine: "mariadb",
             scope: "c",
             text,
             classification: &classification,

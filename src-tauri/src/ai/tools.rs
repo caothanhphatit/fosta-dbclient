@@ -162,7 +162,10 @@ pub(super) async fn run_tool(
             let filter = argument("filter");
             if let Some(filter) = filter.as_deref() {
                 // Same check as a grid filter, so the model can fix a bad one; it still never runs here.
-                gateway::filter::validate_filter(driver.engine(), Some(filter)).map_err(|error| error.to_string())?;
+                let handle = db.handle(connection_id).map_err(|error| error.to_string())?;
+                let descriptor = handle.engine.descriptor();
+                let language = descriptor.filter.raw.unwrap_or(crate::contract::RawFilterLang::Sql);
+                gateway::filter::validate_raw_filter(language, descriptor.sql_dialect, filter).map_err(|error| error.to_string())?;
             }
             show(
                 events,

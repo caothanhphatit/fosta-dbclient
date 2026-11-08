@@ -103,7 +103,10 @@ impl Engine for LegacyEngine {
         }
         match input {
             ClassifyInput::Statement { text, .. } if self.kind == drivers::Engine::MongoDb => classify_mongo(text),
-            ClassifyInput::Statement { text, .. } => classify_sql(self.kind, text),
+            ClassifyInput::Statement { text, .. } => classify_sql(
+                self.descriptor().sql_dialect.unwrap_or(crate::contract::SqlDialectId::Generic),
+                text,
+            ),
             ClassifyInput::Capability { name, .. } => Classification::single(StatementInfo::refused(name, name, "unknown operation")),
             _ => Classification::default(),
         }

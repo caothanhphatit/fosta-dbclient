@@ -45,6 +45,9 @@ pub struct AuditEntry {
     pub connection_id: String,
     #[serde(default)]
     pub connection: String,
+    /// The engine id (`mariadb`, `postgres`, …).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub engine: String,
     /// Statement category (`write`, `destructive`, …), `filter`, or `rules` for relaxations.
     pub category: String,
     pub statement: String,
