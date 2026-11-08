@@ -12,11 +12,11 @@ import { formatNumber, h } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
 import { detectDelimiter, parseCsv } from "./csv";
 import { exportDelimited, exportRows } from "./exporters";
+import { ExportCancelled, exportFileName, fetchAllRows } from "./exportFetch";
 import { sqlDialect, type SqlDialect } from "../../core/sql";
 import { ConfirmationSession } from "../safety/confirmationDialog";
 import type { BrowseRequest, Cell, ColumnMeta, RowChange, TableTarget } from "../../core/types";
 
-const FETCH_PAGE = 1000;
 const IMPORT_BATCH = 500;
 const PREVIEW_ROWS = 6;
 const SKIP = "__skip__";
@@ -69,6 +69,8 @@ export function exportDialog(source: ExportSource): void {
     field("File name", fileName, capabilities().browserDownloads ? "Downloaded by your browser" : "Saved to your Downloads folder"),
     progress,
   );
+  // Closing the dialog (Esc, Cancel) while rows are being read stops the export.
+  const cancel = new AbortController();
   openModal(
     `Export ${source.target.table}`,
     body,
@@ -78,29 +80,30 @@ export function exportDialog(source: ExportSource): void {
         label: "Export",
         primary: true,
         run: async () => {
-          const rows = scopePage.checked
-            ? source.pageRows
-            : await fetchAll(source, (done) => (progress.textContent = `Reading rows… ${formatNumber(done)} / ${formatNumber(source.total)}`));
-          progress.textContent = "Writing file…";
-          const text = render(format.value as FileFormat, source.columns, rows, source.target.table, sqlDialect(source.target.driver));
-          const path = await api.saveDownload(fileName.value.trim() || `${source.target.table}.csv`, text, null);
-          savedDialog(`Exported ${formatNumber(rows.length)} rows`, path);
+          try {
+            const rows = scopePage.checked
+              ? source.pageRows
+              : await fetchAllRows(
+                  async (offset, limit) => (await api.browseTable({ ...source.request, offset, limit })).rows,
+                  source.total,
+                  cancel.signal,
+                  (done) => (progress.textContent = `Reading rows… ${formatNumber(done)} / ${formatNumber(source.total)}`),
+                );
+            if (cancel.signal.aborted) return;
+            progress.textContent = "Writing file…";
+            const chosen = FORMATS.find((item) => item.value === format.value) ?? FORMATS[0];
+            const text = render(chosen.value, source.columns, rows, source.target.table, sqlDialect(source.target.driver));
+            const path = await api.saveDownload(exportFileName(fileName.value, source.target.table, chosen.extension), text, null);
+            savedDialog(`Exported ${formatNumber(rows.length)} rows`, path);
+          } catch (error) {
+            if (error instanceof ExportCancelled) return;
+            throw error;
+          }
         },
       },
     ],
-    { width: 480 },
+    { width: 480, onClose: () => cancel.abort() },
   );
-}
-
-async function fetchAll(source: ExportSource, onProgress: (done: number) => void): Promise<Cell[][]> {
-  const rows: Cell[][] = [];
-  for (let offset = 0; offset < source.total || offset === 0; offset += FETCH_PAGE) {
-    const page = await api.browseTable({ ...source.request, offset, limit: FETCH_PAGE });
-    rows.push(...page.rows);
-    onProgress(rows.length);
-    if (page.rows.length < FETCH_PAGE) break;
-  }
-  return rows;
 }
 
 function render(format: FileFormat, columns: ColumnMeta[], rows: Cell[][], table: string, dialect: SqlDialect): string {
