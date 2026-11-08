@@ -87,7 +87,7 @@ impl std::fmt::Debug for ConnectSecrets {
 }
 
 /// Where to connect after `net::prepare` (the local end of an SSH tunnel, or the spec's host and port).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Endpoint {
     pub host: String,
     pub port: u16,

@@ -62,10 +62,13 @@ macro_rules! for_each_command {
             [sync] save_connection(profile: $crate::config::ConnectionProfile, password: Option<String>, workspace_id: Option<String>, secrets: Option<std::collections::HashMap<$crate::contract::SecretSlot, String>>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::connections::save_connection;
             [async] delete_connection(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::connections::delete_connection;
-            [async] test_connection(profile: $crate::config::ConnectionProfile, password: Option<String>)
+            [async] test_connection(profile: $crate::config::ConnectionProfile, password: Option<String>,
+                secrets: Option<std::collections::HashMap<$crate::contract::SecretSlot, String>>)
                 -> $crate::error::AppResult<$crate::contract::ConnectInfo> = $crate::commands::connections::test_connection;
             [async] connect(id: String, password: Option<String>)
                 -> $crate::error::AppResult<$crate::contract::ConnectInfo> = $crate::commands::connections::connect;
+            [sync] trust_host_key(host: String, port: u16, public_key: String) -> $crate::error::AppResult<()>
+                = $crate::commands::connections::trust_host_key;
             [async] disconnect(id: String) -> $crate::error::AppResult<()> = $crate::commands::connections::disconnect;
 
             [sync] engine_descriptors() -> Vec<$crate::contract::EngineDescriptor> = $crate::commands::engines::engine_descriptors;

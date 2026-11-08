@@ -20,9 +20,10 @@ use super::{
     registry::registry,
 };
 use crate::{
+    config,
     contract::{
-        Canceller, ConnectInfo, ConnectRequest, ConnectSecrets, Connection, ConnectionSpec, Engine, Flow, ResultSink, RunOptions,
-        RunRequest, RunSummary, Session, SessionInfo, SessionOptions, StreamEvent,
+        Canceller, ConnectInfo, ConnectRequest, ConnectSecrets, Connection, ConnectionSpec, Endpoint, Engine, Flow, ResultSink, RunOptions,
+        RunRequest, RunSummary, Session, SessionInfo, SessionOptions, StreamEvent, TlsMode,
     },
     error::{AppError, AppResult, NOT_CONNECTED},
     gateway::Gateway,
@@ -31,6 +32,8 @@ use crate::{
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/// The SSH known_hosts file in the data directory.
+const KNOWN_HOSTS: &str = "known_hosts";
 const SESSION_LOST: &str = "This query tab lost its session. Close it and open a new query.";
 
 struct ConnEntry {
@@ -172,30 +175,70 @@ pub struct ConnectionManager {
     pub gateway: Gateway,
 }
 
+/// The network layer's host settings: the app's known_hosts file in the data directory.
+fn net_context() -> AppResult<net::NetContext> {
+    Ok(net::NetContext::new(config::data_dir()?.join(KNOWN_HOSTS)))
+}
+
+/// The app's known_hosts file (trust on first use writes to it; `trust_host_key` too).
+pub fn known_hosts_file() -> AppResult<std::path::PathBuf> {
+    Ok(net_context()?.known_hosts)
+}
+
+/// Opens the SSH tunnel the spec asks for (`net::prepare`). Through a tunnel the engine connects to 127.0.0.1, so a TLS
+/// setting without its own server name gets the database host as the name to verify.
+async fn prepare_network(spec: &mut ConnectionSpec, secrets: &ConnectSecrets) -> AppResult<net::PreparedEndpoint> {
+    let network = net::NetSpec::from(&*spec);
+    let tunneled = network.ssh.as_ref().is_some_and(|ssh| ssh.enabled);
+    if tunneled && (spec.host.trim().is_empty() || spec.port == 0) {
+        return Err(AppError::coded(
+            net::ssh::SSH_CONFIG,
+            "An SSH tunnel needs the database host and port as the SSH server sees them (often 127.0.0.1 and the default              port). Fill in Host and Port; the hosts of a connection string are not used through a tunnel.",
+        ));
+    }
+    let target = Endpoint {
+        host: spec.host.trim().to_owned(),
+        port: spec.port,
+    };
+    let context = if tunneled {
+        net_context()?
+    } else {
+        net::NetContext::new(KNOWN_HOSTS)
+    };
+    let prepared = net::prepare(&network, &target, &net::NetSecrets::from(secrets), &context).await?;
+    if prepared.tunnel.is_some() {
+        if let Some(tls) = spec.tls.as_mut().filter(|tls| tls.mode != TlsMode::Disable) {
+            if tls.server_name.as_deref().is_none_or(|name| name.trim().is_empty()) {
+                tls.server_name = Some(prepared.tls_server_name.clone());
+            }
+        }
+    }
+    Ok(prepared)
+}
+
 /// Connects without registering: the engine from the registry, the tunnel from `net::prepare`, contained.
-async fn open(spec: ConnectionSpec, secrets: ConnectSecrets) -> AppResult<(&'static dyn Engine, Opened)> {
+async fn open(mut spec: ConnectionSpec, secrets: ConnectSecrets) -> AppResult<(&'static dyn Engine, Opened)> {
     let engine = registry().get(&spec.engine)?;
-    let prepared = net::prepare(&spec, &secrets).await?;
+    let net::PreparedEndpoint { endpoint, tunnel, .. } = prepare_network(&mut spec, &secrets).await?;
     let request = ConnectRequest {
         spec,
         secrets,
-        endpoint: prepared.endpoint,
+        endpoint,
         connect_timeout: CONNECT_TIMEOUT,
     };
     let label = engine.descriptor().label.clone();
     let id = engine.id().to_owned();
-    let conn = contained(&label, "connected", engine.connect(request))
-        .await
-        .map_err(|error| error.with_engine(&id))?;
+    let conn = contained(&label, "connected", engine.connect(request)).await.map_err(|error| {
+        let error = error.with_engine(&id);
+        // A vague "connection reset" from the engine often has its cause in the tunnel.
+        match tunnel.as_ref().and_then(net::TunnelGuard::last_error) {
+            Some(cause) if error.field("detail").is_none() => error.with_detail(format!("SSH tunnel: {cause}")),
+            Some(cause) => error.with("tunnelError", cause),
+            None => error,
+        }
+    })?;
     let info = connect_info(engine, conn.as_ref());
-    Ok((
-        engine,
-        Opened {
-            conn,
-            info,
-            tunnel: prepared.tunnel,
-        },
-    ))
+    Ok((engine, Opened { conn, info, tunnel }))
 }
 
 struct Opened {

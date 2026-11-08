@@ -365,7 +365,7 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       let password = draft.password;
       for (;;) {
         try {
-          const info = await api.testConnection(draft.profile, password);
+          const info = await api.testConnection(draft.profile, password, Object.keys(draft.secrets).length ? draft.secrets : null);
           const ok = h("p", { class: "conn-ok" }, icon("check"), `Connection OK · ${describeServer(info)}`);
           errorHost.replaceChildren(ok);
           toast(`Connection OK · ${describeServer(info)}`, "success");

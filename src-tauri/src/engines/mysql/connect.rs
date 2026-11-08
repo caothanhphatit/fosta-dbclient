@@ -1,13 +1,14 @@
 //! Connection options from a `ConnectRequest`, and what the server is (MariaDB or MySQL, version, VECTOR support).
 
-use std::{future::Future, time::Duration};
+use std::{future::Future, path::PathBuf, time::Duration};
 
-use mysql_async::{prelude::*, Conn, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts};
+use mysql_async::{prelude::*, ClientIdentity, Conn, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
 
 use super::descriptor::Flavor;
 use crate::{
-    contract::{ConnectRequest, ServerInfo, TlsMode},
+    contract::{ConnectRequest, ServerInfo, TlsConfig, TlsMode},
     error::{AppError, AppResult},
+    net,
 };
 
 /// Browse, catalog and cancel requests share this many pooled connections.
@@ -63,19 +64,50 @@ pub struct ConnectOptions {
     pub edit_opts: Opts,
 }
 
-pub fn build_opts(flavor: Flavor, request: &ConnectRequest) -> AppResult<ConnectOptions> {
-    if let Some(tls) = &request.spec.tls {
-        if matches!(tls.mode, TlsMode::Require | TlsMode::VerifyCa | TlsMode::VerifyFull) {
-            // TODO(net::tls): map spec.tls onto mysql_async's rustls SslOpts once a TLS backend is compiled in.
+/// mysql_async's rustls settings for `spec.tls`. Disable and prefer connect without TLS (mysql_async has no opportunistic
+/// TLS); require and verify-full verify the chain and the host name (`server_name` overrides the name, as through an SSH
+/// tunnel), verify-ca skips the host name. mysql_async cannot pin a certificate, so a fingerprint is refused, not ignored.
+fn ssl_opts(flavor: Flavor, tls: &TlsConfig) -> AppResult<Option<SslOpts>> {
+    if matches!(tls.mode, TlsMode::Disable | TlsMode::Prefer) {
+        return Ok(None);
+    }
+    let set = |value: &Option<String>| value.as_deref().map(str::trim).filter(|text| !text.is_empty()).map(str::to_owned);
+    if set(&tls.pinned_sha256).is_some() {
+        return Err(AppError::coded(
+            net::tls::TLS_CONFIG,
+            format!(
+                "Certificate pinning is not available for {} connections. Use a CA file, or accept invalid certificates for a test server.",
+                flavor.label()
+            ),
+        ));
+    }
+    let mut ssl = SslOpts::default()
+        .with_danger_accept_invalid_certs(tls.accept_invalid_certs)
+        .with_danger_skip_domain_validation(tls.mode == TlsMode::VerifyCa)
+        .with_danger_tls_hostname_override(set(&tls.server_name));
+    if let Some(ca) = set(&tls.ca_file) {
+        ssl = ssl.with_root_certs(vec![PathBuf::from(ca).into()]);
+    }
+    match (set(&tls.client_cert_file), set(&tls.client_key_file)) {
+        (Some(cert), Some(key)) => {
+            ssl = ssl.with_client_identity(Some(ClientIdentity::new(PathBuf::from(cert).into(), PathBuf::from(key).into())));
+        }
+        (None, None) => {}
+        _ => {
             return Err(AppError::coded(
-                "UNSUPPORTED_CAPABILITY",
-                format!(
-                    "TLS for {} connections arrives with the TLS work in a later version. Set TLS to Disable or Prefer for now.",
-                    flavor.label()
-                ),
-            ));
+                net::tls::TLS_CONFIG,
+                "A client certificate needs both its certificate file and its key file.",
+            ))
         }
     }
+    Ok(Some(ssl))
+}
+
+pub fn build_opts(flavor: Flavor, request: &ConnectRequest) -> AppResult<ConnectOptions> {
+    let ssl = match &request.spec.tls {
+        Some(tls) => ssl_opts(flavor, tls)?,
+        None => None,
+    };
     let spec = &request.spec;
     let builder = |pool_size: usize| {
         let constraints = PoolConstraints::new(0, pool_size).unwrap_or_default();
@@ -86,6 +118,7 @@ pub fn build_opts(flavor: Flavor, request: &ConnectRequest) -> AppResult<Connect
             .pass(Some(request.secrets.password_or_empty().to_owned()))
             .db_name(spec.database.clone().filter(|name| !name.is_empty()))
             .pool_opts(PoolOpts::default().with_constraints(constraints))
+            .ssl_opts(ssl.clone())
     };
     Ok(ConnectOptions {
         opts: builder(POOL_SIZE).into(),
@@ -181,14 +214,47 @@ mod tests {
     }
 
     #[test]
-    fn required_tls_is_refused_until_a_tls_backend_exists() {
-        let require = TlsConfig {
-            mode: TlsMode::Require,
+    fn tls_settings_map_onto_ssl_opts() {
+        let tls = |mode: TlsMode| TlsConfig {
+            mode,
             ..TlsConfig::default()
         };
-        let error = build_opts(Flavor::MySql, &request(Some(require))).err().expect("refused");
-        assert!(error.to_string().contains("TLS for MySQL"), "{error}");
-        let prefer = TlsConfig::default();
-        assert!(build_opts(Flavor::MySql, &request(Some(prefer))).is_ok());
+        // Disable and prefer connect in plain text (mysql_async has no opportunistic TLS).
+        for mode in [TlsMode::Disable, TlsMode::Prefer] {
+            assert!(build_opts(Flavor::MySql, &request(Some(tls(mode))))
+                .unwrap()
+                .opts
+                .ssl_opts()
+                .is_none());
+        }
+        let verify_full = build_opts(Flavor::MySql, &request(Some(tls(TlsMode::VerifyFull)))).unwrap();
+        let ssl = verify_full.opts.ssl_opts().expect("TLS on");
+        assert!(!ssl.accept_invalid_certs() && !ssl.skip_domain_validation());
+        assert!(verify_full.edit_opts.ssl_opts().is_some(), "the edit pool uses TLS too");
+        let through_tunnel = TlsConfig {
+            mode: TlsMode::VerifyCa,
+            ca_file: Some("C:/ca.pem".into()),
+            server_name: Some("db.example.com".into()),
+            accept_invalid_certs: true,
+            ..TlsConfig::default()
+        };
+        let options = build_opts(Flavor::MariaDb, &request(Some(through_tunnel))).unwrap();
+        let ssl = options.opts.ssl_opts().unwrap();
+        assert!(ssl.accept_invalid_certs() && ssl.skip_domain_validation());
+        assert_eq!(ssl.tls_hostname_override(), Some("db.example.com"));
+        assert_eq!(ssl.root_certs().len(), 1);
+        // Pinning and a half client identity are refused, not ignored.
+        let pinned = TlsConfig {
+            pinned_sha256: Some("ab:cd".into()),
+            ..tls(TlsMode::Require)
+        };
+        let error = build_opts(Flavor::MySql, &request(Some(pinned))).err().expect("refused");
+        assert_eq!(error.code(), Some(net::tls::TLS_CONFIG));
+        assert!(error.to_string().contains("MySQL"), "{error}");
+        let half = TlsConfig {
+            client_cert_file: Some("client.pem".into()),
+            ..tls(TlsMode::Require)
+        };
+        assert!(build_opts(Flavor::MySql, &request(Some(half))).is_err());
     }
 }

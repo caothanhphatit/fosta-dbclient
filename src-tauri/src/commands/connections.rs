@@ -6,7 +6,8 @@ use crate::{
     config::{AppConfig, ConnectionProfile},
     contract::{spec::SshAuth, AuthMethodId, ConnectInfo, ConnectSecrets, SecretSlot},
     error::{AppError, AppResult, PASSWORD_REQUIRED},
-    runtime::ConnectionManager,
+    net,
+    runtime::{manager, ConnectionManager},
     secrets::{self, SecretKey},
     AppState,
 };
@@ -35,17 +36,29 @@ pub async fn delete_connection(state: &AppState, id: String) -> AppResult<AppCon
 }
 
 /// Tries a profile from the connection dialog. Without a typed password, the saved secrets are used only when
-/// the profile still points at the saved connection's server (engine, host, port, user, url, file).
-pub async fn test_connection(state: &AppState, profile: ConnectionProfile, password: Option<String>) -> AppResult<ConnectInfo> {
+/// the profile still points at the saved connection's server (engine, host, port, user, url, file). `secrets` are the
+/// other slots typed in the dialog (SSH password or key passphrase, TLS key passphrase); they win over saved ones.
+pub async fn test_connection(
+    state: &AppState,
+    profile: ConnectionProfile,
+    password: Option<String>,
+    secrets: Option<HashMap<SecretSlot, String>>,
+) -> AppResult<ConnectInfo> {
     let mut profile = profile;
     profile.normalize();
     let saved = state.config.read(|config| config.connection(&profile.id).cloned());
     let bound = saved.as_ref().is_some_and(|saved| saved.same_target(&profile));
-    let secrets = match password {
+    let typed = secrets;
+    let mut secrets = match password {
         Some(password) => with_password(bound.then_some(&profile), password)?,
         None if bound => saved_secrets(&profile)?,
         None => return Err(password_required()),
     };
+    for (slot, value) in typed.unwrap_or_default() {
+        if slot != SecretSlot::Password && !value.is_empty() {
+            secrets.values.insert(slot, value);
+        }
+    }
     ConnectionManager::probe(profile.spec(), secrets).await
 }
 
@@ -56,6 +69,12 @@ pub async fn connect(state: &AppState, id: String, password: Option<String>) -> 
         None => saved_secrets(&profile)?,
     };
     state.engines.connect(&id, profile.spec(), secrets).await
+}
+
+/// Records an SSH server's host key in the app's known_hosts file, after the user accepted the fingerprint an
+/// `SSH_HOST_KEY_UNKNOWN` error showed (its detail carries `host`, `port` and `hostKey.publicKey`).
+pub fn trust_host_key(_state: &AppState, host: String, port: u16, public_key: String) -> AppResult<()> {
+    net::ssh::trust_host_key(&manager::known_hosts_file()?, &host, port, &public_key)
 }
 
 pub async fn disconnect(state: &AppState, id: String) -> AppResult<()> {

@@ -1,0 +1,83 @@
+# SSH servers for the SSH tunnel live tests (src-tauri/src/net/live_tests.rs). Test-only credentials; never
+# reuse them.
+#   docker compose -f dev/docker-compose.yml up -d --wait mariadb
+#   docker compose -f dev/compose/ssh.yml up -d --wait
+#   cd src-tauri && cargo test net::live_tests -- --ignored --test-threads=1
+#
+# ssh-target  127.0.0.1:2222  user tunnel / tunnel-pass. Joins the dev MariaDB network, so "mariadb:3306"
+#             is reachable from it. Its init script creates /config/keys/id_ed25519 (OpenSSH format,
+#             passphrase tunnel-key-pass) and /config/keys/id_rsa (PEM, no passphrase), both authorized.
+# ssh-jump    127.0.0.1:2223  user jump / jump-pass. Shares only the "ssh" network with ssh-target, which it
+#             reaches as ssh-target:2222 (the ProxyJump test).
+#
+# The linuxserver image disables TCP forwarding by default; the init script turns it on.
+
+name: fosta-dev-ssh
+
+x-ssh: &ssh
+  image: lscr.io/linuxserver/openssh-server:10.3_p1-r2-ls242
+  configs:
+    - source: init
+      target: /custom-cont-init.d/10-fosta-test
+      mode: 0755
+  healthcheck:
+    test: ["CMD-SHELL", "nc -z 127.0.0.1 2222 && test -f /config/keys/ready"]
+    interval: 2s
+    retries: 30
+
+services:
+  ssh-target:
+    <<: *ssh
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: tunnel
+      USER_PASSWORD: tunnel-pass
+      PASSWORD_ACCESS: "true"
+    ports:
+      - "127.0.0.1:2222:2222"
+    networks: [ssh, dev]
+
+  ssh-jump:
+    <<: *ssh
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      USER_NAME: jump
+      USER_PASSWORD: jump-pass
+      PASSWORD_ACCESS: "true"
+    ports:
+      - "127.0.0.1:2223:2222"
+    networks: [ssh]
+
+networks:
+  ssh: {}
+  dev:
+    external: true
+    name: db-studio-dev_default
+
+configs:
+  init:
+    content: |
+      #!/usr/bin/with-contenv bash
+      set -e
+      for file in /config/sshd/sshd_config /etc/ssh/sshd_config; do
+        [ -f "$$file" ] || continue
+        sed -i -E 's/^#?AllowTcpForwarding.*/AllowTcpForwarding yes/' "$$file"
+        grep -q '^AllowTcpForwarding yes' "$$file" || echo 'AllowTcpForwarding yes' >> "$$file"
+      done
+      mkdir -p /config/keys /config/.ssh
+      if [ ! -f /config/keys/id_ed25519 ]; then
+        ssh-keygen -q -t ed25519 -N tunnel-key-pass -C fosta-test-ed25519 -f /config/keys/id_ed25519
+        ssh-keygen -q -t rsa -b 2048 -m PEM -N '' -C fosta-test-rsa -f /config/keys/id_rsa
+      fi
+      touch /config/.ssh/authorized_keys
+      for pub in /config/keys/*.pub; do
+        grep -qF "$$(cat "$$pub")" /config/.ssh/authorized_keys || cat "$$pub" >> /config/.ssh/authorized_keys
+      done
+      chown -R "$${PUID:-1000}:$${PGID:-1000}" /config/.ssh
+      chmod 700 /config/.ssh
+      chmod 600 /config/.ssh/authorized_keys
+      touch /config/keys/ready

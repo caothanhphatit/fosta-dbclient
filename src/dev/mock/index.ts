@@ -6,7 +6,7 @@
  * - `state.ts`: config, workspaces, history. `gateway.ts`: the safety rules. `ai.ts`: the assistant.
  * - `connections.ts`: saving and deleting profiles, saved passwords and the test-connection secret binding, connection
  *   string parsing. Test connection with the password "wrong" fails with AUTH_FAILED; SQL Server without "Accept
- *   invalid certificates" fails like a self-signed server; SSH on fails with SSH_NOT_AVAILABLE.
+ *   invalid certificates" fails like a self-signed server; SSH settings are accepted as if the tunnel were up.
  * - `engines/<id>.ts`: one module per engine (collected with `import.meta.glob`), exporting `descriptor`, `order` and, for
  *   the ready ones, `connectInfo`, `tree`, `describe`, `browse`, `apply`, `run`, `invoke`, … over `catalog.ts`.
  *
@@ -100,12 +100,6 @@ function open(profile: ConnectionProfile): Connection {
     throw mockError("ENGINE_NOT_WIRED", `${engine.descriptor.label} support is planned but not available in this build of Fosta Studio yet.`, {
       engine: engine.descriptor.id,
     });
-  if (profile.ssh?.enabled)
-    throw mockError(
-      "SSH_NOT_AVAILABLE",
-      "SSH tunnels are not available in this build yet. Turn SSH off for this connection, or open the tunnel yourself (ssh -L) and connect to its local port.",
-      { engine: engine.descriptor.id },
-    );
   if (unreachable(profile))
     throw mockError("CONNECTION_ERROR", `Can't connect to server on '${profile.host}' (110 "Connection timed out")`, {
       engine: engine.descriptor.id,

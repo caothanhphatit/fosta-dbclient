@@ -11,6 +11,7 @@ use crate::{
     contract::{ConnectRequest, ServerInfo, TlsMode},
     error::{AppError, AppResult},
     lock::lock,
+    net,
 };
 
 pub type TdsClient = Client<Compat<TcpStream>>;
@@ -44,6 +45,16 @@ fn tls_settings(request: &ConnectRequest) -> (EncryptionLevel, bool, Option<Stri
             (level, flag("trustServerCertificate", false), None)
         }
     }
+}
+
+/// Refuses TLS settings tiberius cannot honour (certificate pinning, client certificates) instead of ignoring them. Through
+/// an SSH tunnel tiberius verifies the certificate against 127.0.0.1 (it has no server-name override): use a CA file with
+/// "accept invalid certificates", or connect without the tunnel for full verification.
+pub fn check_tls(request: &ConnectRequest) -> AppResult<()> {
+    if let Some(tls) = &request.spec.tls {
+        net::tls::native_tls_options(&net::TlsSpec::from(tls))?;
+    }
+    Ok(())
 }
 
 pub fn build_config(request: &ConnectRequest) -> Config {
@@ -249,6 +260,21 @@ mod tests {
         let mut with_ca = tls(TlsMode::VerifyCa, false).unwrap();
         with_ca.ca_file = Some("C:/ca.pem".into());
         assert_eq!(level(request(Some(with_ca), &[])).2.as_deref(), Some("C:/ca.pem"));
+    }
+
+    #[test]
+    fn tls_settings_tiberius_cannot_honour_are_refused() {
+        assert!(check_tls(&request(None, &[])).is_ok());
+        assert!(check_tls(&request(tls(TlsMode::VerifyFull, false), &[])).is_ok());
+        let mut pinned = tls(TlsMode::Require, false).unwrap();
+        pinned.pinned_sha256 = Some("ab:cd".into());
+        assert_eq!(
+            check_tls(&request(Some(pinned), &[])).unwrap_err().code(),
+            Some(net::tls::TLS_CONFIG)
+        );
+        let mut mutual = tls(TlsMode::Require, false).unwrap();
+        mutual.client_cert_file = Some("client.pem".into());
+        assert!(check_tls(&request(Some(mutual), &[])).is_err());
     }
 
     #[test]

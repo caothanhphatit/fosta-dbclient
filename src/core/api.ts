@@ -73,7 +73,9 @@ export const api = {
     secrets: Partial<Record<SecretSlot, string>> | null = null,
   ) => invoke<AppConfig>("save_connection", { profile, password, workspaceId, secrets }),
   deleteConnection: (id: string) => invoke<AppConfig>("delete_connection", { id }),
-  testConnection: (profile: ConnectionProfile, password: string | null) => invoke<ConnectInfo>("test_connection", { profile, password }),
+  /** `secrets`: other slots typed in the dialog (SSH password or key passphrase, TLS key passphrase). */
+  testConnection: (profile: ConnectionProfile, password: string | null, secrets: Partial<Record<SecretSlot, string>> | null = null) =>
+    invoke<ConnectInfo>("test_connection", { profile, password, secrets }),
   connect: (id: string, password: string | null) => invoke<ConnectInfo>("connect", { id, password }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
 

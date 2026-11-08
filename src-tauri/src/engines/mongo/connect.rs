@@ -58,11 +58,6 @@ pub async fn build_options(request: &ConnectRequest) -> AppResult<ClientOptions>
                 None if !spec.user.is_empty() => options.credential = Some(credential(&spec.user, password, spec.database.as_deref())),
                 None => {}
             }
-            // Through an SSH tunnel the string's hosts are not reachable; connect to the tunnel's end directly.
-            if spec.ssh.as_ref().is_some_and(|ssh| ssh.enabled) {
-                options.hosts = vec![address(request)];
-                options.direct_connection = Some(true);
-            }
             options
         }
         None => {
@@ -73,6 +68,12 @@ pub async fn build_options(request: &ConnectRequest) -> AppResult<ClientOptions>
             options
         }
     };
+    // Through an SSH tunnel only the tunnel's end is reachable (not the string's hosts, not the replica set members the
+    // server reports): connect to it directly.
+    if spec.ssh.as_ref().is_some_and(|ssh| ssh.enabled) {
+        options.hosts = vec![address(request)];
+        options.direct_connection = Some(true);
+    }
     if let Some(tls) = &spec.tls {
         apply_tls(&mut options, tls);
     }
@@ -203,6 +204,35 @@ mod tests {
         let credential = options.credential.unwrap();
         assert_eq!(credential.username.as_deref(), Some("root"));
         assert_eq!(credential.password.as_deref(), Some("s3cret"));
+    }
+
+    #[tokio::test]
+    async fn through_a_tunnel_only_the_tunnel_end_is_used_directly() {
+        let mut tunneled = spec();
+        tunneled.ssh = Some(crate::contract::SshConfig {
+            enabled: true,
+            host: "bastion".into(),
+            port: 22,
+            user: "me".into(),
+            auth: crate::contract::spec::SshAuth::Agent,
+            jump_hosts: Vec::new(),
+            host_key: Default::default(),
+            keepalive_secs: None,
+        });
+        let mut request = request(tunneled);
+        request.endpoint = Endpoint {
+            host: "127.0.0.1".into(),
+            port: 50123,
+        };
+        let options = build_options(&request).await.unwrap();
+        assert_eq!(
+            options.hosts,
+            vec![ServerAddress::Tcp {
+                host: "127.0.0.1".into(),
+                port: Some(50123)
+            }]
+        );
+        assert_eq!(options.direct_connection, Some(true));
     }
 
     #[tokio::test]

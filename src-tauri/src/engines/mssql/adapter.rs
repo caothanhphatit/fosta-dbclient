@@ -58,6 +58,7 @@ impl Engine for MssqlAdapter {
     }
 
     async fn connect(&self, request: ConnectRequest) -> AppResult<Arc<dyn Connection>> {
+        connect::check_tls(&request)?;
         let config = connect::build_config(&request);
         let mut client = connect::connect(&config, request.connect_timeout).await?;
         let rows = text_rows(

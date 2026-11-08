@@ -1,8 +1,8 @@
 /**
  * The SSH tunnel section of the connection dialog (shown when the descriptor's `connection.ssh` is true): on/off, host,
- * port, user, auth (password / private key with its key file / agent), the host-key policy, and the SSH secrets. SSH
- * tunnels themselves come in a later build: the settings are saved, and connecting with SSH on fails with
- * `SSH_NOT_AVAILABLE` (the section says so). Jump hosts and keepalive are kept from the profile, not edited yet.
+ * port, user, auth (password / private key with its key file / agent), the host-key policy, and the SSH secrets. The
+ * backend opens the tunnel (`net::prepare`) before the engine connects; failures are `SSH_*` errors. Jump hosts and
+ * keepalive are kept from the profile, not edited yet.
  *
  * API (kept small; the SSH/TLS work owns this file):
  *
@@ -26,8 +26,8 @@ export interface SshSection {
 }
 
 export const SSH_NOTE =
-  "SSH tunnels are available in a later build: the settings are saved, but connecting with the tunnel on fails with " +
-  "SSH_NOT_AVAILABLE. Until then, open the tunnel yourself (ssh -L 13306:db:3306 bastion) and connect to its local port.";
+  "The database connects through an SSH tunnel to this server. Host and Port above are the database as the SSH server " +
+  "sees it (often 127.0.0.1 and the default port).";
 
 export type SshAuthMethod = SshAuth["method"];
 
