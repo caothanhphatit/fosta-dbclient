@@ -71,6 +71,10 @@ macro_rules! for_each_command {
             [sync] engine_descriptors() -> Vec<$crate::contract::EngineDescriptor> = $crate::commands::engines::engine_descriptors;
             [sync] parse_connection_string(engine: String, text: String)
                 -> $crate::error::AppResult<$crate::commands::engines::ParsedConnectionString> = $crate::commands::engines::parse_connection_string;
+            [sync] oracle_client_status() -> $crate::error::AppResult<serde_json::Value> = $crate::commands::engines::oracle_client_status;
+            [stream] oracle_client_download() -> $crate::error::AppResult<serde_json::Value> => serde_json::Value
+                = $crate::commands::engines::oracle_client_download;
+            [sync] oracle_client_cancel() -> () = $crate::commands::engines::oracle_client_cancel;
 
             [async] tree_children(connection_id: String, request: $crate::contract::TreeRequest)
                 -> $crate::error::AppResult<$crate::contract::TreeChildren> = $crate::commands::objects::tree_children;

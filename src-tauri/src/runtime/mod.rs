@@ -3,6 +3,7 @@
 
 pub mod contain;
 pub mod manager;
+pub mod oracle_client;
 pub mod registry;
 
 pub use contain::{contained, install_panic_hook, ENGINE_CRASHED};

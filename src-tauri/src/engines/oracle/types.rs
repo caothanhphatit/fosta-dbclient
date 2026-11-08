@@ -1,7 +1,7 @@
 //! Oracle type mapping: catalog type names and ODPI-C column types to neutral kinds, cells to [`Value`], and values to bind
 //! parameters.
 
-use crate::engines::common::{Value, ValueKind};
+use crate::engines::common::{ColumnInfo, Value, ValueKind};
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use oracle::sql_type::{IntervalDS, IntervalYM, OracleType, ToSql};
 use oracle::SqlValue;
@@ -110,6 +110,19 @@ pub fn read(v: &SqlValue) -> Value {
         _ => None,
     };
     r.unwrap_or_else(|| other(v))
+}
+
+/// Reads a browse row whose select list follows `columns`. JSON columns are selected through `JSON_SERIALIZE` (the `oracle`
+/// crate cannot fetch the native JSON type), which arrives as VARCHAR2 / CLOB text; the column kind turns it back into JSON.
+pub fn read_row(columns: &[ColumnInfo], values: &[SqlValue]) -> Vec<Value> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| match (read(v), columns.get(i).map(|c| &c.kind)) {
+            (Value::Text(s), Some(ValueKind::Json)) => Value::Json(s),
+            (value, _) => value,
+        })
+        .collect()
 }
 
 /// A bind parameter for a value (NLS formats are set on connect, so decimal text converts implicitly).

@@ -145,6 +145,18 @@ fn stream_rows(rows: ResultSet<'_, Row>, index: usize, opts: &RunOptions, sink: 
     Ok((batcher.kept, truncated))
 }
 
+/// [`map_err`] for opening a result set, with a way out for native JSON columns, which the `oracle` crate cannot fetch.
+fn query_err(e: oracle::Error) -> EngineError {
+    let mut err = map_err(e);
+    if err.message.contains("unsupported Oracle type JSON") {
+        err.kind = ErrorKind::Input;
+        err.message = "This result has a JSON column, which Fosta Studio cannot read directly yet. Select it as text with \
+                       JSON_SERIALIZE(column), e.g. SELECT JSON_SERIALIZE(doc PRETTY) AS doc FROM ..."
+            .into();
+    }
+    err
+}
+
 fn run_statement(conn: &Connection, index: usize, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> Result<()> {
     let started = Instant::now();
     sink.event(StreamEvent::Statement {
@@ -159,7 +171,7 @@ fn run_statement(conn: &Connection, index: usize, sql: &str, opts: &RunOptions, 
         .build()
         .map_err(map_err)?;
     if stmt.is_query() {
-        let rows = stmt.query(&[]).map_err(map_err)?;
+        let rows = stmt.query(&[]).map_err(query_err)?;
         let (kept, truncated) = stream_rows(rows, index, opts, sink)?;
         sink.event(StreamEvent::Done {
             index,
@@ -192,7 +204,7 @@ fn run_statement(conn: &Connection, index: usize, sql: &str, opts: &RunOptions, 
                 index,
                 sql: format!("-- implicit result {n}"),
             });
-            let rows = cursor.query().map_err(map_err)?;
+            let rows = cursor.query().map_err(query_err)?;
             let (kept, truncated) = stream_rows(rows, index, opts, sink)?;
             sink.event(StreamEvent::Done {
                 index,

@@ -1,6 +1,7 @@
 //! Live tests against the `oracle` service of dev/compose/{postgres,clickhouse,oracle}.yml. Run with
-//! `cargo test live_engine_ -- --ignored --test-threads=1`. They need Oracle Instant Client on PATH; without it each test checks
-//! the "missing client" error, prints a note and passes.
+//! `cargo test live_engine_ -- --ignored --test-threads=1`. They need Oracle Instant Client: on PATH / ORACLE_HOME, or downloaded
+//! into the test binary's data folder by `cargo test live_oracle_instant_client_download -- --ignored`. Without one each test
+//! checks the "missing client" error, prints a note and passes.
 
 use super::*;
 use crate::engines::common::{parse_input, CollectSink, FilterCond, FilterOp, RunOptions, SortKey, StatementKind, TxState};
@@ -11,6 +12,8 @@ fn opts() -> OraOptions {
 
 /// Connects, or returns None (after checking the error) when Instant Client is not installed.
 async fn engine() -> Option<OraEngine> {
+    // Loads a system or downloaded client; without one, connect returns the "not found" error below.
+    let _ = instant_client::initialize(None);
     match OraEngine::connect(opts()).await {
         Ok(e) => Some(e),
         Err(e) if e.message.starts_with("Oracle Instant Client was not found") => {
@@ -198,6 +201,26 @@ async fn live_engine_oracle_typed_values_round_trip() {
     assert_eq!(get("C_BOOLEAN"), Value::Bool(true));
     assert_eq!(get("C_JSON"), Value::Json("{\"a\":1,\"b\":[true,null]}".into()));
     assert!(page.rows[1][1..].iter().all(Value::is_null), "row 2 is all NULL");
+    // A query editor SELECT of a native JSON column: the crate cannot fetch it, the error says how to select it as text.
+    let s = e.open_session().await.unwrap();
+    let err = s
+        .run(
+            "SELECT id, c_json FROM type_zoo",
+            &RunOptions::default(),
+            &mut CollectSink::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("JSON_SERIALIZE"), "{err}");
+    let mut sink = CollectSink::default();
+    s.run(
+        "SELECT JSON_SERIALIZE(c_json) FROM type_zoo WHERE id = 1",
+        &RunOptions::default(),
+        &mut sink,
+    )
+    .await
+    .unwrap();
+    assert_eq!(sink.sets[0].rows[0][0], Value::Text("{\"a\":1,\"b\":[true,null]}".into()));
 
     let mut values = Vec::new();
     for (i, col) in page.columns.iter().enumerate().skip(1) {
@@ -327,7 +350,10 @@ async fn live_engine_oracle_streaming_limit_cancel_timeout() {
     assert!(sink.sets[1].truncated);
     assert_eq!(sink.sets[3].rows[0][0], Value::Text("x".into()), "implicit result set");
 
-    let slow = "SELECT COUNT(*) FROM dual CONNECT BY LEVEL <= 1000000000";
+    // A Cartesian product of two small row generators: runs for minutes with little memory (one big CONNECT BY fails fast with
+    // ORA-30009 on the slim dev image).
+    let slow = "SELECT COUNT(*) FROM (SELECT LEVEL l FROM dual CONNECT BY LEVEL <= 100000) a, \
+                (SELECT LEVEL l FROM dual CONNECT BY LEVEL <= 100000) b";
     let cancel = s.canceller();
     let c = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;

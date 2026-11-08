@@ -44,7 +44,7 @@ engine-mongo = []
 engine-postgres = ["dep:tokio-postgres", "dep:tokio-postgres-rustls"]
 engine-sqlite = ["dep:rusqlite"]
 engine-clickhouse = []
-engine-oracle = ["dep:oracle"]
+engine-oracle = ["dep:oracle", "dep:zip"]
 engine-redis = ["dep:redis"]
 engine-elastic = []
 
@@ -97,6 +97,8 @@ rustls-pki-types = { version = "1.12", features = ["std"] }
 webpki-roots = "1"
 rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype"], optional = true }
 oracle = { version = "0.6.3", features = ["chrono"], optional = true }
+# Unpacks the Oracle Instant Client archive the Oracle engine downloads on demand.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"], optional = true }
 # Web server (feature `web`)
 axum = { version = "0.8", optional = true }
 tower-http = { version = "0.6", features = ["fs", "set-header"], optional = true }
