@@ -459,7 +459,7 @@ pub fn parse_info(text: &str) -> BTreeMap<String, BTreeMap<String, String>> {
 }
 
 /// `db0` + `keys=1,expires=0,avg_ttl=0`.
-fn parse_keyspace(db: &str, stats: &str) -> Option<DbKeyspace> {
+pub(crate) fn parse_keyspace(db: &str, stats: &str) -> Option<DbKeyspace> {
     let db = db.strip_prefix("db")?.parse().ok()?;
     let mut parsed = DbKeyspace {
         db,

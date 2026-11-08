@@ -1,8 +1,12 @@
-//! The Redis engine port (planned): descriptor, classification and connection URLs are wired; `connect` returns
-//! `ENGINE_NOT_WIRED` until a `Connection` over [`super::connection::RedisEngine`] (the core) is implemented here.
+//! The Redis engine port: descriptor, classification, connection URLs and the connection itself.
 //!
-//! Engine views call these `invoke` names: `redis.info`, `redis.slowlog`, `redis.scan`, `redis.keyInfo`,
-//! `redis.readValue` (reads) and `redis.edit` (a [`RedisEdit`], classified by [`RedisEdit::class`]).
+//! One [`RedisEngine`] (a multiplexed connection) serves each logical database: the one from the profile is opened at connect,
+//! the others on first use, so browsing `db3` never `SELECT`s on a connection somebody else is using. A console tab is a
+//! session with a connection of its own.
+//!
+//! Engine views call these `invoke` names: `redis.info`, `redis.slowlog`, `redis.scan`, `redis.keyInfo`, `redis.readValue`
+//! (reads) and `redis.edit` (a [`RedisEdit`] with an optional `expect`, classified by [`RedisEdit::class`]). Everything but
+//! `redis.info` and `redis.slowlog` takes the database in `db`.
 
 use std::{
     collections::HashMap,
@@ -10,20 +14,27 @@ use std::{
 };
 
 use async_trait::async_trait;
+use tokio::sync::Mutex;
 
 use super::{
+    catalog,
     classify::{self, CommandClass},
-    connection::{RedisConnectOptions, DEFAULT_PORT},
+    connect,
+    connection::{RedisConnectOptions, RedisEngine, ServerFlavor, DEFAULT_PORT},
     console::{split_lines, tokenize},
     descriptor,
     edit::RedisEdit,
+    ops,
+    session::{RedisSession, LANGUAGE},
 };
 use crate::{
     contract::{
-        classify_common, not_wired, AuthMethodId, Category, Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec,
-        Engine, EngineDescriptor, ParsedConnection, StatementInfo, TlsConfig, TlsMode,
+        classify_common, unsupported_capability, AuthMethodId, CallContext, CapabilitySet, Category, Classification, ClassifyInput,
+        ConnectRequest, Connection, ConnectionSpec, Engine, EngineDescriptor, EngineError, NodeAction, NodeKind, ObjectDescription,
+        ObjectRef, OpenedSession, ParsedConnection, ServerInfo, SessionOptions, StatementInfo, TlsConfig, TlsMode, TreeChildren,
+        TreeRequest,
     },
-    error::AppResult,
+    error::{AppError, AppResult},
 };
 
 pub struct RedisAdapter;
@@ -113,7 +124,7 @@ impl Engine for RedisAdapter {
             return classification;
         }
         match input {
-            ClassifyInput::Statement { language: "redis", text } => classify_console(text),
+            ClassifyInput::Statement { language: LANGUAGE, text } => classify_console(text),
             ClassifyInput::Statement { language, text } => Classification::single(
                 StatementInfo::new(Category::Unknown, language, text)
                     .with_reason(&format!("Redis consoles do not run the '{language}' language.")),
@@ -153,8 +164,179 @@ impl Engine for RedisAdapter {
         })
     }
 
-    async fn connect(&self, _request: ConnectRequest) -> AppResult<Arc<dyn Connection>> {
-        Err(not_wired(descriptor::ID, descriptor::LABEL))
+    async fn connect(&self, request: ConnectRequest) -> AppResult<Arc<dyn Connection>> {
+        let options = connect::options(&request)?;
+        let base_db = options.db;
+        let (host, port, wait) = (request.endpoint.host.clone(), request.endpoint.port, request.connect_timeout);
+        let base = RedisEngine::connect(options)
+            .await
+            .map_err(|error| connect_failure(error, &host, port, wait))?;
+        let server = base.server_info().await?;
+        let product = match server.flavor {
+            ServerFlavor::Valkey => "Valkey",
+            ServerFlavor::Dragonfly => "Dragonfly",
+            ServerFlavor::Redis | ServerFlavor::Unknown => descriptor::LABEL,
+        };
+        let version = if server.version.is_empty() {
+            "unknown".to_owned()
+        } else {
+            server.version.clone()
+        };
+        let info = ServerInfo {
+            product: product.to_owned(),
+            label: format!("{product} {version}"),
+            version,
+            flavor: Some(server.mode.clone()),
+        };
+        Ok(Arc::new(RedisConnection {
+            databases: server.databases.filter(|count| *count > 0).unwrap_or(catalog::DEFAULT_DATABASES),
+            base,
+            base_db,
+            others: Mutex::new(HashMap::new()),
+            info,
+            capabilities: self.descriptor().capabilities,
+        }))
+    }
+}
+
+/// A connect attempt that timed out is a connection problem (the host, port or firewall), not a slow command: Windows reports a
+/// refused port only after its own retries, so the client's timeout often fires first.
+fn connect_failure(error: AppError, host: &str, port: u16, wait: std::time::Duration) -> AppError {
+    if error.code() != Some("TIMEOUT") {
+        return error;
+    }
+    let seconds = wait.as_secs().max(1);
+    AppError::from(EngineError::connect(format!(
+        "Could not connect to Redis at {host}:{port}: no answer within {seconds} s. Check the host, the port and any firewall or tunnel."
+    )))
+    .with_engine(descriptor::ID)
+}
+
+/// An open Redis server: the engine of the profile's database, the engines of the databases browsed since.
+pub struct RedisConnection {
+    base: RedisEngine,
+    base_db: i64,
+    databases: u32,
+    others: Mutex<HashMap<i64, RedisEngine>>,
+    info: ServerInfo,
+    capabilities: CapabilitySet,
+}
+
+impl RedisConnection {
+    /// The engine of logical database `db`, connecting on first use.
+    async fn engine_for(&self, db: i64) -> AppResult<RedisEngine> {
+        if db == self.base_db {
+            return Ok(self.base.clone());
+        }
+        if db < 0 || db >= i64::from(self.databases) {
+            return Err(AppError::new(format!(
+                "Database {db} does not exist: this server has databases 0 to {}.",
+                self.databases - 1
+            )));
+        }
+        let mut others = self.others.lock().await;
+        if let Some(engine) = others.get(&db) {
+            return Ok(engine.clone());
+        }
+        let engine = RedisEngine::connect(RedisConnectOptions {
+            db,
+            ..self.base.options().clone()
+        })
+        .await?;
+        others.insert(db, engine.clone());
+        Ok(engine)
+    }
+
+    /// `db3`, `3` or nothing (the profile's database).
+    fn database_of_options(&self, database: Option<&str>) -> AppResult<i64> {
+        match database.map(str::trim).filter(|text| !text.is_empty()) {
+            None => Ok(self.base_db),
+            Some(text) => text
+                .trim_start_matches("db")
+                .parse()
+                .map_err(|_| AppError::new(format!("The Redis database is a number such as 0 or 3, not `{text}`."))),
+        }
+    }
+}
+
+#[async_trait]
+impl Connection for RedisConnection {
+    fn engine_id(&self) -> &str {
+        descriptor::ID
+    }
+
+    fn info(&self) -> &ServerInfo {
+        &self.info
+    }
+
+    fn capabilities(&self) -> CapabilitySet {
+        self.capabilities
+    }
+
+    fn connection_actions(&self) -> Vec<NodeAction> {
+        let mut action = NodeAction::view("server", "Server info and slow log", "server");
+        action.icon = Some("server".into());
+        vec![action]
+    }
+
+    async fn children(&self, request: &TreeRequest, _ctx: &CallContext) -> AppResult<TreeChildren> {
+        match &request.parent {
+            None => {
+                let nodes = catalog::databases(&self.base, self.databases).await;
+                Ok(TreeChildren {
+                    total_hint: Some(nodes.len() as u64),
+                    nodes,
+                    next_cursor: None,
+                })
+            }
+            Some(parent) if parent.kind == NodeKind::DATABASE => {
+                let db = catalog::db_of_parent(parent)?;
+                catalog::keys_page(&self.engine_for(db).await?, db, request).await
+            }
+            Some(_) => Ok(TreeChildren::default()),
+        }
+    }
+
+    async fn describe(&self, object: &ObjectRef, _ctx: &CallContext) -> AppResult<ObjectDescription> {
+        let db = catalog::db_of_object(object)?;
+        catalog::describe(&self.engine_for(db).await?, object).await
+    }
+
+    async fn open_session(&self, options: &SessionOptions, _ctx: &CallContext) -> AppResult<OpenedSession> {
+        if let Some(language) = options.language.as_deref().filter(|language| *language != LANGUAGE) {
+            return Err(AppError::new(format!("Redis consoles do not run the '{language}' language.")));
+        }
+        let db = self.database_of_options(options.database.as_deref())?;
+        let (session, canceller) = RedisSession::open(self.engine_for(db).await?).await?;
+        Ok(OpenedSession {
+            session: Arc::new(session),
+            canceller: Some(canceller),
+        })
+    }
+
+    async fn invoke(&self, name: &str, args: serde_json::Value, _ctx: &CallContext) -> AppResult<serde_json::Value> {
+        match name {
+            "redis.info" => ops::info(&self.base).await,
+            "redis.slowlog" => ops::slowlog(&self.base, &args).await,
+            "redis.scan" | "redis.keyInfo" | "redis.readValue" | "redis.edit" => {
+                let engine = self.engine_for(ops::db_of(&args)).await?;
+                match name {
+                    "redis.scan" => ops::scan(&engine, &args).await,
+                    "redis.keyInfo" => Ok(serde_json::to_value(ops::key_info(&engine, &args).await?)?),
+                    "redis.readValue" => Ok(serde_json::to_value(ops::read_value(&engine, &args).await?)?),
+                    _ => ops::edit(&engine, &args).await,
+                }
+            }
+            other => Err(unsupported_capability(other)),
+        }
+    }
+
+    async fn ping(&self) -> AppResult<()> {
+        self.base.ping().await
+    }
+
+    async fn close(&self) {
+        self.others.lock().await.clear();
     }
 }
 
@@ -165,7 +347,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::contract::{errors::ENGINE_NOT_WIRED, ConnectSecrets, Endpoint, EngineStatus};
+    use crate::contract::{ConnectSecrets, Endpoint, EngineStatus};
 
     fn console(text: &str) -> Classification {
         REDIS.classify(&ClassifyInput::Statement { language: "redis", text })
@@ -176,12 +358,28 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_is_planned_and_consistent() {
+    fn descriptor_is_ready_and_consistent() {
         let descriptor = REDIS.descriptor();
         assert_eq!(REDIS.id(), "redis");
-        assert_eq!(descriptor.status, EngineStatus::Planned);
+        assert_eq!(descriptor.status, EngineStatus::Ready);
         assert_eq!(descriptor.default_language().map(|language| language.id.as_str()), Some("redis"));
         assert!(descriptor.filter.raw.is_none());
+        use crate::contract::Capability as C;
+        for capability in [
+            C::Tree,
+            C::MultipleDatabases,
+            C::KeyValue,
+            C::Console,
+            C::Query,
+            C::Cancel,
+            C::ServerOverview,
+        ] {
+            assert!(descriptor.capabilities.contains(capability), "{capability:?}");
+        }
+        // Keys are not rows: no grid browsing or editing, no transactions toolbar.
+        for capability in [C::BrowseRows, C::EditRows, C::Transactions, C::SchemaGraph, C::CreateDatabase] {
+            assert!(!descriptor.capabilities.contains(capability), "{capability:?}");
+        }
     }
 
     #[test]
@@ -195,6 +393,48 @@ mod tests {
         assert_eq!(script.statements.len(), 2);
         assert_eq!(script.statements[1].kind, "DEL");
         assert_eq!(console("SET k \"unclosed").worst(), Some(Category::Unknown));
+    }
+
+    #[test]
+    fn dangerous_commands_need_the_strict_categories_and_writes_are_writes() {
+        for dangerous in [
+            "FLUSHALL",
+            "FLUSHDB",
+            "FLUSHDB ASYNC",
+            "CONFIG SET maxmemory 1",
+            "KEYS *",
+            "DEBUG SLEEP 1",
+            "SHUTDOWN NOSAVE",
+        ] {
+            let worst = console(dangerous).worst();
+            assert!(
+                matches!(worst, Some(Category::Destructive | Category::Admin)),
+                "{dangerous}: {worst:?}"
+            );
+        }
+        for write in [
+            "SET k v",
+            "DEL k",
+            "HSET h f v",
+            "LPUSH l a",
+            "SADD s a",
+            "ZADD z 1 a",
+            "XADD s * f v",
+            "EXPIRE k 10",
+            "RENAME a b",
+        ] {
+            assert_eq!(console(write).worst(), Some(Category::Write), "{write}");
+        }
+        for read in [
+            "GET k",
+            "KEYS user:*",
+            "SCAN 0 MATCH user:*",
+            "HGETALL h",
+            "TTL k",
+            "CONFIG GET maxmemory",
+        ] {
+            assert_eq!(console(read).worst(), Some(Category::Read), "{read}");
+        }
     }
 
     #[test]
@@ -213,10 +453,13 @@ mod tests {
         );
         let set = capability(
             "redis.edit",
-            json!({ "op": "setString", "key": { "text": "k" }, "value": { "text": "v" }, "ttlMs": null, "keepTtl": false, "condition": "always" }),
+            json!({ "op": "setString", "key": { "text": "k" }, "value": { "text": "v" }, "ttlMs": null, "keepTtl": false, "condition": "always",
+                    "db": 2, "expect": { "kind": "string", "value": { "text": "old" } } }),
         );
         assert_eq!(set.worst(), Some(Category::Write));
         assert_eq!(set.tables(), vec!["k".to_owned()]);
+        let ttl = capability("redis.edit", json!({ "op": "expire", "key": { "text": "k" }, "ttlMs": 5000 }));
+        assert_eq!(ttl.worst(), Some(Category::Write));
         let delete = capability("redis.edit", json!({ "op": "delete", "keys": [{ "text": "a" }, { "text": "b" }] }));
         assert_eq!(delete.worst(), Some(Category::Destructive));
         assert_eq!(delete.tables().len(), 2);
@@ -243,19 +486,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_is_not_wired_yet() {
+    async fn an_unreachable_server_is_a_connection_error_naming_the_engine() {
+        // A port nobody listens on: bind to get a free one, then close it so the connection is refused at once.
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let request = ConnectRequest {
             spec: ConnectionSpec::default(),
             secrets: ConnectSecrets::default(),
             endpoint: Endpoint {
                 host: "127.0.0.1".into(),
-                port: 1,
+                port: free,
             },
-            connect_timeout: Duration::from_secs(1),
+            connect_timeout: Duration::from_secs(2),
         };
         let Err(error) = REDIS.connect(request).await else {
-            panic!("a planned engine must not connect");
+            panic!("nothing listens on the port");
         };
-        assert_eq!(error.code(), Some(ENGINE_NOT_WIRED));
+        assert_eq!(error.code(), Some("CONNECTION_ERROR"), "{error:?}");
+        assert_eq!(error.payload().unwrap()["retryable"], true);
+        assert_eq!(error.field("engine").and_then(|engine| engine.as_str()), Some("redis"));
+        assert_ne!(error.code(), Some(crate::contract::errors::ENGINE_NOT_WIRED));
     }
 }

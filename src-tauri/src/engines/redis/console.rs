@@ -304,21 +304,62 @@ pub struct RedisConsole {
     timeout: Duration,
     /// Commands queued since `MULTI`; `EXEC` is classified as the highest of them.
     queued: Option<Vec<CommandClass>>,
+    /// `CLIENT ID` of this connection, so another connection can `CLIENT UNBLOCK` or kill what it runs.
+    client_id: Option<i64>,
 }
 
 impl RedisEngine {
     pub async fn open_console(&self) -> AppResult<RedisConsole> {
+        let mut conn = self.new_connection().await?;
+        let client_id = redis::cmd("CLIENT")
+            .arg("ID")
+            .query_async::<Value>(&mut conn)
+            .await
+            .ok()
+            .as_ref()
+            .and_then(super::types::as_i64);
         Ok(RedisConsole {
-            conn: self.new_connection().await?,
+            conn,
             timeout: self.command_timeout(),
             queued: None,
+            client_id,
         })
     }
 }
 
 impl RedisConsole {
+    pub fn client_id(&self) -> Option<i64> {
+        self.client_id
+    }
+
     pub fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout.max(Duration::from_millis(100));
+    }
+
+    /// Runs one line for a contract session: the classification and the typed reply, or the error with its code kept.
+    /// A server error reply (`WRONGTYPE`) may come back as `Ok(RedisReply::Error)`; the session turns it into an error.
+    pub async fn exec_line(&mut self, line: &str) -> AppResult<(Classification, RedisReply)> {
+        let args = tokenize(line)?;
+        if args.is_empty() {
+            return Err(AppError::new("Empty command."));
+        }
+        let classification = self.classify_args(&args);
+        if classification.class == CommandClass::Unsupported {
+            return Err(AppError::new(
+                classification
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "The console cannot run this command.".into()),
+            ));
+        }
+        let mut cmd = redis::cmd(&String::from_utf8_lossy(&args[0]));
+        for arg in &args[1..] {
+            cmd.arg(arg.as_slice());
+        }
+        let mut conn = self.conn.clone();
+        let reply = with_timeout(self.timeout, conn.send_packed_command(&cmd)).await;
+        self.track_transaction(&classification, &reply);
+        Ok((classification, RedisReply::from_value(reply?)))
     }
 
     /// Classifies a line without running it (for the gateway's preview).

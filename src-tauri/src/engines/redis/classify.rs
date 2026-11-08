@@ -5,7 +5,7 @@
 //! | `Read`        | Reads data or metadata                                     | GET, HGETALL, SCAN, ZRANGE, XRANGE, INFO, JSON.GET, FT.SEARCH |
 //! | `Write`       | Changes data of the keys it names                          | SET, HSET, LPUSH, ZADD, XADD, EXPIRE, DEL/UNLINK of keys    |
 //! | `Destructive` | Can drop data beyond the keys it names, or cannot be checked | FLUSHALL, FLUSHDB, SWAPDB, EVAL/EVALSHA/FCALL (scripts can delete by pattern), FUNCTION FLUSH, FT.DROPINDEX DD |
-//! | `Admin`       | Changes server state, not data                             | CONFIG SET, SHUTDOWN, DEBUG, SCRIPT FLUSH, ACL SETUSER, CLIENT KILL, REPLICAOF, CLUSTER ... |
+//! | `Admin`       | Changes server state, not data, or blocks the server       | CONFIG SET, SHUTDOWN, DEBUG, KEYS *, SCRIPT FLUSH, ACL SETUSER, CLIENT KILL, REPLICAOF, CLUSTER ... |
 //! | `Session`     | Changes only this connection                               | SELECT, MULTI/EXEC/DISCARD, WATCH, CLIENT SETNAME, HELLO, AUTH |
 //! | `Unsupported` | Needs a streaming channel (deferred)                       | SUBSCRIBE, PSUBSCRIBE, SSUBSCRIBE, MONITOR, SYNC, PSYNC     |
 //! | `Unknown`     | Not in the table (module commands etc.); treat like `Write` and ask | |
@@ -507,6 +507,15 @@ pub fn classify(args: &[Vec<u8>]) -> Classification {
     if let Some((_, reason)) = DESTRUCTIVE.iter().find(|(command, _)| *command == name) {
         return result(CommandClass::Destructive, name, Some(reason));
     }
+    // KEYS walks the whole keyspace in one blocking call. A pattern that matches everything is the dangerous form (the key
+    // browser uses SCAN); a narrower pattern still scans every key but returns less, so it stays a read.
+    if name == "KEYS" && args.get(1).is_none_or(|pattern| pattern.iter().all(|byte| *byte == b'*')) {
+        return result(
+            CommandClass::Admin,
+            name,
+            Some("KEYS * blocks the server while it walks every key; use SCAN."),
+        );
+    }
     if let Some((_, read, destructive)) = CONTAINERS.iter().find(|(command, _, _)| *command == name) {
         let Some(sub) = sub else {
             return result(CommandClass::Read, name, None);
@@ -584,6 +593,10 @@ mod tests {
             ("eval \"return 1\" 0", Destructive),
             ("ft.dropindex idx DD", Destructive),
             ("function delete lib", Destructive),
+            ("keys user:*", Read),
+            ("keys *", Admin),
+            ("KEYS **", Admin),
+            ("keys", Admin),
             ("config get maxmemory", Read),
             ("config set maxmemory 1", Admin),
             ("script flush", Admin),

@@ -1,5 +1,5 @@
-//! The Redis descriptor (also Valkey and other RESP servers): connection form, capabilities (the upper bound once the
-//! adapter is wired), the redis-cli style console language.
+//! The Redis descriptor (also Valkey and other RESP servers): connection form, capabilities, the redis-cli style console
+//! language. Cluster and Sentinel are out of scope: the form has no fields for them.
 
 use crate::contract::{
     AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec,
@@ -17,13 +17,18 @@ pub fn descriptor() -> EngineDescriptor {
         label: LABEL.into(),
         family: EngineFamily::KeyValue,
         icon: "key".into(),
-        status: EngineStatus::Planned,
+        status: EngineStatus::Ready,
         sql_dialect: None,
+        // No row browsing or editing (`tabular`): keys are read and written through the typed `redis.*` operations.
         capabilities: CapabilitySet::of(&[
             Capability::Tree,
+            Capability::Describe,
+            Capability::MultipleDatabases,
+            Capability::Query,
+            Capability::Cancel,
+            Capability::StreamingResults,
             Capability::KeyValue,
             Capability::Console,
-            Capability::Query,
             Capability::ServerOverview,
         ]),
         objects_label: "keys".into(),
