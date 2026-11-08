@@ -20,6 +20,8 @@ export interface GridSetup {
   columns: ColumnMeta[];
   rows: Cell[][];
   editable: boolean;
+  /** Why a non-editable grid is read-only, shown in the cell editor (e.g. a Read-only workspace). */
+  readOnlyReason: string | null;
   primaryKey: string[];
   rowOffset: number;
   sort: SortState | null;
@@ -78,6 +80,7 @@ export function gridSetup(columns: ColumnMeta[], rows: Cell[][], dialect: SqlDia
     columns,
     rows,
     editable: false,
+    readOnlyReason: null,
     primaryKey: [],
     rowOffset: 0,
     sort: null,
@@ -715,7 +718,7 @@ export class DataGrid {
   private readOnlyReason(position: Position): string | null {
     const row = this.rows[position.row];
     const column = this.setup.columns[position.column];
-    if (!this.setup.editable) return "This grid is read-only";
+    if (!this.setup.editable) return this.setup.readOnlyReason ?? "This grid is read-only";
     if (row?.deleted) return "The row is marked for deletion";
     if (column?.vectorDims != null) return "Vector values are read-only here";
     if (column?.binary) return "Binary values are shown read-only";

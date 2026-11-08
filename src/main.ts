@@ -24,7 +24,7 @@ import { connectionDialog } from "./features/connections/connectionDialog";
 import { ConnectionTree } from "./features/connections/tree";
 import { TasksPanel } from "./features/tasks/tasksPanel";
 import { embeddingDialog } from "./features/vector/embeddingDialog";
-import { relaxedFromBaseline, safetyLabel, safetyOf } from "./features/safety/safety";
+import { connectionSafety, relaxedFromBaseline, safetyLabel, safetyOf, writesBlocked } from "./features/safety/safety";
 import { workspaceDialog } from "./features/workspaces/workspaceDialog";
 import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./features/workspaces/workspaceRail";
 
@@ -67,6 +67,7 @@ const navigation = new AppNavigation(tabs, {
   connectionName: (connectionId) =>
     currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name ?? connectionId,
   historyEnabled: () => currentConfig?.queryHistory !== false,
+  writesBlocked: (connectionId) => writesBlocked(connectionSafety(currentConfig?.workspaces ?? [], connectionId)),
 });
 
 const assistant = new AssistantPanel({

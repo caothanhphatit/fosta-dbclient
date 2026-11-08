@@ -21,6 +21,8 @@ export interface NavigationHost {
   queryChanged(view: QueryView): void;
   /** Display name of a saved connection, recorded in the query history. */
   connectionName(connectionId: string): string;
+  /** Whether the connection's safety rules block every write. */
+  writesBlocked(connectionId: string): boolean;
   /** Whether query runs are recorded (the `queryHistory` setting). */
   historyEnabled(): boolean;
 }
@@ -40,6 +42,10 @@ export class AppNavigation implements Navigator {
 
   tabKey(connectionId: string, kind: string, ...parts: string[]): string {
     return [this.host.workspaceId(), connectionId, kind, ...parts].join("|");
+  }
+
+  writesBlocked(connectionId: string): boolean {
+    return this.host.writesBlocked(connectionId);
   }
 
   closeConnectionTabs(connectionId: string): void {

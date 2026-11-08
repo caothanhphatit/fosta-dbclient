@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   confirmationReason,
+  connectionSafety,
   defaultSafety,
   effectiveRules,
   gatewayProblem,
@@ -13,7 +14,9 @@ import {
   transactionButtons,
   transactionLabel,
   typedMatches,
+  writesBlocked,
 } from "./safety";
+import type { ConnectionProfile, SafetySettings, Workspace } from "../../core/types";
 
 describe("presets", () => {
   it("map categories like the backend", () => {
@@ -114,5 +117,39 @@ describe("transactions", () => {
     expect(idleReminderDue(0, null, 5 * minute)).toBe(true);
     expect(idleReminderDue(0, 5 * minute, 7 * minute)).toBe(false);
     expect(idleReminderDue(0, 5 * minute, 10 * minute)).toBe(true);
+  });
+});
+
+describe("read-only grids", () => {
+  const profile = (id: string, safety?: SafetySettings): ConnectionProfile => ({
+    id,
+    name: id,
+    driver: "mariadb",
+    host: "h",
+    port: 3306,
+    user: "u",
+    database: null,
+    savePassword: false,
+    options: {},
+    safety,
+  });
+  const workspaces: Workspace[] = [
+    {
+      id: "prod",
+      name: "Production",
+      icon: "shield",
+      color: "red",
+      safety: presetSettings("readOnly"),
+      connections: [profile("p"), profile("p-open", presetSettings("open"))],
+      tasks: [],
+    },
+    { id: "dev", name: "Dev", icon: "laptop", color: "blue", safety: presetSettings("guarded"), connections: [profile("d")], tasks: [] },
+  ];
+
+  it("block editing where the workspace (or the connection) blocks writes", () => {
+    expect(writesBlocked(connectionSafety(workspaces, "p"))).toBe(true);
+    expect(writesBlocked(connectionSafety(workspaces, "p-open"))).toBe(false);
+    expect(writesBlocked(connectionSafety(workspaces, "d"))).toBe(false);
+    expect(writesBlocked(connectionSafety(workspaces, "unknown"))).toBe(false);
   });
 });

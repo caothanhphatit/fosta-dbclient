@@ -3792,6 +3792,22 @@ pre.field-value.text {
   background: var(--accent-soft);
 }
 
+.readonly-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.readonly-bar .icon {
+  color: var(--fg-3);
+}
+
 .suggestion-filter {
   padding: 1px 6px;
   border-radius: 4px;

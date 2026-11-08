@@ -101,6 +101,20 @@ export function safetyOf(workspace: Pick<WorkspaceMeta, "icon" | "safety">): Saf
   return workspace.safety ?? defaultSafety(workspace.icon);
 }
 
+/** The rules a connection runs under: its own override, else its workspace's. Null when it is not in any workspace. */
+export function connectionSafety(workspaces: readonly Workspace[], connectionId: string): SafetySettings | null {
+  for (const workspace of workspaces) {
+    const profile = workspace.connections.find((item) => item.id === connectionId);
+    if (profile) return profile.safety ?? safetyOf(workspace);
+  }
+  return null;
+}
+
+/** True when the rules block every write (Read-only), so grids should not offer editing at all. */
+export function writesBlocked(settings: SafetySettings | null): boolean {
+  return settings !== null && effectiveRules(settings).rules.write === "block";
+}
+
 export function effectiveRules(settings: SafetySettings): EffectiveRules {
   if (settings.preset === "custom") {
     return {

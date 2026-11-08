@@ -21,6 +21,7 @@ const PAGE_SIZES = [100, 200, 500, 1000];
 const EXPORT_FORMATS: ExportFormat[] = ["csv", "json", "markdown", "insert"];
 const DEFAULT_PANEL_WIDTH = 340;
 const NARROW_WINDOW = 1200;
+const READ_ONLY_NOTE = "Read-only workspace: rows cannot be edited, added or deleted here. Change the workspace's safety rules to edit.";
 
 interface ReloadOptions {
   offset?: number;
@@ -131,7 +132,12 @@ export class TableView implements TabContent {
     this.pendingBar = h("div", { class: "pending-bar" }, icon("edit"), this.pendingText, spacer(), discardPending, applyButton);
     this.pendingBar.hidden = true;
     this.suggestionBar = suggested && initialFilter ? this.suggestion(initialFilter) : null;
-    this.element = h("div", { class: "view table-view" }, toolbar, this.suggestionBar, this.content, this.pendingBar);
+    // A Read-only workspace blocks every save, so the grid says so up front instead of failing at Apply.
+    const readOnlyBar =
+      this.target.kind === "table" && this.writesBlocked
+        ? h("div", { class: "readonly-bar", role: "status" }, icon("view"), h("span", {}, READ_ONLY_NOTE))
+        : null;
+    this.element = h("div", { class: "view table-view" }, toolbar, readOnlyBar, this.suggestionBar, this.content, this.pendingBar);
     this.element.addEventListener("keydown", (event) => this.handleShortcut(event));
     void this.loadMetadata();
     if (this.suggestionBar) this.pageInfo.textContent = "Not loaded";
@@ -173,8 +179,13 @@ export class TableView implements TabContent {
     return !this.grid.hasChanges() || confirmDialog(`Discard unsaved changes in ${this.target.table}?`, "Discard");
   }
 
+  /** Tables are editable unless the workspace's rules block writes; views never are. */
   private get editable(): boolean {
-    return this.target.kind === "table";
+    return this.target.kind === "table" && !this.writesBlocked;
+  }
+
+  private get writesBlocked(): boolean {
+    return this.navigator.writesBlocked(this.target.connectionId);
   }
 
   private async loadMetadata(): Promise<void> {
@@ -365,6 +376,7 @@ export class TableView implements TabContent {
         columns: page.columns,
         rows: page.rows,
         editable: this.editable,
+        readOnlyReason: this.writesBlocked ? "The workspace is Read-only" : null,
         primaryKey: page.primaryKey,
         rowOffset: offset,
         sort,
