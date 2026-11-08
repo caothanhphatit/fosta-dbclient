@@ -12,7 +12,7 @@
     <meta
       name="description"
       data-i18n-attr="content:meta.description"
-      content="Fosta Studio is a free, open-source (GPL-3.0) desktop database client for Windows: MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks, a fast data grid, ER diagrams and a built-in AI agent that knows your schema."
+      content="Fosta Studio is a free, open-source (GPL-3.0) desktop database client for Windows, with a web edition for Docker: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle, with workspaces, SSH and TLS, a fast data grid, ER diagrams and a built-in AI agent that knows your schema."
     />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
@@ -27,7 +27,7 @@
     <meta
       property="og:description"
       data-i18n-attr="content:meta.socialDescription"
-      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and a built-in AI agent that knows your schema."
+      content="Free and open-source database client for 11 engines, from MariaDB and PostgreSQL to Redis, Elasticsearch and Oracle, with workspaces, SSH and TLS, safety rules and a built-in AI agent that knows your schema."
     />
     <meta property="og:url" content="https://dbcl.fosta.app/" />
     <!-- i18n:og-locale -->
@@ -44,7 +44,7 @@
     <meta
       name="twitter:description"
       data-i18n-attr="content:meta.socialDescription"
-      content="Free and open-source database client for MariaDB, MySQL, SQL Server and MongoDB, with workspaces, startup tasks and a built-in AI agent that knows your schema."
+      content="Free and open-source database client for 11 engines, from MariaDB and PostgreSQL to Redis, Elasticsearch and Oracle, with workspaces, SSH and TLS, safety rules and a built-in AI agent that knows your schema."
     />
     <meta name="twitter:image" content="https://dbcl.fosta.app/assets/og-image.png" />
 
@@ -227,7 +227,7 @@
             <span data-i18n="hero.facts">Windows · about 10 MB · GPL-3.0</span>
           </p>
           <h1 id="hero-title">Fosta Studio</h1>
-          <p class="lede" data-i18n="hero.lede">A small, fast database client for <strong>MariaDB, MySQL, SQL Server and MongoDB</strong>, with workspaces that bring their own tunnels and a built-in AI agent that knows your schema.</p>
+          <p class="lede" data-i18n="hero.lede">A small, fast database client for <strong>11 engines: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle</strong>, with workspaces that bring their own tunnels and a built-in AI agent that knows your schema.</p>
           <div class="cta-row">
             <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/releases">
               <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg><span data-i18n="hero.download">Download for Windows</span>
@@ -1091,12 +1091,12 @@
               <b class="stat-num">~<span data-count-to="10">10</span>&nbsp;MB</b><span data-i18n="stats.size">portable executable, no installer</span>
             </li>
             <li>
-              <b class="stat-num"><span data-count-to="4">4</span></b
+              <b class="stat-num"><span data-count-to="11">11</span></b
               ><span data-i18n="stats.engines">engines supported today</span>
             </li>
             <li>
-              <b class="stat-num">+<span data-count-to="6">6</span></b
-              ><span data-i18n="stats.roadmap">more engines on the roadmap</span>
+              <b class="stat-num"><span data-count-to="2">2</span></b
+              ><span data-i18n="stats.editions">editions: desktop app and web (Docker)</span>
             </li>
             <li><b class="stat-num"><span data-count-to="5">5</span>+</b><span data-i18n="stats.ai">AI providers, from Claude and GPT to local models</span></li>
           </ul>
@@ -1118,10 +1118,8 @@
               <h3 data-i18n="why.engines.title">A view that fits each engine</h3>
               <p>
                 <span data-i18n="why.engines.text"
-                  >SQL tables open in an editable grid. MongoDB documents, Redis keys and Elasticsearch search are getting views of their own instead of being
-                  squeezed into rows.</span
+                  >SQL tables open in an editable grid. MongoDB documents, Redis keys, Elasticsearch search and ClickHouse parts each get a view of their own instead of being squeezed into rows.</span
                 >
-                <span class="tag-coming" data-i18n="common.coming">coming</span>
               </p>
             </li>
             <li class="why-card">
@@ -1138,10 +1136,9 @@
               <span class="why-icon"
                 ><svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg
               ></span>
-              <h3><span data-i18n="why.gateway.title">Production stays read-only</span> <span class="tag-coming" data-i18n="common.coming">coming</span></h3>
+              <h3><span data-i18n="why.gateway.title">Production stays read-only</span></h3>
               <p data-i18n="why.gateway.text">
-                Every statement passes one gateway with rules per workspace. A Production workspace defaults to read-only, and risky statements ask for
-                confirmation first.
+                Every statement, on every engine, passes one gateway with rules per workspace. A Production workspace defaults to read-only, and risky statements ask for confirmation first.
               </p>
             </li>
             <li class="why-card">
@@ -1160,9 +1157,8 @@
               <h3 data-i18n="why.open.title">Open source, desktop or Docker</h3>
               <p>
                 <span data-i18n="why.open.text"
-                  >GPL-3.0, no account, no telemetry. A Windows app today; a web edition that starts with one <code>docker run</code> is on the way.</span
+                  >GPL-3.0, no account, no telemetry. A Windows desktop app, or a web edition that starts with one <code>docker run</code>.</span
                 >
-                <span class="tag-coming" data-i18n="common.coming">coming</span>
               </p>
             </li>
           </ul>
@@ -1188,14 +1184,13 @@
               ></span>
               <h3 id="f-query" data-i18n="query.title">A query editor that keeps up</h3>
               <p data-i18n="query.text">
-                Syntax highlighting, table-name completion and several statements per run. Each tab keeps its own session, so <code>BEGIN</code>…<code>COMMIT</code> can span runs, and Stop cancels a query that takes too long.
+                Syntax highlighting, a formatter and completion that knows your tables and columns, for SQL, MongoDB commands and Redis. Several statements per run; each tab keeps its own session, so <code>BEGIN</code>…<code>COMMIT</code> can span runs.
               </p>
               <ul class="checks">
                 <li data-i18n="query.item1">Every run lands in a searchable history that stays on your machine</li>
                 <li data-i18n="query.item2">Results open in the same grid as tables, ready to filter and export</li>
                 <li>
-                  <span data-i18n="query.item3">Streaming results that show the first rows at once</span>
-                  <span class="tag-coming" data-i18n="common.coming">coming</span>
+                  <span data-i18n="query.item3">Streaming results that show the first rows at once, and a Stop that really cancels on the server</span>
                 </li>
               </ul>
             </div>
@@ -1281,8 +1276,7 @@
                 <li data-i18n="ws.item2">Automatic restart with backoff when a tunnel drops, and live logs</li>
                 <li data-i18n="ws.item3">Child processes are cleaned up when the app exits</li>
                 <li>
-                  <span data-i18n="ws.item4">Production workspaces with safety rules</span> <span class="tag-coming" data-i18n="common.coming">coming</span>
-                </li>
+                  <span data-i18n="ws.item4">Production workspaces with safety rules</span>                </li>
               </ul>
             </div>
             <figure
@@ -1341,7 +1335,7 @@
               </p>
               <ul class="checks">
                 <li data-i18n="grid.item1">Inline editing, inserts and deletes collected in a pending-changes bar</li>
-                <li data-i18n="grid.item2">Apply everything in one transaction, or discard it</li>
+                <li data-i18n="grid.item2">Apply the changes together, or discard them; a row someone else changed is a conflict, not an overwrite</li>
                 <li data-i18n="grid.item3"><code>WHERE</code> filters and per-column filters, sorting</li>
                 <li data-i18n="grid.item4">A record panel that follows foreign keys to related rows</li>
               </ul>
@@ -1502,17 +1496,17 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg
               ></span>
               <h3 id="f-assistant" data-i18n="ai.title">A built-in AI agent for your databases</h3>
-              <p data-i18n="ai.text">Ask in plain words. The agent looks up tables, columns and relations, writes and explains queries, fixes errors, and opens a table, a diagram or a new query tab for you. Every code block has <b>Insert</b> and <b>New tab</b> buttons.</p>
+              <p data-i18n="ai.text">Ask in plain words. The agent looks up tables, columns and relations, writes and explains queries, fixes errors, and opens a table, a diagram or a new query tab for you. Every code block has <b>Run</b>, <b>Insert</b> and <b>New tab</b> buttons.</p>
               <p class="callout">
                 <svg class="icon" aria-hidden="true"><use href="#i-ban" /></svg
                 ><span data-i18n="ai.callout"
-                  ><b>You stay in control.</b> The agent prepares the work; anything that touches your data runs only when you run it.</span
+                  ><b>You stay in control.</b> Run on a code block follows your workspace's safety rules, like any run of your own. The agent's own queries are read-only, and you can turn them off.</span
                 >
               </p>
               <ul class="checks">
                 <li data-i18n="ai.item1">Bring your own model: Fosta, OpenAI, Gemini, Claude, or any OpenAI-compatible endpoint such as a local Ollama</li>
                 <li data-i18n="ai.item2">Your key is stored in Windows Credential Manager and requests go straight from your machine to the provider</li>
-                <li data-i18n="ai.item3">No row data is read; it only sees metadata and what you choose to share</li>
+                <li data-i18n="ai.item3">It sees metadata and what you share; the optional read-only query tool can read up to 50 rows, which go to your provider</li>
               </ul>
               <p class="fineprint" data-i18n="ai.disclosure">
                 Disclosure: Fosta, the default provider, is a separate AI API service run by the author of Fosta Studio. It is listed first for convenience
@@ -1576,9 +1570,9 @@
               <span class="feature-icon"
                 ><svg class="icon" aria-hidden="true"><use href="#i-link" /></svg
               ></span>
-              <h3 data-i18n="mini.conn.title">Connection strings</h3>
+              <h3 data-i18n="mini.conn.title">Connections, SSH and TLS</h3>
               <p data-i18n="mini.conn.text">
-                Paste a connection string for any engine, including MongoDB Atlas URIs. A password inside it is moved to Credential Manager.
+                Paste a connection string for any engine. Add an SSH tunnel with a jump host or agent, and TLS with your CA, a client certificate or a pinned fingerprint. Passwords stay in Credential Manager.
               </p>
             </li>
             <li class="mini-card">
@@ -1642,49 +1636,79 @@
               ></span>
               <div>
                 <h3>MongoDB</h3>
-                <p data-i18n="engines.mongodb">JSON filters, Atlas URIs, inferred diagram links; a document view is coming</p>
+                <p data-i18n="engines.mongodb">JSON filters, Atlas URIs, inferred diagram links, commands in the query tab</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
-            <li class="engine coming">
+            <li class="engine">
               <span class="engine-glyph"
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
                 <h3>PostgreSQL</h3>
-                <p data-i18n="engines.onRoadmap">On the roadmap</p>
+                <p data-i18n="engines.postgres">Schemas, jsonb and arrays, Stop on the server, EXPLAIN</p>
               </div>
-              <span class="status status-coming" data-i18n="engines.coming">Coming</span>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
-            <li class="engine coming">
+            <li class="engine">
               <span class="engine-glyph"
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
                 <h3>SQLite</h3>
-                <p data-i18n="engines.onRoadmap">On the roadmap</p>
+                <p data-i18n="engines.sqlite">Open a file, attach databases, edit by primary key or rowid</p>
               </div>
-              <span class="status status-coming" data-i18n="engines.coming">Coming</span>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
-            <li class="engine coming">
+            <li class="engine">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+              ></span>
+              <div>
+                <h3>ClickHouse</h3>
+                <p data-i18n="engines.clickhouse">Streaming queries, edits as mutations, parts and query log</p>
+              </div>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
+            </li>
+            <li class="engine">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+              ></span>
+              <div>
+                <h3>Oracle</h3>
+                <p data-i18n="engines.oracle">PL/SQL and packages; Instant Client is downloaded for you</p>
+              </div>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
+            </li>
+            <li class="engine">
               <span class="engine-glyph"
                 ><svg class="icon" aria-hidden="true"><use href="#i-key" /></svg
               ></span>
               <div>
                 <h3>Redis</h3>
-                <p data-i18n="engines.redis">A key browser with a view for each data type</p>
+                <p data-i18n="engines.redis">Key browser with an editor for each data type, console with completion; also Valkey</p>
               </div>
-              <span class="status status-coming" data-i18n="engines.coming">Coming</span>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
-            <li class="engine coming">
+            <li class="engine">
               <span class="engine-glyph"
                 ><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg
               ></span>
               <div>
                 <h3>Elasticsearch</h3>
-                <p data-i18n="engines.elastic">Search, ES|QL, mappings and aggregations</p>
+                <p data-i18n="engines.elastic">Mapping-typed grid, Dev Tools console, ES|QL and SQL</p>
               </div>
-              <span class="status status-coming" data-i18n="engines.coming">Coming</span>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
+            </li>
+            <li class="engine">
+              <span class="engine-glyph"
+                ><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg
+              ></span>
+              <div>
+                <h3>OpenSearch</h3>
+                <p data-i18n="engines.opensearch">The same grid and console, SQL plugin, point-in-time paging</p>
+              </div>
+              <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
           </ul>
         </div>
@@ -1730,16 +1754,15 @@
               <svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg>
               <div>
                 <h3 data-i18n="privacy.ai.title">What the agent sees</h3>
-                <p data-i18n="privacy.ai.text">The model sees table and column metadata plus the editor text, errors and logs you choose to share. It reads no rows, and statements run only when you run them.</p>
+                <p data-i18n="privacy.ai.text">The model sees table and column metadata plus the editor text, errors and logs you choose to share. Statements run only when you run them. The optional read-only query tool reads up to 50 rows per query, which go to your provider; turn it off in Settings or per workspace.</p>
               </div>
             </li>
             <li class="wide">
               <svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg>
               <div>
-                <h3><span data-i18n="privacy.gateway.title">Statement gateway</span> <span class="tag-coming" data-i18n="common.coming">coming</span></h3>
+                <h3><span data-i18n="privacy.gateway.title">Statement gateway</span></h3>
                 <p data-i18n="privacy.gateway.text">
-                  Every statement will pass through one gateway with rules per workspace: Open, Guarded, Read-only or Custom. A workspace marked Production
-                  defaults to Read-only, and relaxing a rule always comes with a loud warning.
+                  Every statement, on every engine, passes through one gateway with rules per workspace: Open, Guarded, Read-only or Custom. A workspace marked Production defaults to Read-only, and relaxing a rule always comes with a loud warning.
                 </p>
               </div>
             </li>
@@ -1757,8 +1780,8 @@
           </header>
           <ol class="roadmap">
             <li>
-              <h3 data-i18n="roadmap.gateway.title">Statement gateway &amp; transactions</h3>
-              <p data-i18n="roadmap.gateway.text">Rules per workspace, auto-commit switch, Begin / Commit / Rollback, open-transaction warnings.</p>
+              <h3 data-i18n="roadmap.gateway.title">Engine depth</h3>
+              <p data-i18n="roadmap.gateway.text">Oracle without Instant Client, Redis Cluster and Sentinel, and more tools per engine.</p>
             </li>
             <li>
               <h3 data-i18n="roadmap.profiling.title">Data profiling &amp; generation</h3>
@@ -1777,8 +1800,8 @@
               <p data-i18n="roadmap.servers.text">Create and run development servers without Docker or admin rights.</p>
             </li>
             <li>
-              <h3 data-i18n="roadmap.web.title">Web edition &amp; encrypted sync</h3>
-              <p data-i18n="roadmap.web.text">A Docker image to use Fosta Studio in a browser, and end-to-end encrypted sync between machines.</p>
+              <h3 data-i18n="roadmap.web.title">Signed builds &amp; sync</h3>
+              <p data-i18n="roadmap.web.text">Code-signed installers, winget and Scoop packages, and end-to-end encrypted sync between machines.</p>
             </li>
           </ol>
           <p class="section-link">
@@ -1857,8 +1880,7 @@
         </nav>
         <!-- i18n:lang-footer -->
         <p class="footer-note" data-i18n="footer.trademarks">
-          MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis and Elasticsearch are trademarks of their respective owners. Fosta Studio is an
-          independent project and is not affiliated with them.
+          MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle are trademarks of their respective owners. Fosta Studio is an independent project and is not affiliated with them.
         </p>
       </div>
     </footer>
