@@ -1,0 +1,18 @@
+{
+  "id": "redis",
+  "compose": "dev/compose/redis.yml",
+  "versions": ["7.4", "8.2"],
+  "versionEnv": "REDIS_TAG",
+  "seed": null,
+  "paths": [
+    "src-tauri/src/engines/redis/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "dev/compose/redis.yml",
+    "ci/engines/redis.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_redis",
+  "note": "The suites seed their own contract:* keys in databases 14 and 15, so no seed script runs. Password studio-redis, as in dev/compose/redis.yml."
+}

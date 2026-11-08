@@ -1,4 +1,4 @@
-# Redis 8.2 for the Redis engine.
+# Redis for the Redis engine: 8.2, or the tag in REDIS_TAG (CI runs 7.4 and 8.2).
 # Test-only credentials; never reuse them.
 # docker compose -f dev/compose/redis.yml up -d --wait   then: sh dev/seed-nosql.sh
 # 127.0.0.1:6379  no ACL user, password studio-redis
@@ -7,7 +7,7 @@ name: fosta-dev-nosql
 
 services:
   redis:
-    image: redis:8.2
+    image: redis:${REDIS_TAG:-8.2}
     command: ["redis-server", "--requirepass", "studio-redis", "--maxmemory", "256mb", "--save", "", "--appendonly", "no"]
     ports:
       - "127.0.0.1:6379:6379"
