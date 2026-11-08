@@ -38,6 +38,10 @@ name = "fosta-studio-server"
 path = "src/server/main.rs"
 required-features = ["web"]
 
+[dev-dependencies]
+# Test certificates for net::tls.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
 
@@ -69,6 +73,10 @@ rustls-pki-types = { version = "1.12", features = ["std"] }
 webpki-roots = "1"
 rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype"] }
 oracle = { version = "0.6.3", features = ["chrono"] }
+# Network layer (net/): SSH tunnels (russh on ring, so no aws-lc / cmake) and the shared rustls helpers
+# (system roots through rustls-native-certs).
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+rustls-native-certs = "0.8"
 # Web server (feature `web`)
 axum = { version = "0.8", optional = true }
 tower-http = { version = "0.6", features = ["fs", "set-header"], optional = true }
