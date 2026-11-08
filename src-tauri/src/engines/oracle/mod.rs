@@ -4,14 +4,23 @@
 //! without it, and connecting without it returns [`missing_client_error`] with the download link.
 //!
 //! The crate is synchronous, so every call runs on Tokio's blocking pool. Connections are thread-safe (ODPI-C), which is what
-//! makes cancelling possible: `break_execution` is called from another thread while a statement runs. Sessions keep autocommit
-//! off; Oracle opens a transaction implicitly on the first change, and the state is read from
-//! `DBMS_TRANSACTION.LOCAL_TRANSACTION_ID`.
+//! makes cancelling possible: `break_execution` (OCIBreak) is called from another thread while a statement runs. Connections
+//! keep OCI autocommit off; query sessions commit after each statement unless a transaction was begun (see `session.rs`).
+//!
+//! The contract side lives in `adapter.rs` (engine and connection), `connect.rs` (options, Instant Client), `nodes.rs` (tree),
+//! `tabular.rs` (browse and guarded edits), `run.rs` (query sessions) and `graph.rs` (ER diagram).
 
 pub mod adapter;
+pub mod connect;
+#[cfg(test)]
+mod contract_tests;
 pub mod descriptor;
+mod graph;
 pub mod instant_client;
+pub mod nodes;
+mod run;
 pub mod session;
+mod tabular;
 #[cfg(test)]
 mod tests;
 pub mod types;
@@ -173,8 +182,8 @@ impl OraOptions {
 /// The error for a machine without Oracle Instant Client.
 pub fn missing_client_error(detail: &str) -> EngineError {
     EngineError::connect(format!(
-        "Oracle Instant Client was not found. Install Instant Client 19c or newer for 64-bit Windows (Basic or Basic Light) from \
-         {INSTANT_CLIENT_URL}, add its folder to PATH, and reconnect. ({detail})"
+        "Oracle Instant Client was not found. Let Fosta Studio download it, or install Instant Client 19c or newer (Basic or \
+         Basic Light) from {INSTANT_CLIENT_URL} and set its folder in the connection's Advanced settings or on PATH. ({detail})"
     ))
 }
 
@@ -193,6 +202,9 @@ pub(crate) fn map_err(e: oracle::Error) -> EngineError {
         };
         return EngineError {
             code: Some(code),
+            // The parse offset in bytes of the statement (0 when the server gives none, except for the ORA-009xx syntax
+            // errors, where 0 is the start); `run.rs` turns it into a character offset in the script.
+            position: (db.offset() > 0 || (900..1000).contains(&db.code())).then(|| db.offset()),
             ..EngineError::new(kind, message)
         };
     }
@@ -205,16 +217,32 @@ pub(crate) fn map_err(e: oracle::Error) -> EngineError {
 /// Identifier quoting, `:n` placeholders and conversions for Oracle.
 pub struct OraDialect;
 
+/// The pseudo column a table without a primary key is browsed and edited by: `ROWIDTOCHAR(ROWID)`. A ROWID is stable while
+/// the row stays where it is; moving the row (table move, partition change, shrink, export/import) changes it, and a stale
+/// ROWID then matches no row, which is reported as a conflict.
+pub const ROWID: &str = "_rowid_";
+
 fn is_lob(col: &ColumnInfo) -> bool {
     matches!(col.type_name.as_str(), "CLOB" | "NCLOB" | "BLOB")
 }
 
+/// Whether a column can take part in an optimistic-concurrency check (`col = :v`): LOBs, LONG, JSON, XMLTYPE, BFILE and
+/// object types cannot be compared with `=`, so an edit checks the row's other original values only.
+pub fn comparable(col: &ColumnInfo) -> bool {
+    let t = col.type_name.as_str();
+    !(is_lob(col) || matches!(t, "LONG" | "LONG RAW" | "JSON" | "XMLTYPE" | "BFILE") || col.kind == ValueKind::Other)
+}
+
 impl SqlDialect for OraDialect {
     fn quote_ident(&self, name: &str) -> String {
+        if name == ROWID {
+            return "ROWID".to_owned();
+        }
         sqlbuild::quote_with(name, '"')
     }
     fn placeholder(&self, n: usize, target: &ParamTarget) -> String {
         match target {
+            ParamTarget::Column(col) if col.name == ROWID => format!("CHARTOROWID(:{n})"),
             ParamTarget::Column(col) => match col.type_name.as_str() {
                 t if t.starts_with("INTERVAL DAY") => format!("TO_DSINTERVAL(:{n})"),
                 t if t.starts_with("INTERVAL YEAR") => format!("TO_YMINTERVAL(:{n})"),
@@ -226,6 +254,9 @@ impl SqlDialect for OraDialect {
         }
     }
     fn select_expr(&self, col: &ColumnInfo) -> String {
+        if col.name == ROWID {
+            return format!("ROWIDTOCHAR(ROWID) AS \"{ROWID}\"");
+        }
         let q = self.quote_ident(&col.name);
         match col.type_name.as_str() {
             "JSON" => format!("JSON_SERIALIZE({q}) AS {q}"),
@@ -274,10 +305,12 @@ fn strings(c: &Connection, sql: &str, params: &[&dyn ToSql]) -> Result<Vec<Vec<O
     Ok(out)
 }
 
-/// An open Oracle database.
+/// An open Oracle database: one connection for the tree, describe, browsing and edits. Its calls are serialised by `lock`,
+/// so a browse (whose estimate commits its EXPLAIN PLAN rows) never lands inside an edit's transaction.
 pub struct OraEngine {
     opts: OraOptions,
     conn: Arc<Connection>,
+    lock: Arc<std::sync::Mutex<()>>,
     version: String,
     user: String,
 }
@@ -298,6 +331,7 @@ impl OraEngine {
         Ok(Self {
             opts,
             conn: Arc::new(conn),
+            lock: Arc::new(std::sync::Mutex::new(())),
             version,
             user,
         })
@@ -323,8 +357,30 @@ impl OraEngine {
     }
 
     async fn with_conn<T: Send + 'static>(&self, f: impl FnOnce(&Connection) -> Result<T> + Send + 'static) -> Result<T> {
-        let conn = self.conn.clone();
-        blocking(move || f(&conn)).await
+        let (conn, lock) = (self.conn.clone(), self.lock.clone());
+        blocking(move || {
+            let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            f(&conn)
+        })
+        .await
+    }
+
+    /// [`Self::with_conn`] for the contract side, whose errors are `AppError`s.
+    pub(crate) async fn on_conn<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Connection) -> crate::error::AppResult<T> + Send + 'static,
+    ) -> crate::error::AppResult<T> {
+        let (conn, lock) = (self.conn.clone(), self.lock.clone());
+        tokio::task::spawn_blocking(move || {
+            let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            f(&conn)
+        })
+        .await
+        .map_err(|error| crate::error::AppError::new(format!("The worker thread failed: {error}")))?
+    }
+
+    pub fn options(&self) -> &OraOptions {
+        &self.opts
     }
 
     /// Schemas (users that own objects and are not Oracle-maintained, the login schema first) with tables, views, materialized
@@ -531,6 +587,9 @@ fn describe_sync(c: &Connection, obj: &ObjectRef, me: &str) -> Result<ObjectDesc
             }
         }
     }
+    if matches!(kind, NodeKind::Package | NodeKind::Procedure | NodeKind::Function | NodeKind::View) {
+        plsql_details(c, &mut d, &owner, &found)?;
+    }
     d.ddl = ddl(c, &owner, &obj.name, kind, &found);
     if d.ddl.is_none() {
         d.extra.push((
@@ -732,17 +791,76 @@ fn ddl(c: &Connection, owner: &str, name: &str, kind: NodeKind, object_type: &st
             NodeKind::Package | NodeKind::Procedure | NodeKind::Function => {
                 let lines = strings(
                     c,
-                    "SELECT text FROM all_source WHERE owner = :1 AND name = :2 ORDER BY CASE type WHEN 'PACKAGE BODY' THEN 1 ELSE 0 END, line",
+                    "SELECT type, text FROM all_source WHERE owner = :1 AND name = :2 \
+                     ORDER BY CASE type WHEN 'PACKAGE BODY' THEN 1 ELSE 0 END, line",
                     &[&owner, &name],
                 )
                 .ok()?;
-                let body: String = lines.into_iter().filter_map(|r| r.into_iter().next().flatten()).collect();
-                (!body.is_empty()).then(|| format!("CREATE OR REPLACE {body}"))
+                plsql_source(
+                    lines
+                        .into_iter()
+                        .map(|mut r| (r[0].take().unwrap_or_default(), r[1].take().unwrap_or_default())),
+                )
             }
             _ => None,
         };
     }
     text.map(|t| t.trim().to_owned())
+}
+
+/// `ALL_SOURCE` lines (type, text) as runnable DDL: each unit (a package spec, then its body) starts with `CREATE OR REPLACE`
+/// and ends with a `/` line, so the text runs as is in a query tab.
+fn plsql_source(lines: impl Iterator<Item = (String, String)>) -> Option<String> {
+    let mut units: Vec<(String, String)> = Vec::new();
+    for (unit, text) in lines {
+        match units.last_mut() {
+            Some((last, body)) if *last == unit => body.push_str(&text),
+            _ => units.push((unit, text)),
+        }
+    }
+    let text: Vec<String> = units
+        .into_iter()
+        .filter(|(_, body)| !body.trim().is_empty())
+        .map(|(_, body)| format!("CREATE OR REPLACE {}\n/", body.trim_end()))
+        .collect();
+    (!text.is_empty()).then(|| text.join("\n\n"))
+}
+
+/// Status, timestamps and compile errors of PL/SQL units and views, for the definition view.
+fn plsql_details(c: &Connection, d: &mut ObjectDescription, owner: &str, object_type: &str) -> Result<()> {
+    if let Some(r) = one(
+        c,
+        "SELECT status, TO_CHAR(created, 'YYYY-MM-DD HH24:MI:SS'), TO_CHAR(last_ddl_time, 'YYYY-MM-DD HH24:MI:SS') \
+         FROM all_objects WHERE owner = :1 AND object_name = :2 AND object_type = :3",
+        &[&owner, &d.object.name, &object_type],
+    )? {
+        for (k, v) in ["status", "created", "lastDdl"].iter().zip(r) {
+            d.extra.push(((*k).into(), v.unwrap_or_default()));
+        }
+    }
+    if object_type == "PACKAGE" {
+        if let Some(r) = one(
+            c,
+            "SELECT status FROM all_objects WHERE owner = :1 AND object_name = :2 AND object_type = 'PACKAGE BODY'",
+            &[&owner, &d.object.name],
+        )? {
+            d.extra.push(("bodyStatus".into(), r[0].clone().unwrap_or_default()));
+        }
+    }
+    let errors = strings(
+        c,
+        "SELECT type, TO_CHAR(line), TO_CHAR(position), text FROM all_errors WHERE owner = :1 AND name = :2 \
+         ORDER BY type, sequence",
+        &[&owner, &d.object.name],
+    )?;
+    for (i, e) in errors.into_iter().enumerate() {
+        let g = |n: usize| e[n].clone().unwrap_or_default();
+        d.extra.push((
+            format!("error{}", i + 1),
+            format!("{} line {}, column {}: {}", g(0), g(1), g(2), g(3).trim()),
+        ));
+    }
+    Ok(())
 }
 
 /// Reads one row of a result set.
@@ -779,6 +897,22 @@ mod unit_tests {
         skip.tls = TlsMode::SkipVerify;
         assert!(skip.connect_string().is_err());
         assert!(OraOptions::parse("localhost:1521/FREEPDB1").is_err(), "a user is required");
+    }
+
+    #[test]
+    fn plsql_source_splits_spec_and_body_into_runnable_units() {
+        let lines = [
+            ("PACKAGE", "PACKAGE p AS\n"),
+            ("PACKAGE", "  PROCEDURE x;\nEND;\n"),
+            ("PACKAGE BODY", "PACKAGE BODY p AS\n"),
+            ("PACKAGE BODY", "  PROCEDURE x IS BEGIN NULL; END;\nEND;\n"),
+        ];
+        let text = plsql_source(lines.iter().map(|(a, b)| (a.to_string(), b.to_string()))).unwrap();
+        assert_eq!(
+            text,
+            "CREATE OR REPLACE PACKAGE p AS\n  PROCEDURE x;\nEND;\n/\n\nCREATE OR REPLACE PACKAGE BODY p AS\n  PROCEDURE x IS BEGIN NULL; END;\nEND;\n/"
+        );
+        assert!(plsql_source(std::iter::empty()).is_none());
     }
 
     #[test]

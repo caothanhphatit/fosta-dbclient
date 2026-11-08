@@ -201,11 +201,20 @@ async fn live_engine_oracle_typed_values_round_trip() {
     assert_eq!(get("C_BOOLEAN"), Value::Bool(true));
     assert_eq!(get("C_JSON"), Value::Json("{\"a\":1,\"b\":[true,null]}".into()));
     assert!(page.rows[1][1..].iter().all(Value::is_null), "row 2 is all NULL");
-    // A query editor SELECT of a native JSON column: the crate cannot fetch it, the error says how to select it as text.
+    // A query editor SELECT of a native JSON column: the crate cannot fetch it, so the query is rewritten through
+    // JSON_SERIALIZE and the column arrives as JSON.
     let s = e.open_session().await.unwrap();
+    let mut sink = CollectSink::default();
+    s.run("SELECT id, c_json FROM type_zoo ORDER BY id", &RunOptions::default(), &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(sink.sets[0].columns[1].kind, ValueKind::Json);
+    assert_eq!(sink.sets[0].rows[0][1], Value::Json("{\"a\":1,\"b\":[true,null]}".into()));
+    assert_eq!(sink.sets[0].rows[1][1], Value::Null);
+    // Two columns with one name cannot be selected by name in the rewrite: the error says how to select JSON as text.
     let err = s
         .run(
-            "SELECT id, c_json FROM type_zoo",
+            "SELECT c_json, c_json FROM type_zoo",
             &RunOptions::default(),
             &mut CollectSink::default(),
         )
