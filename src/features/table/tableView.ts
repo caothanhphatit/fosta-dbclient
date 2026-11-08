@@ -61,6 +61,9 @@ export class TableView implements TabContent {
   private readonly columnsKey: string;
   private hiddenColumns: string[];
 
+  /** The first page load (or nothing, while an assistant suggestion waits); `startTransfer` waits for it. */
+  private firstLoad: Promise<void> = Promise.resolve();
+
   /** Shown while a filter suggested by the assistant waits for the user; nothing has run yet. */
   private suggestionBar: HTMLElement | null = null;
 
@@ -145,7 +148,15 @@ export class TableView implements TabContent {
     this.element.addEventListener("keydown", (event) => this.handleShortcut(event));
     void this.loadMetadata();
     if (this.suggestionBar) this.pageInfo.textContent = "Not loaded";
-    else void this.reload({});
+    else this.firstLoad = this.reload({});
+  }
+
+  /** Opens the import or export dialog once the columns are known (the tree's Import… / Export… actions). */
+  async startTransfer(kind: "import" | "export"): Promise<void> {
+    await this.firstLoad;
+    if (kind === "export") this.exportFile();
+    else if (!this.editable) toast("This object cannot be edited here, so rows cannot be imported into it");
+    else importDialog(this.target, this.columns, () => void this.reload({ force: true }));
   }
 
   private suggestion(filter: string): HTMLElement {

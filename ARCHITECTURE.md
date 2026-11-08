@@ -97,7 +97,11 @@ mock installs it), otherwise HTTP. `api.ts` is unchanged apart from that.
 
 1. The tree (`features/connections/tree.ts`) calls `api.connect(id)`. The backend loads the profile, takes the password from the dialog
    or Credential Manager (`PASSWORD_REQUIRED` makes the UI ask), opens the driver and returns the server version.
-2. Opening a table creates a `TableView` (`features/table/tableView.ts`). It sends a `BrowseRequest` (offset, limit, order, filter) to
+   The tree then shows the engine's `ObjectNode`s from `tree_children`, loaded per node and page by page (`treeModel.ts` keeps the
+   loaded pages, expansion and the search filter); node icons, row counts (`detail`), badges and menu entries (`NodeAction`s: a view, a
+   query template, an engine capability or a builtin) come from the engine.
+2. A double-click opens the node's default view through `app/navigation.ts` `openObject`, which picks the view from the registry
+   (`core/views.ts` `resolveView`) and hands it a `ViewContext` bound to the connection. For tables that is a `TableView` (`features/table/tableView.ts`). It sends a `BrowseRequest` (offset, limit, order, filter) to
    `browse_table`. The gateway checks the filter first (a single condition; a MongoDB query document). SQL drivers build `SELECT … WHERE <filter> ORDER BY … LIMIT/OFFSET` (or `OFFSET/FETCH`), plus a `COUNT(*)` and the
    primary key; MongoDB runs `find` with the JSON filter and `count_documents`.
 3. The page is rendered by the virtualised `DataGrid` (`features/grid/grid.ts`). Per-column filters are turned into a SQL condition

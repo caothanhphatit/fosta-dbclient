@@ -12,6 +12,9 @@
  * as the 4th argument to change only that one) or `__fostaMock.deleteRow("c-local", "products", 1)`, then save:
  * `apply_edits` fails with `CONFLICT`. Also reachable as the mock-only command
  * `mock_touch_row { connectionId, table, key, remove?, column? }`. Tables are named as in the tree (`dbo.Customers`).
+ *
+ * Tree paging demo: `__fostaMock.setTreePageSize(2)` caps every `tree_children` page at 2 nodes, so the tree shows its
+ * "Load more" row; `setTreePageSize(null)` restores the requested limit.
  */
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -209,12 +212,15 @@ async function runSqlLegacy(sessionId: string, sql: string, database: string | n
 
 // --- Contract operations --------------------------------------------------------------------------------------------------
 
+/** Mock-only cap on `tree_children` pages (`__fostaMock.setTreePageSize`), to show the tree's "Load more" row. */
+let treePageSize: number | null = null;
+
 function treeChildren(connectionId: string, request: TreeRequest): TreeChildren {
   const { engine } = connection(connectionId);
   const filter = request.filter?.trim().toLowerCase();
   const all = need(engine, "tree", "a tree")(request.parent).filter((node) => !filter || node.label.toLowerCase().includes(filter));
   const start = Number(request.cursor ?? 0) || 0;
-  const limit = request.limit ?? 500;
+  const limit = Math.min(request.limit ?? 500, treePageSize ?? Number.MAX_SAFE_INTEGER);
   const nodes = all.slice(start, start + limit);
   return { nodes, nextCursor: start + limit < all.length ? String(start + limit) : null, totalHint: all.length };
 }
@@ -641,6 +647,7 @@ declare global {
       touchRow(connectionId: string, table: string, key?: unknown, column?: string): string;
       deleteRow(connectionId: string, table: string, key?: unknown): string;
       connections(): string[];
+      setTreePageSize(size: number | null): void;
     };
   }
 }
@@ -661,5 +668,8 @@ export function installDevMock(): void {
     touchRow: (connectionId, table, key, column) => touchRow(connectionId, table, key, false, column),
     deleteRow: (connectionId, table, key) => touchRow(connectionId, table, key, true),
     connections: () => [...connections.keys()],
+    setTreePageSize: (size) => {
+      treePageSize = size && size > 0 ? size : null;
+    },
   };
 }

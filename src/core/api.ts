@@ -44,7 +44,6 @@ import type {
   RowChange,
   SchemaGraph,
   TableDesign,
-  TableInfo,
   TablePage,
   TableRelations,
   TaskDef,
@@ -117,11 +116,9 @@ export const api = {
   formatSql: (dialect: SqlDialectId | null, text: string) => invoke<string>("format_sql", { dialect, text }),
 
   // --- Pre-contract commands (removed in step 16, once every view uses the ones above) ---
-  listDatabases: (connectionId: string) => invoke<string[]>("list_databases", { connectionId }),
   schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),
   createDatabase: (connectionId: string, name: string, firstCollection: string | null, confirmation: Confirmation | null = null) =>
     invoke<void>("create_database", { connectionId, name, firstCollection, confirmation }),
-  listTables: (connectionId: string, database: string) => invoke<TableInfo[]>("list_tables", { connectionId, database }),
   describeTable: (connectionId: string, database: string, table: string) => invoke<TableDesign>("describe_table", { connectionId, database, table }),
   browseTable: (request: BrowseRequest) => invoke<TablePage>("browse_table", { request }),
   /** `caller` is "gridSave" or "import"; batches of one import share `importId` and are confirmed once. */

@@ -8,7 +8,7 @@
 import type { IconName } from "../core/dom";
 import { defaultLanguage, engineInfo } from "../core/engines";
 import { defaultLanguageSupport, sqlLanguageSupport, type LanguageSupport } from "../core/language";
-import { registerViews, setEngineLoader } from "../core/views";
+import { registerViews, setEngineLoader, setIconResolver } from "../core/views";
 import { sharedViews } from "./shared";
 
 export interface EngineUiModule {
@@ -27,6 +27,7 @@ const resolvedIcons = new Map<string, IconName>();
 
 registerViews(sharedViews);
 setEngineLoader(async (id) => void (await ensureEngine(id)));
+setIconResolver(engineIcon);
 
 /** Loads and registers the engine's UI module once; null when the engine has none (it then uses the shared views). */
 export function ensureEngine(id: string): Promise<EngineUiModule | null> {

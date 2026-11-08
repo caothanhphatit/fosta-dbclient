@@ -1,10 +1,14 @@
+import { bindConnection } from "../core/connectionApi";
+import type { ConnectInfo, ObjectNode, ObjectRef } from "../core/contract";
+import { toast } from "../core/dialogs";
+import type { IconName } from "../core/dom";
+import { connectInfo, engineOf, hasCapability, type EngineInfo } from "../core/engines";
+import { showError } from "../core/errorPanel";
 import type { Navigator } from "../core/navigator";
-import type { TabManager } from "../core/tabs";
-import type { CellValue, ConnectionProfile, DriverId, TableTarget, TaskDef } from "../core/types";
-import { DesignView } from "../features/design/designView";
-import { DiagramView } from "../features/diagram/diagramView";
-import type { QueryView } from "../features/query/queryView";
-import { TableView } from "../features/table/tableView";
+import type { TabContent, TabManager } from "../core/tabs";
+import type { CellValue, ConnectionProfile, TableTarget, TaskDef } from "../core/types";
+import { nodeIcon, resolveView, type ViewContext, type ViewRegistration, type ViewRole } from "../core/views";
+import type { QueryHost, QueryView } from "../features/query/queryView";
 import { createLogView, type TasksPanel } from "../features/tasks/tasksPanel";
 import { VectorHealthView } from "../features/vector/vectorHealth";
 import { VectorSearchView } from "../features/vector/vectorSearch";
@@ -25,8 +29,8 @@ export function preloadQueryView(): void {
 export interface NavigationHost {
   /** Tab keys start with the workspace id, so each workspace keeps its own tabs. */
   workspaceId(): string;
-  /** Driver of a saved connection; picks the query editor's dialect. */
-  driverOf(connectionId: string): DriverId | undefined;
+  /** A saved connection of any workspace. */
+  profileOf(connectionId: string): ConnectionProfile | undefined;
   /** The panel that streams task logs into log tabs. */
   tasksPanel(): TasksPanel;
   configureEmbedding(): void;
@@ -40,10 +44,65 @@ export interface NavigationHost {
   historyEnabled(): boolean;
 }
 
+/** What `openObject` opens: a tree node, an object reference, or nothing (the connection itself: a console). */
+export type OpenTarget = ObjectNode | ObjectRef | null;
+
+/** Extras of `openObject`; the known ones also shape the tab key and title. */
+export interface OpenParams extends Record<string, unknown> {
+  /** A data tab's filter (part of its key: the same table with another filter is another tab). */
+  filter?: string;
+  /** The filter comes from the assistant and is only pre-filled. */
+  suggested?: boolean;
+  /** The database a console or diagram works in. */
+  database?: string | null;
+}
+
+function isNode(target: OpenTarget): target is ObjectNode {
+  return target !== null && "key" in target && "label" in target;
+}
+
+/** "shop/products", "ERP/dbo/Customers": the part of a tab key that names an object, the same from the tree or a link. */
+export function objectIdentity(object: ObjectRef): string {
+  return [object.database ?? "", object.schema ?? "", object.name, ...(object.path ?? [])].join("/");
+}
+
 /**
- * Opens (or re-focuses) the tabs of the main area. A tab key is
- * `workspace|connection|kind|…`, so opening the same thing twice selects the
- * existing tab and closing a connection or a workspace can find its tabs.
+ * The object a `TableTarget` (the pre-contract address: database + the tree label) stands for. Engines with schemas
+ * label tables `schema.table`, so the first dot splits there; elsewhere a dot is part of the name.
+ */
+export function objectOfTarget(engine: EngineInfo, target: TableTarget): ObjectRef {
+  const dot = target.table.indexOf(".");
+  const split = hasCapability(engine, "schemas") && dot > 0 && dot < target.table.length - 1;
+  const kind = target.kind === "view" ? "view" : engine.family === "document" ? "collection" : "table";
+  return {
+    database: target.database,
+    schema: split ? target.table.slice(0, dot) : null,
+    name: split ? target.table.slice(dot + 1) : target.table,
+    kind,
+  };
+}
+
+/** What a view gets for `info` before the connection reported its own (opening a view of a closed connection). */
+function placeholderInfo(engine: EngineInfo): ConnectInfo {
+  return {
+    engine: engine.id,
+    server: { product: engine.label, version: "", label: "", flavor: null },
+    capabilities: engine.capabilities,
+    languages: engine.languages,
+    connectionActions: [],
+  };
+}
+
+/** Duck-typed so the CodeMirror chunk stays out of the main bundle. */
+function asQueryView(content: TabContent | undefined): QueryView | null {
+  return content && typeof (content as QueryView).appendTyped === "function" ? (content as QueryView) : null;
+}
+
+/**
+ * Opens (or re-focuses) the tabs of the main area. A tab key is `workspace|connection|role|<object identity or node id>|…`,
+ * so opening the same thing twice selects the existing tab and closing a connection or a workspace can find its tabs.
+ * Every object view goes through the view registry (`openObject`); `openTable`, `openDesign`, `openQuery` and
+ * `openDiagram` are shorthands for it.
  */
 export class AppNavigation implements Navigator {
   private queryCounter = 0;
@@ -69,16 +128,82 @@ export class AppNavigation implements Navigator {
     this.tabs.closeWhere((key) => key.startsWith(`${workspaceId}|`));
   }
 
+  /**
+   * Opens the view registered for the target's kind and `role` (`resolveView`), with a `ViewContext` bound to the
+   * connection. Resolves with the tab content (an existing tab is selected and returned), or null when no view is
+   * registered or creating it failed (reported in the error panel).
+   */
+  async openObject(profile: ConnectionProfile, target: OpenTarget, role: ViewRole, params: OpenParams = {}): Promise<TabContent | null> {
+    const scope = this.host.workspaceId();
+    const engine = engineOf(profile);
+    const node = isNode(target) ? target : null;
+    const object = node ? node.object : (target as ObjectRef | null);
+    const kind = node?.kind ?? object?.kind ?? "connection";
+    const identity = object ? objectIdentity(object) : (node?.key.id ?? "");
+    const key = this.objectKey(profile.id, role, identity, params);
+    const existing = this.tabs.contentOf(key);
+    if (existing) {
+      this.tabs.open({ key, title: "", icon: "table", create: () => existing });
+      return existing;
+    }
+    let registration: ViewRegistration | null;
+    try {
+      registration = await resolveView(engine, kind, role);
+    } catch (error) {
+      showError(error, `Load the ${engine.label} views`);
+      return null;
+    }
+    if (!registration) {
+      toast(`${engine.label} has no ${role} view for ${kind === "connection" ? "a connection" : `a ${kind}`}`);
+      return null;
+    }
+    const ctx: ViewContext = {
+      connection: bindConnection(profile.id),
+      profile,
+      engine,
+      info: connectInfo(profile.id) ?? placeholderInfo(engine),
+      object,
+      node,
+      navigator: this,
+      params,
+    };
+    try {
+      const factory = await registration.load();
+      const name = node?.label ?? (object ? (object.schema ? `${object.schema}.${object.name}` : object.name) : profile.name);
+      const { title, subtitle } = this.describeTab(registration, ctx, role, name, params);
+      const tabIcon: IconName = role === "data" ? nodeIcon(node?.icon, dataIcon(kind)) : (registration.icon ?? "table");
+      this.tabs.open({ key, scope, title, subtitle, icon: tabIcon, create: () => factory(ctx) });
+    } catch (error) {
+      showError(error, `Open ${describeOpen(role, kind)}`);
+      return null;
+    }
+    return this.tabs.contentOf(key) ?? null;
+  }
+
   /** `suggested`: the filter comes from the assistant and is only pre-filled; the user applies it. */
   openTable(target: TableTarget, filter = "", suggested = false): void {
-    const kind = suggested ? "data-suggested" : "data";
-    this.tabs.open({
-      key: this.tabKey(target.connectionId, kind, target.database, target.table, filter, suggested ? crypto.randomUUID() : ""),
-      title: suggested ? `${target.table} (suggested filter)` : filter ? `${target.table} (filtered)` : target.table,
-      subtitle: filter ? `${target.database}.${target.table} WHERE ${filter}` : `${target.database}.${target.table}`,
-      icon: target.kind === "view" ? "view" : "table",
-      create: () => new TableView(target, this, filter, suggested),
+    const profile = this.profile(target.connectionId);
+    if (!profile) return;
+    void this.openObject(profile, objectOfTarget(engineOf(profile), target), "data", { filter, suggested });
+  }
+
+  openDesign(target: TableTarget): void {
+    const profile = this.profile(target.connectionId);
+    if (!profile) return;
+    void this.openObject(profile, objectOfTarget(engineOf(profile), target), "design");
+  }
+
+  /** Opens the ER diagram of `database`, optionally centred on one table. */
+  openDiagram(profile: ConnectionProfile, database: string, focusTable?: string): void {
+    const object: ObjectRef = { database, schema: null, name: database, kind: "database" };
+    void this.openObject(profile, object, "diagram", { database }).then((view) => {
+      const diagram = view as (TabContent & { focus?: (name: string) => void }) | null;
+      if (focusTable && typeof diagram?.focus === "function") diagram.focus(focusTable);
     });
+  }
+
+  openQuery(connectionId: string, database: string | null, initialSql = ""): void {
+    void this.openQueryTab(connectionId, database, initialSql);
   }
 
   openVectorSearch(target: TableTarget, column: string, seed?: CellValue[]): void {
@@ -108,34 +233,6 @@ export class AppNavigation implements Navigator {
     this.host.configureEmbedding();
   }
 
-  openDesign(target: TableTarget): void {
-    this.tabs.open({
-      key: this.tabKey(target.connectionId, "design", target.database, target.table),
-      title: `${target.table} · design`,
-      subtitle: `${target.database}.${target.table}`,
-      icon: "design",
-      create: () => new DesignView(target),
-    });
-  }
-
-  /** Opens the ER diagram of `database`, optionally centred on one table. */
-  openDiagram(profile: ConnectionProfile, database: string, focusTable?: string): void {
-    const key = this.tabKey(profile.id, "diagram", database);
-    this.tabs.open({
-      key,
-      title: `${database} · diagram`,
-      subtitle: `${profile.name} · ${database}`,
-      icon: "diagram",
-      create: () => new DiagramView(profile.id, profile.driver, database, this),
-    });
-    const view = this.tabs.contentOf(key);
-    if (focusTable && view instanceof DiagramView) view.focus(focusTable);
-  }
-
-  openQuery(connectionId: string, database: string | null, initialSql = ""): void {
-    void this.openQueryTab(connectionId, database, initialSql);
-  }
-
   openLogs(task: TaskDef): void {
     this.tabs.open({
       key: this.tabKey("task", "logs", task.id),
@@ -145,34 +242,86 @@ export class AppNavigation implements Navigator {
     });
   }
 
+  private profile(connectionId: string): ConnectionProfile | null {
+    const profile = this.host.profileOf(connectionId);
+    if (!profile) toast("That connection is no longer saved");
+    return profile ?? null;
+  }
+
+  /** `workspace|connection|role|identity`, plus the filter for data tabs and a fresh id for each console. */
+  private objectKey(connectionId: string, role: ViewRole, identity: string, params: OpenParams): string {
+    if (role === "console") return this.tabKey(connectionId, "console", crypto.randomUUID());
+    if (role === "data") {
+      const filter = params.filter ?? "";
+      if (params.suggested) return this.tabKey(connectionId, "data-suggested", identity, filter, crypto.randomUUID());
+      return this.tabKey(connectionId, "data", identity, filter);
+    }
+    return this.tabKey(connectionId, role, identity);
+  }
+
+  private describeTab(
+    registration: ViewRegistration,
+    ctx: ViewContext,
+    role: ViewRole,
+    name: string,
+    params: OpenParams,
+  ): { title: string; subtitle?: string } {
+    const object = ctx.object;
+    const where = object?.database && object.kind !== "database" ? `${object.database}.${name}` : name;
+    switch (role) {
+      case "data": {
+        const filter = params.filter ?? "";
+        const title = params.suggested ? `${name} (suggested filter)` : filter ? `${name} (filtered)` : name;
+        return { title, subtitle: filter ? `${where} WHERE ${filter}` : where };
+      }
+      case "design":
+        return { title: `${name} · design`, subtitle: where };
+      case "diagram": {
+        const database = params.database ?? object?.database ?? name;
+        return { title: `${database} · diagram`, subtitle: `${ctx.profile.name} · ${database}` };
+      }
+      case "console":
+        return {
+          title: typeof params.title === "string" ? params.title : (registration.title?.(ctx) ?? "Query"),
+          subtitle: params.database ?? object?.database ?? undefined,
+        };
+      default:
+        return { title: registration.title?.(ctx) ?? `${name} · ${role}`, subtitle: where };
+    }
+  }
+
   /** The query view pulls in CodeMirror, so it is loaded on first use (its own chunk). */
   private async openQueryTab(connectionId: string, database: string | null, initialSql: string): Promise<void> {
+    const profile = this.profile(connectionId);
+    if (!profile) return;
     // Typing that starts before the chunk arrives goes into the new editor instead of being lost.
     const stopCapture = captureTyping();
     let typed = "";
-    let QueryView: typeof import("../features/query/queryView").QueryView;
     try {
-      ({ QueryView } = await loadQueryView());
+      await loadQueryView();
+    } catch (error) {
+      showError(error, "Load the query editor");
     } finally {
       typed = stopCapture();
     }
-    const driver = this.host.driverOf(connectionId) ?? "mariadb";
     this.queryCounter += 1;
-    this.tabs.open({
-      key: this.tabKey(connectionId, "query", crypto.randomUUID()),
-      title: `Query ${this.queryCounter}`,
-      subtitle: database ?? undefined,
-      icon: "query",
-      create: () => {
-        const view = new QueryView(connectionId, driver, database, initialSql, {
-          connectionName: (id) => this.host.connectionName(id),
-          historyEnabled: () => this.host.historyEnabled(),
-          openQuery: (id, db, sql) => this.openQuery(id, db, sql),
-        });
-        view.onChanged = () => this.host.queryChanged(view);
-        if (typed) view.appendTyped(typed);
-        return view;
-      },
-    });
+    const host: QueryHost = {
+      connectionName: (id) => this.host.connectionName(id),
+      historyEnabled: () => this.host.historyEnabled(),
+      openQuery: (id, db, sql) => this.openQuery(id, db, sql),
+    };
+    const counter = this.queryCounter;
+    const view = asQueryView((await this.openObject(profile, null, "console", { database, text: initialSql, host, title: `Query ${counter}` })) ?? undefined);
+    if (!view) return;
+    view.onChanged = () => this.host.queryChanged(view);
+    if (typed) view.appendTyped(typed);
   }
+}
+
+function dataIcon(kind: string): IconName {
+  return kind === "view" || kind === "materializedView" ? "view" : "table";
+}
+
+function describeOpen(role: ViewRole, kind: string): string {
+  return role === "console" ? "a query tab" : `the ${role} view of a ${kind}`;
 }

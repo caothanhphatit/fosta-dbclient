@@ -43,7 +43,8 @@ function defaultQueryHost(profile: ConnectionProfile): QueryHost {
 }
 
 const dataView = async (): Promise<ViewFactory> => {
-  return (ctx) => new TableView(tableTarget(ctx), ctx.navigator, typeof ctx.params?.filter === "string" ? ctx.params.filter : "");
+  return (ctx) =>
+    new TableView(tableTarget(ctx), ctx.navigator, typeof ctx.params?.filter === "string" ? ctx.params.filter : "", ctx.params?.suggested === true);
 };
 
 const designView = async (): Promise<ViewFactory> => {

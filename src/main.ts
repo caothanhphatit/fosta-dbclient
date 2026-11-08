@@ -63,7 +63,7 @@ let workspaceArea: HTMLElement | null = null;
 
 const navigation = new AppNavigation(tabs, {
   workspaceId,
-  driverOf: (connectionId) => currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.driver,
+  profileOf: (connectionId) => currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId),
   tasksPanel: () => tasksPanel,
   configureEmbedding: () => void configureEmbedding(),
   queryChanged: (view) => {
@@ -105,8 +105,7 @@ const rail = new WorkspaceRail({
 });
 
 const tree = new ConnectionTree({
-  openTable: (target) => navigation.openTable(target),
-  openDesign: (target) => navigation.openDesign(target),
+  openObject: (profile, node, role, params) => navigation.openObject(profile, node, role, params),
   openQuery: (connectionId, database, initialSql) => navigation.openQuery(connectionId, database, initialSql),
   openDiagram: (profile, database) => navigation.openDiagram(profile, database),
   editConnection: (profile) => void editConnection(profile),

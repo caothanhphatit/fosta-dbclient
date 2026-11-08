@@ -1,5 +1,6 @@
 import type { EditorView } from "@codemirror/view";
 import { api, errorText } from "../../core/api";
+import { listDatabases, listObjects } from "../../core/connectionApi";
 import type { ErrorPosition } from "../../core/contract";
 import { renderError, showError } from "../../core/errorPanel";
 import { positionOffset } from "../../core/errors";
@@ -294,7 +295,7 @@ export class QueryView implements TabContent {
 
   private async loadDatabases(preferred: string | null): Promise<void> {
     try {
-      const databases = await api.listDatabases(this.connectionId);
+      const databases = await listDatabases(this.connectionId);
       this.databaseSelect.replaceChildren(
         h("option", { value: "" }, "(no database)"),
         ...databases.map((name) => h("option", { value: name, selected: name === preferred }, name)),
@@ -309,10 +310,10 @@ export class QueryView implements TabContent {
   private async loadSchema(): Promise<void> {
     const database = this.databaseSelect.value;
     try {
-      const tables = database ? await api.listTables(this.connectionId, database) : [];
+      const tables = database ? await listObjects(this.connectionId, database) : [];
       setSchemaTables(
         this.editor,
-        tables.map((table) => table.name),
+        tables.map((table) => table.label),
       );
     } catch (error) {
       showError(error, "Load table names for completion");

@@ -1,10 +1,10 @@
 /**
  * Config, workspaces and query history of the mock backend (this page load only). "Client A staging" is guarded (run an
  * UPDATE or DELETE to see the confirmation dialog) and has an unreachable server to see a failing connect; "Production"
- * is read-only.
+ * is read-only. "Local" has a PostgreSQL profile: PostgreSQL is a planned engine, so connecting fails with ENGINE_NOT_WIRED.
  */
 import { presetSettings } from "../../features/safety/safety";
-import type { AppConfig, HistoryEntry, Workspace } from "../../core/types";
+import type { AppConfig, DriverId, HistoryEntry, Workspace } from "../../core/types";
 
 const workspaces: Workspace[] = [
   {
@@ -34,6 +34,19 @@ const workspaces: Workspace[] = [
         user: "",
         database: "admin",
         savePassword: false,
+        options: {},
+      },
+      {
+        // A planned engine: connecting fails with ENGINE_NOT_WIRED, as in a real build.
+        id: "c-local-pg",
+        name: "Local PostgreSQL (planned)",
+        // `DriverId` lists the wired engines only (widened in step 15); a saved profile can name any engine id.
+        driver: "postgres" as DriverId,
+        host: "127.0.0.1",
+        port: 5432,
+        user: "postgres",
+        database: "postgres",
+        savePassword: true,
         options: {},
       },
     ],

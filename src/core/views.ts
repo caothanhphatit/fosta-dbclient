@@ -5,7 +5,7 @@
  */
 import type { ConnectionApi } from "./connectionApi";
 import type { CapabilityName, ConnectInfo, EngineDescriptor, EngineFamily, ObjectNode, ObjectRef } from "./contract";
-import type { IconName } from "./dom";
+import { iconOrDefault, type IconName } from "./dom";
 import type { Navigator } from "./navigator";
 import type { TabContent } from "./tabs";
 import type { ConnectionProfile } from "./types";
@@ -95,6 +95,23 @@ let engineLoader: ((id: string) => Promise<void>) | null = null;
 /** Installed by `src/engines/index.ts` so `resolveView` can load an engine's UI module first (core never imports engines). */
 export function setEngineLoader(loader: (id: string) => Promise<void>): void {
   engineLoader = loader;
+}
+
+/** Loads the engine's UI module (its views and node icons) if it is not loaded yet. */
+export async function loadEngineUi(engineId: string): Promise<void> {
+  if (engineLoader) await engineLoader(engineId);
+}
+
+let iconResolver: (icon: string) => string = (icon) => icon;
+
+/** Installed by `src/engines/index.ts`: maps "engine:<id>/<name>" node icons through the engine UI module's `icons`. */
+export function setIconResolver(resolver: (icon: string) => string): void {
+  iconResolver = resolver;
+}
+
+/** The icon to draw for an `ObjectNode.icon` (an IconName or "engine:<id>/<name>"); `fallback` for anything unknown. */
+export function nodeIcon(icon: string | null | undefined, fallback: IconName): IconName {
+  return iconOrDefault(icon ? iconResolver(icon) : null, fallback);
 }
 
 /** Loads the engine's UI module if needed, then picks the registration: engine+kind > family+kind > "*"+kind > engine+"*". */
