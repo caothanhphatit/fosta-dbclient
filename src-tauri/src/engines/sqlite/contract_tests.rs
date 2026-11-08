@@ -8,7 +8,7 @@ use crate::{
     contract::{
         errors::UNSUPPORTED_CAPABILITY, testing::suites::*, BrowseRequest, CallContext, Capability, Category, CollectSink, ConnectSecrets,
         ConnectionSpec, Field, Filter, NodeKind, ObjectRef, RawFilterLang, RowChange, RowChangeSet, RunOptions, RunRequest, Session,
-        SessionOptions, TreeRequest, Value, ValueKind,
+        SessionOptions, TransactionOp, TreeRequest, Value, ValueKind,
     },
     runtime::{ConnectionManager, Handle},
 };
@@ -255,4 +255,32 @@ async fn contract_sqlite_attached_databases_read_only_and_explain() {
         .relations
         .iter()
         .any(|relation| relation.table == "contract_children" && relation.referenced_table == "contract_items"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "writes the contract database file; run with --ignored --test-threads=1"]
+async fn contract_sqlite_error_positions_and_auto_commit() {
+    let f = fixture();
+    let (_manager, handle) = connect(&f).await;
+    let tab = session(&handle).await;
+    let error = run(&handle, &tab, "SELECT 1;\nSELECT nope FROM contract_items")
+        .await
+        .expect_err("unknown column");
+    let payload = error.payload().unwrap();
+    assert_eq!(payload["statement"]["index"], 1, "{payload}");
+    assert_eq!(payload["position"]["line"].as_u64(), Some(2), "{payload}");
+    assert!(payload["vendorCode"].is_string() || payload["vendorCode"].is_number(), "{payload}");
+
+    let options = RunOptions::default();
+    let off = tab
+        .transaction(TransactionOp::AutoCommitOff, &options)
+        .await
+        .expect("auto-commit off");
+    assert!(off.open && !off.auto_commit);
+    let on = tab
+        .transaction(TransactionOp::AutoCommitOn, &options)
+        .await
+        .expect("auto-commit on");
+    assert!(!on.open && on.auto_commit);
+    tab.close().await;
 }

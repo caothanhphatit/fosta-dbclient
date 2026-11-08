@@ -6,7 +6,7 @@
 
 use std::time::Instant;
 
-use super::{as_sql, catalog, map_err, text_params, PgDialect, PgEngine};
+use super::{as_sql, catalog, catalog::RELATION_KIND, map_err, text_params, PgDialect, PgEngine};
 use crate::{
     contract::{
         tabular::{conflict_error, RowConflict},
@@ -75,7 +75,10 @@ fn version_column() -> ColumnInfo {
 /// Only ordinary tables have a trustworthy `xmin` per row (a partitioned parent has none of its own).
 fn has_version(description: &ObjectDescription) -> bool {
     description.object.kind == crate::contract::NodeKind::TABLE
-        && description.extra.iter().any(|(key, value)| key == "relkind" && value == "r")
+        && description
+            .extra
+            .iter()
+            .any(|(key, value)| key == RELATION_KIND && value == "table")
 }
 
 fn convert(description: common::ObjectDescription) -> ObjectDescription {
@@ -170,8 +173,7 @@ impl PgEngine {
         Ok(page)
     }
 
-    /// The exact count when asked for or cheap (small or never analyzed tables); otherwise the statistics' estimate for
-    /// an unfiltered table and the planner's estimate for the filter.
+    /// The exact count when asked for or the result is small; otherwise an estimate (statistics, else the planner).
     async fn total(
         &self,
         client: &tokio_postgres::Client,
@@ -182,8 +184,6 @@ impl PgEngine {
         timeout: u32,
     ) -> AppResult<Option<Total>> {
         let filtered = !built.where_sql.is_empty();
-        let estimate = description.row_estimate;
-        let count = request.exact_total || estimate.is_none_or(|rows| rows < EXACT_COUNT_BELOW);
         // The keyset parameters come after the filter's.
         let filter_params = params.len() - request.after.as_ref().map_or(0, |after| after.len() * (after.len() + 1) / 2);
         let table = EditDialect.table_sql(&adapt::object_to_common(&description.object)?);
@@ -192,6 +192,21 @@ impl PgEngine {
         } else {
             String::new()
         };
+        // How big the result is likely to be: the statistics for a whole table, else the planner's estimate (also when
+        // the statistics are missing, as on a table that was never analyzed, so no unbounded COUNT(*) runs by default).
+        let hint = if request.exact_total {
+            None
+        } else if filtered || description.row_estimate.is_none() {
+            let sql = format!("EXPLAIN (FORMAT JSON) SELECT 1 FROM {table}{where_clause}");
+            client
+                .query_one(&sql, &as_sql(&params[..filter_params]))
+                .await
+                .ok()
+                .and_then(|row| super::plan_rows(&super::types::row_values(&row)[0]))
+        } else {
+            description.row_estimate
+        };
+        let count = request.exact_total || hint.is_none_or(|rows| rows < EXACT_COUNT_BELOW);
         if count {
             let sql = format!("SELECT count(*) FROM {table}{where_clause}");
             let value: i64 = self
@@ -208,19 +223,7 @@ impl PgEngine {
                 exact: true,
             }));
         }
-        if !filtered {
-            return Ok(estimate.map(|rows| Total {
-                value: rows.max(0) as u64,
-                exact: false,
-            }));
-        }
-        let sql = format!("EXPLAIN (FORMAT JSON) SELECT 1 FROM {table}{where_clause}");
-        let planned = client
-            .query_one(&sql, &as_sql(&params[..filter_params]))
-            .await
-            .ok()
-            .and_then(|row| super::plan_rows(&super::types::row_values(&row)[0]));
-        Ok(planned.map(|rows| Total {
+        Ok(hint.map(|rows| Total {
             value: rows.max(0) as u64,
             exact: false,
         }))
@@ -380,9 +383,9 @@ mod tests {
     fn only_ordinary_tables_have_a_row_version() {
         let mut description = convert(common::ObjectDescription::new(object()));
         assert!(!has_version(&description), "no relkind recorded");
-        description.extra.push(("relkind".into(), "r".into()));
+        description.extra.push((RELATION_KIND.into(), "table".into()));
         assert!(has_version(&description));
-        description.extra = vec![("relkind".into(), "p".into())];
+        description.extra = vec![(RELATION_KIND.into(), "partitioned table".into())];
         assert!(!has_version(&description));
     }
 }

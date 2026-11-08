@@ -11,7 +11,15 @@ import { mockError } from "../errors";
 import { classifySql, runSql, type SqlDialectMock } from "../sqlRun";
 import type { EngineMock } from "../types";
 
-export const descriptor = { ...DESCRIPTORS.postgres, status: "ready" as const };
+const base = DESCRIPTORS.postgres;
+export const descriptor = {
+  ...base,
+  status: "ready" as const,
+  connection: {
+    ...base.connection,
+    tls: { modes: ["disable", "require", "verifyCa", "verifyFull"], ca: true, clientCert: true, serverName: true, pin: true },
+  },
+} satisfies typeof base;
 export const order = ORDER.indexOf("postgres");
 
 const ENGINE = "postgres";
@@ -111,7 +119,7 @@ const tables: TableSpec[] = [
         definition: "CREATE UNIQUE INDEX customers_email_key ON public.customers USING btree (email)",
       },
     ],
-    extra: [["relkind", "r"]],
+    extra: [["Relation kind", "table"]],
   },
   {
     database: "shop",
@@ -141,7 +149,7 @@ const tables: TableSpec[] = [
         ];
       }),
     foreignKeys: [fk("orders_customer_id_fkey", ["customer_id"], "public", "customers", ["id"])],
-    extra: [["relkind", "r"]],
+    extra: [["Relation kind", "table"]],
   },
   {
     database: "shop",
@@ -191,7 +199,7 @@ const tables: TableSpec[] = [
         v.bool(index % 3 !== 0),
       ]),
     foreignKeys: [fk("invoices_order_id_fkey", ["order_id"], "public", "orders", ["id"])],
-    extra: [["relkind", "r"]],
+    extra: [["Relation kind", "table"]],
   },
 ];
 

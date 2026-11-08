@@ -143,8 +143,24 @@ impl PgOptions {
 
     fn config(&self) -> tokio_postgres::Config {
         let mut c = tokio_postgres::Config::new();
-        c.host(&self.host)
-            .port(self.port)
+        // Through a tunnel the connect host is a local IP: the TLS server name (set by the manager to the database host)
+        // becomes the host, so it is also the name sent as SNI, and the IP stays the address connected to.
+        let name = self
+            .tls_spec
+            .as_ref()
+            .filter(|spec| spec.is_enabled())
+            .and_then(|spec| spec.server_name.as_deref())
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        match (name, self.host.parse::<std::net::IpAddr>()) {
+            (Some(name), Ok(address)) => {
+                c.host(name).hostaddr(address);
+            }
+            _ => {
+                c.host(&self.host);
+            }
+        }
+        c.port(self.port)
             .user(&self.user)
             .dbname(&self.database)
             .application_name(&self.application_name)
@@ -490,9 +506,10 @@ impl PgEngine {
         self.client.lock().await.batch_execute(sql).await.map_err(map_err)
     }
 
-    /// Whether the server closed this engine's connection (the caller reconnects).
-    pub async fn is_closed(&self) -> bool {
-        self.client.lock().await.is_closed()
+    /// Whether the server closed this engine's connection (the caller reconnects). A connection that is busy with a
+    /// long statement is alive: this never waits for it.
+    pub fn is_closed(&self) -> bool {
+        self.client.try_lock().is_ok_and(|client| client.is_closed())
     }
 
     pub fn database(&self) -> &str {
@@ -640,6 +657,31 @@ mod unit_tests {
         let col = ColumnInfo::result("price", "numeric(12,2)", crate::engines::common::ValueKind::Decimal);
         assert_eq!(PgDialect.placeholder(3, &ParamTarget::Column(col)), "($3::text)::numeric(12,2)");
         assert_eq!(PgDialect.placeholder(1, &ParamTarget::Text), "$1::text");
+    }
+
+    #[test]
+    fn a_tunnelled_tls_connection_sends_the_database_name_and_connects_to_the_tunnel() {
+        use tokio_postgres::config::Host;
+        let tunnelled = PgOptions {
+            host: "127.0.0.1".into(),
+            port: 15432,
+            tls: TlsMode::Verify { ca_file: None },
+            tls_spec: Some(crate::net::TlsSpec {
+                mode: crate::net::TlsMode::VerifyFull,
+                server_name: Some("db.internal".into()),
+                ..Default::default()
+            }),
+            ..PgOptions::default()
+        };
+        let config = tunnelled.config();
+        assert_eq!(config.get_hosts(), [Host::Tcp("db.internal".into())]);
+        assert_eq!(config.get_hostaddrs(), ["127.0.0.1".parse::<std::net::IpAddr>().unwrap()]);
+        let plain = PgOptions {
+            host: "127.0.0.1".into(),
+            ..PgOptions::default()
+        };
+        assert_eq!(plain.config().get_hosts(), [Host::Tcp("127.0.0.1".into())]);
+        assert!(plain.config().get_hostaddrs().is_empty());
     }
 
     #[test]

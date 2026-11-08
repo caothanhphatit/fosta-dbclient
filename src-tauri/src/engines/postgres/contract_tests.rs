@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::{
     contract::{
         testing::suites::*, BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Filter, NodeKind, ObjectRef,
-        RawFilterLang, RunOptions, RunRequest, Session, SessionOptions, TreeRequest, Value, ValueKind,
+        RawFilterLang, RunOptions, RunRequest, Session, SessionOptions, TransactionOp, TreeRequest, Value, ValueKind,
     },
     runtime::{ConnectionManager, Handle},
 };
@@ -309,5 +309,48 @@ async fn contract_postgres_creates_databases() {
     run(&handle, &tab, "DROP DATABASE studio_scratch", RunOptions::default())
         .await
         .expect("drop");
+    tab.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/postgres.yml"]
+async fn contract_postgres_error_positions_and_auto_commit() {
+    let (_manager, handle) = connected().await;
+    let tab = session(&handle).await;
+    // A plain SELECT runs through a cursor; its error position still counts from the start of the statement.
+    let error = run(
+        &handle,
+        &tab,
+        "SELECT 1;\nSELECT nope FROM shop.contract_items",
+        RunOptions::default(),
+    )
+    .await
+    .expect_err("unknown column");
+    let payload = error.payload().unwrap();
+    assert_eq!(payload["sqlstate"], "42703", "{payload}");
+    assert_eq!(
+        (payload["position"]["line"].as_u64(), payload["position"]["column"].as_u64()),
+        (Some(2), Some(8)),
+        "{payload}"
+    );
+    assert_eq!(payload["statement"]["index"], 1);
+    // A statement that is not a cursor query reports the same way.
+    let error = run(&handle, &tab, "UPDATE shop.contract_items SET nope = 1", RunOptions::default())
+        .await
+        .expect_err("unknown column");
+    assert_eq!(error.payload().unwrap()["position"]["column"].as_u64(), Some(32));
+
+    // Auto-commit off keeps a transaction open until it is committed; on ends it.
+    let options = RunOptions::default();
+    let off = tab
+        .transaction(TransactionOp::AutoCommitOff, &options)
+        .await
+        .expect("auto-commit off");
+    assert!(off.open && !off.auto_commit);
+    let on = tab
+        .transaction(TransactionOp::AutoCommitOn, &options)
+        .await
+        .expect("auto-commit on");
+    assert!(!on.open && on.auto_commit);
     tab.close().await;
 }

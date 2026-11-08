@@ -200,10 +200,14 @@ impl PgSession {
     }
 
     async fn fetch_cursor(&self, index: usize, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink, started: Instant) -> Result<()> {
-        self.client
-            .batch_execute(&format!("DECLARE {CURSOR} NO SCROLL CURSOR FOR {sql}"))
-            .await
-            .map_err(map_err)?;
+        let declare = format!("DECLARE {CURSOR} NO SCROLL CURSOR FOR {sql}");
+        // The server reports a position in the whole DECLARE text; the statement starts after the prefix.
+        let prefix = (declare.chars().count() - sql.chars().count()) as u32;
+        self.client.batch_execute(&declare).await.map_err(|error| {
+            let mut error = map_err(error);
+            error.position = error.position.map(|position| position.saturating_sub(prefix));
+            error
+        })?;
         let batch = opts.batch_size.max(1);
         let fetch = self
             .client

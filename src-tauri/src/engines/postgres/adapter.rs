@@ -161,7 +161,7 @@ impl PostgresConnection {
         let name = database.filter(|name| !name.is_empty()).unwrap_or(&self.home);
         let mut engines = self.engines.lock().await;
         if let Some(engine) = engines.get(name) {
-            if !engine.is_closed().await {
+            if !engine.is_closed() {
                 return Ok(Arc::clone(engine));
             }
         }

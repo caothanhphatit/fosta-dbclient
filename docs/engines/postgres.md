@@ -33,13 +33,13 @@ The driver is `tokio-postgres` with rustls (`net::tls::rustls_client_config`); S
 ## Connection
 
 Form: host, port (5432), user, password, database (`postgres` when empty), application name, connect timeout, TLS
-(`disable`, `require`, `verify-ca`, `verify-full`; a CA file; `accept invalid certificates` for self-signed servers) and SSH.
+(`disable`, `require`, `verify-ca`, `verify-full`; a CA file, a client certificate and key, a server name, a certificate pin, `accept invalid certificates` for self-signed servers) and SSH.
 Connection strings: `postgres://user:pass@host:5432/db?sslmode=require&application_name=etl` or libpq `key=value` pairs.
-Through an SSH tunnel the TLS name check uses the name set in the TLS section (`server name`), not `127.0.0.1`.
+Through an SSH tunnel the manager sets the TLS server name to the database host (unless you set one), and the adapter sends it as SNI and checks the certificate against it while connecting to the tunnel's local address.
 
 ## Not done
 
-Client certificates are accepted by the shared TLS builder but the form does not offer them. Composite and range columns are
+Client key passphrases are not supported (the key file must be unencrypted). Composite and range columns are
 read as text and written through a cast. `LISTEN/NOTIFY`, `COPY` streams and logical replication are not supported.
 
 ## Running the contract tests

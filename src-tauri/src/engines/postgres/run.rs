@@ -6,7 +6,7 @@ use futures_util::future::BoxFuture;
 
 use super::session::{PgCancel, PgSession, RunFailure};
 use crate::{
-    contract::{unsupported_capability, Canceller, ResultSink, RunOptions, RunRequest, Session, TransactionOp, TransactionState},
+    contract::{Canceller, ResultSink, RunOptions, RunRequest, Session, TransactionOp, TransactionState},
     engines::common::EngineError,
     error::{AppError, AppResult, ErrorPosition},
 };
@@ -66,7 +66,19 @@ impl Session for PgContractSession {
             }
             TransactionOp::Commit => self.inner.commit().await.map_err(engine)?,
             TransactionOp::Rollback => self.inner.rollback().await.map_err(engine)?,
-            TransactionOp::AutoCommitOn | TransactionOp::AutoCommitOff => return Err(unsupported_capability("auto-commit switching")),
+            // PostgreSQL has no auto-commit setting to switch: "off" is a transaction that stays open until it is
+            // committed, "on" ends it.
+            TransactionOp::AutoCommitOff => {
+                if !self.state().await.open {
+                    self.inner.apply_limits(options).await.map_err(engine)?;
+                    self.inner.begin().await.map_err(engine)?;
+                }
+            }
+            TransactionOp::AutoCommitOn => {
+                if self.state().await.open {
+                    self.inner.commit().await.map_err(engine)?;
+                }
+            }
             TransactionOp::Status => {}
         }
         Ok(self.state().await)
