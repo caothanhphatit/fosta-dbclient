@@ -50,7 +50,7 @@ export function shellMenus(host: MenuHost): ShellMenus {
     return [
       { label: "LLM providers…", icon: "sparkle", run: () => void host.configureAssistant() },
       {
-        label: "Allow the assistant to run read-only queries",
+        label: "Allow the assistant to run read-only queries (rows go to your AI provider)",
         icon: host.config()?.assistantReadQueries !== false ? "check" : undefined,
         run: () => void setAssistantReadQueries(host.config()?.assistantReadQueries === false),
       },

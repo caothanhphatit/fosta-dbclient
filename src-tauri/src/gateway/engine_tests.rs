@@ -91,9 +91,17 @@ fn every_engine_classifies_its_default_language() {
             Category::Destructive,
         ),
     ];
+    let path = std::env::temp_dir().join(format!("fosta-gateway-assistant-{}.jsonl", std::process::id()));
+    let gateway = Gateway::with_audit(crate::audit::AuditLog::new(path.clone(), 1000));
+    let open = context(Preset::Open);
     for (engine, language, read, read_category, danger, danger_category) in samples {
         assert_eq!(worst(engine, language, read), Some(*read_category), "{engine}: {read}");
         assert_eq!(worst(engine, language, danger), Some(*danger_category), "{engine}: {danger}");
+        // The assistant's read-only query tool, generic through the registry: the read runs, the dangerous one is refused.
+        let found = registry().get(engine).unwrap();
+        assert!(assistant::check(&gateway, found, &open, language, read).is_ok(), "{engine}: {read}");
+        let refused = assistant::check(&gateway, found, &open, language, danger).unwrap_err();
+        assert!(assistant::is_refusal(&refused), "{engine}: {danger}: {refused}");
         let unknown = registry().get(engine).unwrap().classify(&ClassifyInput::Capability {
             name: "nope.nothing",
             args: &json!({}),
@@ -104,6 +112,7 @@ fn every_engine_classifies_its_default_language() {
         classify::classify_sql(SqlDialectId::Postgres, "SELECT 1 FROM t").worst(),
         Some(Category::Read)
     );
+    let _ = std::fs::remove_file(path);
 }
 
 fn authorize(gateway: &Gateway, caller: Caller, preset: Preset, classification: &Classification) -> AppResult<()> {

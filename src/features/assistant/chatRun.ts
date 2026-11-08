@@ -94,7 +94,12 @@ export class ChatRun {
     }
     const lines = results.entries.map((entry, index) => describeResult(entry, index, "not finished"));
     if (stopped) lines.push("Stopped.");
-    const open = h("button", { class: "chat-code-button", type: "button", title: "Run it in a new query tab with every row" }, icon("query"), "Open in tab");
+    const open = h(
+      "button",
+      { class: "chat-code-button", type: "button", title: "Open it in a new query tab, to run it there with every row" },
+      icon("query"),
+      "Open in tab",
+    );
     open.addEventListener("click", () => this.host.openQuery(this.code));
     nodes.push(h("div", { class: "chat-run-footer" }, h("span", { class: "chat-run-summary" }, lines.join(" · ") || "Done."), spacer(), open));
     return nodes;
