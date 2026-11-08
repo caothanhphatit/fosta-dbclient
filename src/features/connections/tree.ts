@@ -1,4 +1,4 @@
-import { api, errorText, PASSWORD_REQUIRED } from "../../core/api";
+import { api, errorCode, errorText, PASSWORD_REQUIRED } from "../../core/api";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { promptPassword, toast } from "../../core/dialogs";
 import { copyText, formatCompact, h, icon, type IconName } from "../../core/dom";
@@ -166,10 +166,11 @@ export class ConnectionTree {
       await this.loadDatabases(node);
     } catch (error) {
       const message = errorText(error);
-      node.state = message === PASSWORD_REQUIRED ? "idle" : "error";
-      node.message = message === PASSWORD_REQUIRED ? null : message;
+      const needsPassword = errorCode(error) === PASSWORD_REQUIRED || message === PASSWORD_REQUIRED;
+      node.state = needsPassword ? "idle" : "error";
+      node.message = needsPassword ? null : message;
       this.render();
-      if (message === PASSWORD_REQUIRED) await this.askPasswordAndConnect(node);
+      if (needsPassword) await this.askPasswordAndConnect(node);
       else toast(`${node.profile.name}: ${message}`, "error");
     }
   }

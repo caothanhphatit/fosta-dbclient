@@ -691,7 +691,7 @@ async fn live_gateway_rules_and_confirmation() {
         .await
         .expect_err("guarded asks first");
     assert_eq!(asked.code(), Some(gateway::CONFIRMATION_REQUIRED));
-    let token = asked.detail().unwrap()["token"].as_str().unwrap().to_owned();
+    let token = asked.payload().unwrap()["token"].as_str().unwrap().to_owned();
     let confirmation = Confirmation { token, typed: None };
     let outcome = gateway::run_query(&manager, &guarded, "tab", Some("shop".into()), insert.into(), Some(&confirmation))
         .await

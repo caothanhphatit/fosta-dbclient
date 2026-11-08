@@ -6,6 +6,7 @@
 import "./styles.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { assistantContext as buildAssistantContext, isQueryView, taskLogContext } from "./app/assistantContext";
+import { copyDiagnostics, openLogFolder, setDebugLogging } from "./app/diagnostics";
 import { AppNavigation, preloadQueryView } from "./app/navigation";
 import { welcomeScreen } from "./app/welcome";
 import { api, errorText } from "./core/api";
@@ -285,6 +286,14 @@ function settingsMenu(): MenuItem[] {
       run: () => void setQueryHistory(currentConfig?.queryHistory === false),
     },
     { label: "Clear query history…", icon: "trash", run: () => void clearQueryHistory() },
+    "separator",
+    {
+      label: "Debug logging",
+      icon: currentConfig?.debugLogging ? "check" : undefined,
+      run: () => void setDebugLogging(!currentConfig?.debugLogging, applyConfig),
+    },
+    { label: "Copy diagnostics", icon: "copy", run: () => void copyDiagnostics() },
+    { label: "Open log folder", icon: "logs", run: () => void openLogFolder() },
     ...(capabilities().edition === "web" ? (["separator", { label: "Sign out…", icon: "key", run: () => void confirmSignOut() }] as MenuItem[]) : []),
   ];
 }

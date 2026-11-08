@@ -439,7 +439,11 @@ fn audit_entry(request: &Request<'_>, outcome: Outcome, detail: &str) -> AuditEn
 pub async fn browse(db: &DbManager, context: &Context, request: &BrowseRequest) -> AppResult<TablePage> {
     let driver = db.driver(&request.connection_id)?;
     check_filter(db, context, driver.engine(), request.filter.as_deref())?;
-    driver.browse_table(request, &context.limits()).await
+    let (request, limits) = (request.clone(), context.limits());
+    db.call(&request.connection_id.clone(), "read a page of rows", |driver| async move {
+        driver.browse_table(&request, &limits).await
+    })
+    .await
 }
 
 /// Validates a grid (or vector-search) filter and audits a rejection.
@@ -477,7 +481,6 @@ pub async fn apply_changes(
     if !matches!(caller, Caller::GridSave | Caller::Import) {
         return Err(AppError::new("Row changes come from a grid save or an import"));
     }
-    let driver = db.driver(&context.connection_id)?;
     let classification = classify_changes(table, &changes);
     // An import run is confirmed once for all of its batches; a grid save for its exact changes.
     let import_run = import_id.filter(|id| caller == Caller::Import && !id.is_empty());
@@ -494,7 +497,11 @@ pub async fn apply_changes(
         confirmation,
         reusable: import_run.is_some(),
     })?;
-    driver.apply_changes(database, table, changes).await
+    let (database, table) = (database.to_owned(), table.to_owned());
+    db.call(&context.connection_id, "saved row changes", |driver| async move {
+        driver.apply_changes(&database, &table, changes).await
+    })
+    .await
 }
 
 /// "New database…" (DDL).
@@ -505,7 +512,6 @@ pub async fn create_database(
     first_collection: Option<&str>,
     confirmation: Option<&Confirmation>,
 ) -> AppResult<()> {
-    let driver = db.driver(&context.connection_id)?;
     let classification = Classification::single(StatementInfo {
         category: Category::Ddl,
         kind: "CREATE DATABASE".to_owned(),
@@ -523,7 +529,11 @@ pub async fn create_database(
         confirmation,
         reusable: false,
     })?;
-    driver.create_database(name, first_collection).await
+    let (name, first_collection) = (name.to_owned(), first_collection.map(str::to_owned));
+    db.call(&context.connection_id, "created a database", |driver| async move {
+        driver.create_database(&name, first_collection.as_deref()).await
+    })
+    .await
 }
 
 /// `run_sql` from a query tab: classified, checked against the rules, then run with the limits.
@@ -547,13 +557,17 @@ pub async fn run_query(
         confirmation,
         reusable: false,
     })?;
-    driver.run_query(session_id, database, text, &context.limits()).await
+    tracing::debug!(session = session_id, statement = %crate::logging::statement_excerpt(&text), "run");
+    let (session, limits) = (session_id.to_owned(), context.limits());
+    db.call_session(session_id, "ran a query", |driver| async move {
+        driver.run_query(&session, database, text, &limits).await
+    })
+    .await
 }
 
 /// Begin / Commit / Rollback / auto-commit from the query toolbar: always allowed, even in a
 /// Read-only workspace (Begin then opens a read-only transaction where the engine has one).
 pub async fn transaction(db: &DbManager, context: &Context, session_id: &str, op: TransactionOp) -> AppResult<TransactionState> {
-    let driver = db.session_driver(session_id)?;
     let classification = Classification::single(StatementInfo {
         category: Category::Transaction,
         kind: format!("{op:?}").to_uppercase(),
@@ -570,7 +584,11 @@ pub async fn transaction(db: &DbManager, context: &Context, session_id: &str, op
         confirmation: None,
         reusable: false,
     })?;
-    driver.transaction(session_id, op, &context.limits()).await
+    let (session, limits) = (session_id.to_owned(), context.limits());
+    db.call_session(session_id, "changed the transaction state", |driver| async move {
+        driver.transaction(&session, op, &limits).await
+    })
+    .await
 }
 
 pub fn classify_for(engine: Engine, text: &str) -> Classification {
@@ -631,7 +649,7 @@ mod tests {
     }
 
     fn token_of(error: &AppError) -> (String, Option<String>) {
-        let detail = error.detail().expect("structured");
+        let detail = error.payload().expect("structured");
         (
             detail["token"].as_str().expect("token").to_owned(),
             detail["expected"].as_str().map(str::to_owned),
@@ -650,7 +668,7 @@ mod tests {
         assert!(ask(&gateway, &read_only, "COMMIT", None).is_ok(), "commit is always allowed");
         let error = ask(&gateway, &read_only, "INSERT INTO t VALUES (1)", None).unwrap_err();
         assert_eq!(error.code(), Some(BLOCKED));
-        assert_eq!(error.detail().unwrap()["categories"][0], "write");
+        assert_eq!(error.payload().unwrap()["categories"][0], "write");
         assert_eq!(ask(&gateway, &read_only, "FROBNICATE", None).unwrap_err().code(), Some(BLOCKED));
         let audit = AuditLog::new(path.clone(), 1000).read_all().unwrap();
         assert_eq!(audit.len(), 2);
@@ -668,8 +686,8 @@ mod tests {
         let sql = "UPDATE orders SET status = 'paid' WHERE id = 7";
         let error = ask(&gateway, &guarded, sql, None).unwrap_err();
         assert_eq!(error.code(), Some(CONFIRMATION_REQUIRED));
-        assert_eq!(error.detail().unwrap()["level"], "confirm");
-        assert_eq!(error.detail().unwrap()["tables"][0], "orders");
+        assert_eq!(error.payload().unwrap()["level"], "confirm");
+        assert_eq!(error.payload().unwrap()["tables"][0], "orders");
         let (token, expected) = token_of(&error);
         assert!(expected.is_none());
         // Bound to the exact text: a different statement cannot use it (and it is spent).
@@ -714,7 +732,7 @@ mod tests {
         let (gateway, path) = gateway();
         let guarded = context(Preset::Guarded);
         let error = ask(&gateway, &guarded, "DELETE FROM shop.orders", None).unwrap_err();
-        assert_eq!(error.detail().unwrap()["level"], "typed");
+        assert_eq!(error.payload().unwrap()["level"], "typed");
         let (token, expected) = token_of(&error);
         assert_eq!(expected.as_deref(), Some("orders"));
         let typo = Confirmation {

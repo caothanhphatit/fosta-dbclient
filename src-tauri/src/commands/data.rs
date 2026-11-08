@@ -19,13 +19,22 @@ pub(crate) fn gateway_context(state: &AppState, connection_id: &str) -> AppResul
 }
 
 pub async fn list_databases(state: &AppState, connection_id: String) -> AppResult<Vec<String>> {
-    state.db.driver(&connection_id)?.list_databases().await
+    state
+        .db
+        .call(&connection_id, "listed the databases", |driver| async move {
+            driver.list_databases().await
+        })
+        .await
 }
 
 /// Tables, columns and foreign keys of one database, for the ER diagram.
 pub async fn schema_graph(state: &AppState, connection_id: String, database: String) -> AppResult<schema::SchemaGraph> {
-    let driver = state.db.driver(&connection_id)?;
-    schema::schema_graph(driver.as_ref(), &database).await
+    state
+        .db
+        .call(&connection_id, "read the schema", |driver| async move {
+            schema::schema_graph(driver.as_ref(), &database).await
+        })
+        .await
 }
 
 pub async fn create_database(
@@ -44,11 +53,21 @@ pub async fn create_database(
 }
 
 pub async fn list_tables(state: &AppState, connection_id: String, database: String) -> AppResult<Vec<TableInfo>> {
-    state.db.driver(&connection_id)?.list_tables(&database).await
+    state
+        .db
+        .call(&connection_id, "listed the tables", |driver| async move {
+            driver.list_tables(&database).await
+        })
+        .await
 }
 
 pub async fn describe_table(state: &AppState, connection_id: String, database: String, table: String) -> AppResult<TableDesign> {
-    state.db.driver(&connection_id)?.describe_table(&database, &table).await
+    state
+        .db
+        .call(&connection_id, "described a table", |driver| async move {
+            driver.describe_table(&database, &table).await
+        })
+        .await
 }
 
 pub async fn browse_table(state: &AppState, request: BrowseRequest) -> AppResult<TablePage> {
@@ -85,7 +104,12 @@ pub async fn apply_changes(
 }
 
 pub async fn table_relations(state: &AppState, connection_id: String, database: String, table: String) -> AppResult<TableRelations> {
-    state.db.driver(&connection_id)?.table_relations(&database, &table).await
+    state
+        .db
+        .call(&connection_id, "read the relations of a table", |driver| async move {
+            driver.table_relations(&database, &table).await
+        })
+        .await
 }
 
 pub async fn open_session(state: &AppState, connection_id: String, session_id: String) -> AppResult<()> {

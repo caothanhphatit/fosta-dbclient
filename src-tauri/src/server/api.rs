@@ -74,11 +74,11 @@ fn parse_args<T: DeserializeOwned>(command: &str, args: Value) -> Result<T, Invo
 }
 
 macro_rules! call {
-    ([sync] $call:expr) => {
-        $call
+    ([sync] $name:expr, $call:expr) => {
+        fosta_studio::logging::command_sync($name, || $call)
     };
-    ([async] $call:expr) => {
-        $call.await
+    ([async] $name:expr, $call:expr) => {
+        fosta_studio::logging::command($name, $call).await
     };
 }
 
@@ -99,7 +99,7 @@ macro_rules! web_commands {
                         $($arg: $type,)*
                     }
                     let Arguments { $($arg,)* } = parse_args(command, args)?;
-                    let output: $output = call!([$kind] $function(state, $($arg),*));
+                    let output: $output = call!([$kind] stringify!($name), $function(state, $($arg),*));
                     output.into_json().map_err(InvokeError::Command)
                 })*
                 _ => Err(InvokeError::Unknown(command.to_owned())),
@@ -163,7 +163,7 @@ fn ai_chat(state: Arc<AppState>, args: Value) -> Response {
         };
         let last = match commands::ai::ai_chat(&state, request, &sink).await {
             Ok(text) => json!({ "result": text }),
-            Err(error) => json!({ "error": error.to_string() }),
+            Err(error) => json!({ "error": error }),
         };
         let _ = sender.send(line(&last));
     });
@@ -210,7 +210,7 @@ mod tests {
         let mut missing = Vec::new();
         for piece in source.split("invoke<").skip(1) {
             let Some(name) = piece.split('"').nth(1) else { continue };
-            if !COMMANDS.contains(&name) && !matches!(name, "save_download" | "reveal_file" | "ai_chat") {
+            if !COMMANDS.contains(&name) && !matches!(name, "save_download" | "reveal_file" | "open_log_folder" | "ai_chat") {
                 missing.push(name.to_owned());
             }
         }

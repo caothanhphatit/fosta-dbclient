@@ -32,7 +32,7 @@ macro_rules! tauri_command {
         #[allow(clippy::too_many_arguments)]
         #[tauri::command]
         fn $name(state: State<'_, AppState>, $($arg: $type),*) -> $output {
-            $function(&state, $($arg),*)
+            fosta_studio::logging::command_sync(stringify!($name), || $function(&state, $($arg),*))
         }
     };
     ([async] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty = $function:path) => {
@@ -40,7 +40,7 @@ macro_rules! tauri_command {
         #[allow(clippy::too_many_arguments)]
         #[tauri::command]
         async fn $name(state: State<'_, AppState>, $($arg: $type),*) -> $output {
-            $function(&state, $($arg),*).await
+            fosta_studio::logging::command(stringify!($name), $function(&state, $($arg),*)).await
         }
     };
 }
@@ -51,7 +51,7 @@ macro_rules! desktop_commands {
         $(tauri_command!([$kind] $name ($($arg : $type),*) -> $output = $function);)*
 
         fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
-            tauri::generate_handler![$($name,)* ai_chat, save_download, reveal_file]
+            tauri::generate_handler![$($name,)* ai_chat, save_download, reveal_file, open_log_folder]
         }
     };
 }
@@ -78,7 +78,16 @@ fn reveal_file(path: String) -> AppResult<()> {
     commands::files::reveal_file(path)
 }
 
+#[tauri::command]
+fn open_log_folder() -> AppResult<()> {
+    commands::diagnostics::open_log_folder()
+}
+
 fn main() {
+    if let Ok(data_dir) = fosta_studio::config::data_dir() {
+        fosta_studio::logging::init(&data_dir, fosta_studio::logging::LogLocation::Desktop);
+    }
+    fosta_studio::runtime::install_panic_hook();
     tauri::Builder::default()
         .setup(|app| {
             let executor = tauri::async_runtime::handle().inner().clone();

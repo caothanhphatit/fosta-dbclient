@@ -124,7 +124,7 @@ pub struct TablePage {
     pub elapsed_ms: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowseRequest {
     pub connection_id: String,

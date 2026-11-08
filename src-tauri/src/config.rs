@@ -126,6 +126,8 @@ pub struct AppConfig {
     pub ai_active: Option<AiActive>,
     /// Record query-tab runs in the local history file (on unless turned off).
     pub query_history: bool,
+    /// Write debug-level entries to the application log (Settings → Debug logging).
+    pub debug_logging: bool,
 }
 
 /// On-disk shape. Accepts both the current layout (`workspaces`) and the
@@ -146,6 +148,8 @@ struct StoredConfig {
     ai_active: Option<AiActive>,
     #[serde(default)]
     query_history: Option<bool>,
+    #[serde(default)]
+    debug_logging: bool,
     /// Legacy single assistant setting, migrated into one connection.
     #[serde(default)]
     ai: Option<AiSettings>,
@@ -203,6 +207,7 @@ impl From<StoredConfig> for AppConfig {
             ai_connections,
             ai_active,
             query_history: stored.query_history.unwrap_or(true),
+            debug_logging: stored.debug_logging,
         };
         config.repair_ai_active();
         config

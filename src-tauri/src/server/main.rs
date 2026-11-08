@@ -183,6 +183,9 @@ async fn run(settings: Settings) -> Result<(), String> {
         .map_err(|error| format!("cannot create the data directory {}: {error}", settings.data_dir.display()))?;
     println!("Fosta Studio {} web edition", env!("CARGO_PKG_VERSION"));
     println!("Data directory: {}", settings.data_dir.display());
+    let log_dir = fosta_studio::logging::init(&settings.data_dir, fosta_studio::logging::LogLocation::Web);
+    fosta_studio::runtime::install_panic_hook();
+    println!("Logs: {}", log_dir.display());
 
     let (store, key_source) =
         FileStore::open(&settings.data_dir, env(KEY_ENV).as_deref()).map_err(|error| format!("secret store: {error}"))?;

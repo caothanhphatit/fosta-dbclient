@@ -24,8 +24,10 @@ mod job;
 #[cfg(test)]
 mod live_tests;
 mod lock;
+pub mod logging;
 #[cfg(test)]
 mod perf_tests;
+pub mod runtime;
 pub mod schema;
 pub mod secrets;
 pub mod tasks;
@@ -54,6 +56,9 @@ impl AppState {
         let config = config::ConfigStore::load(!capabilities.in_container)?;
         let tasks = Arc::new(tasks::TaskManager::new(executor, events, capabilities.tasks));
         tasks.start_auto(&config.snapshot().active().tasks);
+        if config.snapshot().debug_logging {
+            let _ = logging::set_debug(true);
+        }
         Ok(Self {
             config,
             db: drivers::DbManager::default(),

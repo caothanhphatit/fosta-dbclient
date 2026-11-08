@@ -153,6 +153,19 @@ export interface AiActive {
   model: string;
 }
 
+/** `diagnostics()`: what a bug report needs, without secrets or row data. */
+export interface Diagnostics {
+  appVersion: string;
+  edition: string;
+  os: string;
+  arch: string;
+  osVersion: string | null;
+  logFolder: string | null;
+  debugLogging: boolean;
+  connections: { engine: string; version: string; crashed: boolean }[];
+  recentErrors: { time: string; level: string; target: string; message: string; code: string | null }[];
+}
+
 /** What the running edition supports (Rust `Capabilities`); the UI hides the rest. */
 export interface Capabilities {
   edition: "desktop" | "web";
@@ -177,6 +190,8 @@ export interface AppConfig {
   aiActive: AiActive | null;
   /** Record query-tab runs in the local history (default on). */
   queryHistory: boolean;
+  /** Debug-level entries in the application log (Settings → Debug logging). */
+  debugLogging?: boolean;
 }
 
 export interface ChatMessage {

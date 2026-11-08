@@ -11,6 +11,7 @@ import type {
   ChatRequest,
   Confirmation,
   ConnectionProfile,
+  Diagnostics,
   EmbeddingSettings,
   HealthCheck,
   HistoryEntry,
@@ -119,6 +120,11 @@ export const api = {
   historyDelete: (ids: string[]) => invoke<number>("history_delete", { ids }),
   historyClear: () => invoke<void>("history_clear"),
   setQueryHistory: (enabled: boolean) => invoke<AppConfig>("set_query_history", { enabled }),
+  /** App version, OS, open connections, recent errors and the log folder, for bug reports. */
+  diagnostics: () => invoke<Diagnostics>("diagnostics"),
+  setDebugLogging: (enabled: boolean) => invoke<AppConfig>("set_debug_logging", { enabled }),
+  /** Desktop only: opens the log folder in the file manager. */
+  openLogFolder: () => invoke<void>("open_log_folder"),
 };
 
 export function onTaskStatus(handler: (status: TaskStatus) => void): Promise<UnlistenFn> {

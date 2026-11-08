@@ -8,6 +8,7 @@
 pub mod ai;
 pub mod connections;
 pub mod data;
+pub mod diagnostics;
 pub mod files;
 pub mod history;
 pub mod tasks;
@@ -38,7 +39,7 @@ pub fn capabilities(state: &AppState) -> Capabilities {
 /// Each function takes `&AppState` first, then the listed arguments, whose camelCase names are the JSON keys.
 ///
 /// Not listed (each front-end handles them itself): `ai_chat` (it streams events), and the desktop-only
-/// `save_download` / `reveal_file` (the web edition downloads through the browser).
+/// `save_download` / `reveal_file` / `open_log_folder` (the web edition downloads through the browser).
 #[macro_export]
 macro_rules! for_each_command {
     ($callback:ident) => {
@@ -125,6 +126,9 @@ macro_rules! for_each_command {
             [async] history_delete(ids: Vec<String>) -> $crate::error::AppResult<usize> = $crate::commands::history::history_delete;
             [async] history_clear() -> $crate::error::AppResult<()> = $crate::commands::history::history_clear;
             [sync] set_query_history(enabled: bool) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::history::set_query_history;
+
+            [sync] diagnostics() -> $crate::commands::diagnostics::Diagnostics = $crate::commands::diagnostics::diagnostics;
+            [sync] set_debug_logging(enabled: bool) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::diagnostics::set_debug_logging;
         }
     };
 }
@@ -150,7 +154,7 @@ macro_rules! infallible_output {
     };
 }
 
-infallible_output!((), AppConfig, Capabilities, Vec<String>, Vec<TaskStatus>);
+infallible_output!((), AppConfig, Capabilities, Vec<String>, Vec<TaskStatus>, diagnostics::Diagnostics);
 
 /// Rejects a command the current front-end does not offer.
 pub fn unsupported(command: &str) -> AppError {

@@ -480,6 +480,23 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "set_query_history":
       config = { ...config, queryHistory: Boolean(payload.enabled) };
       return config;
+    case "set_debug_logging":
+      config = { ...config, debugLogging: Boolean(payload.enabled) };
+      return config;
+    case "open_log_folder":
+      return null;
+    case "diagnostics":
+      return {
+        appVersion: "0.1.0-dev",
+        edition: "desktop",
+        os: "windows",
+        arch: "x86_64",
+        osVersion: "Browser dev mock",
+        logFolder: "C:/Fosta Studio/fosta-studio-logs",
+        debugLogging: Boolean(config.debugLogging),
+        connections: [],
+        recentErrors: [],
+      };
     case "apply_changes": {
       const changes = payload.changes as { kind: string }[];
       const table = String(payload.table);

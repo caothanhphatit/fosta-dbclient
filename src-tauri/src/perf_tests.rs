@@ -55,7 +55,10 @@ async fn perf_open_table_and_10k_query() {
         page_bytes = serde_json::to_vec(&page).unwrap().len();
         best = best.min(started.elapsed().as_micros());
     }
-    println!("PERF open table orders (200 rows): best {:.1} ms, payload {page_bytes} bytes", best as f64 / 1000.0);
+    println!(
+        "PERF open table orders (200 rows): best {:.1} ms, payload {page_bytes} bytes",
+        best as f64 / 1000.0
+    );
 
     driver.open_session("perf").await.expect("session");
     let limits = Limits {
