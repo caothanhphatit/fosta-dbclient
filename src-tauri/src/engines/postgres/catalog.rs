@@ -24,7 +24,7 @@ pub const TEXT_CAST: &[&str] = &[
     "geography",
 ];
 
-const USER_SCHEMAS: &str = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'";
+pub(super) const USER_SCHEMAS: &str = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'";
 
 const RESERVED: &[&str] = &[
     "all",
@@ -360,6 +360,7 @@ async fn describe_relation(c: &Client, obj: &ObjectRef, schema: &str) -> Result<
     };
     let mut d = ObjectDescription::new(ObjectRef::new(obj.database.as_deref(), Some(schema), &obj.name, kind));
     d.comment = rel.get(3);
+    d.extra.push(("relkind".into(), relkind.clone()));
     let tuples: f64 = rel.get(2);
     d.row_estimate = (tuples >= 0.0).then_some(tuples as i64);
     d.columns = columns_of(c, oid).await?;
@@ -594,6 +595,7 @@ async fn describe_type(c: &Client, obj: &ObjectRef, schema: &str) -> Result<Obje
         "e" => {
             let labels: Vec<String> = r.get(6);
             d.extra.push(("kind".into(), "enum".into()));
+            d.extra.push(("labels".into(), labels.join(", ")));
             format!(
                 "CREATE TYPE {name} AS ENUM ({});",
                 labels.iter().map(|l| literal(l)).collect::<Vec<_>>().join(", ")

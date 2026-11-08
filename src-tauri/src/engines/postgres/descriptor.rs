@@ -1,4 +1,4 @@
-//! The PostgreSQL descriptor: connection form, capabilities (the upper bound once the adapter is wired), languages and
+//! The PostgreSQL descriptor: connection form, capabilities (the upper bound), languages and
 //! filter box.
 
 use crate::contract::{
@@ -15,7 +15,7 @@ pub fn descriptor() -> EngineDescriptor {
         label: LABEL.into(),
         family: EngineFamily::Sql,
         icon: "database".into(),
-        status: EngineStatus::Planned,
+        status: EngineStatus::Ready,
         sql_dialect: Some(SqlDialectId::Postgres),
         capabilities: CapabilitySet::of(&[
             Capability::Tree,

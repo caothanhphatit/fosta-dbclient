@@ -25,6 +25,18 @@ pub struct PgSession {
     cancel: PgCancel,
     state: Mutex<TxState>,
     timeout: Mutex<Option<Duration>>,
+    /// The read-only default last applied (`None` = not yet).
+    read_only: Mutex<Option<bool>>,
+}
+
+/// A statement of a script failed: the error, which statement it was and where it starts in the script.
+#[derive(Debug)]
+pub struct RunFailure {
+    pub error: crate::engines::common::EngineError,
+    pub index: usize,
+    pub text: String,
+    /// Byte offset of the statement in the script.
+    pub start: usize,
 }
 
 /// Cancels the statement a session is running.
@@ -48,6 +60,7 @@ impl PgSession {
             cancel: PgCancel { token, tls },
             state: Mutex::new(TxState::Idle),
             timeout: Mutex::new(None),
+            read_only: Mutex::new(None),
         }
     }
 
@@ -107,9 +120,18 @@ impl PgSession {
 
     /// Runs a script statement by statement, streaming each result set. Stops at the first error.
     pub async fn run(&self, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> Result<()> {
-        if self.transaction_state() != TxState::Failed {
-            self.apply_timeout(opts.timeout).await?;
-        }
+        self.run_detailed(sql, opts, sink).await.map_err(|failure| failure.error)
+    }
+
+    /// [`run`](Self::run) that says which statement failed (index, text and its start in the script).
+    pub async fn run_detailed(&self, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> std::result::Result<(), RunFailure> {
+        let before = |error| RunFailure {
+            error,
+            index: 0,
+            text: String::new(),
+            start: 0,
+        };
+        self.apply_limits(opts).await.map_err(before)?;
         let mut result = Ok(());
         for (index, st) in split::split(Dialect::Postgres, sql).into_iter().enumerate() {
             sink.event(StreamEvent::Statement {
@@ -122,13 +144,41 @@ impl PgSession {
             } else {
                 self.run_direct(index, &st.text, opts, sink, started).await
             };
-            if let Err(e) = r {
-                result = Err(e);
+            if let Err(error) = r {
+                result = Err(RunFailure {
+                    error,
+                    index,
+                    text: st.text.clone(),
+                    start: st.start,
+                });
                 break;
             }
         }
         self.refresh_state().await;
         result
+    }
+
+    /// Applies the rules' statement timeout and read-only backstop (a failed transaction block rejects every `SET`).
+    pub async fn apply_limits(&self, opts: &RunOptions) -> Result<()> {
+        if self.transaction_state() != TxState::Failed {
+            self.apply_timeout(opts.timeout).await?;
+            self.apply_read_only(opts.read_only).await?;
+        }
+        Ok(())
+    }
+
+    /// Sets the session's default for new transactions (the rules' read-only backstop) when it changes.
+    async fn apply_read_only(&self, read_only: bool) -> Result<()> {
+        let current = *self.read_only.lock().unwrap_or_else(|p| p.into_inner());
+        if current != Some(read_only) {
+            let mode = if read_only { "READ ONLY" } else { "READ WRITE" };
+            self.client
+                .batch_execute(&format!("SET SESSION CHARACTERISTICS AS TRANSACTION {mode}"))
+                .await
+                .map_err(map_err)?;
+            *self.read_only.lock().unwrap_or_else(|p| p.into_inner()) = Some(read_only);
+        }
+        Ok(())
     }
 
     async fn run_cursor(&self, index: usize, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink, started: Instant) -> Result<()> {

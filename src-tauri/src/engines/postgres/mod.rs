@@ -6,8 +6,16 @@
 
 pub mod adapter;
 mod catalog;
+pub mod connect;
+#[cfg(test)]
+mod contract_tests;
 pub mod descriptor;
+mod explain;
+mod graph;
+mod nodes;
+mod run;
 pub mod session;
+mod tabular;
 #[cfg(test)]
 mod tests;
 pub mod types;
@@ -42,6 +50,9 @@ pub struct PgOptions {
     pub tls: TlsMode,
     pub connect_timeout: Duration,
     pub application_name: String,
+    /// TLS settings of the connection form; when set (and enabled) they replace `tls`'s trust rules (CA file, name
+    /// override, pinning, client certificate) through `net::tls::rustls_client_config`.
+    pub tls_spec: Option<crate::net::TlsSpec>,
 }
 
 impl Default for PgOptions {
@@ -55,6 +66,7 @@ impl Default for PgOptions {
             tls: TlsMode::Disable,
             connect_timeout: Duration::from_secs(10),
             application_name: "Fosta Studio".into(),
+            tls_spec: None,
         }
     }
 }
@@ -260,7 +272,12 @@ impl ServerCertVerifier for NoVerify {
     }
 }
 
-pub(crate) fn tls_connector(mode: &TlsMode) -> Result<MakeRustlsConnect> {
+pub(crate) fn tls_connector(opts: &PgOptions) -> Result<MakeRustlsConnect> {
+    if let Some(spec) = opts.tls_spec.as_ref().filter(|spec| spec.is_enabled()) {
+        let config = crate::net::tls::rustls_client_config(spec).map_err(|error| EngineError::connect(error.to_string()))?;
+        return Ok(MakeRustlsConnect::new(config));
+    }
+    let mode = &opts.tls;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
@@ -338,7 +355,7 @@ Where: {w}"
 
 /// Connects and spawns the connection task. Returns the client and the TLS connector (needed again to send cancel requests).
 pub(crate) async fn open(opts: &PgOptions) -> Result<(Client, MakeRustlsConnect)> {
-    let tls = tls_connector(&opts.tls)?;
+    let tls = tls_connector(opts)?;
     let config = opts.config();
     let fut = config.connect(tls.clone());
     let (client, connection) = match tokio::time::timeout(opts.connect_timeout + Duration::from_secs(1), fut).await {
@@ -398,6 +415,28 @@ impl SqlDialect for PgDialect {
             if ci { "ILIKE" } else { "LIKE" }
         )
     }
+    fn null_safe_eq(&self) -> Option<&'static str> {
+        Some("IS NOT DISTINCT FROM")
+    }
+    /// `json` and `xml` have no equality operator, so row checks compare their text.
+    fn compare_column(&self, col_sql: String, col: &ColumnInfo) -> String {
+        if is_text_compared(col) {
+            format!("{col_sql}::text")
+        } else {
+            col_sql
+        }
+    }
+    fn compare_param(&self, placeholder: String, col: &ColumnInfo) -> String {
+        if is_text_compared(col) {
+            format!("({placeholder})::text")
+        } else {
+            placeholder
+        }
+    }
+}
+
+fn is_text_compared(col: &ColumnInfo) -> bool {
+    matches!(col.type_name.as_str(), "json" | "xml")
 }
 
 pub(crate) fn text_params(params: &[sqlbuild::Param]) -> Vec<Option<String>> {
@@ -439,6 +478,21 @@ impl PgEngine {
 
     pub fn server_version(&self) -> &str {
         &self.version
+    }
+
+    pub async fn ping(&self) -> Result<()> {
+        self.client.lock().await.simple_query("SELECT 1").await.map_err(map_err)?;
+        Ok(())
+    }
+
+    /// Runs statements that cannot sit in a transaction block (`CREATE DATABASE`).
+    pub async fn batch(&self, sql: &str) -> Result<()> {
+        self.client.lock().await.batch_execute(sql).await.map_err(map_err)
+    }
+
+    /// Whether the server closed this engine's connection (the caller reconnects).
+    pub async fn is_closed(&self) -> bool {
+        self.client.lock().await.is_closed()
     }
 
     pub fn database(&self) -> &str {
@@ -590,11 +644,15 @@ mod unit_tests {
 
     #[test]
     fn tls_connectors_build() {
-        assert!(tls_connector(&TlsMode::SkipVerify).is_ok());
-        assert!(tls_connector(&TlsMode::Verify { ca_file: None }).is_ok());
-        assert!(tls_connector(&TlsMode::Verify {
+        let with = |tls: TlsMode| PgOptions {
+            tls,
+            ..PgOptions::default()
+        };
+        assert!(tls_connector(&with(TlsMode::SkipVerify)).is_ok());
+        assert!(tls_connector(&with(TlsMode::Verify { ca_file: None })).is_ok());
+        assert!(tls_connector(&with(TlsMode::Verify {
             ca_file: Some("Z:/missing.pem".into())
-        })
+        }))
         .is_err());
     }
 }
