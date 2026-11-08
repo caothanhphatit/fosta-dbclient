@@ -21,6 +21,7 @@ pub mod files;
 pub mod gateway;
 pub mod history;
 mod job;
+pub mod lang;
 #[cfg(test)]
 mod live_tests;
 mod lock;
