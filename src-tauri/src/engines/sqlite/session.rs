@@ -17,6 +17,16 @@ pub struct SqliteSession {
     cancel: SqliteCancel,
 }
 
+/// A statement of a script failed: the error, which statement it was and where it starts in the script.
+#[derive(Debug)]
+pub struct RunFailure {
+    pub error: EngineError,
+    pub index: usize,
+    pub text: String,
+    /// Byte offset of the statement in the script.
+    pub start: usize,
+}
+
 /// Cancels the statement a session is running, from any thread.
 #[derive(Clone)]
 pub struct SqliteCancel {
@@ -49,7 +59,14 @@ impl SqliteSession {
 
     /// Runs a script statement by statement, streaming each result set. Stops at the first error.
     pub async fn run(&self, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> Result<()> {
+        self.run_detailed(sql, opts, sink).await.map_err(|failure| failure.error)
+    }
+
+    /// [`run`](Self::run) that says which statement failed (index, text and its start in the script).
+    pub async fn run_detailed(&self, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> std::result::Result<(), Box<RunFailure>> {
         self.cancel.cancelled.store(false, Ordering::SeqCst);
+        let failed: Arc<Mutex<Option<(usize, String, usize)>>> = Arc::new(Mutex::new(None));
+        let failed_w = failed.clone();
         let statements = split::split(Dialect::Sqlite, sql);
         let conn = self.conn.clone();
         let opts2 = opts.clone();
@@ -73,6 +90,8 @@ impl SqliteSession {
         let started_w = started.clone();
         let result = run_blocking(sink, move |sink| {
             let conn = lock(&conn);
+            // The rules' read-only backstop: writes fail with SQLITE_READONLY.
+            conn.pragma_update(None, "query_only", opts2.read_only).map_err(map_err)?;
             for (index, st) in statements.iter().enumerate() {
                 if let Ok(mut s) = started_w.lock() {
                     *s = Some(Instant::now());
@@ -80,6 +99,11 @@ impl SqliteSession {
                 let r = run_statement(&conn, index, &st.text, &opts2, sink);
                 if let Ok(mut s) = started_w.lock() {
                     *s = None;
+                }
+                if r.is_err() {
+                    if let Ok(mut failure) = failed_w.lock() {
+                        *failure = Some((index, st.text.clone(), st.start));
+                    }
                 }
                 r?;
             }
@@ -89,12 +113,15 @@ impl SqliteSession {
         if let Some(w) = watchdog {
             w.abort();
         }
-        match result {
+        let error = match result {
+            Ok(()) => return Ok(()),
             Err(e) if e.kind == ErrorKind::Cancelled && timed_out.load(Ordering::SeqCst) => {
-                Err(EngineError::timeout("The statement", opts.timeout.unwrap_or_default()))
+                EngineError::timeout("The statement", opts.timeout.unwrap_or_default())
             }
-            other => other,
-        }
+            Err(e) => e,
+        };
+        let (index, text, start) = failed.lock().ok().and_then(|failure| failure.clone()).unwrap_or_default();
+        Err(Box::new(RunFailure { error, index, text, start }))
     }
 
     pub async fn transaction_state(&self) -> TxState {

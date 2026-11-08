@@ -1,4 +1,4 @@
-//! The PostgreSQL descriptor: connection form, capabilities (the upper bound once the adapter is wired), languages and
+//! The PostgreSQL descriptor: connection form, capabilities (the upper bound), languages and
 //! filter box.
 
 use crate::contract::{
@@ -15,7 +15,7 @@ pub fn descriptor() -> EngineDescriptor {
         label: LABEL.into(),
         family: EngineFamily::Sql,
         icon: "database".into(),
-        status: EngineStatus::Planned,
+        status: EngineStatus::Ready,
         sql_dialect: Some(SqlDialectId::Postgres),
         capabilities: CapabilitySet::of(&[
             Capability::Tree,
@@ -61,13 +61,14 @@ pub fn descriptor() -> EngineDescriptor {
                     .section(FormSection::Advanced),
             ],
             ssh: true,
-            // The core verifies against the bundled roots plus an optional CA file; no client certificates yet.
+            // All of it goes through `net::tls::rustls_client_config`: a CA file, a client certificate, a server name
+            // (through an SSH tunnel the manager sets it to the database host) and a certificate pin.
             tls: Some(TlsSupport {
                 modes: vec![TlsModeId::Disable, TlsModeId::Require, TlsModeId::VerifyCa, TlsModeId::VerifyFull],
                 ca: true,
-                client_cert: false,
-                server_name: false,
-                pin: false,
+                client_cert: true,
+                server_name: true,
+                pin: true,
             }),
         },
         languages: vec![LanguageSpec {

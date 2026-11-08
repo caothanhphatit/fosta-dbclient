@@ -1,4 +1,4 @@
-//! The SQLite descriptor: a file instead of a host, capabilities (the upper bound once the adapter is wired), languages
+//! The SQLite descriptor: a file instead of a host, capabilities (the upper bound), languages
 //! and filter box.
 
 use crate::contract::{
@@ -15,7 +15,7 @@ pub fn descriptor() -> EngineDescriptor {
         label: LABEL.into(),
         family: EngineFamily::Sql,
         icon: "database".into(),
-        status: EngineStatus::Planned,
+        status: EngineStatus::Ready,
         sql_dialect: Some(SqlDialectId::Sqlite),
         capabilities: CapabilitySet::of(&[
             Capability::Tree,
@@ -64,6 +64,10 @@ pub fn descriptor() -> EngineDescriptor {
                 },
                 FieldSpec::new("options.readOnly", FieldKind::Checkbox, "Open read-only").default_value("false"),
                 FieldSpec::new("options.create", FieldKind::Checkbox, "Create the file if it does not exist").default_value("false"),
+                FieldSpec::new("options.attach", FieldKind::Textarea, "Attached databases")
+                    .placeholder("audit=C:\\data\\audit.db")
+                    .hint("One alias=path per line; they show up next to main in the tree and can be used in queries as alias.table.")
+                    .section(FormSection::Advanced),
                 FieldSpec::new("options.busyTimeout", FieldKind::Number, "Busy timeout (ms)")
                     .placeholder("5000")
                     .hint("How long to wait for a lock held by another connection.")

@@ -7,6 +7,22 @@ use crate::engines::common::{
 };
 use tokio_postgres::Client;
 
+/// The `extra` fact that names what kind of relation a description is; browsing reads it to decide whether `xmin` is a
+/// usable row version (ordinary tables only).
+pub const RELATION_KIND: &str = "Relation kind";
+
+/// `pg_class.relkind` as a sentence-case name.
+pub fn relation_kind(relkind: &str) -> &'static str {
+    match relkind {
+        "r" => "table",
+        "p" => "partitioned table",
+        "v" => "view",
+        "m" => "materialized view",
+        "f" => "foreign table",
+        _ => "relation",
+    }
+}
+
 /// Column types selected as text in browse because their binary format has no decoder here.
 pub const TEXT_CAST: &[&str] = &[
     "tsvector",
@@ -24,7 +40,7 @@ pub const TEXT_CAST: &[&str] = &[
     "geography",
 ];
 
-const USER_SCHEMAS: &str = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'";
+pub(super) const USER_SCHEMAS: &str = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'";
 
 const RESERVED: &[&str] = &[
     "all",
@@ -360,6 +376,7 @@ async fn describe_relation(c: &Client, obj: &ObjectRef, schema: &str) -> Result<
     };
     let mut d = ObjectDescription::new(ObjectRef::new(obj.database.as_deref(), Some(schema), &obj.name, kind));
     d.comment = rel.get(3);
+    d.extra.push((RELATION_KIND.into(), relation_kind(&relkind).into()));
     let tuples: f64 = rel.get(2);
     d.row_estimate = (tuples >= 0.0).then_some(tuples as i64);
     d.columns = columns_of(c, oid).await?;
@@ -594,6 +611,7 @@ async fn describe_type(c: &Client, obj: &ObjectRef, schema: &str) -> Result<Obje
         "e" => {
             let labels: Vec<String> = r.get(6);
             d.extra.push(("kind".into(), "enum".into()));
+            d.extra.push(("labels".into(), labels.join(", ")));
             format!(
                 "CREATE TYPE {name} AS ENUM ({});",
                 labels.iter().map(|l| literal(l)).collect::<Vec<_>>().join(", ")

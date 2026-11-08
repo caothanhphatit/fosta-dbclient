@@ -1,0 +1,19 @@
+/* The definition view of PostgreSQL functions, sequences, types and extensions. */
+.definition-view {
+  overflow: auto;
+}
+
+.definition-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 14px 10px;
+}
+
+.definition-chip {
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}

@@ -1,0 +1,19 @@
+{
+  "id": "sqlite",
+  "compose": "dev/compose/postgres.yml",
+  "versions": ["17"],
+  "versionEnv": "POSTGRES_TAG",
+  "seed": null,
+  "paths": [
+    "src-tauri/src/engines/sqlite/**",
+    "src-tauri/src/engines/common/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "dev/seed/sqlite/**",
+    "ci/engines/sqlite.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_sqlite",
+  "note": "SQLite needs no container, but live.yml starts a compose file for every entry, so this entry starts the PostgreSQL one and ignores it."
+}

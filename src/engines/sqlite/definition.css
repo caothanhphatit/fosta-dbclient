@@ -1,0 +1,4 @@
+/* The definition view of SQLite indexes and triggers. */
+.definition-view {
+  overflow: auto;
+}

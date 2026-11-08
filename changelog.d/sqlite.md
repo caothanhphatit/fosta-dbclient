@@ -1,0 +1,3 @@
+- SQLite is now a ready engine: open a database file from the connection dialog (file picker, read-only and create switches, `:memory:`), optionally with attached databases that show up next to `main` in the tree.
+- SQLite rows are edited by primary key or `rowid`; views are read-only. An edit fails with a conflict instead of overwriting when the row changed since you loaded it (the original values are compared, NULL-safe).
+- SQLite query tabs keep a transaction across runs, stop with an interrupt, honour the statement timeout and the read-only rule (`PRAGMA query_only`), and accept `sqlite.explain` (`EXPLAIN QUERY PLAN`).

@@ -5,8 +5,16 @@
 //! SQLite's interrupt handle; the statement timeout is a watchdog that interrupts a statement once it runs too long.
 
 pub mod adapter;
+pub mod connect;
+#[cfg(test)]
+mod contract_tests;
 pub mod descriptor;
+mod explain;
+mod graph;
+mod nodes;
+mod run;
 pub mod session;
+mod tabular;
 #[cfg(test)]
 mod tests;
 pub mod types;
@@ -38,6 +46,8 @@ pub struct SqliteOptions {
     pub create: bool,
     /// How long to wait for a lock held by another connection.
     pub busy_timeout: Duration,
+    /// Databases attached (as `alias`, file) to every connection, so the tree and query tabs see them.
+    pub attach: Vec<(String, String)>,
 }
 
 impl SqliteOptions {
@@ -47,6 +57,7 @@ impl SqliteOptions {
             read_only: false,
             create: false,
             busy_timeout: Duration::from_secs(5),
+            attach: Vec::new(),
         }
     }
 
@@ -104,7 +115,8 @@ impl SqliteOptions {
         } else {
             OpenFlags::SQLITE_OPEN_READ_WRITE
         };
-        if self.path != ":memory:" && !self.create && !PathBuf::from(&self.path).exists() {
+        // `file:` URIs (the shared in-memory database of `connect.rs`) have no file to check.
+        if self.path != ":memory:" && !self.path.starts_with("file:") && !self.create && !PathBuf::from(&self.path).exists() {
             return Err(EngineError::connect(format!(
                 "The file '{}' does not exist. Check the path, or allow creating it.",
                 self.path
@@ -115,6 +127,21 @@ impl SqliteOptions {
         conn.busy_timeout(self.busy_timeout).map_err(map_err)?;
         // Foreign keys are off by default in SQLite; a client should enforce what the schema declares.
         conn.execute_batch("PRAGMA foreign_keys = ON").map_err(map_err)?;
+        for (alias, file) in &self.attach {
+            // ATTACH would silently create a missing file.
+            if !self.create && !PathBuf::from(file).exists() {
+                return Err(EngineError::connect(format!(
+                    "The attached file '{file}' ({alias}) does not exist. Check the path, or allow creating files."
+                )));
+            }
+            let target = if self.read_only {
+                format!("file:{}?mode=ro", file.replace('%', "%25").replace('?', "%3F").replace('#', "%23"))
+            } else {
+                file.clone()
+            };
+            conn.execute(&format!("ATTACH DATABASE ?1 AS {}", SqliteDialect.quote_ident(alias)), [target])
+                .map_err(|e| EngineError::connect(format!("Could not attach '{file}' as {alias}: {e}.")))?;
+        }
         Ok(conn)
     }
 }
@@ -127,6 +154,14 @@ pub(crate) fn map_err(e: rusqlite::Error) -> EngineError {
             }
             let text = msg.clone().unwrap_or_else(|| f.to_string());
             EngineError::server(text, Some(f.extended_code.to_string()))
+        }
+        // A statement that does not compile: SQLite says where (a byte offset into the statement).
+        rusqlite::Error::SqlInputError { error, msg, sql, offset } => {
+            let offset = usize::try_from(*offset).unwrap_or(0).min(sql.len());
+            EngineError {
+                position: Some(sql.get(..offset).map_or(0, |before| before.chars().count()) as u32),
+                ..EngineError::server(msg.clone(), Some(error.extended_code.to_string()))
+            }
         }
         _ => EngineError::server(e.to_string(), None),
     }
@@ -148,6 +183,10 @@ impl SqlDialect for SqliteDialect {
     }
     fn text_expr(&self, col_sql: &str, _col: &ColumnInfo) -> String {
         format!("CAST({col_sql} AS TEXT)")
+    }
+    /// `col IS ?` is true for equal values and for two NULLs.
+    fn null_safe_eq(&self) -> Option<&'static str> {
+        Some("IS")
     }
     /// SQLite's LIKE ignores ASCII case either way; GLOB would change the pattern syntax, so `ci` makes no difference.
     fn like(&self, lhs: &str, rhs: &str, _ci: bool, negate: bool) -> String {

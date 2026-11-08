@@ -7,7 +7,7 @@ name: fosta-dev-sql
 
 services:
   postgres:
-    image: postgres:17
+    image: postgres:${POSTGRES_TAG:-17}
     environment:
       POSTGRES_PASSWORD: studio-root
       POSTGRES_DB: shop
