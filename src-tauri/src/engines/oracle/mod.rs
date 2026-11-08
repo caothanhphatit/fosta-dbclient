@@ -396,14 +396,14 @@ impl OraEngine {
             let rows = c.query(&built.sql, &refs(&b)).map_err(map_err)?;
             let mut out = Vec::new();
             for row in rows {
-                out.push(row.map_err(map_err)?.sql_values().iter().map(types::read).collect());
+                out.push(types::read_row(&d.columns, row.map_err(map_err)?.sql_values()));
             }
             let estimated_total = if !req.estimate_total {
                 None
             } else if built.where_sql.is_empty() {
                 d.row_estimate
             } else {
-                estimate(c, &d.object, &built, req.after.as_ref().map_or(0, Vec::len))
+                estimate(c, &d.object, &built)
             };
             Ok(sqlbuild::finish_page(d.columns, out, req.limit, &built, key, estimated_total))
         })
@@ -457,17 +457,16 @@ impl OraEngine {
     }
 }
 
-/// The optimizer's cardinality for the filter (EXPLAIN PLAN into the session's PLAN_TABLE).
-fn estimate(c: &Connection, obj: &ObjectRef, built: &sqlbuild::BrowseSql, keyset_len: usize) -> Option<i64> {
-    let n = built.params.len() - keyset_len * (keyset_len + 1) / 2;
+/// The optimizer's cardinality for the filter (EXPLAIN PLAN into the session's PLAN_TABLE). EXPLAIN PLAN takes no bind values
+/// (binding fails with "invalid bind index"): the placeholders stay in the text and the optimizer estimates without them.
+fn estimate(c: &Connection, obj: &ObjectRef, built: &sqlbuild::BrowseSql) -> Option<i64> {
     let id = format!("fosta{}", std::process::id());
     let sql = format!(
         "EXPLAIN PLAN SET STATEMENT_ID = '{id}' FOR SELECT 1 FROM {} WHERE {}",
         OraDialect.table_sql(obj),
         built.where_sql
     );
-    let b = binds(&built.params[..n]);
-    c.execute(&sql, &refs(&b)).ok()?;
+    c.execute(&sql, &[]).ok()?;
     let rows = strings(c, "SELECT cardinality FROM plan_table WHERE statement_id = :1 AND id = 0", &[&id]).ok()?;
     let _ = c.execute("DELETE FROM plan_table WHERE statement_id = :1", &[&id]);
     let _ = c.commit();
