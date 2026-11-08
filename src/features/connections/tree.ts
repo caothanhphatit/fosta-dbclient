@@ -107,7 +107,24 @@ export class ConnectionTree {
     return connected ? { connectionId: connected.profile.id, database: connected.profile.database } : null;
   }
 
-  /** Ids of every connection (in any workspace) that is currently connected. */
+  /**
+   * Like `activeContext`, but connects first when nothing is connected yet: the selected connection, or the only
+   * one in the workspace. Null when there is nothing to connect to (or connecting failed or was cancelled).
+   */
+  hasConnections(): boolean {
+    return this.nodes.length > 0;
+  }
+
+  async connectedContext(): Promise<TreeContext | null> {
+    const ready = this.activeContext();
+    if (ready) return ready;
+    const selected = this.selectedKey ? this.contexts.get(this.selectedKey) : undefined;
+    const node = selected ? this.nodeOf(selected.connectionId) : this.nodes.length === 1 ? this.nodes[0] : undefined;
+    if (!node || node.state === "connecting") return null;
+    await this.connect(node);
+    return this.activeContext();
+  }
+
   /** Profile of a connection in the current workspace, if known. */
   profileOf(connectionId: string): ConnectionProfile | null {
     return this.nodeOf(connectionId)?.profile ?? null;

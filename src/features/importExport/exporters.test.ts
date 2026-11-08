@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ColumnMeta } from "../../core/types";
 import { parseCsv } from "./csv";
-import { exportDelimited, exportRows } from "./exporters";
+import { excelSeparator, exportDelimited, exportRows } from "./exporters";
 
 const column = (name: string, vectorDims: number | null = null): ColumnMeta => ({
   name,
@@ -36,6 +36,15 @@ describe("exportDelimited", () => {
 
   it("leaves a comma unquoted when it is not the separator", () => {
     expect(exportDelimited([column("a")], [["x,y"]], ";")).toBe("a\r\nx,y");
+  });
+});
+
+describe("excelSeparator", () => {
+  it("follows the locale's decimal separator", () => {
+    expect(excelSeparator("en-US")).toBe(",");
+    expect(excelSeparator("en-GB")).toBe(",");
+    expect(excelSeparator("vi-VN")).toBe(";");
+    expect(excelSeparator("de-DE")).toBe(";");
   });
 });
 

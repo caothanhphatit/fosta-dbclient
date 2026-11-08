@@ -41,7 +41,7 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
       h(
         "div",
         { class: "welcome-actions" },
-        card("plug", "New connection", "Save a MariaDB or MySQL server in this workspace", () => actions.newConnection()),
+        card("plug", "New connection", "Save a MariaDB, MySQL, SQL Server or MongoDB server in this workspace", () => actions.newConnection()),
         card("query", "New query", "Open a SQL editor on the selected connection", () => actions.newQuery()),
         requires(
           card("task", "New startup task", "Keep a port-forward alive while this workspace is open", () => actions.newTask()),

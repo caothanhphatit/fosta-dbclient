@@ -93,6 +93,7 @@ const rail = new WorkspaceRail({
   toggleTheme: () => {
     toggleTheme();
     setStatus(describeTheme());
+    toast(describeTheme());
   },
   openSettings: (event) => showContextMenu(event, settingsMenu()),
   openThemeMenu: (event) => showContextMenu(event, themeMenu()),
@@ -359,10 +360,13 @@ function diagramFromSelection(): void {
   navigation.openDiagram(profile, context.database);
 }
 
+/** Opens a query tab on the selected connection, connecting it first when needed. */
 function newQueryFromSelection(): void {
-  const context = tree.activeContext();
-  if (context) navigation.openQuery(context.connectionId, context.database);
-  else toast("Connect to a database first (double-click a connection)");
+  void tree.connectedContext().then((context) => {
+    if (context) navigation.openQuery(context.connectionId, context.database);
+    else if (!tree.hasConnections()) toast("Add a connection first, then open a query on it");
+    else toast("Select a connection in the tree to open a query on it");
+  });
 }
 
 async function editConnection(profile: ConnectionProfile | null): Promise<void> {

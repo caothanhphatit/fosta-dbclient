@@ -27,6 +27,8 @@ const GAP_X = 110;
 const GAP_Y = 36;
 const STUB = 18;
 const MIN_SCALE = 0.15;
+/** Zoom used when jumping to a table (search, assistant), so it is readable. */
+const FOCUS_SCALE = 0.9;
 const MAX_SCALE = 2.5;
 const STORAGE_PREFIX = "db-studio.diagram";
 /** Below this zoom boxes show only their header; column text is unreadable anyway. */
@@ -191,7 +193,7 @@ export class DiagramView implements TabContent {
     if (!box || this.svg.getBoundingClientRect().width === 0) return;
     this.pendingFocus = null;
     this.fitted = true;
-    this.scale = Math.max(this.scale, 0.9);
+    this.scale = Math.max(this.scale, FOCUS_SCALE);
     this.select(box.table.name);
     this.centerOn(box);
   }
@@ -560,6 +562,8 @@ export class DiagramView implements TabContent {
       if (match && !first) first = box;
     }
     if (jump && first) {
+      // Zoom in to a readable size (as the assistant's "show table" does), so the label and the view change together.
+      this.scale = Math.max(this.scale, FOCUS_SCALE);
       this.select(first.table.name);
       this.centerOn(first);
     }

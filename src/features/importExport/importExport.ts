@@ -11,7 +11,7 @@ import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs
 import { formatNumber, h } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
 import { detectDelimiter, parseCsv } from "./csv";
-import { exportDelimited, exportRows } from "./exporters";
+import { excelSeparator, exportDelimited, exportRows } from "./exporters";
 import { ExportCancelled, exportFileName, fetchAllRows } from "./exportFetch";
 import { sqlDialect, type SqlDialect } from "../../core/sql";
 import { ConfirmationSession } from "../safety/confirmationDialog";
@@ -28,7 +28,7 @@ type FileFormat = "csv" | "excel" | "json" | "insert" | "markdown";
 
 const FORMATS: { value: FileFormat; label: string; extension: string }[] = [
   { value: "csv", label: "CSV", extension: "csv" },
-  { value: "excel", label: "CSV for Excel (UTF-8 with BOM, ; separated)", extension: "csv" },
+  { value: "excel", label: `CSV for Excel (UTF-8 with BOM, "${excelSeparator()}" separated, from your locale)`, extension: "csv" },
   { value: "json", label: "JSON", extension: "json" },
   { value: "insert", label: "SQL INSERT statements", extension: "sql" },
   { value: "markdown", label: "Markdown table", extension: "md" },
@@ -109,8 +109,8 @@ export function exportDialog(source: ExportSource): void {
 function render(format: FileFormat, columns: ColumnMeta[], rows: Cell[][], table: string, dialect: SqlDialect): string {
   switch (format) {
     case "excel":
-      // Excel on a Vietnamese/European locale expects ";" and only reads UTF-8 with a BOM.
-      return `${BOM}${exportDelimited(columns, rows, ";")}`;
+      // Excel reads UTF-8 only with a BOM, and splits on the locale's list separator ("," in the US, ";" in Vietnam or Germany).
+      return `${BOM}${exportDelimited(columns, rows, excelSeparator())}`;
     case "csv":
     case "json":
     case "insert":

@@ -29,7 +29,10 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
       const needsName = warning !== null && isProduction();
       const label = relaxField.querySelector(".field-label");
       if (label) label.textContent = `Type ${existing?.name ?? (name.value.trim() || "the workspace name")} to confirm`;
+      const shown = warningHost.childElementCount > 0;
       warningHost.replaceChildren(...(warning ? [warning] : []), ...(needsName ? [relaxField] : []));
+      // The warning sits below the rules editor; bring it into view when it first appears.
+      if (warning && !shown && warningHost.isConnected) requestAnimationFrame(() => warningHost.scrollIntoView({ block: "nearest", behavior: "smooth" }));
     };
     const safety = safetyEditor(savedSafety(), refreshWarning);
     const swatches = WORKSPACE_COLORS.map((option) => {
@@ -94,6 +97,7 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
             const relaxing = relaxations(savedSafety(), rules).length > 0;
             const expected = existing?.name ?? trimmed;
             if (relaxing && isProduction() && relaxName.value.trim() !== expected.trim()) {
+              relaxName.scrollIntoView({ block: "center" });
               relaxName.focus();
               throw new Error(`Type ${expected} to relax the rules of a Production workspace`);
             }

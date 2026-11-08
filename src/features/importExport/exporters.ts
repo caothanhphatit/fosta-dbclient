@@ -36,6 +36,15 @@ export function exportRows(format: ExportFormat, columns: ColumnMeta[], rows: Ce
 }
 
 /**
+ * The list separator Excel expects when it opens a CSV: ";" where the decimal separator is a comma (Vietnamese,
+ * most of Europe), "," elsewhere (US, UK). Windows ties its list separator to the locale the same way by default.
+ */
+export function excelSeparator(locale?: string): string {
+  const decimal = new Intl.NumberFormat(locale).formatToParts(1.5).find((part) => part.type === "decimal")?.value;
+  return decimal === "," ? ";" : ",";
+}
+
+/**
  * RFC 4180 text with any separator: a header line, then one record per row.
  * Values holding the separator, a quote or a line break are quoted, so a cell
  * may span lines. NULL becomes an empty field. Vector columns are left out.
