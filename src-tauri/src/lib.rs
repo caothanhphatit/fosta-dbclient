@@ -24,6 +24,8 @@ mod job;
 #[cfg(test)]
 mod live_tests;
 mod lock;
+#[cfg(test)]
+mod perf_tests;
 pub mod schema;
 pub mod secrets;
 pub mod tasks;
