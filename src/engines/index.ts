@@ -8,7 +8,9 @@
 import type { IconName } from "../core/dom";
 import { defaultLanguage, engineInfo } from "../core/engines";
 import { defaultLanguageSupport, jsonLanguageSupport, sqlLanguageSupport, type LanguageSupport } from "../core/language";
-import { registerViews, setEngineLoader, setIconResolver } from "../core/views";
+import type { AppError } from "../core/contract";
+import { toAppError } from "../core/errors";
+import { registerViews, setConnectErrorHandler, setEngineLoader, setIconResolver, type ConnectErrorContext } from "../core/views";
 import { sharedViews } from "./shared";
 
 export interface EngineUiModule {
@@ -19,6 +21,11 @@ export interface EngineUiModule {
   languages?: Record<string, () => Promise<LanguageSupport>>;
   /** Icons for `ObjectNode.icon` values of the form "engine:<id>/<name>". */
   icons?: Record<string, IconName>;
+  /**
+   * Called when connecting failed, before the error is shown: the module may offer a fix (install a client library,
+   * change a setting) and resolve true to retry the connect, or false to show the error as usual.
+   */
+  connectError?(error: AppError, context: ConnectErrorContext): Promise<boolean>;
 }
 
 const modules = import.meta.glob<{ default: EngineUiModule }>("./*/index.ts");
@@ -28,6 +35,10 @@ const resolvedIcons = new Map<string, IconName>();
 registerViews(sharedViews(languageSupport));
 setEngineLoader(async (id) => void (await ensureEngine(id)));
 setIconResolver(engineIcon);
+setConnectErrorHandler(async (id, error, context) => {
+  const module = await ensureEngine(id);
+  return module?.connectError ? module.connectError(toAppError(error), context) : false;
+});
 
 /** Loads and registers the engine's UI module once; null when the engine has none (it then uses the shared views). */
 export function ensureEngine(id: string): Promise<EngineUiModule | null> {

@@ -102,6 +102,32 @@ export async function loadEngineUi(engineId: string): Promise<void> {
   if (engineLoader) await engineLoader(engineId);
 }
 
+/** What an engine's UI module gets when connecting failed (to offer a fix, such as installing a client library). */
+export interface ConnectErrorContext {
+  profile: ConnectionProfile;
+  /** Saves a changed profile (for a setting the fix needs); the saved password is kept. Absent for unsaved profiles. */
+  saveProfile?: (profile: ConnectionProfile) => Promise<void>;
+}
+
+type ConnectErrorHandler = (engineId: string, error: unknown, context: ConnectErrorContext) => Promise<boolean>;
+
+let connectErrorHandler: ConnectErrorHandler | null = null;
+
+/** Installed by `src/engines/index.ts`: forwards a connect error to the engine's UI module. */
+export function setConnectErrorHandler(handler: ConnectErrorHandler): void {
+  connectErrorHandler = handler;
+}
+
+/** Lets the engine's UI module handle a failed connect; true when it fixed the cause and the connect should be retried. */
+export async function recoverConnectError(engineId: string, error: unknown, context: ConnectErrorContext): Promise<boolean> {
+  if (!connectErrorHandler) return false;
+  try {
+    return await connectErrorHandler(engineId, error, context);
+  } catch {
+    return false;
+  }
+}
+
 let iconResolver: (icon: string) => string = (icon) => icon;
 
 /** Installed by `src/engines/index.ts`: maps "engine:<id>/<name>" node icons through the engine UI module's `icons`. */

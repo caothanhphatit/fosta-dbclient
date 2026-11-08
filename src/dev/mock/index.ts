@@ -505,8 +505,15 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     // Mock-only
     case "mock_touch_row":
       return touchRow(str("connectionId"), str("table"), payload.key, Boolean(payload.remove), (payload.column as string | undefined) ?? undefined);
-    default:
-      throw mockError("ERROR", `devMock: no handler for ${command}`);
+    default: {
+      const handler = engines.find((engine) => engine.commands?.[command])?.commands?.[command];
+      if (!handler) throw mockError("ERROR", `devMock: no handler for ${command}`);
+      const channel = payload.onEvent as Channel<unknown> | undefined;
+      const emitter = channel ? channelEmitter(channel) : null;
+      const result = handler(payload, (event) => emitter?.emit(event));
+      if (!(result instanceof Promise)) return result;
+      return result.finally(() => emitter?.end());
+    }
   }
 }
 

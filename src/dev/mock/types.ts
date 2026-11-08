@@ -54,6 +54,8 @@ export interface EngineMock {
   schemaGraph?(database: string): SchemaGraph;
   completion?(database: string | null): CompletionSchema;
   createDatabase?(name: string, firstCollection: string | null): void;
+  /** Engine-specific backend commands (Oracle's `oracle_client_*`); `emit` streams events to a channel argument. */
+  commands?: Record<string, (payload: Record<string, unknown>, emit: (event: unknown) => void) => unknown>;
   /** Mock-only: "someone else" edits (or deletes) a row, to provoke a `CONFLICT` on the next save. */
   touchRow?(table: string, key: unknown, remove: boolean, column?: string): string;
 }
