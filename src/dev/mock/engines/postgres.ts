@@ -14,7 +14,6 @@ import type { EngineMock } from "../types";
 const base = DESCRIPTORS.postgres;
 export const descriptor = {
   ...base,
-  status: "ready" as const,
   connection: {
     ...base.connection,
     tls: { modes: ["disable", "require", "verifyCa", "verifyFull"], ca: true, clientCert: true, serverName: true, pin: true },

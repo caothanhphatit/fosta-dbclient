@@ -13,7 +13,6 @@ import type { EngineMock } from "../types";
 const base: EngineDescriptor = DESCRIPTORS.sqlite;
 export const descriptor: EngineDescriptor = {
   ...base,
-  status: "ready",
   connection: {
     ...base.connection,
     fields: [

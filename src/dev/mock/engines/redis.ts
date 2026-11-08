@@ -15,12 +15,7 @@ import { mockError } from "../errors";
 import { pause } from "../sqlRun";
 import type { EngineMock, RunContext } from "../types";
 
-// The backend's descriptor is ready with these capabilities (the shared dump still says planned).
-export const descriptor: EngineDescriptor = {
-  ...DESCRIPTORS.redis,
-  status: "ready",
-  capabilities: ["tree", "describe", "multipleDatabases", "query", "cancel", "streamingResults", "keyValue", "console", "serverOverview"],
-};
+export const descriptor: EngineDescriptor = DESCRIPTORS.redis;
 export const order = ORDER.indexOf("redis");
 
 const ENGINE = "redis";

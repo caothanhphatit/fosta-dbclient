@@ -16,7 +16,7 @@ import type { EngineMock } from "../types";
 import type { StatementInfo } from "../../../core/types";
 
 // The backend's descriptor is ready (the shared dump still says planned).
-export const descriptor: EngineDescriptor = { ...DESCRIPTORS.clickhouse, status: "ready" };
+export const descriptor: EngineDescriptor = DESCRIPTORS.clickhouse;
 export const order = ORDER.indexOf("clickhouse");
 
 const ENGINE = "clickhouse";

@@ -331,27 +331,7 @@ const ref = (name: string): ObjectRef => ({ database: null, schema: null, name, 
 /** Builds the mock for a flavor (Elasticsearch here, OpenSearch in `opensearch.ts`). */
 export function createSearchMock(flavor: Flavor, base: EngineDescriptor) {
   const catalog = catalogFor(flavor);
-  const desc: EngineDescriptor = {
-    ...base,
-    status: "ready",
-    capabilities: [
-      "tree",
-      "describe",
-      "browseRows",
-      "editRows",
-      "rawFilter",
-      "keysetPaging",
-      "estimatedCount",
-      "exactCount",
-      "query",
-      "cancel",
-      "statementTimeout",
-      "documents",
-      "search",
-      "console",
-      "serverOverview",
-    ],
-  };
+  const desc: EngineDescriptor = base;
   const table = (object: ObjectRef) => catalog.table({ database: "", schema: null, name: object.name === "products-current" ? "products" : object.name });
   const onTable = (object: ObjectRef): ObjectRef => ({
     ...object,

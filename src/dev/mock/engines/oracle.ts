@@ -18,8 +18,6 @@ import type { EngineMock } from "../types";
 const base: EngineDescriptor = DESCRIPTORS.oracle;
 export const descriptor: EngineDescriptor = {
   ...base,
-  status: "ready",
-  capabilities: [...base.capabilities.filter((capability) => capability !== "schemas" && capability !== "readOnlySession"), "multipleDatabases"],
   connection: {
     ...base.connection,
     fields: [
