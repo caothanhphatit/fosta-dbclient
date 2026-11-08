@@ -16,7 +16,6 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use super::{
-    mssql_batch::{with_row_counts, ROWCOUNT_COLUMN},
     relations::{self, TableRelations},
     types::{
         elapsed_millis, encode_hex, BrowseRequest, Cell, CellValue, ColumnDesign, ColumnMeta, QueryOutcome, ResultSet, RowChange,
@@ -26,6 +25,7 @@ use super::{
 };
 use crate::{
     config::ConnectionProfile,
+    engines::mssql::batch::{with_row_counts, ROWCOUNT_COLUMN},
     error::{AppError, AppResult},
     lock::lock,
     schema::{BulkSchema, SchemaColumn},
@@ -321,7 +321,7 @@ impl Driver for MssqlConnection {
                 .await?;
         }
         let started = Instant::now();
-        // Every result set and every row count of the batch, in order (see `mssql_batch`).
+        // Every result set and every row count of the batch, in order (see `engines::mssql::batch`).
         let sets = read_result_sets(&mut client, &with_row_counts(&sql), limits.max_rows).await?;
         let elapsed_ms = elapsed_millis(started);
         let transaction = transaction_state(&mut client).await;

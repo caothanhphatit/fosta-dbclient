@@ -27,7 +27,7 @@ src-tauri/src/           Rust backend
   ai/                    assistant: prompt, tools, Anthropic and OpenAI wire formats
   config.rs secrets.rs   fosta-studio.json, Credential Manager / encrypted secret file
   tasks.rs job.rs        startup tasks and their child processes
-  engines/               engine adapters; engines/mysql is MariaDB/MySQL with its vector tools
+  engines/               engine adapters; engines/mysql is MariaDB/MySQL with its vector tools, engines/mssql SQL Server
   schema.rs              ER diagram data from the pre-contract drivers
 dev/                     docker-compose.yml and seed data for the test databases
 scripts/                 toolchain installer and icon generator (PowerShell), version.mjs (version bump and check)

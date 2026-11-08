@@ -52,6 +52,28 @@ pub trait SqlDialect {
         }
     }
 
+    /// `TOP (n)` written after SELECT where the dialect limits rows that way (T-SQL); `None` uses [`limit_offset`].
+    ///
+    /// [`limit_offset`]: SqlDialect::limit_offset
+    fn top(&self, _limit: u64, _offset: u64) -> Option<String> {
+        None
+    }
+
+    /// The ORDER BY of an unordered page when the dialect's paging needs one (T-SQL `OFFSET … FETCH`).
+    fn unordered(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Characters that are special in a LIKE pattern and escaped with a backslash (T-SQL adds `[`).
+    fn like_specials(&self) -> &'static str {
+        "%_\\"
+    }
+
+    /// The column side of a row-check comparison (T-SQL compares `xml` and `ntext` only as text).
+    fn compare_column(&self, col_sql: String, _col: &ColumnInfo) -> String {
+        col_sql
+    }
+
     /// The NULL-safe equality operator (`<=>`, `IS NOT DISTINCT FROM`) used by row checks; `None` writes
     /// `(col = ? OR (col IS NULL AND ? IS NULL))`.
     fn null_safe_eq(&self) -> Option<&'static str> {
@@ -101,9 +123,14 @@ fn find_column<'c>(columns: &'c [ColumnInfo], name: &str) -> Result<&'c ColumnIn
 
 /// Escapes `%`, `_` and `\` so a substring is matched literally by `LIKE … ESCAPE '\'`.
 pub fn escape_like(text: &str) -> String {
+    escape_like_with(text, "%_\\")
+}
+
+/// Escapes `specials` with a backslash.
+pub fn escape_like_with(text: &str, specials: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     for c in text.chars() {
-        if matches!(c, '%' | '_' | '\\') {
+        if specials.contains(c) {
             out.push('\\');
         }
         out.push(c);
@@ -192,8 +219,13 @@ pub fn build_browse_with_raw<D: SqlDialect + ?Sized>(
     };
 
     let select_list = columns.iter().map(|c| d.select_expr(c)).collect::<Vec<_>>().join(", ");
+    let offset = if req.after.is_some() { 0 } else { req.offset };
+    let (top, tail) = limit_parts(d, req.limit.saturating_add(1), offset);
     let order_sql = if order.is_empty() {
-        String::new()
+        match d.unordered().filter(|_| !tail.is_empty()) {
+            Some(fallback) => format!(" ORDER BY {fallback}"),
+            None => String::new(),
+        }
     } else {
         let items: Vec<String> = order
             .iter()
@@ -201,11 +233,9 @@ pub fn build_browse_with_raw<D: SqlDialect + ?Sized>(
             .collect();
         format!(" ORDER BY {}", items.join(", "))
     };
-    let offset = if req.after.is_some() { 0 } else { req.offset };
     let sql = format!(
-        "SELECT {select_list} FROM {}{where_clause}{order_sql} {}",
-        d.table_sql(&req.object),
-        d.limit_offset(req.limit.saturating_add(1), offset)
+        "SELECT {top}{select_list} FROM {}{where_clause}{order_sql}{tail}",
+        d.table_sql(&req.object)
     );
     Ok(BrowseSql {
         sql,
@@ -214,6 +244,14 @@ pub fn build_browse_with_raw<D: SqlDialect + ?Sized>(
         keyset_ok,
         where_sql: filter_sql,
     })
+}
+
+/// `("TOP (n) ", "")` or `("", " LIMIT n OFFSET m")`.
+fn limit_parts<D: SqlDialect + ?Sized>(d: &D, limit: u64, offset: u64) -> (String, String) {
+    match d.top(limit, offset) {
+        Some(top) => (format!("{top} "), String::new()),
+        None => (String::new(), format!(" {}", d.limit_offset(limit, offset))),
+    }
 }
 
 fn filter_sql<D: SqlDialect + ?Sized>(b: &mut Binder<D>, op: FilterOp, col: &ColumnInfo, values: &[String]) -> Result<String> {
@@ -258,7 +296,7 @@ fn filter_sql<D: SqlDialect + ?Sized>(b: &mut Binder<D>, op: FilterOp, col: &Col
             format!("{c} {}IN ({})", if op == FilterOp::NotIn { "NOT " } else { "" }, ps.join(", "))
         }
         FilterOp::Contains | FilterOp::NotContains | FilterOp::StartsWith | FilterOp::EndsWith => {
-            let e = escape_like(&values[0]);
+            let e = escape_like_with(&values[0], d.like_specials());
             let pattern = match op {
                 FilterOp::StartsWith => format!("{e}%"),
                 FilterOp::EndsWith => format!("%{e}"),
@@ -444,7 +482,7 @@ fn pairs(fields: &[Field]) -> Vec<(String, Value)> {
 
 /// `col <=> ?` in the dialect's NULL-safe form.
 fn null_safe_eq<D: SqlDialect + ?Sized>(b: &mut Binder<D>, col: &ColumnInfo, value: &Value) -> String {
-    let c = b.dialect.quote_ident(&col.name);
+    let c = b.dialect.compare_column(b.dialect.quote_ident(&col.name), col);
     match b.dialect.null_safe_eq() {
         Some(op) => {
             let p = b.bind_column(value.clone(), col);
@@ -531,8 +569,9 @@ pub fn build_reread<D: SqlDialect + ?Sized>(d: &D, obj: &ObjectRef, key: &[Field
     let mut b = Binder::new(d);
     let w = key_where(&mut b, &pairs(key), columns)?;
     let select_list = columns.iter().map(|c| d.select_expr(c)).collect::<Vec<_>>().join(", ");
+    let (top, tail) = limit_parts(d, 1, 0);
     Ok(ChangeSql {
-        sql: format!("SELECT {select_list} FROM {} WHERE {w} {}", d.table_sql(obj), d.limit_offset(1, 0)),
+        sql: format!("SELECT {top}{select_list} FROM {} WHERE {w}{tail}", d.table_sql(obj)),
         params: b.params,
     })
 }

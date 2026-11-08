@@ -174,6 +174,17 @@ async fn read_row(f: &Fixture, handle: &Handle, key: i64) -> Option<Vec<Field>> 
     })
 }
 
+/// The row version of one row (`Page::row_versions`), when the engine has row versions for the table. The suites then
+/// send it in `RowChange::version`, as the grid does, so the engine checks the version instead of the original values.
+async fn read_version(f: &Fixture, handle: &Handle, key: i64) -> Option<Value> {
+    let mut request = BrowseRequest::new(f.table.clone(), 5);
+    request.filter = (f.key_filter)(key);
+    let page = browse(handle, request).await.expect("read row version");
+    let versions = page.row_versions?;
+    assert_eq!(versions.len(), page.rows.len(), "{}: one row version per row", f.engine);
+    versions.into_iter().next()
+}
+
 fn field<'a>(row: &'a [Field], column: &str) -> &'a Value {
     &row.iter()
         .find(|f| f.column == column)
@@ -395,12 +406,23 @@ pub async fn suite_browse(f: &Fixture) {
     }
 }
 
-fn update(f: &Fixture, key: i64, original: &str, new: &str) -> RowChange {
+fn update(f: &Fixture, key: i64, original: &str, new: &str, version: Option<Value>) -> RowChange {
     RowChange::Update {
         key: vec![Field::new(f.key_column, Value::Int(key))],
         values: vec![Field::new(f.name_column, Value::Text(new.to_owned()))],
         original: vec![Field::new(f.name_column, Value::Text(original.to_owned()))],
-        version: None,
+        version,
+        force: false,
+    }
+}
+
+fn delete(f: &Fixture, key: i64, original: Option<&str>, version: Option<Value>) -> RowChange {
+    RowChange::Delete {
+        key: vec![Field::new(f.key_column, Value::Int(key))],
+        original: original
+            .map(|name| vec![Field::new(f.name_column, Value::Text(name.to_owned()))])
+            .unwrap_or_default(),
+        version,
         force: false,
     }
 }
@@ -425,7 +447,8 @@ fn insert(f: &Fixture, key: i64, name: &str) -> RowChange {
 }
 
 /// Insert, update and delete round trips, NULLs, and optimistic concurrency: a stale update or one on a deleted row is
-/// a CONFLICT and nothing of the set is applied; "overwrite" (force) applies it.
+/// a CONFLICT and nothing of the set is applied; "overwrite" (force) applies it. Engines with row versions are checked
+/// by version (read from the page, as the grid does), the others by the original values.
 pub async fn suite_edit(f: &Fixture) {
     let (_manager, handle) = connect(f).await;
     if !handle.conn.capabilities().contains(Capability::EditRows) {
@@ -438,7 +461,13 @@ pub async fn suite_edit(f: &Fixture) {
     let row = read_row(f, &handle, 2001).await.expect("inserted row");
     assert_eq!(text_of(field(&row, f.name_column)), "contract new");
     assert!(field(&row, "note").is_null());
-    let result = apply(&handle, set(f, vec![update(f, 2001, "contract new", "contract renamed")]))
+    let version = read_version(f, &handle, 2001).await;
+    println!(
+        "{}: edits checked by {}",
+        f.engine,
+        if version.is_some() { "row version" } else { "original values" }
+    );
+    let result = apply(&handle, set(f, vec![update(f, 2001, "contract new", "contract renamed", version)]))
         .await
         .expect("update");
     assert_eq!(result.updated, 1);
@@ -446,26 +475,34 @@ pub async fn suite_edit(f: &Fixture) {
         text_of(field(&read_row(f, &handle, 2001).await.unwrap(), f.name_column)),
         "contract renamed"
     );
-    let delete = RowChange::Delete {
-        key: vec![Field::new(f.key_column, Value::Int(2001))],
-        original: vec![Field::new(f.name_column, Value::Text("contract renamed".into()))],
-        version: None,
-        force: false,
-    };
-    assert_eq!(apply(&handle, set(f, vec![delete])).await.expect("delete").deleted, 1);
+    let version = read_version(f, &handle, 2001).await;
+    let removed = apply(&handle, set(f, vec![delete(f, 2001, Some("contract renamed"), version)]))
+        .await
+        .expect("delete");
+    assert_eq!(removed.deleted, 1);
     assert!(read_row(f, &handle, 2001).await.is_none());
 
     if f.has_gap(Gap::Concurrency) {
         return;
     }
     // Two writers edit the same row: B saves first; A's stale update is a conflict, and A's other change (an insert in
-    // the same set) is rolled back.
-    apply(&handle, set(f, vec![update(f, 10, "item 0010", "changed by B")]))
-        .await
-        .expect("writer B");
+    // the same set) is rolled back. Both read the row (and its version) before B saves.
+    let read_by_both = read_version(f, &handle, 10).await;
+    apply(
+        &handle,
+        set(f, vec![update(f, 10, "item 0010", "changed by B", read_by_both.clone())]),
+    )
+    .await
+    .expect("writer B");
     let error = apply(
         &handle,
-        set(f, vec![insert(f, 2002, "rolled back"), update(f, 10, "item 0010", "changed by A")]),
+        set(
+            f,
+            vec![
+                insert(f, 2002, "rolled back"),
+                update(f, 10, "item 0010", "changed by A", read_by_both.clone()),
+            ],
+        ),
     )
     .await
     .expect_err("writer A conflicts");
@@ -480,14 +517,21 @@ pub async fn suite_edit(f: &Fixture) {
         "changed by B"
     );
     // Overwrite: the same change with force wins.
-    let RowChange::Update { key, values, original, .. } = update(f, 10, "item 0010", "changed by A") else {
+    let RowChange::Update {
+        key,
+        values,
+        original,
+        version,
+        ..
+    } = update(f, 10, "item 0010", "changed by A", read_by_both)
+    else {
         unreachable!()
     };
     let forced = RowChange::Update {
         key,
         values,
         original,
-        version: None,
+        version,
         force: true,
     };
     apply(&handle, set(f, vec![forced])).await.expect("overwrite");
@@ -498,24 +542,21 @@ pub async fn suite_edit(f: &Fixture) {
 
     // The row is deleted before the apply: a conflict that says the row no longer exists.
     apply(&handle, set(f, vec![insert(f, 2003, "doomed")])).await.unwrap();
-    let gone = RowChange::Delete {
-        key: vec![Field::new(f.key_column, Value::Int(2003))],
-        original: vec![],
-        version: None,
-        force: false,
-    };
-    apply(&handle, set(f, vec![gone])).await.unwrap();
-    let error = apply(&handle, set(f, vec![update(f, 2003, "doomed", "too late")]))
+    let doomed = read_version(f, &handle, 2003).await;
+    apply(&handle, set(f, vec![delete(f, 2003, None, doomed.clone())])).await.unwrap();
+    let error = apply(&handle, set(f, vec![update(f, 2003, "doomed", "too late", doomed)]))
         .await
         .expect_err("row gone");
     assert_conflict(f, &error, 0, None, "too late");
-    // A stale delete is a conflict too.
-    let stale_delete = RowChange::Delete {
-        key: vec![Field::new(f.key_column, Value::Int(11))],
-        original: vec![Field::new(f.name_column, Value::Text("not what it is".into()))],
-        version: None,
-        force: false,
-    };
+    // A stale delete is a conflict too: by version, the row changed after it was read; by original values, the name
+    // is not what the deleting writer saw.
+    let stale = read_version(f, &handle, 11).await;
+    if stale.is_some() {
+        apply(&handle, set(f, vec![update(f, 11, "item 0011", "item 0011", stale.clone())]))
+            .await
+            .expect("another writer saves row 11");
+    }
+    let stale_delete = delete(f, 11, Some("not what it is"), stale);
     let error = apply(&handle, set(f, vec![stale_delete])).await.expect_err("stale delete");
     assert_eq!(error.code(), Some(CONFLICT));
     assert!(read_row(f, &handle, 11).await.is_some());

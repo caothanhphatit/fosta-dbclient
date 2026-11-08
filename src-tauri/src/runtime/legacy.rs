@@ -1,11 +1,11 @@
-//! Transitional: the engine contract over the pre-contract `drivers::Driver`s (SQL Server, MongoDB), so the core, the
-//! new commands and the contract tests use one path while the native adapters are written. Values are converted at the
-//! boundary (text cells become `Value::Text`, `Value::Bytes` for binary columns, numbers keep their text). Removed once
-//! every engine has a native adapter.
+//! Transitional: the engine contract over the pre-contract `drivers::Driver`s (MongoDB), so the core, the new commands
+//! and the contract tests use one path while the native adapters are written. Values are converted at the boundary
+//! (text cells become `Value::Text`, `Value::Bytes` for binary columns, numbers keep their text). Removed once every
+//! engine has a native adapter.
 //!
 //! The old commands still call the `Driver` directly; [`connect`] returns it next to the contract connection and the
-//! `ConnectionManager` keeps both. MariaDB/MySQL have a native adapter; [`open_driver`] opens their legacy driver next
-//! to it for the old commands.
+//! `ConnectionManager` keeps both. MariaDB/MySQL and SQL Server have native adapters; [`open_driver`] opens their legacy
+//! driver next to it for the old commands.
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -53,7 +53,6 @@ impl LegacyEngine {
     }
 }
 
-pub static MSSQL: LegacyEngine = LegacyEngine::new(drivers::Engine::SqlServer, mssql::descriptor::descriptor);
 pub static MONGODB: LegacyEngine = LegacyEngine::new(drivers::Engine::MongoDb, mongo::descriptor::descriptor);
 
 /// What the legacy drivers can do through the contract (no structured filters, no keyset, no concurrency checks).
@@ -118,7 +117,7 @@ pub fn handles(engine_id: &str) -> bool {
 /// adapter (MariaDB/MySQL) still get a legacy driver next to it (a second pool) for the old commands, until those are
 /// removed.
 pub fn wrapped(engine_id: &str) -> bool {
-    matches!(engine_id, "mssql" | "mongodb")
+    matches!(engine_id, "mongodb")
 }
 
 /// Opens only the legacy driver (next to a native connection).
@@ -168,7 +167,7 @@ pub fn engine_for(kind: drivers::Engine) -> &'static dyn Engine {
     match kind {
         drivers::Engine::MariaDb => &mysql::MARIADB,
         drivers::Engine::MySql => &mysql::MYSQL,
-        drivers::Engine::SqlServer => &MSSQL,
+        drivers::Engine::SqlServer => &mssql::MSSQL,
         drivers::Engine::MongoDb => &MONGODB,
     }
 }
@@ -677,23 +676,20 @@ mod tests {
 
     #[test]
     fn legacy_engines_classify_with_the_gateway_classifiers() {
-        let sql = MSSQL.classify(&ClassifyInput::Statement {
-            language: "sql",
-            text: "DELETE FROM t",
-        });
-        assert_eq!(sql.worst(), Some(Category::Destructive));
         let mongo = MONGODB.classify(&ClassifyInput::Statement {
             language: "mongo-command",
             text: r#"{ "find": "t" }"#,
         });
         assert_eq!(mongo.worst(), Some(Category::Read));
-        let unknown = MSSQL.classify(&ClassifyInput::Capability {
+        let unknown = MONGODB.classify(&ClassifyInput::Capability {
             name: "x.y",
             args: &serde_json::Value::Null,
         });
         assert!(unknown.refusal().is_some());
-        assert_eq!(MSSQL.descriptor().id, "mssql");
+        assert_eq!(MONGODB.descriptor().id, "mongodb");
         assert_eq!(engine_for(drivers::Engine::MariaDb).id(), "mariadb");
+        assert_eq!(engine_for(drivers::Engine::SqlServer).id(), "mssql");
         assert!(!handles("postgres") && handles("mysql") && !wrapped("mysql"));
+        assert!(handles("mssql") && !wrapped("mssql") && wrapped("mongodb"));
     }
 }
