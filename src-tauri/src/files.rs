@@ -40,7 +40,9 @@ fn was_written(path: &Path) -> bool {
 pub fn reveal(path: &str) -> AppResult<()> {
     let target = Path::new(path);
     if !was_written(target) {
-        return Err(AppError::new("Only files exported by Fosta Studio in this session can be shown in their folder."));
+        return Err(AppError::new(
+            "Only files exported by Fosta Studio in this session can be shown in their folder.",
+        ));
     }
     if !target.exists() {
         return Err(AppError::new(format!("{path} no longer exists")));

@@ -93,7 +93,8 @@ impl From<mysql_async::Error> for AppError {
 }
 
 /// Shown with SQL Server TLS failures: the usual cause is the self-signed certificate of a local or dev server.
-pub const MSSQL_TLS_HINT: &str = "The server's TLS certificate is not trusted by this machine (SQL Server uses a self-signed certificate unless one \
+pub const MSSQL_TLS_HINT: &str =
+    "The server's TLS certificate is not trusted by this machine (SQL Server uses a self-signed certificate unless one \
      is installed). Tick \"Trust server certificate\" in the connection dialog for a local or test server, or install a certificate \
      from a trusted authority on the server.";
 
@@ -120,9 +121,18 @@ impl From<tiberius::error::Error> for AppError {
 
 fn tls_message(detail: &str) -> String {
     let lower = detail.to_lowercase();
-    let untrusted = ["not trusted", "untrusted", "unknownissuer", "unknown issuer", "self signed", "self-signed", "certificate chain", "-2146762487"]
-        .iter()
-        .any(|needle| lower.contains(needle));
+    let untrusted = [
+        "not trusted",
+        "untrusted",
+        "unknownissuer",
+        "unknown issuer",
+        "self signed",
+        "self-signed",
+        "certificate chain",
+        "-2146762487",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
     if untrusted {
         format!("Could not set up TLS with SQL Server: {detail}. {MSSQL_TLS_HINT}")
     } else {

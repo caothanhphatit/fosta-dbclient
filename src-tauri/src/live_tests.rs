@@ -151,10 +151,19 @@ async fn live_mariadb() {
         .await
         .expect("browse");
     let id = page.columns.iter().find(|column| column.name == "id").expect("id");
-    assert!(id.type_name.starts_with("int") || id.type_name.starts_with("bigint"), "{}", id.type_name);
+    assert!(
+        id.type_name.starts_with("int") || id.type_name.starts_with("bigint"),
+        "{}",
+        id.type_name
+    );
     driver.open_session("types").await.expect("session");
     let typed = driver
-        .run_query("types", Some("shop".into()), "SELECT 1 AS n, CAST(1.5 AS DECIMAL(4,2)) AS d, CAST('2025-01-02' AS DATE) AS t".into(), &Limits::default())
+        .run_query(
+            "types",
+            Some("shop".into()),
+            "SELECT 1 AS n, CAST(1.5 AS DECIMAL(4,2)) AS d, CAST('2025-01-02' AS DATE) AS t".into(),
+            &Limits::default(),
+        )
         .await
         .expect("typed query");
     let names: Vec<&str> = typed.sets[0].columns.iter().map(|column| column.type_name.as_str()).collect();
@@ -209,10 +218,18 @@ async fn live_mssql() {
         .expect("bracket-quoted filter");
     assert!(filtered.total > 0, "bracket-quoted filter matches rows");
     // Declared SQL types, not TDS wire types (int4, bigvarchar, decimaln).
-    let invoice_id = filtered.columns.iter().find(|column| column.name == "InvoiceId").expect("InvoiceId");
+    let invoice_id = filtered
+        .columns
+        .iter()
+        .find(|column| column.name == "InvoiceId")
+        .expect("InvoiceId");
     assert_eq!(invoice_id.type_name, "int");
     let wire = ["int4", "intn", "bigvarchar", "nvarchar_", "decimaln"];
-    assert!(filtered.columns.iter().all(|column| !wire.contains(&column.type_name.as_str())), "{:?}", filtered.columns);
+    assert!(
+        filtered.columns.iter().all(|column| !wire.contains(&column.type_name.as_str())),
+        "{:?}",
+        filtered.columns
+    );
     create_and_drop(driver.as_ref(), "StudioScratch", None, None, "DROP DATABASE [StudioScratch]").await;
     let relations = driver.table_relations("ERP", "sales.Invoices").await.expect("relations");
     assert!(!relations.outgoing.is_empty());
@@ -235,7 +252,9 @@ async fn live_mssql() {
 #[tokio::test]
 #[ignore]
 async fn live_mssql_batches() {
-    let (driver, _) = drivers::open(&mssql_profile("live-mssql-batch"), "Studio#Pass2026").await.expect("connect");
+    let (driver, _) = drivers::open(&mssql_profile("live-mssql-batch"), "Studio#Pass2026")
+        .await
+        .expect("connect");
     driver.open_session("batch").await.expect("session");
     let limits = Limits::default();
     let run = |sql: &'static str| driver.run_query("batch", Some("ERP".into()), sql.into(), &limits);
@@ -273,8 +292,17 @@ async fn live_mssql_batches() {
 #[tokio::test]
 #[ignore]
 async fn live_mssql_untrusted_certificate() {
-    let untrusted = profile("live-mssql-tls", "mssql", 1433, "sa", "ERP", &[("encrypt", "true"), ("trustServerCertificate", "false")]);
-    let error = drivers::probe(&untrusted, "Studio#Pass2026").await.expect_err("certificate not trusted");
+    let untrusted = profile(
+        "live-mssql-tls",
+        "mssql",
+        1433,
+        "sa",
+        "ERP",
+        &[("encrypt", "true"), ("trustServerCertificate", "false")],
+    );
+    let error = drivers::probe(&untrusted, "Studio#Pass2026")
+        .await
+        .expect_err("certificate not trusted");
     assert!(error.to_string().contains("Trust server certificate"), "{error}");
 }
 
@@ -347,7 +375,11 @@ async fn live_mongo_types_and_cursors() {
 
     let user = run(r#"{ "find": "users", "filter": { "_id": 1 } }"#).await.expect("find user");
     let set = &user.sets[0];
-    let position = set.columns.iter().position(|column| column.name == "signedUpAt").expect("signedUpAt column");
+    let position = set
+        .columns
+        .iter()
+        .position(|column| column.name == "signedUpAt")
+        .expect("signedUpAt column");
     assert_eq!(set.columns[position].type_name, "date");
     let shown = set.rows[0][position].clone().expect("a date");
     // Save the shown value back, as the grid does after an edit.
@@ -366,7 +398,11 @@ async fn live_mongo_types_and_cursors() {
         .await
         .expect("count");
     let n = still_date.sets[0].columns.iter().position(|column| column.name == "n").expect("n");
-    assert_eq!(still_date.sets[0].rows[0][n].as_deref(), Some("1"), "signedUpAt is still a BSON date");
+    assert_eq!(
+        still_date.sets[0].rows[0][n].as_deref(),
+        Some("1"),
+        "signedUpAt is still a BSON date"
+    );
     let refused = driver
         .apply_changes(
             "events",

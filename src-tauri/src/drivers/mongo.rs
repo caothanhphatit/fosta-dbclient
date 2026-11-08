@@ -600,20 +600,35 @@ mod tests {
     fn edits_keep_the_stored_bson_type() {
         let date = DateTime::parse_rfc3339_str("2025-01-02T21:36:00Z").unwrap();
         let shown = bson_text(&Bson::DateTime(date)).unwrap();
-        assert_eq!(coerce_cell("signedUpAt", &Some(shown), Some(&Bson::DateTime(date))).unwrap(), Bson::DateTime(date));
+        assert_eq!(
+            coerce_cell("signedUpAt", &Some(shown), Some(&Bson::DateTime(date))).unwrap(),
+            Bson::DateTime(date)
+        );
         let edited = coerce_cell("signedUpAt", &text("2026-03-04T05:06:07.123Z"), Some(&Bson::DateTime(date))).unwrap();
         assert!(matches!(edited, Bson::DateTime(_)), "{edited:?}");
 
         assert_eq!(coerce_cell("n", &text("5"), Some(&Bson::Int64(1))).unwrap(), Bson::Int64(5));
         assert_eq!(coerce_cell("n", &text("5"), Some(&Bson::Int32(1))).unwrap(), Bson::Int32(5));
         assert_eq!(coerce_cell("x", &text("2"), Some(&Bson::Double(1.5))).unwrap(), Bson::Double(2.0));
-        assert_eq!(coerce_cell("ok", &text("false"), Some(&Bson::Boolean(true))).unwrap(), Bson::Boolean(false));
+        assert_eq!(
+            coerce_cell("ok", &text("false"), Some(&Bson::Boolean(true))).unwrap(),
+            Bson::Boolean(false)
+        );
         // A string field stays a string even when the text looks like a number.
-        assert_eq!(coerce_cell("zip", &text("01234"), Some(&Bson::String("x".into()))).unwrap(), Bson::String("01234".into()));
+        assert_eq!(
+            coerce_cell("zip", &text("01234"), Some(&Bson::String("x".into()))).unwrap(),
+            Bson::String("01234".into())
+        );
         let id = ObjectId::new();
-        assert_eq!(coerce_cell("ref", &text(&id.to_hex()), Some(&Bson::ObjectId(ObjectId::new()))).unwrap(), Bson::ObjectId(id));
+        assert_eq!(
+            coerce_cell("ref", &text(&id.to_hex()), Some(&Bson::ObjectId(ObjectId::new()))).unwrap(),
+            Bson::ObjectId(id)
+        );
         let price: Decimal128 = "9.99".parse().unwrap();
-        assert_eq!(coerce_cell("price", &text("9.99"), Some(&Bson::Decimal128(price))).unwrap(), Bson::Decimal128(price));
+        assert_eq!(
+            coerce_cell("price", &text("9.99"), Some(&Bson::Decimal128(price))).unwrap(),
+            Bson::Decimal128(price)
+        );
         assert_eq!(coerce_cell("gone", &None, Some(&Bson::Int32(1))).unwrap(), Bson::Null);
     }
 
@@ -631,19 +646,28 @@ mod tests {
         let error = coerce_cell("signedUpAt", &text("tomorrow"), Some(&date)).unwrap_err();
         assert!(error.to_string().contains("signedUpAt holds a date"), "{error}");
         // Explicit Extended JSON changes the type on purpose.
-        assert_eq!(coerce_cell("n", &text(r#"{"$numberDouble": "1.5"}"#), Some(&Bson::Int32(1))).unwrap(), Bson::Double(1.5));
+        assert_eq!(
+            coerce_cell("n", &text(r#"{"$numberDouble": "1.5"}"#), Some(&Bson::Int32(1))).unwrap(),
+            Bson::Double(1.5)
+        );
     }
 
     #[test]
     fn new_fields_parse_json_and_extended_json() {
-        assert!(matches!(cell_to_bson(&text(r#"{"$date": "2025-01-02T21:36:00Z"}"#)), Bson::DateTime(_)));
+        assert!(matches!(
+            cell_to_bson(&text(r#"{"$date": "2025-01-02T21:36:00Z"}"#)),
+            Bson::DateTime(_)
+        ));
         assert_eq!(cell_to_bson(&text("plain")), Bson::String("plain".into()));
         assert!(matches!(cell_to_bson(&text("[1, 2]")), Bson::Array(_)));
     }
 
     #[test]
     fn columns_report_their_bson_types() {
-        let documents = [doc! { "_id": 1, "at": DateTime::now(), "mixed": 1 }, doc! { "_id": 2, "mixed": "x", "at": Bson::Null }];
+        let documents = [
+            doc! { "_id": 1, "at": DateTime::now(), "mixed": 1 },
+            doc! { "_id": 2, "mixed": "x", "at": Bson::Null },
+        ];
         let set = documents_to_set(&documents);
         let types: Vec<&str> = set.columns.iter().map(|column| column.type_name.as_str()).collect();
         assert_eq!(types, ["int", "date", "int | string"]);

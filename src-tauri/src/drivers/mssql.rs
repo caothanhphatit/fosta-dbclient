@@ -246,7 +246,12 @@ impl Driver for MssqlConnection {
                 let declared: HashMap<String, String> = fetch(client, &types_sql, &[&schema, &name])
                     .await?
                     .iter()
-                    .map(|row| (row.text(0), type_label(&row.text(1), row.optional(2), row.optional(3), row.optional(4))))
+                    .map(|row| {
+                        (
+                            row.text(0),
+                            type_label(&row.text(1), row.optional(2), row.optional(3), row.optional(4)),
+                        )
+                    })
                     .collect();
                 let mut columns = page.columns;
                 for column in &mut columns {

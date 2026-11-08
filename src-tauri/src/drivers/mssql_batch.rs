@@ -258,10 +258,7 @@ mod tests {
         let sql = "UPDATE [we;ird] SET note = N'a; b' /* ; */ -- ;\nWHERE id = 1";
         assert_eq!(with_row_counts(sql), format!("{sql}{COUNT}"));
         // A trailing comment must not swallow the added query.
-        assert_eq!(
-            with_row_counts("DELETE FROM t -- done"),
-            format!("DELETE FROM t{COUNT} -- done")
-        );
+        assert_eq!(with_row_counts("DELETE FROM t -- done"), format!("DELETE FROM t{COUNT} -- done"));
     }
 
     #[test]
