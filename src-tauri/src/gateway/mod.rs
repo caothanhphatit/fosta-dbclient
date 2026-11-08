@@ -112,7 +112,8 @@ impl Context {
         })
     }
 
-    fn limits(&self) -> Limits {
+    /// The rules' engine-level backstops.
+    pub fn limits(&self) -> Limits {
         let effective = self.safety.effective();
         Limits {
             max_rows: effective.max_rows as usize,
@@ -726,7 +727,7 @@ pub async fn legacy_apply_changes(
     .await
 }
 
-/// The old `run_sql`: classified by the engine, checked against the rules, then run with the limits.
+/// The old `run_sql` (whole result in one response) over [`run`]: the events are collected into the old shape.
 pub async fn run_query(
     db: &ConnectionManager,
     context: &Context,
@@ -735,34 +736,39 @@ pub async fn run_query(
     text: String,
     confirmation: Option<&Confirmation>,
 ) -> AppResult<QueryOutcome> {
-    let handle = db.handle(&db.session_connection(session_id)?)?;
-    let language = handle
-        .engine
-        .descriptor()
-        .default_language()
-        .map(|l| l.id.clone())
-        .unwrap_or_default();
-    let classification = handle.engine.classify(&ClassifyInput::Statement {
-        language: &language,
-        text: &text,
-    });
-    let binding = format!("{}\u{0}{text}", database.as_deref().unwrap_or_default());
-    db.gateway.authorize(&Request {
-        caller: Caller::QueryTab,
-        context,
-        engine: handle.engine.id(),
-        scope: session_id,
-        text: &binding,
-        classification: &classification,
-        confirmation,
-        reusable: false,
-    })?;
-    tracing::debug!(session = session_id, statement = %crate::logging::statement_excerpt(&text), "run");
-    let (session, limits) = (session_id.to_owned(), context.limits());
-    db.call_legacy_session(session_id, "ran a query", |driver| async move {
-        driver.run_query(&session, database, text, &limits).await
+    let request = RunRequest { text, database, offset: 0 };
+    let mut sink = crate::contract::CollectSink::default();
+    let summary = run(db, context, session_id, &request, confirmation, &mut sink).await?;
+    let sets = sink
+        .sets
+        .into_iter()
+        .map(|set| crate::drivers::types::ResultSet {
+            columns: set
+                .columns
+                .iter()
+                .map(|column| crate::drivers::types::ColumnMeta {
+                    name: column.name.clone(),
+                    type_name: column.type_name.clone(),
+                    numeric: column.kind.is_numeric(),
+                    binary: column.hints.binary || matches!(column.kind, crate::contract::ValueKind::Bytes),
+                    primary: column.hints.primary,
+                    vector_dims: column.hints.vector_dims,
+                })
+                .collect(),
+            rows: set
+                .rows
+                .iter()
+                .map(|row| row.iter().map(crate::runtime::legacy::cell_of).collect())
+                .collect(),
+            affected_rows: set.affected.unwrap_or(0),
+            truncated: set.truncated,
+        })
+        .collect();
+    Ok(QueryOutcome {
+        sets,
+        elapsed_ms: summary.elapsed_ms,
+        transaction: summary.transaction,
     })
-    .await
 }
 
 /// The old `sql_transaction`.
@@ -772,23 +778,7 @@ pub async fn legacy_transaction(
     session_id: &str,
     op: TransactionOp,
 ) -> AppResult<TransactionState> {
-    let handle = db.handle(&db.session_connection(session_id)?)?;
-    let classification = handle.engine.classify(&ClassifyInput::Transaction(op));
-    db.gateway.authorize(&Request {
-        caller: Caller::Transaction,
-        context,
-        engine: handle.engine.id(),
-        scope: session_id,
-        text: "",
-        classification: &classification,
-        confirmation: None,
-        reusable: false,
-    })?;
-    let (session, limits) = (session_id.to_owned(), context.limits());
-    db.call_legacy_session(session_id, "changed the transaction state", |driver| async move {
-        driver.transaction(&session, op, &limits).await
-    })
-    .await
+    transaction(db, context, session_id, op).await
 }
 
 /// What an assistant tool may do. Every tool the model can call must be listed here; the

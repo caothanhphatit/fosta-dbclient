@@ -6,11 +6,16 @@
 //! generated from [`for_each_command!`](crate::for_each_command), so a command added there reaches both.
 
 pub mod ai;
+pub mod capability;
 pub mod connections;
 pub mod data;
 pub mod diagnostics;
+pub mod engines;
 pub mod files;
 pub mod history;
+pub mod lang;
+pub mod objects;
+pub mod query;
 pub mod tasks;
 pub mod vector;
 pub mod workspaces;
@@ -35,8 +40,10 @@ pub fn capabilities(state: &AppState) -> Capabilities {
 }
 
 /// Calls `$callback!` with every command both front-ends share, one entry per command:
-/// `[sync|async] name(argument: Type, …) -> ReturnType = path::to::function;`.
-/// Each function takes `&AppState` first, then the listed arguments, whose camelCase names are the JSON keys.
+/// `[sync|async] name(argument: Type, …) -> ReturnType = path::to::function;`, or
+/// `[stream] name(…) -> ReturnType => EventType = path;` for commands that stream events while they run.
+/// Each function takes `&AppState` first, then the listed arguments, whose camelCase names are the JSON keys; a stream
+/// command also takes a trailing `crate::events::EventSink<EventType>` (desktop: a Tauri channel `onEvent`; web: NDJSON).
 ///
 /// Not listed (each front-end handles them itself): `ai_chat` (it streams events), and the desktop-only
 /// `save_download` / `reveal_file` / `open_log_folder` (the web edition downloads through the browser).
@@ -51,16 +58,48 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::connections::save_connection;
             [async] delete_connection(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::connections::delete_connection;
             [async] test_connection(profile: $crate::config::ConnectionProfile, password: Option<String>)
-                -> $crate::error::AppResult<String> = $crate::commands::connections::test_connection;
-            [async] connect(id: String, password: Option<String>) -> $crate::error::AppResult<String> = $crate::commands::connections::connect;
+                -> $crate::error::AppResult<$crate::contract::ConnectInfo> = $crate::commands::connections::test_connection;
+            [async] connect(id: String, password: Option<String>)
+                -> $crate::error::AppResult<$crate::contract::ConnectInfo> = $crate::commands::connections::connect;
             [async] disconnect(id: String) -> $crate::error::AppResult<()> = $crate::commands::connections::disconnect;
 
-            [async] list_databases(connection_id: String) -> $crate::error::AppResult<Vec<String>> = $crate::commands::data::list_databases;
+            [sync] engine_descriptors() -> Vec<$crate::contract::EngineDescriptor> = $crate::commands::engines::engine_descriptors;
+            [sync] parse_connection_string(engine: String, text: String)
+                -> $crate::error::AppResult<$crate::commands::engines::ParsedConnectionString> = $crate::commands::engines::parse_connection_string;
+
+            [async] tree_children(connection_id: String, request: $crate::contract::TreeRequest)
+                -> $crate::error::AppResult<$crate::contract::TreeChildren> = $crate::commands::objects::tree_children;
+            [async] describe_object(connection_id: String, object: $crate::contract::ObjectRef)
+                -> $crate::error::AppResult<$crate::contract::ObjectDescription> = $crate::commands::objects::describe_object;
+            [async] browse_object(connection_id: String, request: $crate::contract::BrowseRequest)
+                -> $crate::error::AppResult<$crate::contract::Page> = $crate::commands::objects::browse_object;
+            [async] apply_edits(connection_id: String, changes: $crate::contract::RowChangeSet, caller: Option<$crate::gateway::Caller>,
+                import_id: Option<String>, confirmation: Option<$crate::gateway::Confirmation>)
+                -> $crate::error::AppResult<$crate::contract::ApplyResult> = $crate::commands::objects::apply_edits;
+            [async] schema_graph(connection_id: String, database: String)
+                -> $crate::error::AppResult<$crate::contract::SchemaGraph> = $crate::commands::objects::schema_graph;
             [async] create_database(connection_id: String, name: String, first_collection: Option<String>,
                 confirmation: Option<$crate::gateway::Confirmation>)
-                -> $crate::error::AppResult<()> = $crate::commands::data::create_database;
-            [async] schema_graph(connection_id: String, database: String)
-                -> $crate::error::AppResult<$crate::schema::SchemaGraph> = $crate::commands::data::schema_graph;
+                -> $crate::error::AppResult<()> = $crate::commands::objects::create_database;
+
+            [async] open_session(connection_id: String, session_id: String, options: Option<$crate::contract::SessionOptions>)
+                -> $crate::error::AppResult<$crate::contract::SessionInfo> = $crate::commands::query::open_session;
+            [async] close_session(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::query::close_session;
+            [stream] run(session_id: String, request: $crate::contract::RunRequest, confirmation: Option<$crate::gateway::Confirmation>)
+                -> $crate::error::AppResult<$crate::contract::RunSummary> => $crate::contract::StreamEvent = $crate::commands::query::run;
+            [async] cancel_run(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::query::cancel_run;
+            [async] transaction(session_id: String, op: $crate::contract::TransactionOp)
+                -> $crate::error::AppResult<$crate::contract::TransactionState> = $crate::commands::query::transaction;
+            [async] invoke_capability(connection_id: String, name: String, args: Option<serde_json::Value>,
+                confirmation: Option<$crate::gateway::Confirmation>)
+                -> $crate::error::AppResult<serde_json::Value> = $crate::commands::capability::invoke_capability;
+            [async] completion_schema(connection_id: String, database: String)
+                -> $crate::error::AppResult<$crate::commands::lang::CompletionSchema> = $crate::commands::lang::completion_schema;
+            [sync] format_sql(dialect: Option<$crate::contract::SqlDialectId>, text: String)
+                -> $crate::error::AppResult<String> = $crate::commands::lang::format_sql;
+
+            // Pre-contract commands, kept until the UI has moved to the ones above.
+            [async] list_databases(connection_id: String) -> $crate::error::AppResult<Vec<String>> = $crate::commands::data::list_databases;
             [async] list_tables(connection_id: String, database: String)
                 -> $crate::error::AppResult<Vec<$crate::drivers::types::TableInfo>> = $crate::commands::data::list_tables;
             [async] describe_table(connection_id: String, database: String, table: String)
@@ -72,8 +111,6 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<u64> = $crate::commands::data::apply_changes;
             [async] table_relations(connection_id: String, database: String, table: String)
                 -> $crate::error::AppResult<$crate::drivers::relations::TableRelations> = $crate::commands::data::table_relations;
-            [async] open_session(connection_id: String, session_id: String) -> $crate::error::AppResult<()> = $crate::commands::data::open_session;
-            [async] close_session(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::data::close_session;
             [async] run_sql(session_id: String, database: Option<String>, sql: String, confirmation: Option<$crate::gateway::Confirmation>)
                 -> $crate::error::AppResult<$crate::drivers::types::QueryOutcome> = $crate::commands::data::run_sql;
             [async] cancel_sql(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::data::cancel_sql;
@@ -154,7 +191,15 @@ macro_rules! infallible_output {
     };
 }
 
-infallible_output!((), AppConfig, Capabilities, Vec<String>, Vec<TaskStatus>, diagnostics::Diagnostics);
+infallible_output!(
+    (),
+    AppConfig,
+    Capabilities,
+    Vec<String>,
+    Vec<TaskStatus>,
+    diagnostics::Diagnostics,
+    Vec<crate::contract::EngineDescriptor>
+);
 
 /// Rejects a command the current front-end does not offer.
 pub fn unsupported(command: &str) -> AppError {

@@ -44,18 +44,10 @@ struct ConnEntry {
     _tunnel: Option<net::TunnelGuard>,
 }
 
-enum SessionKind {
-    Contract {
-        session: Arc<dyn Session>,
-        canceller: Option<Arc<dyn Canceller>>,
-    },
-    /// A session the old commands opened on the legacy driver under the tab's session id.
-    Legacy,
-}
-
 struct SessionEntry {
     connection_id: String,
-    kind: SessionKind,
+    session: Arc<dyn Session>,
+    canceller: Option<Arc<dyn Canceller>>,
 }
 
 /// A cheap handle on an open connection for one call.
@@ -290,9 +282,7 @@ impl ConnectionManager {
             ids.into_iter().filter_map(|id| map.remove(&id)).collect()
         };
         for entry in sessions {
-            if let SessionKind::Contract { session, .. } = entry.kind {
-                session.close().await;
-            }
+            entry.session.close().await;
         }
         let removed = lock(&self.connections).remove(connection_id);
         if let Some(entry) = removed {
@@ -342,18 +332,12 @@ impl ConnectionManager {
             session_id,
             SessionEntry {
                 connection_id: connection_id.to_owned(),
-                kind: SessionKind::Contract {
-                    session: opened.session,
-                    canceller: opened.canceller,
-                },
+                session: opened.session,
+                canceller: opened.canceller,
             },
         );
-        if let Some(SessionEntry {
-            kind: SessionKind::Contract { session, .. },
-            ..
-        }) = previous
-        {
-            session.close().await;
+        if let Some(previous) = previous {
+            previous.session.close().await;
         }
         Ok(info)
     }
@@ -363,10 +347,7 @@ impl ConnectionManager {
         let (connection_id, session) = {
             let sessions = lock(&self.sessions);
             let entry = sessions.get(session_id).ok_or_else(|| AppError::new(SESSION_LOST))?;
-            match &entry.kind {
-                SessionKind::Contract { session, .. } => (entry.connection_id.clone(), Arc::clone(session)),
-                SessionKind::Legacy => return Err(AppError::new(SESSION_LOST)),
-            }
+            (entry.connection_id.clone(), Arc::clone(&entry.session))
         };
         Ok((self.handle(&connection_id)?, session))
     }
@@ -381,41 +362,18 @@ impl ConnectionManager {
 
     pub async fn close_session(&self, session_id: &str) {
         let removed = lock(&self.sessions).remove(session_id);
-        match removed {
-            Some(SessionEntry {
-                kind: SessionKind::Contract { session, .. },
-                ..
-            }) => session.close().await,
-            Some(SessionEntry {
-                connection_id,
-                kind: SessionKind::Legacy,
-            }) => {
-                if let Ok(driver) = self.legacy_driver(&connection_id) {
-                    driver.close_session(session_id);
-                }
-            }
-            None => {}
+        if let Some(entry) = removed {
+            entry.session.close().await;
         }
     }
 
     /// Cancels the statement a session runs (without waiting for the session's lock).
     pub async fn cancel(&self, session_id: &str) -> AppResult<()> {
-        let (connection_id, canceller, legacy) = {
+        let (connection_id, canceller) = {
             let sessions = lock(&self.sessions);
             let entry = sessions.get(session_id).ok_or_else(|| AppError::new(SESSION_LOST))?;
-            match &entry.kind {
-                SessionKind::Contract { canceller, .. } => (entry.connection_id.clone(), canceller.clone(), false),
-                SessionKind::Legacy => (entry.connection_id.clone(), None, true),
-            }
+            (entry.connection_id.clone(), entry.canceller.clone())
         };
-        if legacy {
-            let id = session_id.to_owned();
-            return self
-                .call_legacy(&connection_id, "cancelled a query", |driver| async move {
-                    driver.cancel_query(&id).await
-                })
-                .await;
-        }
         let canceller = canceller.ok_or_else(|| AppError::coded("UNSUPPORTED_CAPABILITY", "Stop is not supported by this engine."))?;
         let handle = self.handle(&connection_id)?;
         handle.call("cancelled a query", move |_| canceller.cancel()).await
@@ -459,34 +417,6 @@ impl ConnectionManager {
         let handle = self.handle(connection_id)?;
         let driver = self.legacy_driver(connection_id)?;
         handle.call(what, move |_| call(driver)).await
-    }
-
-    /// [`call_legacy`](Self::call_legacy) on the connection a legacy session belongs to.
-    pub async fn call_legacy_session<T, F, Fut>(&self, session_id: &str, what: &'static str, call: F) -> AppResult<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(Arc<dyn Driver>) -> Fut,
-        Fut: Future<Output = AppResult<T>> + Send + 'static,
-    {
-        let connection_id = self.session_connection(session_id)?;
-        self.call_legacy(&connection_id, what, call).await
-    }
-
-    /// Opens a session on the legacy driver under the tab's own id.
-    pub async fn open_legacy_session(&self, connection_id: &str, session_id: String) -> AppResult<()> {
-        let id = session_id.clone();
-        self.call_legacy(connection_id, "opened a query session", |driver| async move {
-            driver.open_session(&id).await
-        })
-        .await?;
-        lock(&self.sessions).insert(
-            session_id,
-            SessionEntry {
-                connection_id: connection_id.to_owned(),
-                kind: SessionKind::Legacy,
-            },
-        );
-        Ok(())
     }
 
     /// A pooled MariaDB/MySQL connection for the vector tooling (until it moves to `invoke`).

@@ -158,7 +158,7 @@ export class ConnectionTree {
     node.message = null;
     this.render();
     try {
-      const version = await api.connect(node.profile.id, password);
+      const version = (await api.connect(node.profile.id, password)).server.version;
       node.state = "connected";
       node.version = version;
       node.expanded = true;

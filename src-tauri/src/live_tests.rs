@@ -571,18 +571,13 @@ fn gate(connection_id: &str, preset: Preset) -> Context {
 /// Runs app-internal setup SQL in a throwaway session (no gateway: this is the test's own fixture).
 async fn setup(manager: &ConnectionManager, connection_id: &str, database: &str, sql: &str) {
     let session = format!("setup-{connection_id}");
-    manager
-        .open_legacy_session(connection_id, session.clone())
-        .await
-        .expect("setup session");
-    let driver = manager
-        .legacy_driver(&manager.session_connection(&session).unwrap())
-        .expect("driver");
+    let driver = manager.legacy_driver(connection_id).expect("driver");
+    driver.open_session(&session).await.expect("setup session");
     driver
         .run_query(&session, Some(database.into()), sql.into(), &Limits::default())
         .await
         .unwrap_or_else(|error| panic!("setup {sql}: {error}"));
-    manager.close_session(&session).await;
+    driver.close_session(&session);
 }
 
 async fn probe_rows(manager: &ConnectionManager, connection_id: &str, database: &str) -> u64 {
@@ -671,7 +666,10 @@ async fn live_gateway_rules_and_confirmation() {
         "CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe",
     )
     .await;
-    manager.open_legacy_session("rules-maria", "tab".into()).await.expect("session");
+    manager
+        .open_session("rules-maria", "tab".into(), Default::default())
+        .await
+        .expect("session");
     let insert = "INSERT INTO gate_probe VALUES (7)";
 
     let read_only = gate("rules-maria", Preset::ReadOnly);
@@ -691,19 +689,19 @@ async fn live_gateway_rules_and_confirmation() {
     .expect("reads still run");
     assert_eq!(read.sets[0].rows[0][0].as_deref(), Some("0"));
     // The session itself is read-only now: even bypassing the gateway the server refuses the write.
-    let driver = manager.legacy_driver(&manager.session_connection("tab").unwrap()).unwrap();
-    let engine_refusal = driver
-        .run_query(
-            "tab",
-            Some("shop".into()),
-            insert.into(),
-            &Limits {
-                read_only: true,
-                ..Limits::default()
-            },
-        )
-        .await
-        .expect_err("READ ONLY session");
+    let (_, session) = manager.session("tab").unwrap();
+    let request = crate::contract::RunRequest {
+        text: insert.into(),
+        database: Some("shop".into()),
+        offset: 0,
+    };
+    let options = Limits {
+        read_only: true,
+        ..Limits::default()
+    }
+    .run_options();
+    let mut sink = crate::contract::CollectSink::default();
+    let engine_refusal = session.run(&request, &options, &mut sink).await.expect_err("READ ONLY session");
     println!("engine refusal: {engine_refusal}");
 
     let guarded = gate("rules-maria", Preset::Guarded);
@@ -774,7 +772,7 @@ async fn live_transactions() {
             "CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe"
         };
         setup(&manager, id, database, create).await;
-        manager.open_legacy_session(id, "tx".into()).await.expect("session");
+        manager.open_session(id, "tx".into(), Default::default()).await.expect("session");
         let context = gate(id, Preset::Open);
         let run = |sql: &'static str| gateway::run_query(&manager, &context, "tx", Some(database.into()), sql.into(), None);
 
@@ -835,7 +833,10 @@ async fn live_gateway_mongo() {
         .connect(&profile.id, profile.spec(), ConnectSecrets::password("studio-root"))
         .await
         .expect("connect");
-    manager.open_legacy_session("gate-mongo", "m".into()).await.expect("session");
+    manager
+        .open_session("gate-mongo", "m".into(), Default::default())
+        .await
+        .expect("session");
     let read_only = gate("gate-mongo", Preset::ReadOnly);
     let insert = r#"{ "insert": "clicks", "documents": [ { "type": "probe" } ] }"#;
     let blocked = gateway::run_query(&manager, &read_only, "m", Some("events".into()), insert.into(), None)

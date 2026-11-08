@@ -2,7 +2,7 @@
 
 use crate::{
     config::{AppConfig, ConnectionProfile},
-    contract::ConnectSecrets,
+    contract::{ConnectInfo, ConnectSecrets},
     error::{AppError, AppResult, PASSWORD_REQUIRED},
     runtime::ConnectionManager,
     secrets, AppState,
@@ -28,20 +28,18 @@ pub async fn delete_connection(state: &AppState, id: String) -> AppResult<AppCon
     })
 }
 
-pub async fn test_connection(_state: &AppState, profile: ConnectionProfile, password: Option<String>) -> AppResult<String> {
+pub async fn test_connection(_state: &AppState, profile: ConnectionProfile, password: Option<String>) -> AppResult<ConnectInfo> {
     let password = resolve_password(&profile.id, password)?;
-    let info = ConnectionManager::probe(profile.spec(), ConnectSecrets::password(&password)).await?;
-    Ok(info.server.version)
+    ConnectionManager::probe(profile.spec(), ConnectSecrets::password(&password)).await
 }
 
-pub async fn connect(state: &AppState, id: String, password: Option<String>) -> AppResult<String> {
+pub async fn connect(state: &AppState, id: String, password: Option<String>) -> AppResult<ConnectInfo> {
     let profile = state.config.connection(&id)?;
     let password = resolve_password(&id, password)?;
-    let info = state
+    state
         .engines
         .connect(&id, profile.spec(), ConnectSecrets::password(&password))
-        .await?;
-    Ok(info.server.version)
+        .await
 }
 
 pub async fn disconnect(state: &AppState, id: String) -> AppResult<()> {

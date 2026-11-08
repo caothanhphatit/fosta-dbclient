@@ -402,7 +402,15 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const profile =
         (payload.profile as ConnectionProfile | undefined) ?? config.workspaces.flatMap((item) => item.connections).find((item) => item.id === payload.id);
       const versions: Record<string, string> = { mariadb: "11.8.2-MariaDB", mysql: "8.4.3", mssql: "16.0.1000.6 (Developer Edition)", mongodb: "8.0.4" };
-      return versions[profile?.driver ?? "mariadb"];
+      const engine = profile?.driver ?? "mariadb";
+      const version = versions[engine];
+      return {
+        engine,
+        server: { product: engine, version, label: `${engine} ${version}`, flavor: null },
+        capabilities: [],
+        languages: [],
+        connectionActions: [],
+      };
     }
     case "open_session":
       sessions.set(String(payload.sessionId), { connectionId: String(payload.connectionId), open: false, autoCommit: true });

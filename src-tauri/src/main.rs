@@ -43,12 +43,21 @@ macro_rules! tauri_command {
             fosta_studio::logging::command(stringify!($name), $function(&state, $($arg),*)).await
         }
     };
+    ([stream] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty => $event:ty = $function:path) => {
+        // Events go out on the `onEvent` channel; a failed send means the webview is gone, so the command stops.
+        #[allow(clippy::too_many_arguments)]
+        #[tauri::command]
+        async fn $name(state: State<'_, AppState>, $($arg: $type,)* on_event: Channel<$event>) -> $output {
+            let events: fosta_studio::events::EventSink<$event> = Arc::new(move |event| on_event.send(event).is_ok());
+            fosta_studio::logging::command(stringify!($name), $function(&state, $($arg,)* events)).await
+        }
+    };
 }
 
 /// Defines one wrapper per shared command, then the invoke handler listing them plus the desktop-only ones.
 macro_rules! desktop_commands {
-    ($([$kind:tt] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty = $function:path;)*) => {
-        $(tauri_command!([$kind] $name ($($arg : $type),*) -> $output = $function);)*
+    ($([$kind:tt] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty $(=> $event:ty)? = $function:path;)*) => {
+        $(tauri_command!([$kind] $name ($($arg : $type),*) -> $output $(=> $event)? = $function);)*
 
         fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
             tauri::generate_handler![$($name,)* ai_chat, save_download, reveal_file, open_log_folder]

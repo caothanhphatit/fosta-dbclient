@@ -1,3 +1,4 @@
+import type { ConnectInfo } from "./contract";
 import { downloadInBrowser, invoke, invokeStreaming, isTauri, listen, type UnlistenFn } from "./transport";
 import type {
   AiConnection,
@@ -42,8 +43,8 @@ export const api = {
   saveConnection: (profile: ConnectionProfile, password: string | null, workspaceId: string | null = null) =>
     invoke<AppConfig>("save_connection", { profile, password, workspaceId }),
   deleteConnection: (id: string) => invoke<AppConfig>("delete_connection", { id }),
-  testConnection: (profile: ConnectionProfile, password: string | null) => invoke<string>("test_connection", { profile, password }),
-  connect: (id: string, password: string | null) => invoke<string>("connect", { id, password }),
+  testConnection: (profile: ConnectionProfile, password: string | null) => invoke<ConnectInfo>("test_connection", { profile, password }),
+  connect: (id: string, password: string | null) => invoke<ConnectInfo>("connect", { id, password }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   listDatabases: (connectionId: string) => invoke<string[]>("list_databases", { connectionId }),
   schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),

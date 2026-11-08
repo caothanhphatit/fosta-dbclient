@@ -14,3 +14,7 @@ pub struct NoEvents;
 impl EventEmitter for NoEvents {
     fn emit(&self, _event: &str, _payload: Value) {}
 }
+
+/// Where a streaming command sends its events (`run`'s `StreamEvent`s). Returns false once the receiver is gone (the
+/// tab closed, the HTTP response was dropped), so the command can stop.
+pub type EventSink<E> = std::sync::Arc<dyn Fn(E) -> bool + Send + Sync>;

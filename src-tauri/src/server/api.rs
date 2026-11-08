@@ -23,7 +23,7 @@ use axum::{
 use fosta_studio::{
     ai::{ChatEvent, ChatRequest},
     commands::{self, CommandOutput},
-    error::AppError,
+    error::{AppError, AppResult},
     events::EventEmitter,
     AppState,
 };
@@ -74,20 +74,80 @@ fn parse_args<T: DeserializeOwned>(command: &str, args: Value) -> Result<T, Invo
 }
 
 macro_rules! call {
-    ([sync] $name:expr, $call:expr) => {
-        fosta_studio::logging::command_sync($name, || $call)
+    ([sync] $name:expr, $function:path, $state:expr, ($($arg:expr),*)) => {
+        fosta_studio::logging::command_sync($name, || $function($state, $($arg),*))
     };
-    ([async] $name:expr, $call:expr) => {
-        fosta_studio::logging::command($name, $call).await
+    ([async] $name:expr, $function:path, $state:expr, ($($arg:expr),*)) => {
+        fosta_studio::logging::command($name, $function($state, $($arg),*)).await
     };
+    // A stream command called through plain `dispatch` runs with its events dropped (`invoke` streams them).
+    ([stream] $name:expr, $function:path, $state:expr, ($($arg:expr),*)) => {
+        fosta_studio::logging::command($name, $function($state, $($arg,)* std::sync::Arc::new(|_| true))).await
+    };
+}
+
+/// The streaming arm of a command: `Some` only for `[stream]` commands.
+/// The command's name as a string for `[stream]` commands, `""` for the others.
+macro_rules! stream_name {
+    ([stream] $name:ident) => {
+        stringify!($name)
+    };
+    ([$kind:tt] $name:ident) => {
+        ""
+    };
+}
+
+macro_rules! stream_call {
+    ([sync] $($rest:tt)*) => {
+        None
+    };
+    ([async] $($rest:tt)*) => {
+        None
+    };
+    ([stream] $name:expr, $function:path, $state:expr, $events:expr, ($($arg:expr),*)) => {{
+        let events = $events;
+        let sink: fosta_studio::events::EventSink<_> = std::sync::Arc::new(move |event| {
+            serde_json::to_value(event).map(|value| events(value)).unwrap_or(true)
+        });
+        Some(fosta_studio::logging::command($name, $function($state, $($arg,)* sink)).await.into_json())
+    }};
 }
 
 /// `dispatch(state, command, args)`: runs one shared command with its JSON arguments.
 macro_rules! web_commands {
-    ($([$kind:tt] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty = $function:path;)*) => {
+    ($([$kind:tt] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty $(=> $event:ty)? = $function:path;)*) => {
         /// Every command the server answers through `dispatch` (`ai_chat` is handled separately).
         #[cfg(test)]
         pub const COMMANDS: &[&str] = &[$(stringify!($name)),*];
+
+        /// Commands that stream events: `invoke` answers them with NDJSON.
+        pub const STREAM_COMMANDS: &[&str] = &[$(stream_name!([$kind] $name)),*];
+
+        /// Runs a `[stream]` command, sending each event (as JSON) to `events`; `None` for other commands.
+        #[allow(clippy::let_unit_value, unused_variables)]
+        pub async fn dispatch_stream(
+            state: &AppState,
+            command: &str,
+            args: Value,
+            events: fosta_studio::events::EventSink<Value>,
+        ) -> Option<Result<Value, InvokeError>> {
+            match command {
+                $(stringify!($name) => {
+                    #[derive(Deserialize)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Arguments {
+                        $($arg: $type,)*
+                    }
+                    let Arguments { $($arg,)* } = match parse_args(command, args) {
+                        Ok(arguments) => arguments,
+                        Err(error) => return Some(Err(error)),
+                    };
+                    let output: Option<AppResult<Value>> = stream_call!([$kind] stringify!($name), $function, state, events, ($($arg),*));
+                    output.map(|output| output.map_err(InvokeError::Command))
+                })*
+                _ => None,
+            }
+        }
 
         #[allow(clippy::let_unit_value)]
         pub async fn dispatch(state: &AppState, command: &str, args: Value) -> Result<Value, InvokeError> {
@@ -99,7 +159,7 @@ macro_rules! web_commands {
                         $($arg: $type,)*
                     }
                     let Arguments { $($arg,)* } = parse_args(command, args)?;
-                    let output: $output = call!([$kind] stringify!($name), $function(state, $($arg),*));
+                    let output: $output = call!([$kind] stringify!($name), $function, state, ($($arg),*));
                     output.into_json().map_err(InvokeError::Command)
                 })*
                 _ => Err(InvokeError::Unknown(command.to_owned())),
@@ -123,6 +183,9 @@ pub async fn invoke(State(server): State<Arc<Server>>, Path(command): Path<Strin
     };
     if command == "ai_chat" {
         return ai_chat(Arc::clone(&server.state), args);
+    }
+    if STREAM_COMMANDS.contains(&command.as_str()) {
+        return stream(Arc::clone(&server.state), command, args);
     }
     match dispatch(&server.state, &command, args).await {
         Ok(value) => Json(value).into_response(),
@@ -179,6 +242,45 @@ fn ai_chat(state: Arc<AppState>, args: Value) -> Response {
         .unwrap_or_else(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Cannot stream the reply"))
 }
 
+/// Answers a `[stream]` command with NDJSON: one `{ "event": … }` line per event, then `{ "result": … }` or
+/// `{ "error": … }`. Dropping the response (the tab closed the request) makes the event sink return false, so the
+/// command stops.
+fn stream(state: Arc<AppState>, command: String, args: Value) -> Response {
+    ndjson(move |sink| async move {
+        match dispatch_stream(&state, &command, args, sink).await {
+            Some(Ok(value)) => json!({ "result": value }),
+            Some(Err(InvokeError::Command(error))) => json!({ "error": error }),
+            Some(Err(InvokeError::Arguments(message) | InvokeError::Unknown(message))) => json!({ "error": message }),
+            None => json!({ "error": format!("Unknown command '{command}'") }),
+        }
+    })
+}
+
+/// Streams `{ "event": … }` lines while `run` sends events, then its final line.
+fn ndjson<F, Fut>(run: F) -> Response
+where
+    F: FnOnce(fosta_studio::events::EventSink<Value>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Value> + Send + 'static,
+{
+    let (sender, receiver) = mpsc::unbounded_channel::<String>();
+    tokio::spawn(async move {
+        let events = sender.clone();
+        let sink: fosta_studio::events::EventSink<Value> = Arc::new(move |event| events.send(line(&json!({ "event": event }))).is_ok());
+        let last = run(sink).await;
+        let _ = sender.send(line(&last));
+    });
+    let body = stream::unfold(receiver, |mut receiver| async move {
+        let next = receiver.recv().await?;
+        Some((Ok::<_, Infallible>(next), receiver))
+    });
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("x-accel-buffering", "no")
+        .body(Body::from_stream(body))
+        .unwrap_or_else(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "Cannot stream the result"))
+}
+
 fn line(value: &Value) -> String {
     format!("{value}\n")
 }
@@ -201,7 +303,36 @@ pub async fn events(State(server): State<Arc<Server>>) -> Sse<impl Stream<Item =
 
 #[cfg(test)]
 mod tests {
-    use super::COMMANDS;
+    use super::{ndjson, COMMANDS, STREAM_COMMANDS};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn stream_commands_answer_ndjson_and_stop_when_the_client_leaves() {
+        assert!(STREAM_COMMANDS.contains(&"run"));
+        let response = ndjson(|sink| async move {
+            assert!(sink(json!({ "event": "statement", "index": 0, "sql": "SELECT 1" })));
+            assert!(sink(json!({ "event": "done", "index": 0 })));
+            json!({ "result": { "statements": 1 } })
+        });
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let lines: Vec<serde_json::Value> = String::from_utf8(body.to_vec())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0]["event"]["sql"], "SELECT 1");
+        assert_eq!(lines[2]["result"]["statements"], 1);
+        // A dropped response closes the channel: the sink reports the receiver is gone.
+        let (told, heard) = tokio::sync::oneshot::channel();
+        let response = ndjson(|sink| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let _ = told.send(sink(json!({ "event": "rows" })));
+            json!({ "result": null })
+        });
+        drop(response);
+        assert!(!heard.await.unwrap());
+    }
 
     #[test]
     fn every_ui_command_is_routed() {
