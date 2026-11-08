@@ -6,6 +6,8 @@ use std::{fmt::Write as _, time::Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::{AppError, AppResult};
+
 /// One cell rendered as text; `None` is SQL NULL (or a missing document field).
 pub type Cell = Option<String>;
 
@@ -57,7 +59,19 @@ impl TransactionState {
             auto_commit: true,
         }
     }
+
+    /// Refuses Begin while a transaction is open: MySQL/MariaDB would silently commit it
+    /// (`START TRANSACTION` ends the current one) and SQL Server would nest it, so a later
+    /// Commit or Rollback would not do what the user expects.
+    pub fn ensure_can_begin(&self) -> AppResult<()> {
+        if self.open {
+            return Err(AppError::new(TRANSACTION_ALREADY_OPEN));
+        }
+        Ok(())
+    }
 }
+
+pub const TRANSACTION_ALREADY_OPEN: &str = "A transaction is already open in this tab. Commit or roll it back before starting a new one.";
 
 /// A transaction control from the query toolbar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -162,4 +176,22 @@ pub(crate) fn encode_hex(bytes: &[u8]) -> String {
 
 pub(crate) fn elapsed_millis(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn begin_is_refused_while_a_transaction_is_open() {
+        let idle = TransactionState {
+            supported: true,
+            open: false,
+            auto_commit: true,
+        };
+        assert!(idle.ensure_can_begin().is_ok());
+        let open = TransactionState { open: true, ..idle };
+        let error = open.ensure_can_begin().expect_err("nested begin");
+        assert_eq!(error.to_string(), TRANSACTION_ALREADY_OPEN);
+    }
 }

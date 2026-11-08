@@ -10,6 +10,7 @@ import {
   presetSettings,
   relaxations,
   riskExamples,
+  transactionButtons,
   transactionLabel,
   typedMatches,
 } from "./safety";
@@ -97,6 +98,13 @@ describe("transactions", () => {
     expect(transactionLabel({ supported: false, open: false, autoCommit: true })).toBe("Transactions: not supported");
     expect(transactionLabel({ supported: true, open: true, autoCommit: false })).toBe("Transaction open");
     expect(transactionLabel({ supported: true, open: false, autoCommit: true })).toBe("Auto-commit");
+  });
+
+  it("disables Begin while a transaction is open", () => {
+    expect(transactionButtons({ supported: true, open: true, autoCommit: true })).toEqual({ begin: false, commit: true, rollback: true });
+    expect(transactionButtons({ supported: true, open: false, autoCommit: false })).toEqual({ begin: true, commit: false, rollback: false });
+    expect(transactionButtons(null)).toEqual({ begin: true, commit: false, rollback: false });
+    expect(transactionButtons({ supported: false, open: false, autoCommit: true }).begin).toBe(false);
   });
 
   it("reminds about idle transactions every few minutes", () => {

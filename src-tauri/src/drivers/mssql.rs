@@ -323,6 +323,10 @@ impl Driver for MssqlConnection {
     async fn transaction(&self, session_id: &str, op: TransactionOp, _limits: &Limits) -> AppResult<TransactionState> {
         let session = self.session(session_id)?;
         let mut client = session.lock().await;
+        if op == TransactionOp::Begin {
+            // BEGIN TRANSACTION would nest (@@TRANCOUNT 2), so one Commit would leave it open.
+            transaction_state(&mut client).await.ensure_can_begin()?;
+        }
         let sql = match op {
             TransactionOp::Begin => Some("BEGIN TRANSACTION"),
             TransactionOp::Commit => Some("IF @@TRANCOUNT > 0 COMMIT TRANSACTION"),

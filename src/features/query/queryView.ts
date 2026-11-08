@@ -12,7 +12,7 @@ import { summarizeSets } from "./historyFormat";
 import type { TabContent } from "../../core/tabs";
 import type { HistoryEntry, QueryOutcome, ResultSet, TransactionOp, TransactionState } from "../../core/types";
 import { withConfirmation } from "../safety/confirmationDialog";
-import { IDLE_TRANSACTION_MINUTES, idleReminderDue, transactionLabel } from "../safety/safety";
+import { IDLE_TRANSACTION_MINUTES, idleReminderDue, transactionButtons, transactionLabel } from "../safety/safety";
 
 interface ResultPanel {
   title: string;
@@ -167,6 +167,8 @@ export class QueryView implements TabContent {
   }
 
   private async transactionControl(op: TransactionOp): Promise<void> {
+    // No double Begin while the first one is still on its way.
+    if (op === "begin") this.transactionButtons[0].disabled = true;
     try {
       await this.ensureSession();
       const state = await api.sqlTransaction(this.sessionId, op);
@@ -175,6 +177,7 @@ export class QueryView implements TabContent {
       if (op !== "status") toast(done[op] ?? transactionLabel(state), "success");
     } catch (error) {
       toast(errorText(error), "error");
+      this.showTransaction(this.transaction);
       void this.refreshTransaction();
     }
   }
@@ -220,9 +223,12 @@ export class QueryView implements TabContent {
         ? "MongoDB commands run on their own here: the app does not open server sessions, so there are no transactions to show."
         : "Reported by the database after each run";
     if (state?.supported) this.autoCommit.checked = state.autoCommit;
-    const [, commit, rollback] = this.transactionButtons;
-    commit.disabled = !open;
-    rollback.disabled = !open;
+    const [begin, commit, rollback] = this.transactionButtons;
+    const usable = transactionButtons(state);
+    begin.disabled = !usable.begin;
+    begin.title = open ? "A transaction is already open: commit or roll it back first" : "Start a transaction in this tab";
+    commit.disabled = !usable.commit;
+    rollback.disabled = !usable.rollback;
     this.element.classList.toggle("tx-open", open);
   }
 

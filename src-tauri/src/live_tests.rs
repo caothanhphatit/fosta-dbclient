@@ -594,6 +594,11 @@ async fn live_transactions() {
         assert!(begun.open, "{}: begin opens a transaction", profile.driver);
         let inserted = run("INSERT INTO gate_probe VALUES (1)").await.expect("insert");
         assert!(inserted.transaction.open, "still open after the run");
+        // A second Begin must be refused, not commit (MySQL) or nest (SQL Server) the open one.
+        let nested = gateway::transaction(&manager, &context, "tx", TransactionOp::Begin)
+            .await
+            .expect_err("nested begin refused");
+        assert_eq!(nested.to_string(), drivers::types::TRANSACTION_ALREADY_OPEN, "{}", profile.driver);
         let rolled = gateway::transaction(&manager, &context, "tx", TransactionOp::Rollback)
             .await
             .expect("rollback");

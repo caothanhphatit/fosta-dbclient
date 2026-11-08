@@ -659,6 +659,7 @@ function transactionState(session: MockSession | undefined): TransactionState {
 function transactionControl(sessionId: string, op: string): TransactionState {
   const session = sessions.get(sessionId);
   if (!session) throw new Error("This query tab lost its session. Close it and open a new query.");
+  if (op === "begin" && session.open) throw new Error("A transaction is already open in this tab. Commit or roll it back before starting a new one.");
   if (op === "begin") session.open = true;
   if (op === "commit" || op === "rollback" || op === "autoCommitOn") session.open = false;
   if (op === "autoCommitOn") session.autoCommit = true;

@@ -384,6 +384,8 @@ impl Driver for MysqlConnection {
         }
         match op {
             TransactionOp::Begin => {
+                // START TRANSACTION would implicitly commit an open transaction.
+                self.transaction_state(&mut state.conn).await.ensure_can_begin()?;
                 self.apply_limits(&mut state, limits).await?;
                 let sql = if limits.read_only {
                     "START TRANSACTION READ ONLY"

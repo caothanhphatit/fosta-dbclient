@@ -227,6 +227,16 @@ export function transactionLabel(state: TransactionState | null): string {
   return state.autoCommit ? "Auto-commit" : "No transaction (manual commit)";
 }
 
+/**
+ * Which transaction buttons are usable. Begin is disabled while a transaction is open: on MySQL/MariaDB a second
+ * START TRANSACTION silently commits the open one, and on SQL Server it nests.
+ */
+export function transactionButtons(state: TransactionState | null): { begin: boolean; commit: boolean; rollback: boolean } {
+  const open = state?.open === true;
+  const supported = state?.supported !== false;
+  return { begin: supported && !open, commit: open, rollback: open };
+}
+
 /** Minutes after which an open transaction triggers a reminder. */
 export const IDLE_TRANSACTION_MINUTES = 5;
 
