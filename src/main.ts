@@ -12,7 +12,7 @@ import { api, errorText } from "./core/api";
 import { capabilities, hideUnsupported, loadCapabilities } from "./core/capabilities";
 import { isTauri, signOut } from "./core/transport";
 import { showContextMenu, type MenuItem } from "./core/contextMenu";
-import { confirmDialog, toast } from "./core/dialogs";
+import { confirmDialog, isModalOpen, toast } from "./core/dialogs";
 import { bigButton, clamp, h, icon, iconButton, separator, spacer, type IconName } from "./core/dom";
 import { makeSplitter } from "./core/splitter";
 import { TabManager } from "./core/tabs";
@@ -478,6 +478,11 @@ function installShortcuts(): void {
   document.addEventListener("keydown", (event) => {
     if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
     const key = event.key.toLowerCase();
+    // Shortcuts would act behind an open dialog (or stack a second one); keep the browser's own meaning off too.
+    if (isModalOpen()) {
+      if (/^[1-9nt]$/.test(key) && !event.shiftKey) event.preventDefault();
+      return;
+    }
     if (key >= "1" && key <= "9" && !event.shiftKey) {
       const target = currentConfig?.workspaces[Number(key) - 1];
       if (target) {

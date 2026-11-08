@@ -5,7 +5,7 @@
  *
  * Keys stay inside the dialog: Esc closes without saving, Ctrl+Enter saves.
  */
-import { toast } from "../../core/dialogs";
+import { registerModal, toast } from "../../core/dialogs";
 import { copyText, h, icon } from "../../core/dom";
 import type { Cell, ColumnMeta } from "../../core/types";
 import { checkJson, formatJson, hexDump, looksLikeJson, minifyJson, textStats, vectorListing } from "./cellValue";
@@ -129,7 +129,15 @@ export function openCellEditor(options: CellEditorOptions): void {
     }
   };
 
+  // Keys inside the dialog are handled below; Esc with focus elsewhere still closes it.
+  const unregister = registerModal(overlay, (event, inside) => {
+    if (inside || event.key !== "Escape") return false;
+    close();
+    return true;
+  });
   const close = () => {
+    if (!overlay.isConnected) return;
+    unregister();
     overlay.remove();
     options.onClose?.();
   };

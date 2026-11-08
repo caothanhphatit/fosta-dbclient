@@ -1,6 +1,7 @@
 import { capabilities } from "./capabilities";
 import { errorText } from "./api";
 import { h } from "./dom";
+import { ModalStack } from "./modalStack";
 
 export interface ModalAction {
   label: string;
@@ -25,22 +26,67 @@ export function openModal(title: string, body: HTMLElement, actions: ModalAction
     footer,
   );
   const overlay = h("div", { class: "modal-overlay" }, dialog);
+  let closed = false;
   const close = () => {
+    if (closed) return;
+    closed = true;
     overlay.remove();
-    document.removeEventListener("keydown", onKey);
+    unregister();
     options.onClose?.();
   };
   const buttons = actions.map((action) => actionButton(action, close));
-  const onKey = (event: KeyboardEvent) => {
-    if (event.key === "Escape") close();
-    if (event.key === "Enter" && event.target instanceof HTMLInputElement) {
-      buttons.find((_, index) => actions[index].primary)?.click();
+  const unregister = registerModal(overlay, (event, inside) => {
+    if (event.key === "Escape") {
+      close();
+      return true;
     }
-  };
+    if (event.key === "Enter" && inside && event.target instanceof HTMLInputElement && !event.isComposing) {
+      buttons.find((_, index) => actions[index].primary)?.click();
+      return true;
+    }
+    return false;
+  });
   footer.append(...buttons);
   document.body.append(overlay);
-  document.addEventListener("keydown", onKey);
-  dialog.querySelector<HTMLElement>("input:not([type=checkbox]), select, textarea")?.focus();
+  focusInto(dialog, dialog.querySelector<HTMLElement>("input:not([type=checkbox]), select, textarea"));
+}
+
+const modals = new ModalStack();
+let modalKeysInstalled = false;
+
+/** True while any modal dialog is open; global shortcuts are ignored then. */
+export function isModalOpen(): boolean {
+  return modals.size > 0;
+}
+
+/**
+ * Adds a dialog to the modal stack. `handleKey` sees keys only while the dialog is the top-most one; it
+ * returns true when it used the key. Returns the function that removes the dialog from the stack.
+ */
+export function registerModal(element: HTMLElement, handleKey: (event: KeyboardEvent, inside: boolean) => boolean): () => void {
+  if (!modalKeysInstalled) {
+    modalKeysInstalled = true;
+    // Capturing, so the top-most dialog sees keys before the views and shortcuts behind it.
+    document.addEventListener("keydown", (event) => modals.dispatch(event), true);
+  }
+  return modals.push({
+    contains: (target) => target instanceof Node && element.contains(target),
+    handleKey: (event, inside) => handleKey(event as KeyboardEvent, inside),
+  });
+}
+
+/**
+ * Moves focus into a dialog that just opened. Blurring whatever had focus also closes editor popups
+ * (such as the SQL completion list) that would otherwise stay drawn above the dialog.
+ */
+export function focusInto(dialog: HTMLElement, preferred: HTMLElement | null): void {
+  if (document.activeElement instanceof HTMLElement && !dialog.contains(document.activeElement)) document.activeElement.blur();
+  if (preferred) {
+    preferred.focus();
+    return;
+  }
+  if (!dialog.hasAttribute("tabindex")) dialog.tabIndex = -1;
+  dialog.focus();
 }
 
 function actionButton(action: ModalAction, close: () => void): HTMLButtonElement {

@@ -26,7 +26,8 @@ const editorTheme = EditorView.theme({
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground": {
     backgroundColor: "var(--selection) !important",
   },
-  ".cm-tooltip": { backgroundColor: "var(--bg-panel)", color: "var(--fg)", border: "1px solid var(--border)" },
+  // Below modal overlays (z-index 40), so a completion list never stays drawn above a dialog.
+  ".cm-tooltip": { zIndex: "35", backgroundColor: "var(--bg-panel)", color: "var(--fg)", border: "1px solid var(--border)" },
   ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--accent)", color: "var(--accent-fg)" },
 });
 
