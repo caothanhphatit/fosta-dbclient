@@ -8,6 +8,7 @@ import { DataGrid, gridSetup } from "../grid/grid";
 import { makeSplitter } from "../../core/splitter";
 import { createSqlEditor, selectedOrAllText, setSchemaTables } from "./sqlEditor";
 import { HistoryPanel } from "./historyPanel";
+import { AttemptTimer } from "./attemptTimer";
 import { summarizeSets } from "./historyFormat";
 import type { TabContent } from "../../core/tabs";
 import type { HistoryEntry, QueryOutcome, ResultSet, TransactionOp, TransactionState } from "../../core/types";
@@ -317,12 +318,14 @@ export class QueryView implements TabContent {
     if (!sql || this.running) return;
     const database = this.databaseSelect.value || null;
     const startedAt = Date.now();
-    const started = performance.now();
+    // Time spent in the confirmation dialog is not query time, and Stop is only usable while a statement runs.
+    const timer = new AttemptTimer();
+    const inFlight = (running: boolean) => (this.stopButton.disabled = !running);
     this.cancelRequested = false;
     this.setRunning(true);
     try {
       await this.ensureSession();
-      const outcome = await withConfirmation((confirmation) => api.runSql(this.sessionId, database, sql, confirmation));
+      const outcome = await withConfirmation((confirmation) => timer.attempt(() => api.runSql(this.sessionId, database, sql, confirmation), inFlight));
       if (outcome === null) {
         this.showPanels([{ title: "Messages", element: messageList([{ text: "Cancelled; nothing ran.", kind: "muted" }]) }]);
         return;
@@ -330,11 +333,11 @@ export class QueryView implements TabContent {
       this.lastError = null;
       this.showOutcome(outcome);
       if (this.transactionsSupported) this.showTransaction(outcome.transaction);
-      this.record({ sql, database, startedAt, durationMs: performance.now() - started, results: summarizeSets(outcome.sets), error: null });
+      this.record({ sql, database, startedAt, durationMs: outcome.elapsedMs, results: summarizeSets(outcome.sets), error: null });
     } catch (error) {
       this.lastError = errorText(error);
       this.showPanels([{ title: "Messages", element: messageList([{ text: this.lastError, kind: "error" }]) }]);
-      this.record({ sql, database, startedAt, durationMs: performance.now() - started, results: [], error: this.lastError });
+      this.record({ sql, database, startedAt, durationMs: timer.elapsed(), results: [], error: this.lastError });
       void this.refreshTransaction();
     } finally {
       this.setRunning(false);
@@ -383,7 +386,8 @@ export class QueryView implements TabContent {
   private setRunning(running: boolean): void {
     this.running = running;
     this.runButton.disabled = running;
-    this.stopButton.disabled = !running;
+    // Enabled by the attempt itself (see run), so it stays off while a confirmation dialog is open.
+    if (!running) this.stopButton.disabled = true;
     this.element.classList.toggle("busy", running);
   }
 
