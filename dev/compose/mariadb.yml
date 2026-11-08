@@ -1,4 +1,4 @@
-# MariaDB 11.8 for the live and contract tests.
+# MariaDB 11.8 (MARIADB_TAG overrides the image tag) for the contract tests.
 # Test-only credentials; never reuse them.
 # docker compose -f dev/compose/mariadb.yml up -d --wait
 # 127.0.0.1:3306  root / studio-root  database shop (vector column included); contract data in fosta_contract
@@ -7,7 +7,7 @@ name: db-studio-dev
 
 services:
   mariadb:
-    image: mariadb:11.8
+    image: mariadb:${MARIADB_TAG:-11.8}
     environment:
       MARIADB_ROOT_PASSWORD: studio-root
     ports:

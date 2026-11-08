@@ -1,0 +1,20 @@
+{
+  "id": "mongo",
+  "compose": "dev/compose/mongo.yml",
+  "versions": ["7", "8"],
+  "versionEnv": "MONGO_TAG",
+  "seed": "sh ci/wait-mongo.sh",
+  "paths": [
+    "src-tauri/src/engines/mongo/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "dev/compose/mongo.yml",
+    "dev/seed/mongo.js",
+    "dev/seed/mongo/**",
+    "ci/wait-mongo.sh",
+    "ci/engines/mongo.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_mongo"
+}

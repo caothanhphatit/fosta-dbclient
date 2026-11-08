@@ -23,13 +23,14 @@ src-tauri/src/           Rust backend
   main.rs                desktop front-end: Tauri setup and the command wrappers
   server/                web front-end (feature `web`): HTTP API, sign-in, static UI
   commands/              command bodies, grouped by area; for_each_command! lists them
-  drivers/               Driver trait + MariaDB/MySQL, SQL Server and MongoDB drivers, shared types
+  contract/              engine contract: Engine / Connection / Session traits, typed values, DTOs, contract suites
+  runtime/               engine registry, ConnectionManager, crash containment
+  gateway/               statement gateway: classification, safety rules, confirmations
   ai/                    assistant: prompt, tools, Anthropic and OpenAI wire formats
   config.rs secrets.rs   fosta-studio.json, Credential Manager / encrypted secret file
   tasks.rs job.rs        startup tasks and their child processes
   engines/               engine adapters; engines/mysql is MariaDB/MySQL with its vector tools, engines/mssql SQL Server,
                          engines/mongo MongoDB
-  schema.rs              ER diagram data from the pre-contract drivers
 dev/                     docker-compose.yml and seed data for the test databases
 scripts/                 toolchain installer and icon generator (PowerShell), version.mjs (version bump and check)
 deploy/                  docker-compose.yml for the web edition (Dockerfile at the root)
@@ -88,24 +89,27 @@ cargo clippy --all-targets --no-default-features --features web -- -D warnings
 cargo test --no-default-features --features web
 ```
 
-## Test databases and live tests
+## Test databases and contract tests
 
-`dev/docker-compose.yml` starts MariaDB 11.8 (`shop`, with a vector column), SQL Server 2022 (`ERP`) and MongoDB 8 (`events`), all with
-generated sample data. The credentials in that file are for local testing only.
+`dev/compose/<engine>.yml` starts one engine each (`dev/docker-compose.yml` includes them all): MariaDB 11.8 (`shop`, with a vector
+column), SQL Server 2022 (`ERP`), MongoDB 8 (`events`) and the others, all with generated sample data. The credentials in those files
+are for local testing only.
 
 ```sh
-docker compose -f dev/docker-compose.yml up -d
-sh dev/seed-mssql.sh    # SQL Server has no init directory; this loads dev/seed/mssql.sql once
+docker compose -f dev/compose/mariadb.yml up -d --wait
+sh dev/seed-mssql.sh    # after starting SQL Server: it has no init directory; this loads dev/seed/mssql.sql once
 cd src-tauri
-cargo test live_ -- --ignored --test-threads=1
+cargo test contract_mariadb -- --ignored --test-threads=1
 ```
 
-Notes on the live tests (`src-tauri/src/live_tests.rs`):
+Each engine's `engines/<id>/contract_tests.rs` runs the shared contract suites plus its own `contract_<id>_*` checks; CI runs them per
+engine from `ci/engines/<id>.json` (`.github/workflows/live.yml`). A few machine-specific tests are named `live_*`:
 
 - `live_saved_passwords_are_readable` expects saved passwords in Credential Manager for connections with the ids `local-mariadb`,
   `local-mssql` and `local-mongo` (create them in the app with "Save password" ticked, or skip this test).
 - `live_assistant_tools` talks to the Fosta API and needs `FOSTA_KEY` in the environment; without it the test prints a note and passes.
-- They live inside the library crate (as a `#[cfg(test)]` module in `lib.rs`) because they use crate-internal APIs.
+- `live_save_download` writes into your Downloads folder and cleans up.
+- The Redis and Elasticsearch adapters have `live_*` tests against their containers.
 
 ## Code style
 
@@ -121,11 +125,11 @@ Notes on the live tests (`src-tauri/src/live_tests.rs`):
   a migration.
 - Unit-test pure logic (parsers, SQL builders) next to the code: `foo.test.ts` with Vitest, `#[cfg(test)] mod tests` in Rust.
 
-## Adding a database driver
+## Adding an engine
 
-The checklist is in [ARCHITECTURE.md](ARCHITECTURE.md#how-to-add-a-database-driver). In short: implement `Driver` in
-`src-tauri/src/drivers/<engine>.rs`, route the new driver id in `drivers::open`, describe its connection form in the engine
-descriptor, parse its connection strings in the adapter (`engines/<id>/url.rs`), add sample data to `dev/` and a live test.
+The checklist is in [ARCHITECTURE.md](ARCHITECTURE.md#how-to-add-an-engine). In short: write the engine's `descriptor.rs` and
+`adapter.rs` in `src-tauri/src/engines/<id>/`, register it in `runtime/registry.rs`, add a contract fixture with
+`contract_tests!`, a compose file and seed in `dev/`, `ci/engines/<id>.json`, and a UI module in `src/engines/<id>/`.
 
 ## Pull requests
 

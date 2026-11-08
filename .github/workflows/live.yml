@@ -1,0 +1,78 @@
+name: Contract tests
+
+# Runs each engine's contract suites (`contract_<id>` tests, #[ignore]d in the normal test run) against its container from
+# dev/compose/<id>.yml. ci/engines/<id>.json lists the compose file, the image versions and the paths that trigger it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: plan
+        name: Pick engines
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --name-only "origin/$BASE_REF...HEAD" > "$RUNNER_TEMP/changed.txt"
+            matrix=$(node ci/plan.mjs --changed "$RUNNER_TEMP/changed.txt")
+          else
+            matrix=$(node ci/plan.mjs --all)
+          fi
+          echo "$matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo "$matrix" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).include.length))')" >> "$GITHUB_OUTPUT"
+
+  contract:
+    name: ${{ matrix.id }} ${{ matrix.version }}
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: contract
+      - name: Start ${{ matrix.id }} ${{ matrix.version }}
+        run: |
+          export "${{ matrix.versionEnv }}=${{ matrix.version }}"
+          docker compose -f "${{ matrix.compose }}" up -d --wait
+      - name: Seed
+        if: matrix.seed != ''
+        run: ${{ matrix.seed }}
+      - name: Contract tests
+        working-directory: src-tauri
+        run: |
+          cargo test --no-default-features --features web,engines-all "${{ matrix.filter }}" -- --ignored --test-threads=1 2>&1 | tee "$RUNNER_TEMP/test.log"
+          # A filter that matches nothing must not pass silently.
+          grep -Eq "test result: ok\. [1-9]" "$RUNNER_TEMP/test.log"
+      - name: Stop
+        if: always()
+        run: |
+          export "${{ matrix.versionEnv }}=${{ matrix.version }}"
+          docker compose -f "${{ matrix.compose }}" down -v

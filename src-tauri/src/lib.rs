@@ -9,6 +9,8 @@
 //! [`ai::ChatSink`]) and what the edition supports ([`Capabilities`]).
 
 pub mod ai;
+#[cfg(test)]
+mod architecture_tests;
 pub mod audit;
 pub mod commands;
 pub mod config;

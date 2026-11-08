@@ -1,0 +1,19 @@
+{
+  "id": "mysql",
+  "enabled": false,
+  "compose": "dev/compose/mysql.yml",
+  "versions": ["8.4"],
+  "versionEnv": "MYSQL_TAG",
+  "seed": null,
+  "paths": [
+    "src-tauri/src/engines/mysql/**",
+    "src-tauri/src/engines/common/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "ci/engines/mysql.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_mysql",
+  "note": "Disabled until dev/compose/mysql.yml, a MySQL contract seed and a contract_mysql fixture exist (the adapter is shared with MariaDB)."
+}

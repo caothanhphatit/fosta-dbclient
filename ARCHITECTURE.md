@@ -7,14 +7,14 @@ backend and UI also ship as a web edition in a Docker image (see [Two front-ends
 ## Layers
 
 ```
- UI (src/)                     Tauri commands (src-tauri/src/commands/)        Drivers (src-tauri/src/drivers/)
- ───────────────────────       ─────────────────────────────────────────       ──────────────────────────────────
- features/* views & dialogs    connections.rs  data.rs  tasks.rs               trait Driver (mod.rs)
-        │                      workspaces.rs   ai.rs    vector.rs  files.rs     ├─ mysql.rs   MariaDB / MySQL (mysql_async)
-        │                      history.rs                                       │
-        ▼                               │                                       ├─ mssql.rs   SQL Server (tiberius)
- core/api.ts ── invoke() ─────────────► │ ── gateway/ ── DbManager ──────────►  └─ mongo.rs   MongoDB (mongodb)
-             ◄─ events / Channel ────── │                                       types.rs     shared data shapes
+ UI (src/)                     Commands (src-tauri/src/commands/)       Engines (src-tauri/src/engines/<id>/)
+ ───────────────────────       ──────────────────────────────────       ─────────────────────────────────────
+ features/* views & dialogs    connections  engines  objects  query     descriptor.rs  EngineDescriptor
+ engines/<id>/ UI modules      capability   vector   lang     ai …      adapter.rs     impl Engine / Connection
+        │                               │                               … (catalog, session, values, url)
+        ▼                               │                               common/        shared SQL toolkit
+ core/api.ts ── invoke() ─────────────► │ ── gateway/ ── runtime/ ─────► contract/ (traits and DTOs)
+             ◄─ events / Channel ────── │      ConnectionManager, registry, crash containment
                                         ├─ ConfigStore (config.rs) → fosta-studio.json
                                         ├─ HistoryStore (history.rs) → fosta-studio-history.jsonl
                                         ├─ AuditLog (audit.rs) → fosta-studio-audit.jsonl
@@ -24,24 +24,32 @@ backend and UI also ship as a web edition in a Docker image (see [Two front-ends
 ```
 
 - **UI** (`src/`). `main.ts` is the app shell: it builds the layout, wires the feature modules together and holds the current config.
-  `app/navigation.ts` opens tabs; `core/` has the shared pieces (`api.ts` is the only module that calls `invoke`, `types.ts` mirrors the
-  Rust types; `transport.ts` carries the calls). Each `features/<area>/` folder owns its views and dialogs.
+  `app/navigation.ts` opens tabs; `core/` has the shared pieces (`api.ts` is the only module that calls `invoke`, `contract.ts` mirrors
+  the Rust contract types, `engines.ts` serves the engine descriptors, `views.ts` the view registry; `transport.ts` carries the calls).
+  Each `features/<area>/` folder owns its views and dialogs; `src/engines/<id>/` holds an engine's own views and is the only UI folder
+  that may know engine ids.
 - **Commands** (`src-tauri/src/commands/`). Plain functions that take `&AppState`, check arguments and delegate. Their names, argument
   names and JSON shapes are the contract with `core/api.ts`; `for_each_command!` in `commands/mod.rs` lists them for both front-ends.
 - **Statement gateway** (`src-tauri/src/gateway/`). Every statement the app runs on a caller's behalf passes through it before it reaches
-  a driver, in both editions; see [Statement gateway and safety rules](#statement-gateway-and-safety-rules). Its structured errors
+  an engine, in both editions; see [Statement gateway and safety rules](#statement-gateway-and-safety-rules). Its structured errors
   (`CONFIRMATION_REQUIRED`, `BLOCKED`, …) reach the UI as the same object over Tauri and over HTTP.
-- **Drivers** (`src-tauri/src/drivers/`). `DbManager` keeps one `Arc<dyn Driver>` per open connection and maps query-tab sessions to
-  their connection. A driver turns engine results into the shared shapes in `drivers/types.rs` (`ColumnMeta`, `ResultSet`,
-  `TablePage`, `TableDesign`, `RowChange`, …), so the UI never sees engine-specific types. Cells travel as text (`Option<String>`);
-  binary values as `0x…` hex, MariaDB vectors as a short summary.
+- **Contract** (`src-tauri/src/contract/`). The engine ports (ADR 0001): `Engine` (descriptor, `classify`, `connect`), `Connection`
+  (tree `children`, `describe`, `open_session`, `invoke`, optional `TabularData`, `SchemaGraphSource`, `DatabaseAdmin`) and `Session`
+  (`run` streaming `StreamEvent`s, `transaction`), plus every DTO the UI sees: typed `Value`s (`{t, v}` on the wire), `ColumnInfo`,
+  `ObjectRef`, `ObjectNode`, `Page`, `RowChangeSet`, structured `AppError`s. Nothing outside an engine sees engine-specific types.
+- **Runtime** (`src-tauri/src/runtime/`). `registry.rs` lists the engines of this build (one Cargo feature `engine-<id>` each);
+  `ConnectionManager` keeps one `Arc<dyn Connection>` per open connection and the query-tab sessions, and runs every engine call through
+  crash containment (`contain.rs`: a panic becomes `ENGINE_CRASHED` and marks only that connection crashed).
+- **Engines** (`src-tauri/src/engines/<id>/`). One self-contained adapter per engine; `engines/common/` holds the shared SQL toolkit
+  (statement splitter and classifier, SQL builder with bound values, typed catalog helpers). Commands, the gateway and the assistant
+  reach engines only through the registry and the contract, never an engine module (`architecture_tests.rs` checks it).
 
-`AppState` (in `lib.rs`) holds the `ConfigStore`, the `DbManager`, the `TaskManager`, the in-flight assistant runs, the query
+`AppState` (in `lib.rs`) holds the `ConfigStore`, the `ConnectionManager`, the `TaskManager`, the in-flight assistant runs, the query
 `HistoryStore` and the edition's `Capabilities`.
 
 ## Two front-ends: desktop and web
 
-`src-tauri` is one crate: a library with the whole backend (`lib.rs`: config, secrets, drivers, assistant, history, tasks, schema,
+`src-tauri` is one crate: a library with the whole backend (`lib.rs`: config, secrets, the contract, runtime and engines, assistant, history, tasks,
 vector tools and the command bodies) and two binaries.
 
 |                  | Desktop (`fosta-studio`, feature `desktop`, default) | Web (`fosta-studio-server`, feature `web`)            |
@@ -96,14 +104,16 @@ mock installs it), otherwise HTTP. `api.ts` is unchanged apart from that.
 ### Browse
 
 1. The tree (`features/connections/tree.ts`) calls `api.connect(id)`. The backend loads the profile, takes the password from the dialog
-   or Credential Manager (`PASSWORD_REQUIRED` makes the UI ask), opens the driver and returns the server version.
+   or Credential Manager (`PASSWORD_REQUIRED` makes the UI ask), connects through the engine's adapter and returns a `ConnectInfo`
+   (server version, capabilities, query languages).
    The tree then shows the engine's `ObjectNode`s from `tree_children`, loaded per node and page by page (`treeModel.ts` keeps the
    loaded pages, expansion and the search filter); node icons, row counts (`detail`), badges and menu entries (`NodeAction`s: a view, a
    query template, an engine capability or a builtin) come from the engine.
 2. A double-click opens the node's default view through `app/navigation.ts` `openObject`, which picks the view from the registry
-   (`core/views.ts` `resolveView`) and hands it a `ViewContext` bound to the connection. For tables that is a `TableView` (`features/table/tableView.ts`). It sends a `BrowseRequest` (offset, limit, order, filter) to
-   `browse_table`. The gateway checks the filter first (a single condition; a MongoDB query document). SQL drivers build `SELECT … WHERE <filter> ORDER BY … LIMIT/OFFSET` (or `OFFSET/FETCH`), plus a `COUNT(*)` and the
-   primary key; MongoDB runs `find` with the JSON filter and `count_documents`.
+   (`core/views.ts` `resolveView`) and hands it a `ViewContext` bound to the connection. For tables that is a `TableView` (`features/table/tableView.ts`). It sends a `BrowseRequest` (object, structured or raw filter, sort, offset or keyset cursor) to
+   `browse_object`. The gateway checks the filter first (structured conditions by the engine, a raw SQL filter as a single condition, a
+   MongoDB query document). SQL engines build `SELECT … WHERE <filter> ORDER BY … LIMIT/OFFSET` (or `OFFSET/FETCH`) with bound values;
+   MongoDB runs `find`. The `Page` carries typed values, the key columns and, where the engine has them, row versions.
 3. The page is rendered by the virtualised `DataGrid` (`features/grid/grid.ts`). Per-column filters are turned into a SQL condition
    or a MongoDB query by `features/grid/columnFilter.ts`. Hidden columns (`features/grid/columnVisibility.ts`, the Columns popover in
    `columnsPopover.ts`) are only left out of the drawing: the grid keeps their data, filters and pending edits, and copies/exports
@@ -114,25 +124,27 @@ mock installs it), otherwise HTTP. `api.ts` is unchanged apart from that.
 1. Cell edits, inserts and deletes are kept client-side as pending changes (the pending bar shows how many). The large cell editor
    (`features/grid/cellEditor.ts`, Shift+Enter) writes into the grid the same way; it is a plain textarea, so CodeMirror stays out of
    the main bundle.
-2. Saving sends them as one `apply_changes` call: a list of `RowChange` (`insert`, `update`, `delete`) where `key` holds the primary-key
-   cells of the row (all non-vector columns when the table has no key).
-3. `apply_changes` goes through the gateway as a write (caller `gridSave`, or `import` for imports, whose batches share one
-   confirmation). SQL drivers run all statements in one transaction with bound parameters (`UPDATE … WHERE key LIMIT 1`, `TOP (1)` on SQL Server);
-   binary columns accept `0x…` hex. MongoDB applies `insert_one` / `update_one($set)` / `delete_one` per change.
+2. Saving sends them as one `apply_edits` call: a `RowChangeSet` (`insert`, `update`, `delete`) where each update and delete carries
+   its key and a concurrency check (the row version, or the original values).
+3. `apply_edits` goes through the gateway as a write (caller `gridSave`, or `import` for imports, whose batches share one
+   confirmation). SQL engines apply all changes in one transaction with bound parameters; a change that matches no row fails the whole
+   set with `CONFLICT` and the current values, and the grid offers to reload or overwrite. MongoDB undoes the writes it already made.
 
 ### Query
 
-1. A query tab (`features/query/queryView.ts`, loaded lazily with CodeMirror) calls `open_session`: MariaDB/MySQL and SQL Server open a
-   dedicated connection per tab, so `BEGIN … COMMIT` can span several runs.
-2. `run_sql` is classified and checked by the gateway, then sends the editor text (or the selection) to that session and returns every result set (up to 1000 rows each, flagged as
-   truncated). MongoDB takes a database command as JSON.
-3. `cancel_sql` issues `KILL QUERY <thread id>` on MariaDB/MySQL; the other drivers report that cancelling is not supported.
+1. A query tab (`features/query/queryView.ts`, loaded lazily with CodeMirror) calls `open_session`: SQL engines open a dedicated
+   connection per tab, so `BEGIN … COMMIT` can span several runs. The session's language picks the editor support (`LanguageSupport`).
+2. `run` is classified by the engine and checked by the gateway, then streams `StreamEvent`s (statement, columns, row batches,
+   notices, done) over a channel while the engine runs the editor text (or the selection); the row limit (1000 by default) marks a set
+   truncated. MongoDB takes a database command as JSON.
+3. `cancel_run` cancels the running statement where the engine can (`KILL QUERY` on MariaDB/MySQL, an attention on SQL Server); other
+   engines answer `UNSUPPORTED_CAPABILITY`.
 4. After each run the tab sends a `HistoryEntry` (text, connection id and name, driver, database, start time, duration, rows or
    affected rows per set, or the error, and whether Stop was pressed) to `history_append` without waiting for it. The History panel
    (`features/query/historyPanel.ts`) reads it back with `history_list` (newest first, filtered by connection and search text, paged
    with `before`), and can `history_delete` entries or `history_clear` everything.
 
-5. **Transactions**: the toolbar's auto-commit switch and Begin / Commit / Rollback call `sql_transaction` (always allowed, also in
+5. **Transactions**: the toolbar's auto-commit switch and Begin / Commit / Rollback call `transaction` (always allowed, also in
    Read-only workspaces). Every run returns the session's `TransactionState` as the engine reports it (`@@in_transaction` on MariaDB, the
    performance schema on MySQL, `@@TRANCOUNT` and `@@OPTIONS` on SQL Server); MongoDB commands run without server sessions, so the tab
    says transactions are not supported. Closing a tab or the window with an open transaction asks first (the server rolls it back), and a
@@ -142,9 +154,10 @@ mock installs it), otherwise HTTP. `api.ts` is unchanged apart from that.
 
 Code: `src-tauri/src/gateway/` (backend), `src/features/safety/` (dialogs, the Safety section, pure helpers).
 
-- **Callers**: query tabs (`run_sql`), grid filters (`browse_table`, also the vector-search filter), grid saves and imports
-  (`apply_changes`), `create_database`, transaction controls and the assistant. The gateway knows which one is calling.
-- **Classification** (`gateway/classify.rs`): SQL is parsed with `sqlparser` in the engine's dialect (MySQL for MariaDB/MySQL, MsSql for
+- **Callers**: query tabs (`run`), grid filters (`browse_object`, also the vector-search filter), grid saves and imports
+  (`apply_edits`), `create_database`, engine views (`invoke_capability`), transaction controls and the assistant. The gateway knows
+  which one is calling.
+- **Classification** (`Engine::classify`, shared SQL classifier in `engines/common/sqlclassify.rs`): SQL is parsed with `sqlparser` in the engine's dialect (MySQL for MariaDB/MySQL, MsSql for
   SQL Server, Generic as a fallback). Every statement, including statements nested in CTEs, `EXPLAIN ANALYZE` and control flow, gets a
   category: _read_, _transaction_, _write_ (INSERT/UPDATE/DELETE/MERGE/REPLACE, procedure calls), _DDL_, _destructive_ (DROP, TRUNCATE,
   UPDATE/DELETE without WHERE, ALTER … DROP) or _administrative_ (users, grants, KILL, SET GLOBAL, settings that switch off the app's own
@@ -202,8 +215,9 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
 - **Never executes anything.** The model can read metadata and ask the UI to open a view; it has no tool that runs a query or changes
   data. SQL it writes appears in code blocks with Insert / New tab buttons, and the user runs it.
 - **Tools** (`ai/tools.rs`), offered only when a connection is open:
-  - `list_databases`, `list_tables`, `describe_table` (columns and DDL), `schema_overview` (all tables, columns and foreign keys): read
-    catalog metadata through the same `Driver` calls the UI uses. No row data is read.
+  - `list_databases`, `list_tables`, `describe_table` (columns, keys, indexes and DDL), `schema_overview` (all tables, columns and
+    foreign keys): read catalog metadata through the contract (`ai/catalog.rs`: the tree's `children`, `describe`, `schema_graph`),
+    so every engine gets them without engine code. No row data is read.
   - `open_diagram`, `open_table` (with an optional filter that is only pre-filled as a suggestion), `open_query` (a new tab with the
     text in the editor): emit a `UiAction` event; the UI opens the view, nothing runs.
 - **Context** (`ai/prompt.rs`): the system prompt lists the engine, database, table names, and what the user shares from the active tab
@@ -241,25 +255,40 @@ It answers the same commands with sample workspaces, tables and results, so the 
 imports it dynamically behind `import.meta.env.DEV`, so it is not part of the production bundle. Because it installs
 `__TAURI_INTERNALS__`, `core/transport.ts` routes calls to it rather than to the web server.
 
-## How to add a database driver
+## How to add an engine
 
-1. **Backend driver**: add `src-tauri/src/drivers/<engine>.rs` with a connection type and `impl Driver for …`. Return the shared types
-   from `drivers/types.rs`; render cells as text. Implement at least `list_databases`, `create_database`, `list_tables`,
-   `describe_table`, `browse_table`, `apply_changes` (one transaction where the engine allows), `open_session` / `close_session` /
-   `run_query` / `cancel_query`, and `engine` (it picks the gateway's SQL dialect). Honour the `Limits` the gateway passes (row limit,
-   timeout, read-only session) where the engine allows, and override `transaction` when it has transactions. Override `table_relations`
-   and `schema_bulk` when the engine has foreign keys, and `close` to release pools. Drivers only execute: classification and rules
-   live in the gateway.
-2. **Register it**: `pub mod <engine>;` in `drivers/mod.rs` and a match arm on the profile's `driver` id in `drivers::open`. Add the
-   crate to `Cargo.toml` and, if it has its own error type, a `From` conversion in `error.rs`.
-3. **Frontend description**: add the id to `KnownEngineId` in `src/core/types.ts`. The connection dialog is rendered from the
-   engine's descriptor (`connection`: host/file usage, default port and user, database label, extra `fields`, auth methods, TLS
-   support, SSH), so it needs no frontend code.
-4. **Connection strings**: implement `parse_connection_string` in the engine's adapter (`src-tauri/src/engines/<id>/url.rs`), with
-   tests there. Passwords must come back separately, never inside `options` or `url`.
-5. **Dialect details**: check identifier quoting in filters (`core/sql.ts`, `features/grid/columnFilter.ts`), the assistant's hints in
-   `ai/prompt.rs`, and the export/import paths if the engine needs different SQL.
-6. **Dev mock**: add `src/dev/mock/engines/<id>.ts` (descriptor, sample data, tree/browse/run) and a sample connection in `src/dev/mock/state.ts` so the UI can be previewed.
-7. **Test data and live tests**: add a container and seed data to `dev/`, and a `live_<engine>` test in `src-tauri/src/live_tests.rs`
-   that exercises listing, describing, browsing with a filter and a query.
-8. **Docs**: list the engine in both READMEs.
+An engine is one folder on each side plus test data; shared code does not change. `src-tauri/src/engines/sqlite/` is a small complete
+example, `engines/mysql/` a large one.
+
+1. **Descriptor** (`src-tauri/src/engines/<id>/descriptor.rs`): an `EngineDescriptor` with the id, label, icon, family, SQL dialect,
+   the capability upper bound, the connection form (host or file, default port and user, database label, extra `fields`, auth methods,
+   TLS, SSH), the query languages and the filter support. The UI renders the connection dialog and the engine pickers from it. Start
+   with `status: Planned` (connect refuses with `ENGINE_NOT_WIRED`), then `Preview`, then `Ready`.
+2. **Adapter** (`src-tauri/src/engines/<id>/adapter.rs`): `impl Engine` (descriptor, `classify`, `connect`, optionally
+   `parse_connection_string` / `format_connection_string` with tests; passwords come back separately, never inside `options`) and
+   `impl Connection` (`children` for the tree with stable node ids and cursor paging, `describe`, `open_session`, `capabilities` as the
+   server's subset of the descriptor). Add `TabularData` (browse with structured filters, keyset paging where possible; apply in one
+   transaction with concurrency checks and `CONFLICT`), `SchemaGraphSource`, `DatabaseAdmin` and `invoke` for engine operations as the
+   engine allows. `classify` must cover every session language and every `invoke` name (unknown names are refused); `classify_common`
+   handles row changes, transactions and "New database". Honour the `CallContext` limits (row limit, timeout, read-only session) and map
+   driver errors to structured `AppError`s (`ENGINE_ERROR` with SQLSTATE or vendor code, `TIMEOUT`, `CANCELLED`, `CONNECTION_ERROR`, …). The SQL toolkit
+   in `engines/common/` (splitter, classifier, builder, typed values) covers most of a SQL engine.
+3. **Register it**: `pub mod <id>;` behind a Cargo feature `engine-<id>` in `engines/mod.rs` (added to `engines-all`), and one line in
+   `runtime/registry.rs`. Commands, the gateway and the assistant pick it up from the registry; they must not import the module.
+4. **Contract tests** (`engines/<id>/contract_tests.rs`): a `Fixture` (connection from `FOSTA_CONTRACT_<ID>_*` with defaults from the
+   compose file, the seeded `contract_items` table, typed columns, a sleep statement, classification samples) and
+   `contract_tests!(contract_<id>, fixture())`, which generates the suites (connect, tree, describe, browse, edit, query, cancel,
+   transactions, classify); a suite whose capability is not advertised asserts `UNSUPPORTED_CAPABILITY`. Engine-specific checks go in
+   the same file as `contract_<id>_*` tests.
+5. **Test data and CI**: `dev/compose/<id>.yml` (image tag from an environment variable, test-only credentials), seeds in
+   `dev/seed/<id>/`, and `ci/engines/<id>.json` (compose file, versions, paths, test filter) so `.github/workflows/live.yml` runs the
+   suites on pull requests that touch the engine and nightly. Run locally with `docker compose -f dev/compose/<id>.yml up -d --wait` and
+   `cargo test contract_<id> -- --ignored --test-threads=1`.
+6. **UI module** (`src/engines/<id>/index.ts`): an `EngineUiModule` with the engine's own views, editor languages and node icons
+   (found by `import.meta.glob`, loaded lazily); shared views cover tables, documents and queries. Add the id to `KnownEngineId` in
+   `src/core/types.ts`.
+7. **Dev mock**: `src/dev/mock/engines/<id>.ts` (descriptor, sample tree, browse, run) and a sample connection in
+   `src/dev/mock/state.ts`, so the UI can be reviewed without a server.
+8. **Contract fixtures**: if a contract type changed, regenerate the JSON samples with
+   `FOSTA_UPDATE_FIXTURES=1 cargo test contract::fixtures`; vitest checks them against `src/core/contract.ts`.
+9. **Docs**: list the engine in both READMEs.

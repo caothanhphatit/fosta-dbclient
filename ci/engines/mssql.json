@@ -1,0 +1,21 @@
+{
+  "id": "mssql",
+  "compose": "dev/compose/mssql.yml",
+  "versions": ["2022-latest"],
+  "versionEnv": "MSSQL_TAG",
+  "seed": "MSSQL_COMPOSE=compose/mssql.yml sh dev/seed-mssql.sh",
+  "paths": [
+    "src-tauri/src/engines/mssql/**",
+    "src-tauri/src/engines/common/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "dev/compose/mssql.yml",
+    "dev/seed/mssql.sql",
+    "dev/seed/mssql/**",
+    "dev/seed-mssql.sh",
+    "ci/engines/mssql.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_mssql"
+}

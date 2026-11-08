@@ -1,0 +1,22 @@
+{
+  "id": "mariadb",
+  "compose": "dev/compose/mariadb.yml",
+  "versions": ["11.8"],
+  "versionEnv": "MARIADB_TAG",
+  "seed": null,
+  "paths": [
+    "src-tauri/src/engines/mysql/**",
+    "src-tauri/src/engines/common/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "src-tauri/src/ai/**",
+    "dev/compose/mariadb.yml",
+    "dev/seed/mariadb.sql",
+    "dev/seed/mariadb/**",
+    "ci/engines/mariadb.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_mariadb",
+  "note": "10.11 is not in the matrix yet: dev/seed/mariadb.sql creates a VECTOR column, which needs MariaDB 11.7+."
+}

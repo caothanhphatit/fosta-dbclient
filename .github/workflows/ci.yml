@@ -43,7 +43,8 @@ jobs:
           workspaces: src-tauri
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
-      # Live tests need the Docker databases from dev/docker-compose.yml and are #[ignore]d.
+      # Includes the dependency rules (architecture_tests.rs). Contract tests need the engine containers, are #[ignore]d here
+      # and run in live.yml.
       - run: cargo test
 
   server:

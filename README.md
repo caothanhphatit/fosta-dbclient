@@ -6,7 +6,8 @@ A lightweight desktop database client (Tauri 2 + Rust, plain TypeScript frontend
 ## Features
 
 - **Several engines**: MariaDB and MySQL (`mysql_async`), SQL Server (`tiberius`, TLS on by default) and MongoDB (`mongodb`, connection URIs
-  for Atlas). Each engine is a driver in `src-tauri/src/drivers/` behind the shared `Driver` trait.
+  for Atlas). Each engine is a self-contained adapter in `src-tauri/src/engines/<id>/` behind the engine contract
+  (`src-tauri/src/contract/`).
   - SQL Server: tables show as `schema.table` (`dbo` is hidden), paging uses `OFFSET/FETCH`, DDL is rebuilt from `INFORMATION_SCHEMA`.
   - MongoDB: collections show as tables whose columns are the fields seen on the current page; nested values show as JSON. The filter box
     takes a JSON query and the query tab runs database commands as JSON (`{ "find": "products", "filter": {...} }`).
