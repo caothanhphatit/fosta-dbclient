@@ -22,3 +22,29 @@
   flex-shrink: 0;
   color: var(--fg-3);
 }
+
+.status-context {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.status-seg {
+  padding: 0 8px;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-seg:first-child {
+  padding-left: 0;
+  color: var(--fg);
+}
+
+.status-seg.warn {
+  color: var(--warning);
+  font-weight: 600;
+}

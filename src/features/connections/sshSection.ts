@@ -25,9 +25,7 @@ export interface SshSection {
   secrets(): Partial<Record<SecretSlot, string>>;
 }
 
-export const SSH_NOTE =
-  "The database connects through an SSH tunnel to this server. Host and Port above are the database as the SSH server " +
-  "sees it (often 127.0.0.1 and the default port).";
+export const SSH_NOTE = "Host and Port above are the database as the SSH server sees it.";
 
 export type SshAuthMethod = SshAuth["method"];
 

@@ -159,7 +159,7 @@ export class HistoryPanel {
     const rows = this.entries.map((entry) => this.row(entry, now));
     if (rows.length === 0) {
       const searching = this.search.value.trim() !== "";
-      rows.push(h("div", { class: "empty-hint" }, searching ? "No run matches the search" : "Runs of this connection appear here"));
+      rows.push(h("div", { class: "empty-hint" }, searching ? "No run matches the search" : "No runs"));
     }
     if (this.hasMore) {
       const more = h("button", { class: "link-button history-more", type: "button" }, "Load older runs");

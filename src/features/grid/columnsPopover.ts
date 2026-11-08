@@ -48,7 +48,7 @@ export function openColumnsPopover(target: ColumnsTarget, anchor: Anchor): void 
     h("div", { class: "columns-filter-row" }, icon("search"), filter),
     list,
     h("div", { class: "columns-actions" }, showAll, hideAll, h("span", { class: "spacer" }), count),
-    h("div", { class: "columns-hint" }, "Hidden columns keep their data. Exports include hidden columns."),
+    h("div", { class: "columns-hint" }, "Exports include hidden columns."),
   );
 
   const names = () => target.columns().map((column) => column.name);

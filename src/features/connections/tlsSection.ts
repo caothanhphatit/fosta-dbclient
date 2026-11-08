@@ -162,6 +162,4 @@ export function renderTlsSection(profile: Pick<ConnectionProfile, "tls"> | null,
   };
 }
 
-const ACCEPT_HINT =
-  "Encrypts the traffic without checking the server's certificate: for self-signed local or test servers only. " +
-  'SQL Server tools call this "Trust server certificate".';
+const ACCEPT_HINT = "Encrypts without verifying the server certificate; self-signed or test servers only.";

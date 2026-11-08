@@ -49,7 +49,7 @@ export function taskDialog(existing: TaskDef | null, workspaceName: string): Pro
     const body = h(
       "div",
       { class: "form-grid" },
-      h("p", { class: "form-intro" }, "Runs in the background while workspace ", h("strong", {}, workspaceName), " is open. ", useTemplate),
+      h("p", { class: "form-intro" }, "Runs while workspace ", h("strong", {}, workspaceName), " is open. ", useTemplate),
       field("Task name", name),
       field("Program", program, "Must be on PATH, e.g. kubectl"),
       field("Arguments", args),

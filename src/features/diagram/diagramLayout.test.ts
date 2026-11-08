@@ -26,6 +26,22 @@ describe("layoutBoxes", () => {
     expect(placed.get("a")).toEqual({ x: 150 + GAP_X, y: 0 });
   });
 
+  it("gives finite positions to a two-table foreign-key cycle", () => {
+    const placed = layoutBoxes(
+      [box("a", 100, 50), box("b", 100, 50)],
+      [
+        { from: "a", to: "b" },
+        { from: "b", to: "a" },
+      ],
+    );
+    expect(placed.size).toBe(2);
+    for (const position of placed.values()) {
+      expect(Number.isFinite(position.x)).toBe(true);
+      expect(Number.isFinite(position.y)).toBe(true);
+    }
+    expect(placed.get("a")).not.toEqual(placed.get("b"));
+  });
+
   it("ignores self references", () => {
     const placed = layoutBoxes([box("a", 100, 50), box("b", 100, 50)], [{ from: "a", to: "a" }]);
     expect(placed.get("a")).toEqual({ x: 0, y: 0 });

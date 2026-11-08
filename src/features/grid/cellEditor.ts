@@ -94,7 +94,7 @@ export function openCellEditor(options: CellEditorOptions): void {
     h(
       "div",
       { class: "modal-body cell-editor-body" },
-      readOnly ? h("div", { class: "cell-editor-note" }, icon("view"), `${options.readOnlyReason}. You can read and copy the value.`) : null,
+      readOnly ? h("div", { class: "cell-editor-note" }, icon("view"), options.readOnlyReason) : null,
       tools,
       bool ? boolControl : textarea,
       h("div", { class: "cell-editor-status" }, stats, status),
@@ -257,11 +257,7 @@ export function openCellEditor(options: CellEditorOptions): void {
   if (readOnly) {
     footer.append(actionButton("Close", true, close));
   } else {
-    footer.append(
-      h("span", { class: "cell-editor-hint" }, "Ctrl+Enter saves · Esc cancels · changes stay pending until Apply"),
-      actionButton("Cancel", false, close),
-      saveButton,
-    );
+    footer.append(h("span", { class: "cell-editor-hint" }, "Ctrl+Enter save · Esc cancel"), actionButton("Cancel", false, close), saveButton);
   }
 
   if (vector && options.loadVector && value.t !== "null") {

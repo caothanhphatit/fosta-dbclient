@@ -41,7 +41,7 @@
 }
 
 .record-field {
-  padding: 7px 14px;
+  padding: var(--bar-pad);
   border-bottom: 1px solid var(--grid-line);
 }
 
@@ -157,7 +157,7 @@ pre.field-value.text {
 }
 
 .section-title {
-  padding: 6px 14px;
+  padding: var(--bar-pad);
   background: var(--surface-2);
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);

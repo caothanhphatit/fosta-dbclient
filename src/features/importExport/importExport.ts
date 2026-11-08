@@ -286,7 +286,7 @@ export function importDialog(target: ImportTarget): void {
       { class: "form-intro" },
       "Rows are inserted into ",
       h("strong", {}, target.where),
-      ` in batches of ${IMPORT_BATCH}; each batch is applied as one set, so a failed batch leaves the earlier ones in place. Values are checked against the column types before anything is sent.`,
+      ` in batches of ${IMPORT_BATCH}; a failed batch leaves the earlier ones in place.`,
     ),
     field("File", fileInput),
     h(

@@ -50,7 +50,7 @@ export class RecordPanel {
 
   show(context: RecordContext | null): void {
     if (!context) {
-      this.body.replaceChildren(h("div", { class: "empty-hint" }, "Select a row to see all of its fields"));
+      this.body.replaceChildren(h("div", { class: "empty-hint" }, "No row selected"));
       return;
     }
     const fields = context.columns.map((_, index) => this.field(context, index, context.row[index] ?? NULL));

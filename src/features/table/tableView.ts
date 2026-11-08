@@ -481,12 +481,7 @@ export class TableView implements TabContent {
     }
     openModal(
       "Query for this page",
-      h(
-        "div",
-        { class: "form-grid" },
-        h("p", { class: "form-intro" }, "What the engine ran for the page on screen (values of the filters are bound as parameters)."),
-        h("pre", { class: "ddl statement-text" }, statement),
-      ),
+      h("div", { class: "form-grid" }, h("pre", { class: "ddl statement-text" }, statement)),
       [
         { label: "Copy", alignLeft: true, run: async () => void (await copyText(statement)) },
         { label: "Close", primary: true, run: () => undefined },

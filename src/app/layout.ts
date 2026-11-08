@@ -19,6 +19,7 @@ export const ASSISTANT_STORAGE_KEY = "db-studio.assistant";
 export interface LayoutParts {
   workspaceHeader: HTMLElement;
   statusText: HTMLElement;
+  statusContext: HTMLElement;
   safetyStatus: HTMLElement;
   taskSummary: HTMLElement;
   tree: ConnectionTree;
@@ -41,7 +42,7 @@ function withRequirement<T extends HTMLElement>(element: T, capability: keyof Ca
 
 /** Appends the shell to the page and returns the workspace area (the element that toggles the assistant column). */
 export function buildLayout(parts: LayoutParts): HTMLElement {
-  const { workspaceHeader, statusText, safetyStatus, taskSummary, tree, tasksPanel, tabs, assistant, rail } = parts;
+  const { workspaceHeader, statusText, statusContext, safetyStatus, taskSummary, tree, tasksPanel, tabs, assistant, rail } = parts;
   const toolbar = h(
     "header",
     { class: "app-toolbar" },
@@ -88,7 +89,7 @@ export function buildLayout(parts: LayoutParts): HTMLElement {
   }
   area.classList.toggle("with-assistant", remembered === "open");
   const version = h("span", { class: "status-version", title: "Fosta Studio version" }, `v${__APP_VERSION__}`);
-  const statusBar = h("footer", { class: "status-bar" }, statusText, spacer(), errorPanelBadge(), safetyStatus, taskSummary, version);
+  const statusBar = h("footer", { class: "status-bar" }, statusContext, statusText, spacer(), errorPanelBadge(), safetyStatus, taskSummary, version);
   const main = h("div", { class: "app-main" }, toolbar, area, errorPanelElement(), statusBar);
   (document.getElementById("app") ?? document.body).append(rail.element, main);
   return area;
