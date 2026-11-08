@@ -97,7 +97,7 @@ macro_rules! for_each_command {
             [async] open_session(connection_id: String, session_id: String, options: Option<$crate::contract::SessionOptions>)
                 -> $crate::error::AppResult<$crate::contract::SessionInfo> = $crate::commands::query::open_session;
             [async] close_session(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::query::close_session;
-            [stream] run(session_id: String, request: $crate::contract::RunRequest, confirmation: Option<$crate::gateway::Confirmation>)
+            [stream] run(session_id: String, request: $crate::contract::RunRequest, confirmation: Option<$crate::gateway::Confirmation>, max_rows: Option<usize>)
                 -> $crate::error::AppResult<$crate::contract::RunSummary> => $crate::contract::StreamEvent = $crate::commands::query::run;
             [async] cancel_run(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::query::cancel_run;
             [async] transaction(session_id: String, op: $crate::contract::TransactionOp)
@@ -148,6 +148,8 @@ macro_rules! for_each_command {
             [async] test_ai(settings: $crate::ai::AiSettings, api_key: Option<String>, connection_id: Option<String>)
                 -> $crate::error::AppResult<String> = $crate::commands::ai::test_ai;
             [sync] ai_cancel(id: String) -> () = $crate::commands::ai::ai_cancel;
+            [sync] set_assistant_read_queries(enabled: bool)
+                -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::ai::set_assistant_read_queries;
 
             [async] history_append(entry: $crate::history::HistoryEntry)
                 -> $crate::error::AppResult<Option<$crate::history::HistoryEntry>> = $crate::commands::history::history_append;

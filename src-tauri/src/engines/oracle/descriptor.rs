@@ -3,8 +3,8 @@
 //! download it, see `instant_client.rs`).
 
 use crate::contract::{
-    AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec,
-    FilterSupport, FormSection, LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
+    AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind,
+    FieldSpec, FilterSupport, FormSection, LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
 };
 
 pub const ID: &str = "oracle";
@@ -88,11 +88,13 @@ pub fn descriptor() -> EngineDescriptor {
             hint: "Oracle SQL and PL/SQL blocks; end a PL/SQL block with '/' on its own line. Each statement commits unless a \
                    transaction is begun. Ctrl+Enter runs the query."
                 .into(),
+            fences: LanguageSpec::fence_tags(&["sql", "plsql", "oracle"]),
         }],
         filter: FilterSupport {
             structured: true,
             raw: Some(RawFilterLang::Sql),
             placeholder: "Filter: SQL WHERE, e.g. STATUS = 'PAID' AND TOTAL > 10".into(),
         },
+        assistant: AssistantHints::sql(LABEL),
     }
 }

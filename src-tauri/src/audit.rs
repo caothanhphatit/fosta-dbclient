@@ -1,4 +1,4 @@
-//! Local safety audit log: blocked, confirmed and relaxed operations, kept in
+//! Local safety audit log: blocked, confirmed and relaxed operations and the assistant's read-only runs, kept in
 //! `fosta-studio-audit.jsonl` next to `fosta-studio.json`.
 //!
 //! Same layout as the query history (`history.rs`): append-only JSON Lines under one mutex,
@@ -30,6 +30,8 @@ pub enum Outcome {
     Confirmed,
     /// A workspace's rules were made less strict.
     Relaxed,
+    /// The assistant ran a read-only statement (detail: row count or error).
+    Ran,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,8 +2,8 @@
 //! language. Cluster and Sentinel are out of scope: the form has no fields for them.
 
 use crate::contract::{
-    AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec,
-    FilterSupport, FormSection, LanguageSpec, TlsModeId, TlsSupport, UrlSpec,
+    AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind,
+    FieldSpec, FilterSupport, FormSection, LanguageSpec, TlsModeId, TlsSupport, UrlSpec,
 };
 
 use super::connection::DEFAULT_PORT;
@@ -79,11 +79,16 @@ pub fn descriptor() -> EngineDescriptor {
             dialect: None,
             default: true,
             hint: "One command per line, as in redis-cli; # starts a comment. Ctrl+Enter runs the commands.".into(),
+            fences: LanguageSpec::fence_tags(&["redis"]),
         }],
         filter: FilterSupport {
             structured: false,
             raw: None,
             placeholder: "Key pattern, e.g. user:*".into(),
+        },
+        assistant: AssistantHints {
+            test_data: "Redis commands (SET, HSET, RPUSH, …)".into(),
+            ..AssistantHints::default()
         },
     }
 }

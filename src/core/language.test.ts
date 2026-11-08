@@ -53,7 +53,9 @@ describe("statementAt", () => {
   it("is what the default language support uses", async () => {
     const support = defaultLanguageSupport();
     expect(support.statementAt("a; b", 3)).toEqual({ from: 3, to: 4 });
-    expect(await support.editorExtensions({ language: { id: "x", label: "X", editor: "text", dialect: null, default: true, hint: "" } })).toEqual([]);
+    expect(await support.editorExtensions({ language: { id: "x", label: "X", editor: "text", dialect: null, default: true, hint: "", fences: [] } })).toEqual(
+      [],
+    );
   });
 });
 

@@ -1,0 +1,150 @@
+/* Results of a code block's Run button, and read-only queries the assistant ran (features/assistant/chatRun.ts). */
+
+.chat-run {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.chat-run .error-block {
+  margin: 6px;
+}
+
+.chat-run-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--fg-2);
+}
+
+.chat-run-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: chat-run-spin 0.8s linear infinite;
+}
+
+@keyframes chat-run-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.chat-run-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 10px;
+  color: var(--fg-3);
+}
+
+.chat-run-footer .chat-code-button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.chat-run-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-grid {
+  max-height: 260px;
+  overflow: auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-grid table {
+  border-collapse: collapse;
+  font: 11.5px/1.4 var(--font-mono);
+}
+
+.chat-grid th,
+.chat-grid td {
+  max-width: 220px;
+  padding: 3px 8px;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-grid th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-weight: 600;
+}
+
+.chat-grid td.null {
+  color: var(--fg-3);
+  font-style: italic;
+}
+
+.chat-tool-query {
+  display: block;
+}
+
+.chat-tool-query summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.chat-tool-query summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-tool-query summary .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-tool-query.failed summary .icon {
+  color: var(--danger);
+}
+
+.chat-tool-outcome {
+  color: var(--fg-3);
+}
+
+.chat-tool-outcome::before {
+  content: "· ";
+}
+
+.chat-tool-query[open] {
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+}
+
+.chat-tool-query .chat-grid {
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--editor-bg);
+}
+
+.chat-tool-statement {
+  margin: 4px 0 0;
+  padding: 6px 9px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: var(--editor-bg);
+  color: var(--fg);
+  font: 11.5px/1.45 var(--font-mono);
+}
+
+.chat-tool-note {
+  margin-top: 3px;
+  font-size: 11px;
+}

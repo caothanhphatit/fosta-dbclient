@@ -28,18 +28,29 @@ pub async fn close_session(state: &AppState, session_id: String) -> AppResult<()
     Ok(())
 }
 
-/// Runs the editor text through the gateway; events stream through `events` while it runs. The run stops when the
-/// receiver goes away (the tab closed, the HTTP response was dropped).
+/// Runs the editor text (or an assistant code block) through the gateway; events stream through `events` while it runs.
+/// The run stops when the receiver goes away (the tab closed, the HTTP response was dropped). `max_rows` lowers the rules'
+/// row limit (optional, so older callers keep working).
 pub async fn run(
     state: &AppState,
     session_id: String,
     request: RunRequest,
     confirmation: Option<Confirmation>,
+    max_rows: Option<usize>,
     events: EventSink<StreamEvent>,
 ) -> AppResult<RunSummary> {
     let context = gateway_context(state, &state.engines.session_connection(&session_id)?)?;
     let mut sink = move |event: StreamEvent| if events(event) { Flow::Continue } else { Flow::Stop };
-    gateway::run(&state.engines, &context, &session_id, &request, confirmation.as_ref(), &mut sink).await
+    gateway::run_limited(
+        &state.engines,
+        &context,
+        &session_id,
+        &request,
+        confirmation.as_ref(),
+        max_rows,
+        &mut sink,
+    )
+    .await
 }
 
 pub async fn cancel_run(state: &AppState, session_id: String) -> AppResult<()> {

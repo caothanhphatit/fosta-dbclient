@@ -19,7 +19,11 @@
       "editor": "sql",
       "dialect": "mariaDb",
       "default": true,
-      "hint": "Ctrl+Enter runs the query."
+      "hint": "Ctrl+Enter runs the query.",
+      "fences": [
+        "sql",
+        "mariadb"
+      ]
     }
   ],
   "connectionActions": [

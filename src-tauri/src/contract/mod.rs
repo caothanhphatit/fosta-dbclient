@@ -32,8 +32,8 @@ pub use capability::{Capability, CapabilitySet};
 pub use classify::{Category, Classification, ClassifyInput, StatementInfo};
 pub use describe::{ColumnHints, ColumnInfo, ForeignKeyInfo, IndexInfo, KeyInfo, ObjectDescription, ReferencingKey};
 pub use descriptor::{
-    AuthMethodId, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec, FilterSupport, FormSection,
-    LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
+    AssistantHints, AssistantPrompt, AuthMethodId, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec,
+    FilterSupport, FormSection, LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
 };
 pub use engine::{
     classify_common, default_validate_filter, require, Connection, DatabaseAdmin, Engine, ParsedConnection, SchemaGraphSource, TabularData,

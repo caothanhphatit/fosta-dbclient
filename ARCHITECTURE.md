@@ -188,15 +188,20 @@ categories, tables, statements, … }`; `BLOCKED` has the same shape without a t
   MariaDB/MySQL; statement timeouts use `max_statement_time` on MariaDB, `max_execution_time` on MySQL (SELECT only) and `maxTimeMS` for
   MongoDB browsing. SQL Server has no per-statement timeout or read-only session the app can switch on: there the gateway enforces the
   rules, and a read-only login is recommended for production. The row limit applies to query results on every engine.
-- **The assistant never executes**: each tool is registered as metadata-only or view-opening (`assistant_tool_effect`). A filter from
-  `open_table` is checked like a grid filter, then only pre-filled and marked as suggested; the table loads when the user applies it.
+- **The assistant never changes anything**: each tool is registered as metadata-only, view-opening or read-only rows
+  (`assistant_tool_effect`). `run_read_query` (`gateway/assistant.rs`) classifies one statement with the engine's `classify`, allows
+  only Read statements the rules allow outright (a confirmation is never handed to the model), and runs it in a session of its own
+  opened read-only, with 50 rows and a 10 s timeout. A filter from `open_table` is checked like a grid filter, then only pre-filled and
+  marked as suggested; the table loads when the user applies it.
+- **Run buttons in the chat** are the user's own runs: `run` on a session of their own, with the workspace rules (confirm, typed confirm,
+  block) and at most 200 rows (`maxRows`).
 - **Relaxing rules**: the workspace dialog lists what becomes possible and an example of what could go wrong; relaxing a Production
   workspace needs its name typed (checked again by `save_workspace`). A workspace looser than its baseline shows a badge on the rail and
   in the status bar.
 
 ## Audit log
 
-`audit.rs` appends one JSON object per blocked, confirmed or relaxed operation to `fosta-studio-audit.jsonl` next to `fosta-studio.json`
+`audit.rs` appends one JSON object per blocked, confirmed or relaxed operation and per assistant query (outcome `ran`) to `fosta-studio-audit.jsonl` next to `fosta-studio.json`
 (time, caller, workspace, connection, category, statement excerpt, outcome, detail), with the same append-and-compact scheme as the query
 history (newest 20,000 entries). It stays on this machine and never holds passwords.
 
@@ -212,14 +217,23 @@ The history **never leaves this machine**; it holds only what the user ran (neve
 
 Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provider dialog, model switcher).
 
-- **Never executes anything.** The model can read metadata and ask the UI to open a view; it has no tool that runs a query or changes
-  data. SQL it writes appears in code blocks with Insert / New tab buttons, and the user runs it.
+- **Never changes anything.** The model reads metadata, asks the UI to open a view and, where the user allows it, runs read-only
+  queries. Code it writes appears in blocks with Run / Insert / New tab buttons: Run is the user's run through the gateway, with the
+  result in a compact grid under the block (200 rows, "Open in tab" for the rest) and errors in the structured error shape. Which fence
+  runs in which language, the quick prompts and the translation targets come from the engine descriptors (`LanguageSpec.fences`,
+  `EngineDescriptor.assistant`).
 - **Tools** (`ai/tools.rs`), offered only when a connection is open:
   - `list_databases`, `list_tables`, `describe_table` (columns, keys, indexes and DDL), `schema_overview` (all tables, columns and
     foreign keys): read catalog metadata through the contract (`ai/catalog.rs`: the tree's `children`, `describe`, `schema_graph`),
     so every engine gets them without engine code. No row data is read.
+    Key-value engines list at most 200 keys per database, with a note; engines without databases (Elasticsearch) list their
+    top-level folders.
   - `open_diagram`, `open_table` (with an optional filter that is only pre-filled as a suggestion), `open_query` (a new tab with the
     text in the editor): emit a `UiAction` event; the UI opens the view, nothing runs.
+  - `run_read_query`: one read-only statement through `gateway::assistant` (Read only, 50 rows, cells cut at 200 characters, 10 s,
+    cancelled with the chat). Registered with the model only when Settings → "Allow the assistant to run read-only queries" is on for
+    the workspace (default on; off for Read-only and Production workspaces unless the workspace allows it). The rows go to the AI
+    provider; each run shows in the chat as an expandable tool call and is written to the audit log and the application log.
 - **Context** (`ai/prompt.rs`): the system prompt lists the engine, database, table names, and what the user shares from the active tab
   (editor text, last error, the tail of a task log), with size limits.
 - **Transport**: the user's own key goes straight from this machine to the provider. `ai/anthropic.rs` speaks the Messages API, and

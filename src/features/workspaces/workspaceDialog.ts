@@ -1,7 +1,7 @@
 import { api } from "../../core/api";
 import { field, openModal, textInput } from "../../core/dialogs";
 import { h, icon } from "../../core/dom";
-import type { AppConfig, WorkspaceMeta } from "../../core/types";
+import type { AppConfig, AssistantQueries, WorkspaceMeta } from "../../core/types";
 import { newWorkspaceSafety, PRODUCTION_ICON, relaxations, safetyOf } from "../safety/safety";
 import { relaxationWarning, safetyEditor } from "../safety/safetySection";
 import { WORKSPACE_COLORS, WORKSPACE_ICONS, workspaceColor, workspaceIcon } from "./workspaceRail";
@@ -35,6 +35,18 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
       if (warning && !shown && warningHost.isConnected) requestAnimationFrame(() => warningHost.scrollIntoView({ block: "nearest", behavior: "smooth" }));
     };
     const safety = safetyEditor(savedSafety(), refreshWarning);
+    const assistantQueries = h(
+      "select",
+      { class: "input" },
+      ...(
+        [
+          ["default", "Follow the setting (off for Read-only and Production)"],
+          ["allow", "Allow read-only queries"],
+          ["deny", "Never run queries"],
+        ] as [AssistantQueries, string][]
+      ).map(([value, label]) => h("option", { value }, label)),
+    );
+    assistantQueries.value = existing?.assistantQueries ?? "default";
     const swatches = WORKSPACE_COLORS.map((option) => {
       const swatch = h("button", { class: `swatch color-${option}${option === color ? " active" : ""}`, type: "button", title: option, "aria-label": option });
       swatch.addEventListener("click", () => {
@@ -72,10 +84,15 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
         "div",
         { class: "field" },
         h("span", { class: "field-label" }, "Safety"),
-        h("span", { class: "field-hint" }, "What query tabs, grid edits, imports and filters may run here"),
+        h("span", { class: "field-hint" }, "What query tabs, grid edits, imports, filters and assistant Run buttons may run here"),
         safety.element,
       ),
       warningHost,
+      field(
+        "Assistant queries",
+        assistantQueries,
+        "Whether the assistant may run read-only queries itself here (Settings → Allow the assistant to run read-only queries). The rows it reads are sent to your AI provider.",
+      ),
     );
     openModal(
       existing ? "Edit workspace" : "New workspace",
@@ -96,7 +113,10 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
               relaxName.focus();
               throw new Error(`Type ${expected} to relax the rules of a Production workspace`);
             }
-            saved = await api.saveWorkspace({ id, name: trimmed, color, icon: iconName, safety: rules }, relaxing ? relaxName.value.trim() : null);
+            saved = await api.saveWorkspace(
+              { id, name: trimmed, color, icon: iconName, safety: rules, assistantQueries: assistantQueries.value as AssistantQueries },
+              relaxing ? relaxName.value.trim() : null,
+            );
           },
         },
       ],

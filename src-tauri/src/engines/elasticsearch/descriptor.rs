@@ -2,8 +2,8 @@
 //! Dev Tools console; Elasticsearch adds ES|QL and the Cloud ID, OpenSearch has neither.
 
 use crate::contract::{
-    AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec,
-    FilterSupport, FormSection, LanguageSpec, RawFilterLang, TlsModeId, TlsSupport, UrlSpec,
+    AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind,
+    FieldSpec, FilterSupport, FormSection, LanguageSpec, RawFilterLang, TlsModeId, TlsSupport, UrlSpec,
 };
 
 /// Which product an engine id stands for (the server's own distribution is detected when connecting).
@@ -76,6 +76,7 @@ fn build(flavor: Flavor) -> EngineDescriptor {
         dialect: None,
         default: true,
         hint: "Dev Tools format: METHOD /path on one line, then a JSON body. Ctrl+Enter runs the requests.".into(),
+        fences: LanguageSpec::fence_tags(&["http", "es", "console", "elasticsearch", "opensearch"]),
     }];
     if elastic {
         languages.push(LanguageSpec {
@@ -85,6 +86,7 @@ fn build(flavor: Flavor) -> EngineDescriptor {
             dialect: None,
             default: false,
             hint: "One ES|QL query, e.g. FROM logs-* | WHERE status >= 500 | LIMIT 100. Ctrl+Enter runs it.".into(),
+            fences: LanguageSpec::fence_tags(&["esql"]),
         });
     }
     languages.push(LanguageSpec {
@@ -98,6 +100,7 @@ fn build(flavor: Flavor) -> EngineDescriptor {
         } else {
             "One query for the OpenSearch SQL plugin, e.g. SELECT * FROM logs LIMIT 100. Ctrl+Enter runs it.".into()
         },
+        fences: LanguageSpec::fence_tags(&["sql"]),
     });
 
     let mut auth = vec![AuthMethodId::Password];
@@ -165,6 +168,11 @@ fn build(flavor: Flavor) -> EngineDescriptor {
             structured: true,
             raw: Some(RawFilterLang::EsQueryDsl),
             placeholder: "Filter: Query DSL, e.g. { \"term\": { \"status\": \"paid\" } }".into(),
+        },
+        assistant: AssistantHints {
+            test_data: "a _bulk request".into(),
+            translate_to: Some(format!("an {} search request (Query DSL)", flavor.label())),
+            ..AssistantHints::default()
         },
     }
 }

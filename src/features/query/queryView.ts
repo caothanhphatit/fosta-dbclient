@@ -851,7 +851,7 @@ function messageLines(messages: Message[]): HTMLElement[] {
 
 /** A language for an engine whose descriptor lists none (an unknown engine id): plain text. */
 function fallbackLanguage(engine: EngineDescriptor): LanguageSpec {
-  return { id: "text", label: "Text", editor: "text", dialect: engine.sqlDialect, default: true, hint: "Ctrl+Enter runs the query." };
+  return { id: "text", label: "Text", editor: "text", dialect: engine.sqlDialect, default: true, hint: "Ctrl+Enter runs the query.", fences: [] };
 }
 
 function readHistoryPanelOpen(): boolean {

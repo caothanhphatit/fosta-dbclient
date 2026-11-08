@@ -84,12 +84,14 @@ pub fn descriptor() -> EngineDescriptor {
             dialect: None,
             default: true,
             hint: String::new(),
+            fences: LanguageSpec::fence_tags(&["sql"]),
         }],
         filter: FilterSupport {
             structured: true,
             raw: None,
             placeholder: String::new(),
         },
+        assistant: crate::contract::AssistantHints::sql("Fake"),
     }
 }
 
@@ -231,6 +233,9 @@ impl TabularData for FakeConnection {
     }
 }
 
+/// Rows a read of `items` returns from a session.
+pub const ITEM_ROWS: i64 = 120;
+
 struct FakeSession {
     engine: &'static FakeEngine,
 }
@@ -241,7 +246,7 @@ impl Session for FakeSession {
         "sql"
     }
 
-    async fn run(&self, request: &RunRequest, _options: &RunOptions, sink: &mut dyn ResultSink) -> AppResult<()> {
+    async fn run(&self, request: &RunRequest, options: &RunOptions, sink: &mut dyn ResultSink) -> AppResult<()> {
         self.engine.record("run");
         if self.engine.panics.run.load(Ordering::Relaxed) {
             panic!("fake run panicked");
@@ -250,11 +255,33 @@ impl Session for FakeSession {
             index: 0,
             sql: request.text.clone(),
         });
+        // A read of `items` returns its rows, cut at `options.row_limit` (then marked truncated).
+        let rows: Vec<Vec<Value>> = if request.text.to_ascii_lowercase().contains("from items") {
+            sink.event(StreamEvent::Columns {
+                index: 0,
+                columns: vec![
+                    ColumnInfo::result("id", "int", ValueKind::Int),
+                    ColumnInfo::result("name", "text", ValueKind::Text),
+                ],
+            });
+            (1..=ITEM_ROWS)
+                .map(|id| vec![Value::Int(id), Value::Text(format!("item {id}"))])
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let total = rows.len();
+        let kept: Vec<Vec<Value>> = rows.into_iter().take(options.row_limit).collect();
+        let truncated = kept.len() < total;
+        let count = kept.len();
+        if !kept.is_empty() {
+            sink.event(StreamEvent::Rows { index: 0, rows: kept });
+        }
         sink.event(StreamEvent::Done {
             index: 0,
-            affected: Some(0),
-            rows: 0,
-            truncated: false,
+            affected: if count == 0 && total == 0 { Some(0) } else { None },
+            rows: count,
+            truncated,
             elapsed_ms: 0,
         });
         Ok(())

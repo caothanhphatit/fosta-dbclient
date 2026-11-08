@@ -1,8 +1,8 @@
 //! The SQL Server descriptor.
 
 use crate::contract::{
-    AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FilterSupport, LanguageSpec,
-    RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
+    AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FilterSupport,
+    LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
 };
 
 pub const ID: &str = "mssql";
@@ -70,11 +70,13 @@ pub fn descriptor() -> EngineDescriptor {
             dialect: Some(SqlDialectId::MsSql),
             default: true,
             hint: "Ctrl+Enter runs the batch. Tables are addressed as schema.table; the default schema is dbo.".into(),
+            fences: LanguageSpec::fence_tags(&["sql", "tsql", "mssql"]),
         }],
         filter: FilterSupport {
             structured: true,
             raw: Some(RawFilterLang::Sql),
             placeholder: "Filter: T-SQL WHERE, e.g. Status = 'Active'".into(),
         },
+        assistant: AssistantHints::sql(LABEL),
     }
 }

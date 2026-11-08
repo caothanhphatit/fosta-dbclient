@@ -1,12 +1,13 @@
 //! What the assistant reads about a connection, through the engine contract only (`Handle::call`, contained): database
 //! names and the objects of a database from `children`, descriptions from `describe`, and the schema overview from
 //! `schema_graph` (or per-object descriptions when the engine has no schema graph). Every engine gets these read-only
-//! metadata tools without engine code here.
+//! metadata tools without engine code here. Key-value engines (Redis) list at most [`MAX_KEYS`] keys per database, so a
+//! question never scans a large keyspace; the listing says so.
 
 use crate::{
     contract::{
-        CallContext, Capability, NodeKey, NodeKind, ObjectDescription, ObjectNode, ObjectRef, Relation, SchemaColumn, SchemaGraph,
-        SchemaTable, TreeRequest,
+        CallContext, Capability, EngineFamily, NodeKey, NodeKind, ObjectDescription, ObjectNode, ObjectRef, Relation, SchemaColumn,
+        SchemaGraph, SchemaTable, TreeRequest,
     },
     error::{AppError, AppResult},
     runtime::Handle,
@@ -19,18 +20,21 @@ const WALK_MAX_PAGES: usize = 40;
 const MAX_DEPTH: usize = 3;
 /// Objects collected per database; a huge catalog is cut here.
 const MAX_OBJECTS: usize = 5000;
+/// Keys collected per database of a key-value engine (every key is an object there).
+pub const MAX_KEYS: usize = 200;
 /// Objects described one by one when the engine has no schema graph.
 const MAX_DESCRIBED: usize = 100;
 
-/// Every child of `parent`, following `next_cursor` (bounded).
-async fn children(handle: &Handle, ctx: &CallContext, parent: Option<NodeKey>) -> AppResult<Vec<ObjectNode>> {
+/// Up to `max` children of `parent`, following `next_cursor` (bounded).
+async fn children(handle: &Handle, ctx: &CallContext, parent: Option<NodeKey>, max: usize) -> AppResult<Vec<ObjectNode>> {
     let mut nodes = Vec::new();
     let mut cursor = None;
     for _ in 0..WALK_MAX_PAGES {
+        let room = max.saturating_sub(nodes.len()).max(1);
         let request = TreeRequest {
             parent: parent.clone(),
             cursor: cursor.take(),
-            limit: Some(WALK_PAGE),
+            limit: Some(WALK_PAGE.min(u32::try_from(room).unwrap_or(WALK_PAGE))),
             filter: None,
         };
         let ctx = ctx.clone();
@@ -39,10 +43,11 @@ async fn children(handle: &Handle, ctx: &CallContext, parent: Option<NodeKey>) -
             .await?;
         nodes.extend(page.nodes);
         match page.next_cursor {
-            Some(next) if nodes.len() < MAX_OBJECTS => cursor = Some(next),
+            Some(next) if nodes.len() < max => cursor = Some(next),
             _ => break,
         }
     }
+    nodes.truncate(max);
     Ok(nodes)
 }
 
@@ -56,7 +61,7 @@ fn database_name(node: &ObjectNode) -> String {
 
 /// The database nodes at the top of the tree.
 async fn database_nodes(handle: &Handle, ctx: &CallContext) -> AppResult<Vec<ObjectNode>> {
-    Ok(children(handle, ctx, None)
+    Ok(children(handle, ctx, None, MAX_OBJECTS)
         .await?
         .into_iter()
         .filter(|node| node.kind == NodeKind::DATABASE)
@@ -72,36 +77,78 @@ fn is_listed(kind: &NodeKind) -> bool {
     kind.is_relation() || *kind == NodeKind::SEARCH_INDEX || *kind == NodeKind::KEY
 }
 
-/// The objects of `database`: the database node's children, looking inside schema and folder nodes on the way, in the
-/// engine's order.
-pub async fn objects(handle: &Handle, ctx: &CallContext, database: &str) -> AppResult<Vec<ObjectNode>> {
-    let root = database_nodes(handle, ctx)
-        .await?
-        .into_iter()
-        .find(|node| database_name(node) == database)
-        .ok_or_else(|| AppError::new(format!("There is no database {database} on this connection")))?;
-    let mut found = Vec::new();
-    collect(handle, ctx, root.key, 0, &mut found).await?;
-    Ok(found)
+/// The objects of one database, and a note for the model when the listing was cut.
+pub struct Listing {
+    pub objects: Vec<ObjectNode>,
+    pub note: Option<String>,
 }
 
-/// Adds the listed objects under `parent` to `found`, visiting containers where they appear (boxed: it recurses).
+/// The objects of `database`: the database node's children, looking inside schema and folder nodes on the way, in the
+/// engine's order; at most [`MAX_KEYS`] for a key-value engine and [`MAX_OBJECTS`] for the others. An engine without
+/// databases (Elasticsearch: indices, data streams and aliases in top-level folders) ignores `database`.
+pub async fn objects(handle: &Handle, ctx: &CallContext, database: &str) -> AppResult<Listing> {
+    let roots = children(handle, ctx, None, MAX_OBJECTS).await?;
+    let key_value = handle.engine.descriptor().family == EngineFamily::KeyValue;
+    let max = if key_value { MAX_KEYS } else { MAX_OBJECTS };
+    let mut found = Vec::new();
+    if roots.iter().any(|node| node.kind == NodeKind::DATABASE) {
+        if database.is_empty() {
+            return Err(AppError::new("No database selected; pass `database`."));
+        }
+        let root = roots
+            .into_iter()
+            .find(|node| node.kind == NodeKind::DATABASE && database_name(node) == database)
+            .ok_or_else(|| AppError::new(format!("There is no database {database} on this connection")))?;
+        collect(handle, ctx, root.key, 0, max, &mut found).await?;
+    } else {
+        visit(handle, ctx, roots, 0, max, &mut found).await?;
+    }
+    let note = (found.len() >= max).then(|| {
+        if key_value {
+            format!("only the first {max} keys were listed; the database may hold many more. Ask for a key pattern instead of listing")
+        } else {
+            format!("only the first {max} objects were listed")
+        }
+    });
+    Ok(Listing { objects: found, note })
+}
+
+/// Adds the listed objects under `parent` to `found`, visiting containers where they appear.
 fn collect<'a>(
     handle: &'a Handle,
     ctx: &'a CallContext,
     parent: NodeKey,
     depth: usize,
+    max: usize,
     found: &'a mut Vec<ObjectNode>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<()>> + Send + 'a>> {
+) -> Walk<'a> {
     Box::pin(async move {
-        for node in children(handle, ctx, Some(parent)).await? {
-            if found.len() >= MAX_OBJECTS {
+        let room = max.saturating_sub(found.len()).max(1);
+        let nodes = children(handle, ctx, Some(parent), room).await?;
+        visit(handle, ctx, nodes, depth, max, found).await
+    })
+}
+
+type Walk<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<()>> + Send + 'a>>;
+
+/// Adds the listed objects among `nodes` to `found` and looks inside schema and folder nodes (boxed: it recurses).
+fn visit<'a>(
+    handle: &'a Handle,
+    ctx: &'a CallContext,
+    nodes: Vec<ObjectNode>,
+    depth: usize,
+    max: usize,
+    found: &'a mut Vec<ObjectNode>,
+) -> Walk<'a> {
+    Box::pin(async move {
+        for node in nodes {
+            if found.len() >= max {
                 break;
             }
             if is_listed(&node.kind) {
                 found.push(node);
             } else if node.expandable && depth < MAX_DEPTH && matches!(node.kind.as_str(), "schema" | "folder") {
-                collect(handle, ctx, node.key, depth + 1, found).await?;
+                collect(handle, ctx, node.key, depth + 1, max, found).await?;
             }
         }
         Ok(())
@@ -154,6 +201,7 @@ pub async fn schema_overview(handle: &Handle, ctx: &CallContext, database: &str)
     }
     let nodes: Vec<ObjectNode> = objects(handle, ctx, database)
         .await?
+        .objects
         .into_iter()
         .filter(|node| node.kind.is_relation())
         .collect();

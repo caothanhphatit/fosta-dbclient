@@ -181,6 +181,83 @@ pub struct LanguageSpec {
     /// One line under the editor that says what to type and how to run it.
     #[serde(default)]
     pub hint: String,
+    /// Code-fence tags of this language in assistant replies: the assistant writes the first (```sql), and a block
+    /// tagged with any of them runs in this language from the chat.
+    #[serde(default)]
+    pub fences: Vec<String>,
+}
+
+impl LanguageSpec {
+    /// `fences` from string literals.
+    pub fn fence_tags(tags: &[&str]) -> Vec<String> {
+        tags.iter().map(|tag| (*tag).to_owned()).collect()
+    }
+
+    /// The fence tag the assistant writes for this language (empty when it has none).
+    pub fn fence(&self) -> &str {
+        self.fences.first().map(String::as_str).unwrap_or_default()
+    }
+}
+
+/// A prompt the assistant panel offers as a quick action for this engine (prefilled in the composer).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantPrompt {
+    pub label: String,
+    /// An `IconName` from `src/core/dom.ts`.
+    pub icon: String,
+    pub prompt: String,
+}
+
+/// What the assistant panel says and offers for an engine, so it never compares engine ids.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssistantHints {
+    /// How test data for one object is written: "INSERT statements", "an insertMany command".
+    pub test_data: String,
+    /// Extra quick actions in query tabs and on the connection ("Aggregation pipeline").
+    #[serde(default)]
+    pub prompts: Vec<AssistantPrompt>,
+    /// Query tabs of this engine offer "Translate to…".
+    #[serde(default)]
+    pub translate_from: bool,
+    /// The engine as a translation target, in "Translate this to …"; `None` leaves it out of the menu.
+    #[serde(default)]
+    pub translate_to: Option<String>,
+    /// The menu label of the target; the engine label when `None`.
+    #[serde(default)]
+    pub translate_label: Option<String>,
+}
+
+impl AssistantHints {
+    /// A SQL engine: INSERT statements, translatable from and to (as `label`).
+    pub fn sql(label: &str) -> Self {
+        Self {
+            test_data: "INSERT statements".into(),
+            prompts: Vec::new(),
+            translate_from: true,
+            translate_to: Some(label.to_owned()),
+            translate_label: None,
+        }
+    }
+
+    /// No longer a translation target (another engine stands for the same dialect).
+    pub fn not_a_target(mut self) -> Self {
+        self.translate_to = None;
+        self
+    }
+}
+
+impl Default for AssistantHints {
+    fn default() -> Self {
+        Self {
+            test_data: "statements".into(),
+            prompts: Vec::new(),
+            translate_from: false,
+            translate_to: None,
+            translate_label: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -218,6 +295,9 @@ pub struct EngineDescriptor {
     pub connection: ConnectionForm,
     pub languages: Vec<LanguageSpec>,
     pub filter: FilterSupport,
+    /// What the assistant panel offers for this engine.
+    #[serde(default)]
+    pub assistant: AssistantHints,
 }
 
 impl EngineDescriptor {

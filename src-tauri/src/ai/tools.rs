@@ -1,20 +1,27 @@
-//! Tools the model may call. They only read metadata (database, table and
-//! column names, DDL) through the engine contract (`super::catalog`) or ask the
-//! UI to open a view; none of them runs a query or changes data. Each tool is
-//! registered with the statement gateway (`gateway::assistant_tool_effect`), and
-//! a filter from `open_table` is only pre-filled in the grid for the user to apply.
+//! Tools the model may call. They read metadata (database, table and column
+//! names, DDL) through the engine contract (`super::catalog`), ask the UI to open
+//! a view, or, only where the user allows it, run one read-only statement
+//! (`run_read_query` through `gateway::assistant`: Read category only, 50 rows,
+//! 10 s). None of them changes data. Each tool is registered with the statement
+//! gateway (`gateway::assistant_tool_effect`), and a filter from `open_table` is
+//! only pre-filled in the grid for the user to apply.
 
 use serde_json::{json, Value};
 
 use super::{catalog, prompt::truncate, ChatContext, ChatEvent, ChatSink, ToolCall, UiAction, Wire};
 use crate::{
     contract::{CallContext, ObjectDescription, SchemaGraph},
-    gateway,
+    gateway::{self, assistant::ReadResult},
     runtime::ConnectionManager,
 };
 
 const MAX_DDL_CHARS: usize = 8000;
 const MAX_OVERVIEW_CHARS: usize = 24_000;
+/// A cell of a query result is cut here before the model (and the chat) sees it.
+const MAX_CELL_CHARS: usize = 200;
+/// The whole query result sent to the model.
+const MAX_RESULT_CHARS: usize = 16_000;
+pub(super) const READ_QUERY: &str = "run_read_query";
 
 pub(super) struct ToolSpec {
     pub(super) name: &'static str,
@@ -22,9 +29,10 @@ pub(super) struct ToolSpec {
     pub(super) schema: Value,
 }
 
-pub(super) fn tool_definitions() -> Vec<ToolSpec> {
+/// The tools offered to the model; `read_queries` adds `run_read_query` (the user allows it for the workspace).
+pub(super) fn tool_definitions(read_queries: bool) -> Vec<ToolSpec> {
     let database = json!({ "type": "string", "description": "Database name; defaults to the current one." });
-    vec![
+    let mut tools = vec![
         ToolSpec {
             name: "schema_overview",
             description: "Returns every table of a database with its columns (keys marked) and all foreign keys between tables. Use it before writing joins across several tables or explaining how tables relate.",
@@ -90,7 +98,23 @@ pub(super) fn tool_definitions() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
         },
-    ]
+    ];
+    if read_queries {
+        tools.push(ToolSpec {
+            name: READ_QUERY,
+            description: "Runs one read-only statement in the query language of the connection (SELECT, SHOW, EXPLAIN without ANALYZE; a find or aggregate without $out/$merge; a read-only Redis command; a _search or _count request) and returns at most 50 rows, long values cut. Use it to look at real values before answering: distinct values, counts, a few sample rows. Anything that writes, changes the schema or administers the server is refused: put such statements in a fenced code block for the user to run. The rows are sent to you, so read only what you need.",
+            schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "One statement in the connection's query language." },
+                    "database": database
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        });
+    }
+    tools
 }
 
 pub(super) fn describe_call(call: &ToolCall, context: &ChatContext) -> String {
@@ -104,13 +128,17 @@ pub(super) fn describe_call(call: &ToolCall, context: &ChatContext) -> String {
         "open_diagram" => format!("Opened the diagram of {database}"),
         "open_table" => format!("Opened {}", argument("table").unwrap_or_default()),
         "open_query" => String::from("Opened a query tab"),
+        READ_QUERY => String::from("Running a read-only query"),
         other => format!("Called {other}"),
     }
 }
 
+/// Runs one tool call. `reads` is the gateway context when the user allows read-only queries; without it
+/// `run_read_query` is refused even if the model calls it unasked.
 pub(super) async fn run_tool(
     db: &ConnectionManager,
     context: &ChatContext,
+    reads: Option<&gateway::Context>,
     call: &ToolCall,
     events: &dyn ChatSink,
 ) -> Result<String, String> {
@@ -132,10 +160,42 @@ pub(super) async fn run_tool(
             .or_else(|| context.database.clone())
             .ok_or_else(|| String::from("No database selected; pass `database`."))
     };
+    // The catalog tools: an engine without databases (Elasticsearch) needs none.
+    let catalog_database = || argument("database").or_else(|| context.database.clone()).unwrap_or_default();
     let outcome = match call.name.as_str() {
-        "list_databases" => catalog::databases(&handle, &ctx).await.map(|names| names.join("\n")),
+        READ_QUERY => {
+            let reads = reads
+                .ok_or("Running queries is turned off for this workspace. Put the query in a fenced code block so the user can run it.")?;
+            let query = argument("query").ok_or("`query` is required")?;
+            let database = argument("database").or_else(|| context.database.clone());
+            let outcome = gateway::assistant::read(db, reads, &query, database.as_deref()).await;
+            let (columns, rows) = outcome.as_ref().map(result_cells).unwrap_or_default();
+            show_event(
+                events,
+                ChatEvent::Query {
+                    statement: query.clone(),
+                    database: database.clone(),
+                    columns: columns.clone(),
+                    rows: rows.clone(),
+                    truncated: outcome.as_ref().is_ok_and(|result| result.truncated),
+                    elapsed_ms: outcome.as_ref().map(|result| result.elapsed_ms).unwrap_or_default(),
+                    error: outcome.as_ref().err().map(ToString::to_string),
+                },
+            );
+            return match outcome {
+                Ok(result) => Ok(format_rows(&columns, &rows, result.truncated)),
+                Err(error) => Err(error.to_string()),
+            };
+        }
+        "list_databases" => catalog::databases(&handle, &ctx).await.map(|names| {
+            if names.is_empty() {
+                String::from("This connection has no databases; list_tables lists its objects.")
+            } else {
+                names.join("\n")
+            }
+        }),
         "schema_overview" => {
-            let database = database()?;
+            let database = catalog_database();
             catalog::schema_overview(&handle, &ctx, &database)
                 .await
                 .map(|graph| format_overview(&database, &graph))
@@ -194,24 +254,28 @@ pub(super) async fn run_tool(
             return Ok(String::from("Opened a query tab with that text. It has not run; the user runs it."));
         }
         "list_tables" => {
-            let database = database()?;
-            catalog::objects(&handle, &ctx, &database).await.map(|objects| {
-                objects
+            let database = catalog_database();
+            catalog::objects(&handle, &ctx, &database).await.map(|listing| {
+                let mut lines: Vec<String> = listing
+                    .objects
                     .iter()
                     .map(|object| match &object.detail {
                         Some(detail) => format!("{}\t{}\t{detail}", object.label, object.kind),
                         None => format!("{}\t{}", object.label, object.kind),
                     })
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                    .collect();
+                if let Some(note) = listing.note {
+                    lines.push(format!("Note: {note}."));
+                }
+                lines.join("\n")
             })
         }
         "describe_table" => {
             let table = argument("table").ok_or("`table` is required")?;
-            let database = database()?;
+            let database = catalog_database();
             let object = catalog::objects(&handle, &ctx, &database)
                 .await
-                .and_then(|objects| catalog::find_object(&objects, &database, &table))
+                .and_then(|listing| catalog::find_object(&listing.objects, &database, &table))
                 .map_err(|error| error.to_string())?;
             catalog::describe(&handle, &ctx, object)
                 .await
@@ -318,7 +382,61 @@ pub(super) fn append_tool_results(wire: Wire, history: &mut Vec<Value>, results:
 }
 
 fn show(events: &dyn ChatSink, action: UiAction) {
-    let _ = events.send(ChatEvent::Action { action });
+    show_event(events, ChatEvent::Action { action });
+}
+
+fn show_event(events: &dyn ChatSink, event: ChatEvent) {
+    let _ = events.send(event);
+}
+
+/// Column names and cells as text, each cell on one line and cut at [`MAX_CELL_CHARS`].
+fn result_cells(result: &ReadResult) -> (Vec<String>, Vec<Vec<String>>) {
+    let columns = result.columns.iter().map(|column| column.name.clone()).collect();
+    let rows = result.rows.iter().map(|row| row.iter().map(cell_text).collect()).collect();
+    (columns, rows)
+}
+
+fn cell_text(value: &crate::contract::Value) -> String {
+    let text = match value {
+        crate::contract::Value::Bytes(bytes) => format!("<binary {} bytes>", bytes.len()),
+        other => other.display_or_null(),
+    };
+    let flat: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if flat.chars().count() > MAX_CELL_CHARS {
+        format!("{}…", flat.chars().take(MAX_CELL_CHARS).collect::<String>())
+    } else {
+        flat
+    }
+}
+
+/// The result for the model: a header, tab-separated rows, and a note when rows or characters were cut.
+fn format_rows(columns: &[String], rows: &[Vec<String>], truncated: bool) -> String {
+    if columns.is_empty() {
+        return String::from("The statement ran and returned no result set.");
+    }
+    let mut text = format!("{} row(s)", rows.len());
+    if truncated {
+        text.push_str(&format!(" (only the first {} were read; there are more)", rows.len()));
+    }
+    text.push_str(":\n");
+    text.push_str(&columns.join("\t"));
+    let mut shown = 0;
+    for row in rows {
+        let line = row.join("\t");
+        if text.len() + line.len() + 1 > MAX_RESULT_CHARS {
+            break;
+        }
+        text.push('\n');
+        text.push_str(&line);
+        shown += 1;
+    }
+    if shown < rows.len() {
+        text.push_str(&format!(
+            "\n… ({} more row(s) left out to keep the answer short)",
+            rows.len() - shown
+        ));
+    }
+    text
 }
 
 /// Compact text for the model: one line per table, then the foreign keys.
@@ -368,7 +486,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::contract::testing::FakeEngine;
+    use crate::contract::{testing::FakeEngine, Value as Cell};
 
     fn call(name: &str, input: Value) -> ToolCall {
         ToolCall {
@@ -396,12 +514,12 @@ mod tests {
             ("open_table", json!({ "table": "items", "filter": "name = 'x'" })),
             ("open_query", json!({ "sql": "DELETE FROM items" })),
         ];
-        let defined: Vec<&str> = tool_definitions().iter().map(|tool| tool.name).collect();
+        let defined: Vec<&str> = tool_definitions(false).iter().map(|tool| tool.name).collect();
         assert_eq!(defined.len(), inputs.len(), "every tool is exercised here");
         let mut outputs = Vec::new();
         for (name, input) in inputs {
             assert!(defined.contains(&name), "{name}");
-            let outcome = run_tool(&db, &context, &call(name, input), &events).await;
+            let outcome = run_tool(&db, &context, None, &call(name, input), &events).await;
             assert!(outcome.is_ok(), "{name}: {outcome:?}");
             outputs.push(outcome.unwrap());
         }
@@ -414,19 +532,33 @@ mod tests {
         );
         assert!(outputs[3].contains("- items: id int?, name text?"), "{}", outputs[3]);
         // Unknown objects are a clear error, not a guess.
-        let missing = run_tool(&db, &context, &call("describe_table", json!({ "table": "nope" })), &events).await;
+        let missing = run_tool(&db, &context, None, &call("describe_table", json!({ "table": "nope" })), &events).await;
         assert!(missing.unwrap_err().contains("no table, view or collection nope"));
         // Stacked statements in a suggested filter are rejected before the UI ever sees them.
         let injected = call(
             "open_table",
             json!({ "table": "items", "filter": "1=0; DELETE FROM items; SELECT 1 WHERE 1" }),
         );
-        assert!(run_tool(&db, &context, &injected, &events).await.is_err());
-        assert!(
-            run_tool(&db, &context, &call("run_sql", json!({ "sql": "DELETE FROM items" })), &events)
-                .await
-                .is_err()
-        );
+        assert!(run_tool(&db, &context, None, &injected, &events).await.is_err());
+        assert!(run_tool(
+            &db,
+            &context,
+            None,
+            &call("run_sql", json!({ "sql": "DELETE FROM items" })),
+            &events
+        )
+        .await
+        .is_err());
+        // With the setting off the query tool is refused even when the model calls it unasked.
+        let unasked = run_tool(
+            &db,
+            &context,
+            None,
+            &call(READ_QUERY, json!({ "query": "SELECT * FROM items" })),
+            &events,
+        )
+        .await;
+        assert!(unasked.unwrap_err().contains("turned off"));
         // The engine saw metadata reads only: no browse, apply, session, run or invoke.
         let calls = engine.calls.lock().unwrap().clone();
         assert!(
@@ -441,6 +573,62 @@ mod tests {
         let tables: Vec<&String> = events.iter().filter(|event| event.contains("openTable")).collect();
         assert_eq!(tables.len(), 1, "{events:?}");
         assert!(tables[0].contains(r#""suggestedFilter":"name = 'x'""#), "{}", tables[0]);
+    }
+
+    fn reads(preset: gateway::rules::Preset) -> gateway::Context {
+        gateway::Context {
+            workspace_id: "w".into(),
+            workspace_name: "Team".into(),
+            connection_id: "c".into(),
+            connection_name: "Main DB".into(),
+            safety: gateway::rules::SafetySettings::preset(preset),
+        }
+    }
+
+    #[test]
+    fn the_query_tool_is_only_offered_when_allowed() {
+        let names = |allowed: bool| -> Vec<&'static str> { tool_definitions(allowed).iter().map(|tool| tool.name).collect() };
+        assert!(!names(false).contains(&READ_QUERY));
+        assert!(names(true).contains(&READ_QUERY));
+        assert_eq!(names(true).len(), names(false).len() + 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_query_tool_reads_through_the_gateway_and_refuses_changes() {
+        let db = ConnectionManager::default();
+        let engine = FakeEngine::leak();
+        db.insert("c", engine, engine.connection());
+        let context: ChatContext = serde_json::from_value(json!({ "connectionId": "c", "database": "shop" })).unwrap();
+        let seen = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let sink = seen.clone();
+        let events = move |event: ChatEvent| sink.lock().unwrap().push(serde_json::to_value(&event).unwrap());
+        let allowed = reads(gateway::rules::Preset::Guarded);
+        let read = call(READ_QUERY, json!({ "query": "SELECT id, name FROM items" }));
+        let text = run_tool(&db, &context, Some(&allowed), &read, &events).await.unwrap();
+        assert!(text.starts_with("50 row(s) (only the first 50 were read"), "{text}");
+        assert!(text.contains("id\tname\n1\titem 1"), "{text}");
+        let refused = call(READ_QUERY, json!({ "query": "UPDATE items SET name = 'x' WHERE id = 1" }));
+        let error = run_tool(&db, &context, Some(&allowed), &refused, &events).await.unwrap_err();
+        assert!(error.contains("code block"), "{error}");
+        // Both runs show in the chat as tool calls with the statement; the refused one never reached a session.
+        let events = seen.lock().unwrap().clone();
+        let queries: Vec<&serde_json::Value> = events.iter().filter(|event| event["type"] == "query").collect();
+        assert_eq!(queries.len(), 2, "{events:?}");
+        assert_eq!(queries[0]["statement"], "SELECT id, name FROM items");
+        assert_eq!(queries[0]["rows"].as_array().unwrap().len(), 50);
+        assert_eq!(queries[0]["truncated"], true);
+        assert!(queries[1]["error"].as_str().unwrap().contains("write"));
+        let runs = engine.calls.lock().unwrap().iter().filter(|call| *call == "run").count();
+        assert_eq!(runs, 1);
+    }
+
+    #[test]
+    fn long_cells_and_binary_values_are_cut() {
+        assert_eq!(cell_text(&Cell::Bytes(vec![0; 4096])), "<binary 4096 bytes>");
+        let long = cell_text(&Cell::Text("x".repeat(5000)));
+        assert_eq!(long.chars().count(), MAX_CELL_CHARS + 1);
+        assert_eq!(cell_text(&Cell::Text("a\nb".into())), "a b");
+        assert_eq!(format_rows(&[], &[], false), "The statement ran and returned no result set.");
     }
 
     // --- Against the dev MariaDB (`dev/compose/mariadb.yml`, demo database `shop`) ------------------------------------
@@ -478,7 +666,7 @@ mod tests {
         let events = |_: ChatEvent| {};
         let tool = |name: &str, input: Value| {
             let (db, context, call) = (&db, &context, call(name, input));
-            async move { run_tool(db, context, &call, &events).await }
+            async move { run_tool(db, context, None, &call, &events).await }
         };
         assert!(tool("list_databases", json!({})).await.unwrap().lines().any(|line| line == "shop"));
         let tables = tool("list_tables", json!({})).await.unwrap();
@@ -495,7 +683,7 @@ mod tests {
             "{overview}"
         );
         assert!(tool("describe_table", json!({ "table": "no_such_table" })).await.is_err());
-        let prompt = super::super::prompt::system_prompt(&db, &context).await;
+        let prompt = super::super::prompt::system_prompt(&db, &context, false).await;
         assert!(
             prompt.contains("- Tables in shop: ") && prompt.contains("products (table"),
             "{prompt}"
@@ -526,7 +714,7 @@ mod tests {
             "context": { "connectionId": "shop", "connectionName": "Local MariaDB", "driverLabel": "MariaDB", "database": "shop" }
         }))
         .unwrap();
-        let reply = crate::ai::chat(&settings, Some(key), &db, &crate::ai::AiRuns::default(), request, &channel)
+        let reply = crate::ai::chat(&settings, Some(key), &db, &crate::ai::AiRuns::default(), request, None, &channel)
             .await
             .expect("chat");
         let events = seen.lock().unwrap().clone();
@@ -570,7 +758,7 @@ mod tests {
         let events = |_: ChatEvent| {};
         let tool = |name: &str, input: Value| {
             let (db, context, call) = (&db, &context, call(name, input));
-            async move { run_tool(db, context, &call, &events).await }
+            async move { run_tool(db, context, None, &call, &events).await }
         };
         let tables = tool("list_tables", json!({})).await.unwrap();
         assert!(tables.lines().any(|line| line.contains("Customers")), "{tables}");
@@ -602,7 +790,7 @@ mod tests {
         let events = |_: ChatEvent| {};
         let tool = |name: &str, input: Value| {
             let (db, context, call) = (&db, &context, call(name, input));
-            async move { run_tool(db, context, &call, &events).await }
+            async move { run_tool(db, context, None, &call, &events).await }
         };
         let collections = tool("list_tables", json!({})).await.unwrap();
         let first = collections
