@@ -8,7 +8,7 @@
 import { showError } from "../../core/errorPanel";
 import { api } from "../../core/api";
 import type { ConnectionApi } from "../../core/connectionApi";
-import type { EngineDescriptor, Relation, SchemaGraph, SchemaTable } from "../../core/contract";
+import type { EngineDescriptor, SchemaGraph, SchemaTable } from "../../core/contract";
 import { showContextMenu } from "../../core/contextMenu";
 import { copyText, formatCompact, h, icon, iconButton, iconOrDefault, separator, spacer, toolButton } from "../../core/dom";
 import type { Navigator } from "../../core/navigator";
@@ -17,17 +17,13 @@ import type { TabContent } from "../../core/tabs";
 import { onThemeChange } from "../../core/theme";
 import type { DriverId } from "../../core/types";
 import type { ViewContext } from "../../core/views";
+import { boxHeightFor, buildLinks, HEADER, layoutBoxes, ROW, STUB, type Link } from "./diagramLayout";
+import { readPalette, setDisplayed, SVG, svg, text, truncate, type Palette } from "./diagramSvg";
 
-const SVG = "http://www.w3.org/2000/svg";
 const FONT = "12px 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif";
-const HEADER = 28;
-const ROW = 20;
 const PAD_X = 10;
 const MIN_WIDTH = 170;
 const MAX_WIDTH = 380;
-const GAP_X = 110;
-const GAP_Y = 36;
-const STUB = 18;
 const MIN_SCALE = 0.15;
 /** Zoom used when jumping to a table (search, assistant), so it is readable. */
 const FOCUS_SCALE = 0.9;
@@ -48,34 +44,6 @@ interface Box {
   group: SVGGElement | null;
   /** The column rows; hidden at low zoom. */
   body: SVGGElement | null;
-}
-
-interface Link {
-  name: string;
-  from: string;
-  fromColumns: string[];
-  to: string;
-  toColumns: string[];
-  inferred: boolean;
-  path: SVGPathElement | null;
-  marks: SVGGElement | null;
-}
-
-interface Palette {
-  canvas: string;
-  dot: string;
-  surface: string;
-  border: string;
-  fg: string;
-  fg2: string;
-  fg3: string;
-  accent: string;
-  accentFg: string;
-  view: string;
-  collection: string;
-  key: string;
-  line: string;
-  highlight: string;
 }
 
 export class DiagramView implements TabContent {
@@ -268,7 +236,7 @@ export class DiagramView implements TabContent {
   }
 
   private boxHeight(box: Box): number {
-    return HEADER + Math.max(1, box.rows.length) * ROW + 6;
+    return boxHeightFor(box.rows.length);
   }
 
   /**
@@ -277,81 +245,17 @@ export class DiagramView implements TabContent {
    * Tables without links are packed in a grid below.
    */
   private autoLayout(save: boolean): void {
-    const names = [...this.boxes.keys()];
-    const parents = new Map(names.map((name) => [name, new Set<string>()]));
-    const neighbours = new Map(names.map((name) => [name, new Set<string>()]));
-    for (const link of this.links) {
-      if (link.from === link.to) continue;
-      parents.get(link.from)?.add(link.to);
-      neighbours.get(link.from)?.add(link.to);
-      neighbours.get(link.to)?.add(link.from);
-    }
-    const rank = new Map<string, number>();
-    const visiting = new Set<string>();
-    const rankOf = (name: string): number => {
-      const known = rank.get(name);
-      if (known !== undefined) return known;
-      if (visiting.has(name)) return 0;
-      visiting.add(name);
-      let value = 0;
-      for (const parent of parents.get(name) ?? []) value = Math.max(value, rankOf(parent) + 1);
-      visiting.delete(name);
-      rank.set(name, value);
-      return value;
-    };
-    const connected = names.filter((name) => (neighbours.get(name)?.size ?? 0) > 0);
-    const isolated = names.filter((name) => (neighbours.get(name)?.size ?? 0) === 0).sort();
-    const columns: string[][] = [];
-    for (const name of connected.sort()) {
-      const index = rankOf(name);
-      (columns[index] ??= []).push(name);
-    }
-    const order = new Map<string, number>();
-    const index = () => columns.forEach((column) => column.forEach((name, position) => order.set(name, position)));
-    index();
-    for (let pass = 0; pass < 4; pass += 1) {
-      for (const column of columns) {
-        if (!column) continue;
-        const score = (name: string) => {
-          const around = [...(neighbours.get(name) ?? [])].map((other) => order.get(other) ?? 0);
-          return around.length ? around.reduce((sum, value) => sum + value, 0) / around.length : (order.get(name) ?? 0);
-        };
-        column.sort((a, b) => score(a) - score(b));
+    const boxes = [...this.boxes.values()];
+    const placed = layoutBoxes(
+      boxes.map((box) => ({ name: box.table.name, width: box.width, height: this.boxHeight(box) })),
+      this.links,
+    );
+    for (const box of boxes) {
+      const position = placed.get(box.table.name);
+      if (position) {
+        box.x = position.x;
+        box.y = position.y;
       }
-      index();
-    }
-    let x = 0;
-    let bottom = 0;
-    const heights = columns.map((column) => (column ?? []).reduce((sum, name) => sum + this.boxHeight(this.boxes.get(name)!) + GAP_Y, -GAP_Y));
-    const tallest = Math.max(0, ...heights);
-    columns.forEach((column, columnIndex) => {
-      if (!column) return;
-      const width = Math.max(...column.map((name) => this.boxes.get(name)!.width));
-      let y = (tallest - heights[columnIndex]) / 2;
-      for (const name of column) {
-        const box = this.boxes.get(name)!;
-        box.x = x;
-        box.y = y;
-        y += this.boxHeight(box) + GAP_Y;
-        bottom = Math.max(bottom, y);
-      }
-      x += width + GAP_X;
-    });
-    const gridWidth = Math.max(x - GAP_X, 1100);
-    let gx = 0;
-    let gy = connected.length ? bottom + GAP_Y * 2 : 0;
-    let lineHeight = 0;
-    for (const name of isolated) {
-      const box = this.boxes.get(name)!;
-      if (gx > 0 && gx + box.width > gridWidth) {
-        gx = 0;
-        gy += lineHeight + GAP_Y;
-        lineHeight = 0;
-      }
-      box.x = gx;
-      box.y = gy;
-      gx += box.width + GAP_Y;
-      lineHeight = Math.max(lineHeight, this.boxHeight(box));
     }
     if (save) {
       this.savePositions();
@@ -755,80 +659,6 @@ export class DiagramView implements TabContent {
 }
 
 /** Foreign keys from the server, plus (optionally) links guessed from `xxxId` / `xxx_id` field names. */
-function buildLinks(graph: SchemaGraph, infer: boolean): Link[] {
-  const links: Link[] = graph.relations.map((relation: Relation) => ({
-    name: relation.constraint,
-    from: relation.table,
-    fromColumns: relation.columns,
-    to: relation.referencedTable,
-    toColumns: relation.referencedColumns,
-    inferred: false,
-    path: null,
-    marks: null,
-  }));
-  if (!infer) return links;
-  const byName = new Map(graph.tables.map((table) => [table.name.toLowerCase(), table]));
-  const declared = new Set(links.map((link) => `${link.from}|${link.fromColumns[0]}`));
-  for (const table of graph.tables) {
-    for (const column of table.columns) {
-      if (column.primary || declared.has(`${table.name}|${column.name}`)) continue;
-      const match = /^(.+?)(?:_id|Id|ID)$/.exec(column.name);
-      if (!match) continue;
-      const base = match[1].replace(/_$/, "").toLowerCase();
-      const candidates = [base, `${base}s`, `${base}es`, base.replace(/y$/, "ies")];
-      const target = candidates.map((name) => byName.get(name)).find((item) => item && item.name !== table.name);
-      const key = target?.columns.find((item) => item.primary);
-      if (!target || !key) continue;
-      links.push({ name: "", from: table.name, fromColumns: [column.name], to: target.name, toColumns: [key.name], inferred: true, path: null, marks: null });
-    }
-  }
-  return links;
-}
-
-function svg<K extends keyof SVGElementTagNameMap>(tag: K, attributes: Record<string, string | number>): SVGElementTagNameMap[K] {
-  const element = document.createElementNS(SVG, tag);
-  for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, String(value));
-  return element;
-}
-
-function text(value: string, x: number, y: number, attributes: Record<string, string | number>): SVGTextElement {
-  const element = svg("text", { x, y, ...attributes });
-  element.textContent = value;
-  return element;
-}
-
-function setDisplayed(element: SVGElement | null, visible: boolean): void {
-  if (!element) return;
-  const value = visible ? "" : "none";
-  if (element.style.display !== value) element.style.display = value;
-}
-
-function truncate(value: string, limit: number): string {
-  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
-}
-
-/** Resolves the theme's CSS variables into concrete colours, so exports look like the screen. */
-function readPalette(): Palette {
-  const style = getComputedStyle(document.documentElement);
-  const value = (name: string) => style.getPropertyValue(name).trim();
-  return {
-    canvas: value("--canvas"),
-    dot: value("--border-strong"),
-    surface: value("--surface"),
-    border: value("--border-strong"),
-    fg: value("--fg"),
-    fg2: value("--fg-2"),
-    fg3: value("--fg-3"),
-    accent: value("--accent"),
-    accentFg: value("--accent-fg"),
-    view: value("--ws-purple"),
-    collection: value("--ws-green"),
-    key: value("--warning"),
-    line: value("--fg-3"),
-    highlight: value("--accent"),
-  };
-}
-
 async function saveFile(name: string, text: string | null, base64: string | null): Promise<void> {
   try {
     savedDialog("Diagram saved", await api.saveDownload(name, text, base64));
