@@ -1,4 +1,0 @@
-- Redis is now a ready engine (also works with Valkey): a key browser per database (`db0` to `db15` in the tree, `SCAN` with a pattern, paged, with type, TTL and memory), typed editors for string, hash, list, set, sorted set and stream values (a pretty view for JSON strings, append to streams), TTL set and remove, and a server view with INFO and the slow log.
-- Redis edits fail with a conflict instead of overwriting when someone else changed the value since you loaded it (WATCH/MULTI on a connection of its own); the conflict shows what the key holds now, with Reload and Overwrite.
-- The Redis console runs one command per line with the Redis completion language and Stop (`CLIENT UNBLOCK`). FLUSHALL, FLUSHDB, CONFIG SET, KEYS *, DEBUG and SHUTDOWN need a typed confirmation under the default safety rules; Pub/Sub and MONITOR are refused.
-- Redis Cluster and Sentinel are not supported yet: connect to a single node.

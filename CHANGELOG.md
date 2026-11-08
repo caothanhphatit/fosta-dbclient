@@ -7,75 +7,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Fixed
-
-- **Transactions**: Begin is disabled while a transaction is open, and the backend refuses a nested Begin. On MariaDB/MySQL a second
-  Begin used to commit the open transaction silently; on SQL Server it nested. Running DDL in an open MariaDB/MySQL transaction asks
-  first, since it commits.
-- **Toolbars and tabs**: toolbars wrap instead of hiding controls behind an invisible scrollbar, so the pager and the transaction
-  controls are reachable from 1024 px wide. The tab strip scrolls with the mouse wheel, keeps the active tab in view and lists every tab
-  when they overflow.
-- **Dialogs**: Esc and Enter act on the top-most dialog only, and global shortcuts are ignored while a dialog is open.
-- **MongoDB**: grid edits keep the stored BSON type (dates, numbers, ObjectIds; nested values through Extended JSON), query-tab
-  commands read past the first batch of 101 documents, and grid columns show their BSON types.
-- **SQL Server**: column filters, foreign-key navigation and `INSERT` export use bracket quoting; batches return every result set and
-  row count in order; server errors are readable; an untrusted TLS certificate explains how to trust it.
-- **Grids**: SQL type names instead of driver wire types; Read-only workspaces make grids read-only up front; stale page loads no
-  longer overwrite newer ones.
-- **Query history** records execution time, not the time spent in a confirmation dialog. Text typed while the editor loads is kept.
-- **Toasts** appear at the top centre instead of covering dialog footers and the Apply/Discard bar.
-- **Export** stops when its dialog is closed; an empty file name gets the chosen format's extension; CSV for Excel uses the locale's
-  list separator.
-- **Assistant**: hosted providers need an API key before they can be saved.
-- **Web edition**: no `127.0.0.1` connection is seeded inside a container; unknown `/api/*` paths return a JSON 404 after the sign-in
-  check; a failed sign-in no longer leaves the browser on the form post.
-- **Security**: the desktop app runs under a strict Content Security Policy; "Show in folder" only opens files the app exported;
-  unknown driver ids are refused instead of opening MySQL.
-- The tree no longer shows a stale `~0` row estimate for tables that hold data.
-
 ## [0.1.0] - 2026-11-08
 
-First public release for Windows.
+First public release for Windows, plus a web edition for Docker.
 
 ### Added
 
-- **Databases**: MariaDB, MySQL, SQL Server and MongoDB, connected with parameters or a connection string. MongoDB connection URIs
-  work with Atlas, and SQL Server uses TLS by default.
-- **Connections**: saved connection profiles; passwords are kept in Windows Credential Manager, never in a file.
-- **Workspaces**: each workspace has its own connections, startup tasks and tabs. Switch from the rail or with `Ctrl+1…9`; tabs of other
-  workspaces stay open.
-- **Startup tasks**: background commands such as `kubectl port-forward` that start with their workspace, restart with backoff when they
-  drop, show live logs, and stop when the app exits.
-- **Database tree**: connections, databases, tables and views, with search.
-- **Data grid**: paging, `WHERE` and per-column filters, sorting, inline editing, inserting and deleting rows, all saved in one
-  transaction.
-  - Show or hide columns, remembered per table.
-  - A cell editor (`Shift+Enter`) for long values, with JSON format, minify and validation.
-  - A record panel that follows foreign keys.
-- **Import and export**: import CSV, TSV and JSON; export CSV, CSV for Excel, JSON, SQL `INSERT` statements and Markdown.
-- **Query editor**: syntax highlighting, table-name completion, several statements per run, Stop, and one session per tab so
-  transactions can span runs.
-- **Query history**: every run is recorded per tab with search, and can be inserted or opened in a new tab. History stays on this
-  machine and can be turned off or cleared in Settings.
-- **Design view** with columns and DDL, and an interactive **ER diagram** per database.
-- **MongoDB**: collections open as tables, filters take a JSON query, and query tabs run database commands as JSON.
-- **Vector tools** for MariaDB 11.7 and newer: embedding search, column and index health checks, and ANN recall compared with exact
-  search.
-- **Safety rules per workspace**: every statement the app runs is classified as read, write, DDL, destructive or administrative and
-  checked against the workspace's preset (Open, Guarded, Read-only or Custom). Risky statements ask for confirmation, destructive ones
-  ask you to type the table or workspace name, and Production workspaces start read-only. Blocked, confirmed and relaxed operations are
-  recorded in a local audit log.
-- **Transactions in query tabs**: Begin, Commit, Rollback and an auto-commit switch, with the current state shown in the toolbar and a
-  warning before closing a tab with an open transaction. Statement timeouts on MariaDB/MySQL and MongoDB.
+- **Eleven engines** behind one engine contract, so workspaces, safety rules, the assistant and the grid work the same on each:
+  - **MariaDB and MySQL**: tree, typed grid, design view, ER diagram, Stop with `KILL QUERY`, transactions across runs, statement timeouts,
+    and vector tools for MariaDB 11.7 and newer.
+  - **SQL Server**: schemas, bracket quoting, batches that return every result set and row count, TLS on by default.
+  - **MongoDB**: collections as tables with BSON-typed columns and edits, JSON filters, Atlas URIs, query tabs that run database commands.
+  - **PostgreSQL**: databases, schemas, tables, views, materialized views, functions, sequences, types and extensions; arrays, `jsonb`,
+    `uuid`, `numeric` and `timestamptz` values; Stop that cancels on the server; SQLSTATE, detail, hint and error position;
+    `postgres.explain`.
+  - **SQLite**: open a file (read-only, create, `:memory:`) with optional attached databases; edits by primary key or `rowid`; Stop by
+    interrupt; `sqlite.explain`.
+  - **Redis** (and Valkey): a key browser per database with `SCAN`, type, TTL and memory; typed editors for string, hash, list, set,
+    sorted set and stream values; TTL changes; a server view with `INFO` and the slow log; a console with Stop.
+  - **Elasticsearch and OpenSearch**: indices, data streams and aliases; a document grid typed by the mapping with structured and Query
+    DSL filters; `search_after` with a point in time beyond 10,000 documents; **Mapping** as the design view; a Dev Tools console
+    (`METHOD /path` with JSON or NDJSON bodies) plus ES|QL and SQL tabs; the OpenSearch SQL plugin and basic auth.
+  - **ClickHouse**: databases, tables, views, materialized views and dictionaries; keyset paging; streaming query tabs that stop with
+    `KILL QUERY`; edits as asynchronous mutations on MergeTree tables; Parts and mutations and Server views with running queries and the
+    query log.
+  - **Oracle**: schemas with tables, views, materialized views, sequences, synonyms, packages, procedures and functions; PL/SQL source
+    with compile errors; ROWID edits for tables without a primary key; `OCIBreak` to stop a statement; ORA codes with the error position.
+    Oracle Instant Client is downloaded from Oracle on first use (pinned checksum, progress and cancel), or you point to an installed one.
+- **SSH tunnel and TLS** for every network engine: password, key file or agent authentication, one jump host, host key checks,
+  keepalives and automatic reconnect; TLS modes from `disable` to `verifyFull` with a custom CA, client certificate, server name or a
+  pinned SHA-256 fingerprint.
+- **Column-aware completion and a formatter** in the query editor for every SQL dialect (tables, columns, aliases, schemas), plus
+  completion for MongoDB commands and Redis commands.
+- **Streaming results with a real cancel**: the first rows show at once, and Stop cancels the statement on the server.
+- **Optimistic concurrency on edits**: a grid save is checked against the values you loaded, and nothing is applied if a row changed.
+  A conflict dialog shows what the row holds now, with Reload and Overwrite. No transaction is held open while you edit.
+- **Structured errors**: server errors keep their code, position, detail and failing statement and show in a dockable error panel with a count badge in the
+  status bar and a jump to the error line. The application log and copyable diagnostics help when you report a problem.
+- **Compact density** by default with a Comfortable option, and a richer status bar (connection context, safety preset, task summary,
+  error badge and version).
+- **Statement gateway with safety rules on every engine**: every statement the app runs is classified as read, write, DDL, destructive
+  or administrative, then checked against the workspace's preset (Open, Guarded, Read-only or Custom). Risky statements ask for
+  confirmation, destructive ones ask you to type the object or workspace name, Production workspaces start read-only, and blocked,
+  confirmed and relaxed operations go to a local audit log.
 - **AI agent** (`Ctrl+Shift+A`) with the provider of your choice (Fosta, OpenAI, Gemini, Claude or any OpenAI-compatible endpoint such
-  as Ollama) and your own key. It looks up tables, columns and relations, writes and explains queries, fixes errors, reads task logs,
-  and opens tables, diagrams or query tabs for you. Statements run only when you run them.
+  as Ollama) and your own key. It looks up tables, columns and relations on every ready engine, writes and explains queries, fixes
+  errors, reads task logs and opens tables, diagrams or query tabs.
+  - Every code block has **Run**, Insert and New tab. Run is your own run: it follows the workspace safety rules and shows up to 200
+    rows under the block.
+  - An optional read-only query tool lets the assistant look at real data (one statement, at most 50 rows, 10 seconds, cancelled with
+    Stop). Writes, schema changes and administration are refused and handed back as a code block. Each run is shown in the chat and
+    written to the audit log. Turn it off in Settings or per workspace; the rows it reads go to your AI provider.
 - **Web edition**: run Fosta Studio in a browser from one Docker image
   (`docker run -p 8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio`), protected by an access token, with encrypted
-  secrets in the data volume and sign-out that ends every session.
-- Light, dark and system themes.
-- Portable configuration: settings are stored in `fosta-studio.json` next to the executable.
-- The app version is shown in the status bar.
+  secrets in the data volume and a sign-out that ends every session.
+- **Workspaces**: each workspace has its own connections, startup tasks and tabs. Switch from the rail or with `Ctrl+1…9`.
+- **Startup tasks**: background commands such as `kubectl port-forward` that start with their workspace, restart with backoff, show live
+  logs and stop when the app exits.
+- **Connections**: saved profiles with parameters or a connection string; passwords are kept in Windows Credential Manager, never in a
+  file.
+- **Data grid**: paging, `WHERE` and per-column filters, sorting, inline editing, inserts and deletes, show or hide columns, a cell editor
+  (`Shift+Enter`) with JSON format and validation, and a record panel that follows foreign keys.
+- **Import and export**: import CSV, TSV and JSON; export CSV, CSV for Excel, JSON, SQL `INSERT` statements and Markdown.
+- **Query tabs**: syntax highlighting, several statements per run, Begin / Commit / Rollback with an auto-commit switch, a warning
+  before closing a tab with an open transaction, and per-tab history with search that stays on this machine.
+- **Design view** with columns and DDL, and an interactive **ER diagram** per database.
+- Light, dark and system themes. Settings are stored in `fosta-studio.json` next to the executable.
 
 [Unreleased]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/caothanhphatit/fosta-dbclient/releases/tag/v0.1.0
