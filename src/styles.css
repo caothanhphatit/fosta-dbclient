@@ -2255,7 +2255,7 @@ pre.field-value.text {
   accent-color: var(--accent);
 }
 
-/* An option the last error points at (e.g. "Trust server certificate" after a TLS failure). */
+/* An option the last error points at (e.g. "Accept invalid certificates" after a TLS failure). */
 .checkbox.attention {
   margin: -3px -6px;
   padding: 3px 6px;

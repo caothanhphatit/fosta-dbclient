@@ -250,8 +250,9 @@ fn mysql_error_line(message: &str) -> Option<u32> {
 /// Shown with SQL Server TLS failures: the usual cause is the self-signed certificate of a local or dev server.
 pub const MSSQL_TLS_HINT: &str =
     "The server's TLS certificate is not trusted by this machine (SQL Server uses a self-signed certificate unless one \
-     is installed). Tick \"Trust server certificate\" in the connection dialog for a local or test server, or install a certificate \
-     from a trusted authority on the server.";
+     is installed). For a local or test server, tick \"Accept invalid certificates\" in the TLS section of the connection \
+     dialog (\"Trust server certificate\" in other SQL Server tools), or install a certificate from a trusted authority on \
+     the server.";
 
 impl From<tiberius::error::Error> for AppError {
     fn from(error: tiberius::error::Error) -> Self {

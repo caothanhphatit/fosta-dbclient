@@ -4,6 +4,9 @@
  *
  * - `index.ts` (this file): the command router, connections and sessions, diagnostics, tasks, the old commands.
  * - `state.ts`: config, workspaces, history. `gateway.ts`: the safety rules. `ai.ts`: the assistant.
+ * - `connections.ts`: saving and deleting profiles, saved passwords and the test-connection secret binding, connection
+ *   string parsing. Test connection with the password "wrong" fails with AUTH_FAILED; SQL Server without "Accept
+ *   invalid certificates" fails like a self-signed server; SSH on fails with SSH_NOT_AVAILABLE.
  * - `engines/<id>.ts`: one module per engine (collected with `import.meta.glob`), exporting `descriptor`, `order` and, for
  *   the ready ones, `connectInfo`, `tree`, `describe`, `browse`, `apply`, `run`, `invoke`, … over `catalog.ts`.
  *
@@ -25,6 +28,7 @@ import type {
   RowChangeSet,
   RunRequest,
   RunSummary,
+  SecretSlot,
   SessionInfo,
   SessionOptions,
   StreamEvent,
@@ -52,6 +56,7 @@ import type {
 } from "../../core/types";
 import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf } from "../../features/safety/safety";
 import { chatRuns, deleteAiConnection, draftKey, fetchModels, probeChat, saveAiConnection, setAiActive, streamChat } from "./ai";
+import { checkTestPassword, deleteConnection, parseConnectionString, profiles, saveConnection } from "./connections";
 import { mockError, NOT_CONNECTED } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
 import * as legacy from "./legacy";
@@ -75,10 +80,6 @@ const recentErrors: Diagnostics["recentErrors"] = [];
 
 // --- Connections ----------------------------------------------------------------------------------------------------------
 
-function profiles(): ConnectionProfile[] {
-  return state.config.workspaces.flatMap((workspace) => workspace.connections);
-}
-
 function savedProfile(id: string): ConnectionProfile {
   const profile = profiles().find((item) => item.id === id);
   if (!profile) throw mockError("ERROR", `Connection '${id}' no longer exists`);
@@ -90,13 +91,24 @@ function unreachable(profile: ConnectionProfile): boolean {
   return /^10\./.test(profile.host.trim());
 }
 
+function knownEngine(id: string): EngineMock {
+  const engine = engineById.get(id);
+  if (!engine) throw mockError("UNKNOWN_ENGINE", `This build of Fosta Studio does not know the engine '${id}'.`, { engine: id });
+  return engine;
+}
+
 function open(profile: ConnectionProfile): Connection {
-  const engine = engineById.get(profile.driver);
-  if (!engine) throw mockError("UNKNOWN_ENGINE", `This build of Fosta Studio does not know the engine '${profile.driver}'.`, { engine: profile.driver });
+  const engine = knownEngine(profile.driver);
   if (engine.descriptor.status === "planned" || !engine.connectInfo)
     throw mockError("ENGINE_NOT_WIRED", `${engine.descriptor.label} support is planned but not available in this build of Fosta Studio yet.`, {
       engine: engine.descriptor.id,
     });
+  if (profile.ssh?.enabled)
+    throw mockError(
+      "SSH_NOT_AVAILABLE",
+      "SSH tunnels are not available in this build yet. Turn SSH off for this connection, or open the tunnel yourself (ssh -L) and connect to its local port.",
+      { engine: engine.descriptor.id },
+    );
   if (unreachable(profile))
     throw mockError("CONNECTION_ERROR", `Can't connect to server on '${profile.host}' (110 "Connection timed out")`, {
       engine: engine.descriptor.id,
@@ -311,70 +323,6 @@ function legacyVector(connectionId: string, command: string, payload: Record<str
   }
 }
 
-/** A connection string split into profile fields (the backend's adapters parse every engine's own formats). */
-function parseConnectionString(engineId: string, text: string) {
-  const engine = engineById.get(engineId);
-  if (!engine) throw mockError("UNKNOWN_ENGINE", `This build of Fosta Studio does not know the engine '${engineId}'.`, { engine: engineId });
-  const value = text.trim();
-  const base = {
-    engine: engineId,
-    host: "",
-    port: engine.descriptor.connection.defaultPort ?? 0,
-    user: "",
-    database: null,
-    file: null,
-    url: null,
-    options: {},
-    tls: null,
-    ssh: null,
-    auth: null,
-  };
-  if (/^[\w+]+:\/\//.test(value)) {
-    const url = new URL(value.replace(/^[\w+]+:/, "http:"));
-    const scheme = /^([\w+]+):/.exec(value)?.[1] ?? "";
-    const known = engine.descriptor.connection.url?.schemes ?? [];
-    if (!known.includes(scheme))
-      throw mockError("ERROR", `A ${engine.descriptor.label} connection string starts with ${known.map((item) => `${item}://`).join(" or ")}.`);
-    const options = Object.fromEntries(url.searchParams.entries());
-    return {
-      spec: {
-        ...base,
-        host: decodeURIComponent(url.hostname),
-        port: Number(url.port) || base.port,
-        user: decodeURIComponent(url.username),
-        database: decodeURIComponent(url.pathname.replace(/^\//, "")) || null,
-        url: scheme.endsWith("+srv") ? value.replace(/:[^:@/]*@/, "@") : null,
-        options,
-      },
-      password: url.password ? decodeURIComponent(url.password) : null,
-    };
-  }
-  if (/server\s*=/i.test(value)) {
-    const parts = Object.fromEntries(
-      value
-        .split(";")
-        .map((part) => part.split("="))
-        .filter((pair) => pair.length === 2)
-        .map(([key, item]) => [key.trim().toLowerCase(), item.trim()]),
-    );
-    const [host, port] = String(parts.server ?? parts["data source"] ?? "").split(",");
-    return {
-      spec: {
-        ...base,
-        host,
-        port: Number(port) || base.port,
-        user: parts["user id"] ?? parts.uid ?? "",
-        database: parts.database ?? parts["initial catalog"] ?? null,
-      },
-      password: parts.password ?? parts.pwd ?? null,
-    };
-  }
-  throw mockError(
-    "ERROR",
-    `Not a ${engine.descriptor.label} connection string. Example: ${engine.descriptor.connection.url?.example ?? "scheme://user@host:port/database"}`,
-  );
-}
-
 // --- History and workspaces -----------------------------------------------------------------------------------------------
 
 function appendHistory(entry: HistoryEntry): HistoryEntry | null {
@@ -457,7 +405,15 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       if (state.config.activeWorkspace === payload.id) state.config.activeWorkspace = state.config.workspaces[0].id;
       return state.config;
     case "save_connection":
+      return saveConnection(
+        payload.profile as ConnectionProfile,
+        (payload.password as string | null) ?? null,
+        (payload.workspaceId as string | null) ?? null,
+        (payload.secrets as Partial<Record<SecretSlot, string>> | null) ?? null,
+      );
     case "delete_connection":
+      connections.delete(str("id"));
+      return deleteConnection(str("id"));
     case "save_task":
     case "delete_task":
     case "save_embedding_settings":
@@ -519,9 +475,13 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "engine_descriptors":
       return engines.map((engine) => engine.descriptor);
     case "parse_connection_string":
-      return parseConnectionString(str("engine"), str("text"));
-    case "test_connection":
-      return open(payload.profile as ConnectionProfile).info;
+      return parseConnectionString(knownEngine(str("engine")).descriptor, str("text"));
+    case "test_connection": {
+      const profile = payload.profile as ConnectionProfile;
+      knownEngine(profile.driver);
+      checkTestPassword(profile, (payload.password as string | null) ?? null);
+      return open(profile).info;
+    }
     case "connect": {
       const opened = open(savedProfile(str("id")));
       connections.set(opened.profile.id, opened);

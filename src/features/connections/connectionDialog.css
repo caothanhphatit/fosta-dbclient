@@ -1,0 +1,67 @@
+/* Connection dialog: collapsible sections (Advanced, TLS, SSH), inline feedback. */
+
+.connection-dialog [hidden] {
+  display: none !important;
+}
+
+.conn-sections {
+  display: grid;
+  gap: 6px;
+}
+
+.conn-sections:empty {
+  display: none;
+}
+
+.conn-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.conn-section > summary {
+  padding: 7px 10px;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.conn-section > summary:hover {
+  color: var(--fg);
+}
+
+.conn-section[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.conn-section-body {
+  padding: 10px;
+}
+
+.conn-section-body .driver-note {
+  margin: 0;
+}
+
+.conn-feedback:empty {
+  display: none;
+}
+
+.conn-ok {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.conn-ok .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--success);
+}

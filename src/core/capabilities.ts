@@ -27,10 +27,12 @@ const WEB: Capabilities = {
   inContainer: false,
 };
 
-// The dev mock (`npm run dev`) stands in for the desktop backend.
-let current: Capabilities = isTauri() || import.meta.env.DEV ? DESKTOP : WEB;
+// The dev mock (`npm run dev`) stands in for the desktop backend. Decided on first use, so the module loads without a
+// window (unit tests).
+let current: Capabilities | null = null;
 
 export function capabilities(): Capabilities {
+  current ??= isTauri() || import.meta.env.DEV ? DESKTOP : WEB;
   return current;
 }
 
@@ -40,14 +42,14 @@ export async function loadCapabilities(): Promise<Capabilities> {
   } catch {
     // A backend without the command (or the dev mock): keep the defaults.
   }
-  return current;
+  return capabilities();
 }
 
 /** Hides elements marked `data-requires="<capability>"` whose capability is off. */
 export function hideUnsupported(root: ParentNode): void {
   for (const element of root.querySelectorAll<HTMLElement>("[data-requires]")) {
     const key = element.dataset.requires as keyof Capabilities;
-    if (current[key] === false) element.hidden = true;
+    if (capabilities()[key] === false) element.hidden = true;
   }
 }
 
@@ -55,6 +57,6 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"
 
 /** In a container, `localhost` is the container itself: a hint to use host.docker.internal, or "". */
 export function localhostHint(host: string): string {
-  if (!current.inContainer || !LOCAL_HOSTS.has(host.trim().toLowerCase())) return "";
+  if (!capabilities().inContainer || !LOCAL_HOSTS.has(host.trim().toLowerCase())) return "";
   return "Fosta Studio runs in a container, where localhost is the container itself. For a database on the Docker host, use host.docker.internal.";
 }

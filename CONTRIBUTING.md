@@ -124,8 +124,8 @@ Notes on the live tests (`src-tauri/src/live_tests.rs`):
 ## Adding a database driver
 
 The checklist is in [ARCHITECTURE.md](ARCHITECTURE.md#how-to-add-a-database-driver). In short: implement `Driver` in
-`src-tauri/src/drivers/<engine>.rs`, route the new driver id in `drivers::open`, describe it in `src/core/drivers.ts`, teach
-`connectionString.ts` its string format, add sample data to `dev/` and a live test.
+`src-tauri/src/drivers/<engine>.rs`, route the new driver id in `drivers::open`, describe its connection form in the engine
+descriptor, parse its connection strings in the adapter (`engines/<id>/url.rs`), add sample data to `dev/` and a live test.
 
 ## Pull requests
 

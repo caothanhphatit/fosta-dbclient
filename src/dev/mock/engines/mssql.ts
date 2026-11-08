@@ -8,6 +8,7 @@ import { DESCRIPTORS, ORDER } from "../descriptors";
 import { mockError } from "../errors";
 import { classifySql, runSql, type SqlDialectMock } from "../sqlRun";
 import type { EngineMock } from "../types";
+import type { ConnectionProfile } from "../../../core/types";
 
 export const descriptor = DESCRIPTORS.mssql;
 export const order = ORDER.indexOf("mssql");
@@ -211,7 +212,30 @@ const dialect: SqlDialectMock = {
   version: `Microsoft SQL Server 2022 (RTM) - ${VERSION} (X64) Developer Edition`,
 };
 
-export const connectInfo = (): ConnectInfo => ({
+/**
+ * The dev server has a self-signed certificate, like a real SQL Server without one installed: an encrypted connection
+ * that does not accept invalid certificates fails with the backend's message (the dialog then points at the option).
+ */
+function checkCertificate(profile: ConnectionProfile): void {
+  const tls = profile.tls;
+  const encrypted = !tls || tls.mode !== "disable";
+  if (encrypted && !tls?.acceptInvalidCerts && !tls?.caFile)
+    throw mockError(
+      "CONNECTION_ERROR",
+      "Could not set up TLS with SQL Server: A certificate chain processed, but terminated in a root certificate which is not trusted by the trust " +
+        "provider. (os error -2146762487). The server's TLS certificate is not trusted by this machine (SQL Server uses a self-signed certificate " +
+        'unless one is installed). For a local or test server, tick "Accept invalid certificates" in the TLS section of the connection dialog ' +
+        '("Trust server certificate" in other SQL Server tools), or install a certificate from a trusted authority on the server.',
+      { engine: ENGINE },
+    );
+}
+
+export const connectInfo = (profile: ConnectionProfile): ConnectInfo => {
+  checkCertificate(profile);
+  return info();
+};
+
+const info = (): ConnectInfo => ({
   engine: ENGINE,
   server: { product: "Microsoft SQL Server", version: VERSION, label: `SQL Server 2022 (${VERSION})`, flavor: "Developer Edition" },
   capabilities: descriptor.capabilities,

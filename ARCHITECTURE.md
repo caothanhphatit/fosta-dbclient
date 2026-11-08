@@ -252,10 +252,11 @@ imports it dynamically behind `import.meta.env.DEV`, so it is not part of the pr
    live in the gateway.
 2. **Register it**: `pub mod <engine>;` in `drivers/mod.rs` and a match arm on the profile's `driver` id in `drivers::open`. Add the
    crate to `Cargo.toml` and, if it has its own error type, a `From` conversion in `error.rs`.
-3. **Frontend description**: add the id to `DriverId` in `src/core/types.ts` and an entry to `DRIVERS` in `src/core/drivers.ts`
-   (default port and user, labels, `filterKind` `sql` or `json`, `supportsCancel`, extra `options` such as TLS flags).
-4. **Connection strings**: teach `src/features/connections/connectionString.ts` to parse and format the engine's string, with tests in
-   `connectionString.test.ts`. Passwords must come back separately, never inside `options`.
+3. **Frontend description**: add the id to `KnownEngineId` in `src/core/types.ts`. The connection dialog is rendered from the
+   engine's descriptor (`connection`: host/file usage, default port and user, database label, extra `fields`, auth methods, TLS
+   support, SSH), so it needs no frontend code.
+4. **Connection strings**: implement `parse_connection_string` in the engine's adapter (`src-tauri/src/engines/<id>/url.rs`), with
+   tests there. Passwords must come back separately, never inside `options` or `url`.
 5. **Dialect details**: check identifier quoting in filters (`core/sql.ts`, `features/grid/columnFilter.ts`), the assistant's hints in
    `ai/prompt.rs`, and the export/import paths if the engine needs different SQL.
 6. **Dev mock**: add `src/dev/mock/engines/<id>.ts` (descriptor, sample data, tree/browse/run) and a sample connection in `src/dev/mock/state.ts` so the UI can be previewed.

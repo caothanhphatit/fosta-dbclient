@@ -4,7 +4,7 @@
  * is read-only. "Local" has a PostgreSQL profile: PostgreSQL is a planned engine, so connecting fails with ENGINE_NOT_WIRED.
  */
 import { presetSettings } from "../../features/safety/safety";
-import type { AppConfig, DriverId, HistoryEntry, Workspace } from "../../core/types";
+import type { AppConfig, HistoryEntry, Workspace } from "../../core/types";
 
 const workspaces: Workspace[] = [
   {
@@ -40,8 +40,7 @@ const workspaces: Workspace[] = [
         // A planned engine: connecting fails with ENGINE_NOT_WIRED, as in a real build.
         id: "c-local-pg",
         name: "Local PostgreSQL (planned)",
-        // `DriverId` lists the wired engines only (widened in step 15); a saved profile can name any engine id.
-        driver: "postgres" as DriverId,
+        driver: "postgres",
         host: "127.0.0.1",
         port: 5432,
         user: "postgres",
@@ -91,7 +90,17 @@ const workspaces: Workspace[] = [
         user: "sa",
         database: "ERP",
         savePassword: true,
-        options: { encrypt: "true" },
+        options: {},
+        // The dev server's self-signed certificate is accepted explicitly (untick it to see the untrusted-certificate error).
+        tls: {
+          mode: "require",
+          caFile: null,
+          clientCertFile: null,
+          clientKeyFile: null,
+          serverName: null,
+          acceptInvalidCerts: true,
+          pinnedSha256: null,
+        },
       },
       {
         id: "c-a-5",
@@ -112,6 +121,8 @@ const workspaces: Workspace[] = [
         port: 27017,
         user: "app",
         database: "admin",
+        // An SRV string: the profile connects with it (the password stays in the secret store).
+        url: "mongodb+srv://app@cluster0.example.net/events?retryWrites=true&w=majority&authSource=admin",
         savePassword: true,
         options: {},
       },

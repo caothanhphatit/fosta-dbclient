@@ -38,7 +38,7 @@ import type { Navigator } from "../../core/navigator";
 import { makeSplitter } from "../../core/splitter";
 import { dialectOf, type SqlDialect } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
-import type { DriverId, TableTarget, VectorInfo } from "../../core/types";
+import type { TableTarget, VectorInfo } from "../../core/types";
 import { displayValue } from "../../core/values";
 import type { ViewContext } from "../../core/views";
 import { api } from "../../core/api";
@@ -148,7 +148,7 @@ export class TableView implements TabContent {
     this.label = this.object.schema ? `${this.object.schema}.${this.object.name}` : this.object.name;
     this.target = {
       connectionId: ctx.profile.id,
-      driver: ctx.profile.driver as DriverId,
+      driver: ctx.profile.driver,
       database: this.object.database ?? "",
       table: this.label,
       kind: EDITABLE_KINDS.has(this.object.kind) ? "table" : "view",

@@ -2,7 +2,19 @@ import type { AuthMethodId, Relation, SshConfig, TlsConfig } from "./contract";
 
 export type Cell = string | null;
 
-export type DriverId = "mariadb" | "mysql" | "mssql" | "mongodb";
+/** The engines this build registers (`engine_descriptors`), planned ones included. */
+export type KnownEngineId =
+  "mariadb" | "mysql" | "mssql" | "mongodb" | "postgres" | "sqlite" | "clickhouse" | "oracle" | "redis" | "elasticsearch" | "opensearch";
+
+/**
+ * An engine id as profiles store it (JSON key `driver`): usually a `KnownEngineId`, but any string is kept as written (a
+ * profile from a newer version, or a typo, fails at connect with `UNKNOWN_ENGINE`). Shared UI never compares it; it asks
+ * the engine's descriptor (`core/engines.ts`).
+ */
+export type EngineId = KnownEngineId | (string & Record<never, never>);
+
+/** The profile's `driver` field: an engine id. */
+export type DriverId = EngineId;
 
 export interface ConnectionProfile {
   id: string;
@@ -17,10 +29,10 @@ export interface ConnectionProfile {
   /** Connection string without its password (MongoDB SRV / replica sets); the backend moves `options.uri` here. */
   url?: string;
   savePassword: boolean;
-  /** Driver-specific settings, see drivers.ts for the keys each driver reads. */
+  /** Engine settings: the descriptor's `options.<name>` connection fields. */
   options: Record<string, string>;
   auth?: AuthMethodId;
-  /** TLS settings; the backend moves the SQL Server `options.encrypt` / `options.trustServerCertificate` here. */
+  /** TLS settings (the dialog's TLS section); the backend moves the v1 SQL Server `options.encrypt` / `options.trustServerCertificate` here. */
   tls?: TlsConfig;
   ssh?: SshConfig;
   /** Safety rules for this connection only (replacing the workspace's); not edited by the dialog yet. */
