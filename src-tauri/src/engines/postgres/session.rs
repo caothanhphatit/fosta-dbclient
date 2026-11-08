@@ -124,12 +124,14 @@ impl PgSession {
     }
 
     /// [`run`](Self::run) that says which statement failed (index, text and its start in the script).
-    pub async fn run_detailed(&self, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> std::result::Result<(), RunFailure> {
-        let before = |error| RunFailure {
-            error,
-            index: 0,
-            text: String::new(),
-            start: 0,
+    pub async fn run_detailed(&self, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> std::result::Result<(), Box<RunFailure>> {
+        let before = |error| {
+            Box::new(RunFailure {
+                error,
+                index: 0,
+                text: String::new(),
+                start: 0,
+            })
         };
         self.apply_limits(opts).await.map_err(before)?;
         let mut result = Ok(());
@@ -145,12 +147,12 @@ impl PgSession {
                 self.run_direct(index, &st.text, opts, sink, started).await
             };
             if let Err(error) = r {
-                result = Err(RunFailure {
+                result = Err(Box::new(RunFailure {
                     error,
                     index,
                     text: st.text.clone(),
                     start: st.start,
-                });
+                }));
                 break;
             }
         }

@@ -1,0 +1,21 @@
+{
+  "id": "postgres",
+  "compose": "dev/compose/postgres.yml",
+  "versions": ["13", "17"],
+  "versionEnv": "POSTGRES_TAG",
+  "seed": null,
+  "paths": [
+    "src-tauri/src/engines/postgres/**",
+    "src-tauri/src/engines/common/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "src-tauri/src/net/tls.rs",
+    "dev/compose/postgres.yml",
+    "dev/seed/postgres.sql",
+    "dev/seed/postgres/**",
+    "ci/engines/postgres.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_postgres"
+}

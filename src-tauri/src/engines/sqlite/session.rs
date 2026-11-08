@@ -63,7 +63,7 @@ impl SqliteSession {
     }
 
     /// [`run`](Self::run) that says which statement failed (index, text and its start in the script).
-    pub async fn run_detailed(&self, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> std::result::Result<(), RunFailure> {
+    pub async fn run_detailed(&self, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> std::result::Result<(), Box<RunFailure>> {
         self.cancel.cancelled.store(false, Ordering::SeqCst);
         let failed: Arc<Mutex<Option<(usize, String, usize)>>> = Arc::new(Mutex::new(None));
         let failed_w = failed.clone();
@@ -121,7 +121,7 @@ impl SqliteSession {
             Err(e) => e,
         };
         let (index, text, start) = failed.lock().ok().and_then(|failure| failure.clone()).unwrap_or_default();
-        Err(RunFailure { error, index, text, start })
+        Err(Box::new(RunFailure { error, index, text, start }))
     }
 
     pub async fn transaction_state(&self) -> TxState {

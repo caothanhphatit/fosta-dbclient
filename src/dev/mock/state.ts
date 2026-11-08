@@ -1,7 +1,7 @@
 /**
  * Config, workspaces and query history of the mock backend (this page load only). "Client A staging" is guarded (run an
  * UPDATE or DELETE to see the confirmation dialog) and has an unreachable server to see a failing connect; "Production"
- * is read-only. "Local" has a PostgreSQL profile: PostgreSQL is a planned engine, so connecting fails with ENGINE_NOT_WIRED.
+ * is read-only. "Local" has PostgreSQL and SQLite profiles on the mock engines.
  */
 import { presetSettings } from "../../features/safety/safety";
 import type { AppConfig, HistoryEntry, Workspace } from "../../core/types";
@@ -37,16 +37,29 @@ const workspaces: Workspace[] = [
         options: {},
       },
       {
-        // A planned engine: connecting fails with ENGINE_NOT_WIRED, as in a real build.
+        // PostgreSQL: schemas in the tree, typed values and xmin-style row versions.
         id: "c-local-pg",
-        name: "Local PostgreSQL (planned)",
+        name: "Local PostgreSQL",
         driver: "postgres",
         host: "127.0.0.1",
         port: 5432,
         user: "postgres",
-        database: "postgres",
+        database: "shop",
         savePassword: true,
         options: {},
+      },
+      {
+        // SQLite: a file instead of a host; edits by primary key or rowid.
+        id: "c-local-sqlite",
+        name: "Sample SQLite",
+        driver: "sqlite",
+        host: "",
+        port: 0,
+        user: "",
+        database: "",
+        file: "C:\\data\\contacts.db",
+        savePassword: false,
+        options: { attach: "audit=C:\\data\\audit.db" },
       },
     ],
     tasks: [],

@@ -104,12 +104,14 @@ mod tests {
 
     #[test]
     fn tls_goes_through_the_shared_builder() {
-        let mut spec = ConnectionSpec::default();
-        spec.tls = Some(TlsConfig {
-            mode: TlsMode::Require,
-            accept_invalid_certs: true,
+        let mut spec = ConnectionSpec {
+            tls: Some(TlsConfig {
+                mode: TlsMode::Require,
+                accept_invalid_certs: true,
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         let options = build_options(&request(spec.clone(), "")).unwrap();
         assert!(options.tls_spec.is_some());
         assert_ne!(options.tls, CoreTls::Disable);

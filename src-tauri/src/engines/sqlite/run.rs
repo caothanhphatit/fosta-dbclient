@@ -53,7 +53,7 @@ impl Session for SqliteContractSession {
         self.inner
             .run_detailed(&request.text, options, sink)
             .await
-            .map_err(|failure| failure_error(failure, &request.text))
+            .map_err(|failure| failure_error(*failure, &request.text))
     }
 
     async fn transaction(&self, op: TransactionOp, _options: &RunOptions) -> AppResult<TransactionState> {
