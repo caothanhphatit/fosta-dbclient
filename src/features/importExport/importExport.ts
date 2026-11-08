@@ -12,6 +12,7 @@ import { formatNumber, h } from "../../core/dom";
 import { driverInfo } from "../../core/drivers";
 import { detectDelimiter, parseCsv } from "./csv";
 import { exportDelimited, exportRows } from "./exporters";
+import { sqlDialect, type SqlDialect } from "../../core/sql";
 import { ConfirmationSession } from "../safety/confirmationDialog";
 import type { BrowseRequest, Cell, ColumnMeta, RowChange, TableTarget } from "../../core/types";
 
@@ -81,7 +82,7 @@ export function exportDialog(source: ExportSource): void {
             ? source.pageRows
             : await fetchAll(source, (done) => (progress.textContent = `Reading rows… ${formatNumber(done)} / ${formatNumber(source.total)}`));
           progress.textContent = "Writing file…";
-          const text = render(format.value as FileFormat, source.columns, rows, source.target.table);
+          const text = render(format.value as FileFormat, source.columns, rows, source.target.table, sqlDialect(source.target.driver));
           const path = await api.saveDownload(fileName.value.trim() || `${source.target.table}.csv`, text, null);
           savedDialog(`Exported ${formatNumber(rows.length)} rows`, path);
         },
@@ -102,7 +103,7 @@ async function fetchAll(source: ExportSource, onProgress: (done: number) => void
   return rows;
 }
 
-function render(format: FileFormat, columns: ColumnMeta[], rows: Cell[][], table: string): string {
+function render(format: FileFormat, columns: ColumnMeta[], rows: Cell[][], table: string, dialect: SqlDialect): string {
   switch (format) {
     case "excel":
       // Excel on a Vietnamese/European locale expects ";" and only reads UTF-8 with a BOM.
@@ -111,7 +112,7 @@ function render(format: FileFormat, columns: ColumnMeta[], rows: Cell[][], table
     case "json":
     case "insert":
     case "markdown":
-      return exportRows(format, columns, rows, table);
+      return exportRows(format, columns, rows, table, dialect);
   }
 }
 

@@ -207,7 +207,7 @@ function page(offset: number, limit: number, filter: string | null = null): Tabl
   return { columns, rows: matching.slice(offset, offset + limit), total: matching.length, primaryKey: ["id"], elapsedMs: 12 };
 }
 
-const CONDITION = /^`?(\w+)`?\s*(IS NOT NULL|IS NULL|LIKE|<>|!=|>=|<=|=|>|<)\s*(.*)$/i;
+const CONDITION = /^[`["]?(\w+)[`\]"]?\s*(IS NOT NULL|IS NULL|LIKE|<>|!=|>=|<=|=|>|<)\s*(.*)$/i;
 
 /** Evaluates the SQL-ish WHERE text the UI builds, enough for the preview to feel real. */
 function compilePredicate(filter: string | null): ((row: (string | null)[]) => boolean) | null {
@@ -220,7 +220,7 @@ function compilePredicate(filter: string | null): ((row: (string | null)[]) => b
     const index = columns.findIndex((column) => column.name === match[1]);
     if (index < 0) return [];
     const operator = match[2].toUpperCase();
-    const operand = match[3].replace(/^'|'$/g, "").replace(/''/g, "'");
+    const operand = match[3].replace(/^N?'|'$/g, "").replace(/''/g, "'");
     return [(row: (string | null)[]) => compareCell(row[index], operator, operand)];
   });
   return (row) => checks.every((check) => check(row));

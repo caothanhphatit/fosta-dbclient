@@ -2,7 +2,7 @@ import { api, errorText } from "../../core/api";
 import { toast } from "../../core/dialogs";
 import { copyText, h, icon, iconButton } from "../../core/dom";
 import type { Navigator } from "../../core/navigator";
-import { equalsFilter, rowKey } from "../../core/sql";
+import { equalsFilter, rowKey, sqlDialect } from "../../core/sql";
 import type { Cell, ColumnMeta, Relation, TableRelations, TableTarget } from "../../core/types";
 
 const JSON_START = /^\s*[{[]/;
@@ -96,10 +96,11 @@ export class RecordPanel {
     const label = `→ ${relation.referencedTable}`;
     return actionLink(label, () => {
       const filter = equalsFilter(
-        relation.columns.map((column, index) => ({
-          column: relation.referencedColumns[index],
-          value: context.row[context.columns.findIndex((meta) => meta.name === column)] ?? null,
-        })),
+        relation.columns.map((column, index) => {
+          const position = context.columns.findIndex((meta) => meta.name === column);
+          return { column: relation.referencedColumns[index], value: context.row[position] ?? null, meta: context.columns[position] };
+        }),
+        sqlDialect(context.target.driver),
       );
       this.navigator.openTable({ ...context.target, database: relation.referencedDatabase, table: relation.referencedTable, kind: "table" }, filter);
     });
@@ -122,10 +123,11 @@ export class RecordPanel {
 
   private openReferencing(context: RecordContext, relation: Relation): void {
     const filter = equalsFilter(
-      relation.columns.map((column, index) => ({
-        column,
-        value: context.row[context.columns.findIndex((meta) => meta.name === relation.referencedColumns[index])] ?? null,
-      })),
+      relation.columns.map((column, index) => {
+        const position = context.columns.findIndex((meta) => meta.name === relation.referencedColumns[index]);
+        return { column, value: context.row[position] ?? null, meta: context.columns[position] };
+      }),
+      sqlDialect(context.target.driver),
     );
     this.navigator.openTable({ ...context.target, database: relation.database, table: relation.table, kind: "table" }, filter);
   }

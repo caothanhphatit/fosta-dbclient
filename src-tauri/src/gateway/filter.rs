@@ -231,6 +231,8 @@ mod tests {
         }
         ok(Engine::MariaDb, "`category_id` = 3 AND JSON_VALUE(attributes, '$.color') = 'oak'");
         ok(Engine::SqlServer, "[Status] = N'paid' AND YEAR(InvoiceDate) = 2026");
+        // What the grid's column filters build for SQL Server (src/core/sql.ts, tsql dialect).
+        ok(Engine::SqlServer, "([Status] LIKE N'%a[[]b%') AND ([Amount] > 5) AND ([Note] IS NULL)");
     }
 
     #[test]

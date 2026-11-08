@@ -1,4 +1,4 @@
-import { quoteIdent, sqlLiteral } from "../../core/sql";
+import { quoteIdent, quoteTable, sqlLiteral, type SqlDialect } from "../../core/sql";
 import type { Cell, ColumnMeta } from "../../core/types";
 
 export type ExportFormat = "csv" | "json" | "markdown" | "insert";
@@ -10,7 +10,7 @@ export const EXPORT_LABELS: Record<ExportFormat, string> = {
   insert: "INSERT statements",
 };
 
-export function exportRows(format: ExportFormat, columns: ColumnMeta[], rows: Cell[][], tableName: string | null): string {
+export function exportRows(format: ExportFormat, columns: ColumnMeta[], rows: Cell[][], tableName: string | null, dialect: SqlDialect): string {
   const exportable = columns.map((column, index) => ({ column, index })).filter(({ column }) => column.vectorDims === null);
   const pick = (row: Cell[]) => exportable.map(({ index }) => row[index]);
   const names = exportable.map(({ column }) => column.name);
@@ -30,6 +30,7 @@ export function exportRows(format: ExportFormat, columns: ColumnMeta[], rows: Ce
         tableName ?? "table_name",
         exportable.map(({ column }) => column),
         rows.map(pick),
+        dialect,
       );
   }
 }
@@ -64,9 +65,10 @@ function markdownTable(names: string[], rows: Cell[][]): string {
   return [header, divider, ...rows.map((row) => `| ${row.map(escape).join(" | ")} |`)].join("\n");
 }
 
-function insertStatements(table: string, columns: ColumnMeta[], rows: Cell[][]): string {
-  const columnList = columns.map((column) => quoteIdent(column.name)).join(", ");
+function insertStatements(table: string, columns: ColumnMeta[], rows: Cell[][], dialect: SqlDialect): string {
+  const columnList = columns.map((column) => quoteIdent(column.name, dialect)).join(", ");
+  const target = quoteTable(table, dialect);
   return rows
-    .map((row) => `INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${row.map((value, index) => sqlLiteral(value, columns[index])).join(", ")});`)
+    .map((row) => `INSERT INTO ${target} (${columnList}) VALUES (${row.map((value, index) => sqlLiteral(value, columns[index], dialect)).join(", ")});`)
     .join("\n");
 }

@@ -13,7 +13,7 @@ import type { Navigator } from "../../core/navigator";
 import { RecordPanel } from "./recordPanel";
 import { withConfirmation } from "../safety/confirmationDialog";
 import { makeSplitter } from "../../core/splitter";
-import { equalsFilter, rowKey } from "../../core/sql";
+import { equalsFilter, rowKey, sqlDialect, type SqlDialect } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
 import type { Cell, ColumnMeta, TableRelations, TableTarget, VectorInfo } from "../../core/types";
 
@@ -33,6 +33,8 @@ export class TableView implements TabContent {
   readonly target: TableTarget;
   private readonly navigator: Navigator;
   private readonly driver: DriverInfo;
+  /** How filters and foreign-key navigation quote names and values for this engine. */
+  private readonly dialect: SqlDialect;
   private readonly grid: DataGrid;
   private readonly record: RecordPanel;
   private readonly filter: HTMLInputElement;
@@ -67,6 +69,7 @@ export class TableView implements TabContent {
     this.columnsKey = columnStorageKey(target.connectionId, target.database, target.table);
     this.hiddenColumns = loadHiddenColumns(this.columnsKey);
     this.driver = driverInfo(target.driver);
+    this.dialect = sqlDialect(target.driver);
     this.grid = new DataGrid(() => this.refreshButtons());
     this.record = new RecordPanel(navigator);
     this.filter = h("input", { class: "input", placeholder: this.driver.filterPlaceholder, spellcheck: "false", value: initialFilter });
@@ -226,7 +229,7 @@ export class TableView implements TabContent {
   private currentFilter(): string | null {
     return this.driver.filterKind === "json"
       ? combinedJsonFilter(this.columns, this.columnFilters, this.filter.value)
-      : combinedCondition(this.columns, this.columnFilters, this.filter.value);
+      : combinedCondition(this.columns, this.columnFilters, this.filter.value, this.dialect);
   }
 
   private exportMenu(): MenuItem[] {
@@ -253,10 +256,11 @@ export class TableView implements TabContent {
         this.navigator.openTable(
           { ...this.target, database: relation.database, table: relation.table, kind: "table" },
           equalsFilter(
-            relation.columns.map((column, index) => ({
-              column,
-              value: row[this.columns.findIndex((meta) => meta.name === relation.referencedColumns[index])] ?? null,
-            })),
+            relation.columns.map((column, index) => {
+              const position = this.columns.findIndex((meta) => meta.name === relation.referencedColumns[index]);
+              return { column, value: row[position] ?? null, meta: this.columns[position] };
+            }),
+            this.dialect,
           ),
         ),
     }));
@@ -341,7 +345,7 @@ export class TableView implements TabContent {
       const filter =
         this.driver.filterKind === "json"
           ? combinedJsonFilter(this.columns, this.columnFilters, this.filter.value)
-          : combinedCondition(this.columns, this.columnFilters, this.filter.value);
+          : combinedCondition(this.columns, this.columnFilters, this.filter.value, this.dialect);
       const page = await api.browseTable({
         connectionId: this.target.connectionId,
         database: this.target.database,
@@ -366,6 +370,7 @@ export class TableView implements TabContent {
         sort,
         onSort: (column) => this.toggleSort(column),
         tableName: this.target.table,
+        dialect: this.dialect,
         onSelect: (row) => this.showRecord(row),
         extraMenu: (row) => this.rowMenu(row),
         columnFilters: this.columnFilters,

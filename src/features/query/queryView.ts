@@ -10,6 +10,7 @@ import { createSqlEditor, selectedOrAllText, setSchemaTables } from "./sqlEditor
 import { HistoryPanel } from "./historyPanel";
 import { AttemptTimer } from "./attemptTimer";
 import { summarizeSets } from "./historyFormat";
+import { sqlDialect, type SqlDialect } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
 import type { HistoryEntry, QueryOutcome, ResultSet, TransactionOp, TransactionState } from "../../core/types";
 import { withConfirmation } from "../safety/confirmationDialog";
@@ -385,7 +386,7 @@ export class QueryView implements TabContent {
   private showOutcome(outcome: QueryOutcome): void {
     const rowSets = outcome.sets.filter((set) => set.columns.length > 0);
     const panels: ResultPanel[] = rowSets.map((set, index) => {
-      const grid = resultGrid(set);
+      const grid = resultGrid(set, sqlDialect(this.driver));
       return { title: rowSets.length > 1 ? `Result ${index + 1}` : "Result", element: grid.element, grid };
     });
     const messages: Message[] = outcome.sets.map((set, index) => ({ text: describeSet(set, index), kind: "info" }));
@@ -415,9 +416,9 @@ export class QueryView implements TabContent {
   }
 }
 
-function resultGrid(set: ResultSet): DataGrid {
+function resultGrid(set: ResultSet, dialect: SqlDialect): DataGrid {
   const grid = new DataGrid();
-  grid.load({ ...gridSetup(set.columns, set.rows), clientFilter: true });
+  grid.load({ ...gridSetup(set.columns, set.rows, dialect), clientFilter: true });
   return grid;
 }
 

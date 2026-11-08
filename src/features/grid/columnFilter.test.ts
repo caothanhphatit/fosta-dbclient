@@ -18,41 +18,61 @@ const hash = column("hash", { typeName: "varbinary", binary: true });
 
 describe("columnCondition", () => {
   it("turns plain text into a case-insensitive contains", () => {
-    expect(columnCondition(name, "abc")).toBe("`name` LIKE '%abc%'");
-    expect(columnCondition(name, "O'Brien")).toBe("`name` LIKE '%O''Brien%'");
+    expect(columnCondition(name, "abc", "mysql")).toBe("`name` LIKE '%abc%'");
+    expect(columnCondition(name, "O'Brien", "mysql")).toBe("`name` LIKE '%O''Brien%'");
   });
 
   it("compares numbers on numeric columns and hex on binary ones", () => {
-    expect(columnCondition(price, "42")).toBe("`price` = 42");
-    expect(columnCondition(name, "42")).toBe("`name` LIKE '%42%'");
-    expect(columnCondition(hash, "0xABCD")).toBe("`hash` = 0xABCD");
+    expect(columnCondition(price, "42", "mysql")).toBe("`price` = 42");
+    expect(columnCondition(name, "42", "mysql")).toBe("`name` LIKE '%42%'");
+    expect(columnCondition(hash, "0xABCD", "mysql")).toBe("`hash` = 0xABCD");
   });
 
   it("understands comparison operators, with != written as <>", () => {
-    expect(columnCondition(price, ">= 10")).toBe("`price` >= 10");
-    expect(columnCondition(name, "!=x")).toBe("`name` <> 'x'");
-    expect(columnCondition(name, "<b")).toBe("`name` < 'b'");
+    expect(columnCondition(price, ">= 10", "mysql")).toBe("`price` >= 10");
+    expect(columnCondition(name, "!=x", "mysql")).toBe("`name` <> 'x'");
+    expect(columnCondition(name, "<b", "mysql")).toBe("`name` < 'b'");
   });
 
   it("understands null and not null", () => {
-    expect(columnCondition(name, "NULL")).toBe("`name` IS NULL");
-    expect(columnCondition(name, "!null")).toBe("`name` IS NOT NULL");
-    expect(columnCondition(name, "not null")).toBe("`name` IS NOT NULL");
+    expect(columnCondition(name, "NULL", "mysql")).toBe("`name` IS NULL");
+    expect(columnCondition(name, "!null", "mysql")).toBe("`name` IS NOT NULL");
+    expect(columnCondition(name, "not null", "mysql")).toBe("`name` IS NOT NULL");
   });
 
   it("ignores empty filters", () => {
-    expect(columnCondition(name, "   ")).toBeNull();
+    expect(columnCondition(name, "   ", "mysql")).toBeNull();
   });
 });
 
 describe("combinedCondition", () => {
   it("returns null without filters and a bare condition for one", () => {
-    expect(combinedCondition([name, price], {}, " ")).toBeNull();
-    expect(combinedCondition([name, price], { price: ">5" }, "")).toBe("`price` > 5");
+    expect(combinedCondition([name, price], {}, " ", "mysql")).toBeNull();
+    expect(combinedCondition([name, price], { price: ">5" }, "", "mysql")).toBe("`price` > 5");
   });
 
   it("wraps several conditions in parentheses, the WHERE text first", () => {
-    expect(combinedCondition([name, price], { name: "x", price: "<9" }, "status = 1")).toBe("(status = 1) AND (`name` LIKE '%x%') AND (`price` < 9)");
+    expect(combinedCondition([name, price], { name: "x", price: "<9" }, "status = 1", "mysql")).toBe("(status = 1) AND (`name` LIKE '%x%') AND (`price` < 9)");
+  });
+});
+
+describe("column filters per dialect", () => {
+  it("uses brackets and N'…' strings on SQL Server", () => {
+    const status = column("Status");
+    expect(columnCondition(status, "paid", "tsql")).toBe("[Status] LIKE N'%paid%'");
+    expect(columnCondition(status, "a[b", "tsql")).toBe("[Status] LIKE N'%a[[]b%'");
+    expect(columnCondition(column("we]ird"), "=x", "tsql")).toBe("[we]]ird] = N'x'");
+    expect(columnCondition(price, "42", "tsql")).toBe("[price] = 42");
+    expect(columnCondition(hash, "0xABCD", "tsql")).toBe("[hash] = 0xABCD");
+    expect(columnCondition(status, String.raw`C:\tmp`, "tsql")).toBe(String.raw`[Status] LIKE N'%C:\tmp%'`);
+    expect(combinedCondition([status, price], { Status: "paid", price: ">5" }, "", "tsql")).toBe("([Status] LIKE N'%paid%') AND ([price] > 5)");
+  });
+
+  it("uses double quotes and standard strings in ANSI SQL", () => {
+    expect(columnCondition(name, "O'Brien", "ansi")).toBe(`"name" LIKE '%O''Brien%'`);
+    expect(columnCondition(name, String.raw`a\b`, "ansi")).toBe(String.raw`"name" LIKE '%a\b%'`);
+    expect(columnCondition(hash, "0xABCD", "ansi")).toBe(`"hash" = '0xABCD'`);
+    expect(columnCondition(name, "null", "ansi")).toBe(`"name" IS NULL`);
   });
 });
 

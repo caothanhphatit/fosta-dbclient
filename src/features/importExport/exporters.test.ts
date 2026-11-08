@@ -31,10 +31,27 @@ describe("exportDelimited", () => {
   });
 
   it("matches the comma CSV export when the separator is a comma", () => {
-    expect(exportDelimited(columns, rows, ",")).toBe(exportRows("csv", columns, rows, "t"));
+    expect(exportDelimited(columns, rows, ",")).toBe(exportRows("csv", columns, rows, "t", "mysql"));
   });
 
   it("leaves a comma unquoted when it is not the separator", () => {
     expect(exportDelimited([column("a")], [["x,y"]], ";")).toBe("a\r\nx,y");
+  });
+});
+
+describe("INSERT export per dialect", () => {
+  const columns = [{ ...column("Id"), numeric: true }, column("Name")];
+  const rows = [["1", "it's"]];
+
+  it("quotes for MySQL", () => {
+    expect(exportRows("insert", columns, rows, "orders", "mysql")).toBe("INSERT INTO `orders` (`Id`, `Name`) VALUES (1, 'it''s');");
+  });
+
+  it("quotes for SQL Server, splitting schema.table", () => {
+    expect(exportRows("insert", columns, rows, "sales.Invoices", "tsql")).toBe("INSERT INTO [sales].[Invoices] ([Id], [Name]) VALUES (1, N'it''s');");
+  });
+
+  it("quotes for ANSI engines", () => {
+    expect(exportRows("insert", columns, rows, "public.orders", "ansi")).toBe(`INSERT INTO "public"."orders" ("Id", "Name") VALUES (1, 'it''s');`);
   });
 });

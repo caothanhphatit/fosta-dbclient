@@ -180,6 +180,15 @@ async fn live_mssql() {
         "SELECT TOP 5 * FROM sales.vMonthlyRevenue ORDER BY Month",
     )
     .await;
+    // The grid's column filters and foreign-key navigation for SQL Server (src/core/sql.ts, tsql dialect).
+    let filtered = driver
+        .browse_table(
+            &browse("ERP", "sales.Invoices", Some("([Status] LIKE N'%paid%') AND ([InvoiceId] > 0)")),
+            &Limits::default(),
+        )
+        .await
+        .expect("bracket-quoted filter");
+    assert!(filtered.total > 0, "bracket-quoted filter matches rows");
     create_and_drop(driver.as_ref(), "StudioScratch", None, None, "DROP DATABASE [StudioScratch]").await;
     let relations = driver.table_relations("ERP", "sales.Invoices").await.expect("relations");
     assert!(!relations.outgoing.is_empty());

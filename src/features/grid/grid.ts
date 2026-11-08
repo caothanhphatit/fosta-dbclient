@@ -6,7 +6,7 @@ import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
 import { clamp, copyText, h, icon } from "../../core/dom";
 import { EXPORT_LABELS, exportRows, type ExportFormat } from "../importExport/exporters";
-import { rowKey } from "../../core/sql";
+import { rowKey, type SqlDialect } from "../../core/sql";
 import type { Cell, CellValue, ColumnMeta, RowChange } from "../../core/types";
 import "./grid-virtual.css";
 import "./grid-tools.css";
@@ -25,6 +25,8 @@ export interface GridSetup {
   sort: SortState | null;
   onSort: ((column: string) => void) | null;
   tableName: string | null;
+  /** How "Copy as INSERT statements" quotes names and values. */
+  dialect: SqlDialect;
   onSelect: ((row: Cell[] | null) => void) | null;
   extraMenu: ((row: Cell[]) => MenuItem[]) | null;
   columnFilters: ColumnFilters;
@@ -71,7 +73,7 @@ const MOVES: Record<string, Position> = {
   ArrowRight: { row: 0, column: 1 },
 };
 
-export function gridSetup(columns: ColumnMeta[], rows: Cell[][]): GridSetup {
+export function gridSetup(columns: ColumnMeta[], rows: Cell[][], dialect: SqlDialect = "ansi"): GridSetup {
   return {
     columns,
     rows,
@@ -81,6 +83,7 @@ export function gridSetup(columns: ColumnMeta[], rows: Cell[][]): GridSetup {
     sort: null,
     onSort: null,
     tableName: null,
+    dialect,
     onSelect: null,
     extraMenu: null,
     columnFilters: {},
@@ -229,7 +232,7 @@ export class DataGrid {
   }
 
   exportPage(format: ExportFormat): string {
-    return exportRows(format, this.setup.columns, this.visibleRows(), this.setup.tableName);
+    return exportRows(format, this.setup.columns, this.visibleRows(), this.setup.tableName, this.setup.dialect);
   }
 
   private visibleRows(): Cell[][] {

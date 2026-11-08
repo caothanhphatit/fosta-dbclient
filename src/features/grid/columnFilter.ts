@@ -1,4 +1,4 @@
-import { quoteIdent, sqlLiteral } from "../../core/sql";
+import { containsPattern, quoteIdent, sqlLiteral, type SqlDialect } from "../../core/sql";
 import type { Cell, ColumnMeta } from "../../core/types";
 
 export type ColumnFilters = Record<string, string>;
@@ -26,22 +26,21 @@ function isNotNullKeyword(text: string): boolean {
   return lower === "!null" || lower === "not null";
 }
 
-export function columnCondition(column: ColumnMeta, text: string): string | null {
+export function columnCondition(column: ColumnMeta, text: string, dialect: SqlDialect): string | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
-  const name = quoteIdent(column.name);
+  const name = quoteIdent(column.name, dialect);
   if (isNullKeyword(trimmed)) return `${name} IS NULL`;
   if (isNotNullKeyword(trimmed)) return `${name} IS NOT NULL`;
   const comparison = parseComparison(trimmed);
-  if (comparison) return `${name} ${comparison.operator} ${sqlLiteral(comparison.operand, column)}`;
-  if (column.binary && HEX.test(trimmed)) return `${name} = ${trimmed}`;
-  if (column.numeric && NUMBER.test(trimmed)) return `${name} = ${trimmed}`;
-  return `${name} LIKE ${sqlLiteral(`%${trimmed}%`)}`;
+  if (comparison) return `${name} ${comparison.operator} ${sqlLiteral(comparison.operand, column, dialect)}`;
+  if ((column.binary && HEX.test(trimmed)) || (column.numeric && NUMBER.test(trimmed))) return `${name} = ${sqlLiteral(trimmed, column, dialect)}`;
+  return `${name} LIKE ${containsPattern(trimmed, dialect)}`;
 }
 
-export function combinedCondition(columns: ColumnMeta[], filters: ColumnFilters, extra: string): string | null {
-  const conditions = [extra.trim(), ...columns.map((column) => columnCondition(column, filters[column.name] ?? ""))].filter((condition): condition is string =>
-    Boolean(condition),
+export function combinedCondition(columns: ColumnMeta[], filters: ColumnFilters, extra: string, dialect: SqlDialect): string | null {
+  const conditions = [extra.trim(), ...columns.map((column) => columnCondition(column, filters[column.name] ?? "", dialect))].filter(
+    (condition): condition is string => Boolean(condition),
   );
   if (conditions.length === 0) return null;
   return conditions.length === 1 ? conditions[0] : conditions.map((condition) => `(${condition})`).join(" AND ");

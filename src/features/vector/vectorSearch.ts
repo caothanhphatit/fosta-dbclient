@@ -154,7 +154,7 @@ export class VectorSearchView implements TabContent {
     const current = SOURCES.find((source) => source.kind === this.source);
     this.queryText.hidden = this.source === "row";
     this.queryText.placeholder = this.source === "text" ? "What are employees entitled to for annual leave?" : "[0.0123, -0.0456, …]";
-    const seedText = this.seed ? `Query vector from row: ${describeKey(this.seed)}` : "No row selected yet.";
+    const seedText = this.seed ? `Query vector from row: ${describeKey(this.seed, "mysql")}` : "No row selected yet.";
     this.sourceHint.replaceChildren(this.source === "row" ? seedText : (current?.hint ?? ""));
     if (this.source === "text")
       this.sourceHint.append(
