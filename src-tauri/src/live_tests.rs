@@ -207,6 +207,53 @@ async fn live_mssql() {
     driver.close().await;
 }
 
+/// Batches return every result set and every row count, in order, whatever comes first.
+#[tokio::test]
+#[ignore]
+async fn live_mssql_batches() {
+    let (driver, _) = drivers::open(&mssql_profile("live-mssql-batch"), "Studio#Pass2026").await.expect("connect");
+    driver.open_session("batch").await.expect("session");
+    let limits = Limits::default();
+    let run = |sql: &'static str| driver.run_query("batch", Some("ERP".into()), sql.into(), &limits);
+
+    let update_first = run("UPDATE sales.Invoices SET Status = Status WHERE InvoiceId = 1; SELECT TOP 2 InvoiceId FROM sales.Invoices")
+        .await
+        .expect("update then select");
+    assert_eq!(update_first.sets.len(), 2, "{:?}", update_first.sets);
+    assert!(update_first.sets[0].columns.is_empty());
+    assert_eq!(update_first.sets[0].affected_rows, 1);
+    assert_eq!(update_first.sets[1].rows.len(), 2);
+
+    let select_first = run("SELECT TOP 2 InvoiceId FROM sales.Invoices; UPDATE sales.Invoices SET Status = Status WHERE InvoiceId = 1")
+        .await
+        .expect("select then update");
+    assert_eq!(select_first.sets.len(), 2, "{:?}", select_first.sets);
+    assert_eq!(select_first.sets[0].rows.len(), 2);
+    assert_eq!(select_first.sets[1].affected_rows, 1);
+
+    // Variables keep their scope: the batch still runs as one batch.
+    let scoped = run("DECLARE @id INT = 1; UPDATE sales.Invoices SET Status = Status WHERE InvoiceId = @id; SELECT @id AS id")
+        .await
+        .expect("declared variable");
+    assert_eq!(scoped.sets.len(), 2, "{:?}", scoped.sets);
+    assert_eq!(scoped.sets[1].rows[0][0].as_deref(), Some("1"));
+
+    let error = run("SELECT * FROM sales.NoSuchTable").await.expect_err("missing table");
+    assert!(error.to_string().contains("SQL Server error 208"), "{error}");
+    assert!(!error.to_string().contains("executing  on line"), "{error}");
+    driver.close_session("batch");
+    driver.close().await;
+}
+
+/// SQL Server's self-signed certificate without "Trust server certificate" explains the fix.
+#[tokio::test]
+#[ignore]
+async fn live_mssql_untrusted_certificate() {
+    let untrusted = profile("live-mssql-tls", "mssql", 1433, "sa", "ERP", &[("encrypt", "true"), ("trustServerCertificate", "false")]);
+    let error = drivers::probe(&untrusted, "Studio#Pass2026").await.expect_err("certificate not trusted");
+    assert!(error.to_string().contains("Trust server certificate"), "{error}");
+}
+
 /// The connection-string tab stores the URI without its password; the driver adds it back.
 #[tokio::test]
 #[ignore]

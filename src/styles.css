@@ -2058,6 +2058,15 @@ pre.field-value.text {
   accent-color: var(--accent);
 }
 
+/* An option the last error points at (e.g. "Trust server certificate" after a TLS failure). */
+.checkbox.attention {
+  margin: -3px -6px;
+  padding: 3px 6px;
+  border-radius: var(--radius);
+  outline: 1px solid var(--warning);
+  background: var(--accent-soft);
+}
+
 .confirm-text {
   margin: 4px 0;
   line-height: 1.5;

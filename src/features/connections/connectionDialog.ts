@@ -232,7 +232,15 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
           alignLeft: true,
           run: async () => {
             const profile = readProfile();
-            const version = await api.testConnection(profile, readPassword());
+            const version = await api.testConnection(profile, readPassword()).catch((error: unknown) => {
+              // An untrusted (self-signed) SQL Server certificate: point at the option that fixes it.
+              const trust = optionInputs.get("trustServerCertificate");
+              if (trust && !trust.checked && /trust server certificate/i.test(errorText(error))) {
+                trust.closest("label")?.classList.add("attention");
+                trust.focus();
+              }
+              throw error;
+            });
             toast(`Connection OK · ${describeServer(profile, version)}`, "success");
             return false;
           },

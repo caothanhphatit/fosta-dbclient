@@ -7,6 +7,7 @@
 
 pub mod mongo;
 pub mod mssql;
+mod mssql_batch;
 pub mod mysql;
 pub mod relations;
 pub mod types;

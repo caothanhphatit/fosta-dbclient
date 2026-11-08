@@ -77,14 +77,45 @@ macro_rules! convert_from {
     };
 }
 
-convert_from!(
-    std::io::Error,
-    serde_json::Error,
-    mysql_async::Error,
-    tiberius::error::Error,
-    mongodb::error::Error,
-    reqwest::Error,
-);
+convert_from!(std::io::Error, serde_json::Error, mysql_async::Error, mongodb::error::Error, reqwest::Error);
+
+/// Shown with SQL Server TLS failures: the usual cause is the self-signed certificate of a local or dev server.
+pub const MSSQL_TLS_HINT: &str = "The server's TLS certificate is not trusted by this machine (SQL Server uses a self-signed certificate unless one \
+     is installed). Tick \"Trust server certificate\" in the connection dialog for a local or test server, or install a certificate \
+     from a trusted authority on the server.";
+
+impl From<tiberius::error::Error> for AppError {
+    fn from(error: tiberius::error::Error) -> Self {
+        match error {
+            // The raw token error reads "Token error: '…' on server X executing  on line 1 (code: 102, state: 1, class: 15)".
+            tiberius::error::Error::Server(token) => {
+                let mut message = format!("{} (SQL Server error {}", token.message(), token.code());
+                if token.line() > 0 {
+                    message.push_str(&format!(", line {}", token.line()));
+                }
+                if !token.procedure().is_empty() {
+                    message.push_str(&format!(", in {}", token.procedure()));
+                }
+                message.push(')');
+                Self::new(message)
+            }
+            tiberius::error::Error::Tls(detail) => Self::new(tls_message(&detail)),
+            other => Self::new(other.to_string()),
+        }
+    }
+}
+
+fn tls_message(detail: &str) -> String {
+    let lower = detail.to_lowercase();
+    let untrusted = ["not trusted", "untrusted", "unknownissuer", "unknown issuer", "self signed", "self-signed", "certificate chain", "-2146762487"]
+        .iter()
+        .any(|needle| lower.contains(needle));
+    if untrusted {
+        format!("Could not set up TLS with SQL Server: {detail}. {MSSQL_TLS_HINT}")
+    } else {
+        format!("Could not set up TLS with SQL Server: {detail}")
+    }
+}
 
 #[cfg(feature = "desktop")]
 convert_from!(keyring::Error);
@@ -102,5 +133,16 @@ mod tests {
         assert_eq!(value["code"], "X");
         assert_eq!(value["message"], "Needs a confirmation");
         assert_eq!(error.to_string(), "Needs a confirmation");
+    }
+
+    #[test]
+    fn untrusted_sql_server_certificates_explain_the_fix() {
+        let error = AppError::from(tiberius::error::Error::Tls(
+            "A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider. (os error -2146762487)"
+                .into(),
+        ));
+        assert!(error.to_string().contains("Trust server certificate"), "{error}");
+        let other = AppError::from(tiberius::error::Error::Tls("handshake eof".into()));
+        assert!(!other.to_string().contains("Trust server certificate"));
     }
 }

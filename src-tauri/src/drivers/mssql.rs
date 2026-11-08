@@ -16,6 +16,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 
 use super::{
+    mssql_batch::{with_row_counts, ROWCOUNT_COLUMN},
     relations::{self, TableRelations},
     types::{
         elapsed_millis, encode_hex, BrowseRequest, Cell, CellValue, ColumnDesign, ColumnMeta, QueryOutcome, ResultSet, RowChange,
@@ -35,7 +36,6 @@ type TdsClient = Client<Compat<TcpStream>>;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAGE_SIZE: u64 = 5000;
 const DEFAULT_SCHEMA: &str = "dbo";
-const READ_KEYWORDS: [&str; 6] = ["select", "with", "exec", "execute", "declare", "sp_"];
 
 pub struct MssqlConnection {
     config: Config,
@@ -298,15 +298,8 @@ impl Driver for MssqlConnection {
                 .await?;
         }
         let started = Instant::now();
-        let sets = if is_read_statement(&sql) {
-            read_result_sets(&mut client, &sql, limits.max_rows).await?
-        } else {
-            let result = client.execute(sql.as_str(), &[]).await?;
-            vec![ResultSet {
-                affected_rows: result.rows_affected().iter().sum(),
-                ..ResultSet::default()
-            }]
-        };
+        // Every result set and every row count of the batch, in order (see `mssql_batch`).
+        let sets = read_result_sets(&mut client, &with_row_counts(&sql), limits.max_rows).await?;
         let elapsed_ms = elapsed_millis(started);
         let transaction = transaction_state(&mut client).await;
         Ok(QueryOutcome {
@@ -523,12 +516,27 @@ async fn fetch(client: &mut TdsClient, sql: &str, params: &[&dyn ToSql]) -> AppR
 async fn read_result_sets(client: &mut TdsClient, sql: &str, max_rows: usize) -> AppResult<Vec<ResultSet>> {
     let mut stream = client.simple_query(sql).await?;
     let mut sets: Vec<ResultSet> = Vec::new();
+    // True while the current result set is an injected `SELECT @@ROWCOUNT`.
+    let mut row_count = false;
     while let Some(item) = stream.try_next().await? {
         match item {
-            QueryItem::Metadata(meta) => sets.push(ResultSet {
-                columns: meta.columns().iter().map(column_meta).collect(),
-                ..ResultSet::default()
-            }),
+            QueryItem::Metadata(meta) => {
+                row_count = matches!(meta.columns(), [column] if column.name() == ROWCOUNT_COLUMN);
+                sets.push(ResultSet {
+                    columns: if row_count {
+                        Vec::new()
+                    } else {
+                        meta.columns().iter().map(column_meta).collect()
+                    },
+                    ..ResultSet::default()
+                });
+            }
+            QueryItem::Row(row) if row_count => {
+                let count = row.into_iter().next().and_then(|data| cell_text(&data)).unwrap_or_default();
+                if let Some(set) = sets.last_mut() {
+                    set.affected_rows = count.parse().unwrap_or(0);
+                }
+            }
             QueryItem::Row(row) => {
                 if sets.is_empty() {
                     sets.push(ResultSet {
@@ -682,16 +690,6 @@ fn synthesize_ddl(qualified: &str, columns: &[ColumnDesign], keys: &[String]) ->
         lines.push(format!("  PRIMARY KEY ({})", list.join(", ")));
     }
     format!("CREATE TABLE {qualified} (\n{}\n);", lines.join(",\n"))
-}
-
-fn is_read_statement(sql: &str) -> bool {
-    let first = sql
-        .trim_start()
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .next()
-        .unwrap_or_default()
-        .to_lowercase();
-    READ_KEYWORDS.iter().any(|keyword| first.starts_with(keyword))
 }
 
 fn where_clause(filter: Option<&str>) -> String {
