@@ -19,10 +19,7 @@ const base: EngineDescriptor = DESCRIPTORS.oracle;
 export const descriptor: EngineDescriptor = {
   ...base,
   status: "ready",
-  capabilities: [
-    ...base.capabilities.filter((capability) => capability !== "schemas" && capability !== "readOnlySession"),
-    "multipleDatabases",
-  ],
+  capabilities: [...base.capabilities.filter((capability) => capability !== "schemas" && capability !== "readOnlySession"), "multipleDatabases"],
   connection: {
     ...base.connection,
     fields: [
@@ -63,7 +60,8 @@ const errors = {
   syntax: () => serverError(900, "invalid SQL statement"),
   noTable: () => serverError(942, "table or view does not exist"),
   noColumn: (name: string) => serverError(904, `"${name.toUpperCase()}": invalid identifier`),
-  cancelled: () => mockError("CANCELLED", "ORA-01013: user requested cancel of current operation", { engine: ENGINE, vendorCode: "ORA-01013", kind: "cancelled" }),
+  cancelled: () =>
+    mockError("CANCELLED", "ORA-01013: user requested cancel of current operation", { engine: ENGINE, vendorCode: "ORA-01013", kind: "cancelled" }),
 };
 
 const explain = "EXPLAIN PLAN FOR SELECT * FROM {qualified};\nSELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY());";
@@ -148,7 +146,7 @@ const tables: TableSpec[] = [
           v.text(STATUS[n % STATUS.length]),
           v.dec((n * 3.75).toFixed(2)),
           v.ts(`2026-0${(n % 9) + 1}-${pad((n % 28) + 1)} 1${n % 10}:00:00`),
-          n % 4 === 0 ? v.text(`Deliver after ${n % 12 + 8}:00`) : v.null(),
+          n % 4 === 0 ? v.text(`Deliver after ${(n % 12) + 8}:00`) : v.null(),
         ];
       }),
     foreignKeys: [
@@ -272,7 +270,7 @@ const others: Other[] = [
       ["status", "INVALID"],
       ["created", "2026-11-01 09:00:00"],
       ["lastDdl", "2026-11-08 10:02:45"],
-      ["error1", "PROCEDURE line 4, column 1: PLS-00103: Encountered the symbol \"END\" when expecting one of the following: ;"],
+      ["error1", 'PROCEDURE line 4, column 1: PLS-00103: Encountered the symbol "END" when expecting one of the following: ;'],
     ],
   },
   {

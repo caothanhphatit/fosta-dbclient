@@ -12,16 +12,7 @@ import { field, openModal, textInput, type ModalAction } from "../../core/dialog
 import { h } from "../../core/dom";
 import { errorText, toAppError } from "../../core/errors";
 import type { ConnectErrorContext } from "../../core/views";
-import {
-  clientApi,
-  clientErrorKind,
-  INSTANT_CLIENT_URL,
-  LICENSE_URL,
-  megabytes,
-  progressText,
-  type ClientStatus,
-  type DownloadOffer,
-} from "./clientApi";
+import { clientApi, clientErrorKind, INSTANT_CLIENT_URL, LICENSE_URL, megabytes, progressText, type ClientStatus, type DownloadOffer } from "./clientApi";
 import "./oracle.css";
 
 const CLIENT_DIR = "clientDir";

@@ -420,13 +420,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unreachable_server_or_a_missing_client_is_a_structured_error() {
+    async fn a_client_folder_without_the_library_is_a_structured_error() {
+        if oracle::InitParams::is_initialized() {
+            return; // another test in this process loaded a client
+        }
+        // An empty folder: connect refuses before loading anything, so no client gets loaded into this test process.
+        let empty = std::env::temp_dir().join("fosta-oracle-adapter-no-client");
+        std::fs::create_dir_all(&empty).unwrap();
+        let mut spec = ConnectionSpec {
+            engine: "oracle".into(),
+            user: "shop".into(),
+            ..ConnectionSpec::default()
+        };
+        spec.options
+            .insert(connect::CLIENT_DIR.into(), empty.to_string_lossy().into_owned());
         let request = ConnectRequest {
-            spec: ConnectionSpec {
-                engine: "oracle".into(),
-                user: "shop".into(),
-                ..ConnectionSpec::default()
-            },
+            spec,
             secrets: ConnectSecrets::default(),
             endpoint: Endpoint {
                 host: "127.0.0.1".into(),
@@ -435,10 +444,10 @@ mod tests {
             connect_timeout: Duration::from_secs(2),
         };
         let Err(error) = ORACLE.connect(request).await else {
-            panic!("nothing listens on port 1");
+            panic!("the folder has no client");
         };
-        let code = error.code().unwrap_or_default();
-        assert!(code == "CONNECTION_ERROR" || code == "ORACLE_CLIENT", "{error:?}");
+        assert_eq!(error.code(), Some("ORACLE_CLIENT"), "{error:?}");
+        assert_eq!(error.field("kind").and_then(|v| v.as_str()), Some("notInstalled"));
         assert_eq!(error.field("engine").and_then(|v| v.as_str()), Some("oracle"));
     }
 }

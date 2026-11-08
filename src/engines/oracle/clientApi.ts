@@ -12,16 +12,7 @@ export const INSTANT_CLIENT_URL = "https://www.oracle.com/database/technologies/
 export const LICENSE_URL = "https://www.oracle.com/downloads/licenses/instant-client-lic.html";
 
 /** `ClientErrorKind` in `instant_client.rs`. */
-export type ClientErrorKind =
-  | "notInstalled"
-  | "unsupportedPlatform"
-  | "network"
-  | "checksumMismatch"
-  | "diskFull"
-  | "cancelled"
-  | "archive"
-  | "io"
-  | "load";
+export type ClientErrorKind = "notInstalled" | "unsupportedPlatform" | "network" | "checksumMismatch" | "diskFull" | "cancelled" | "archive" | "io" | "load";
 
 export interface DownloadOffer {
   version: string;

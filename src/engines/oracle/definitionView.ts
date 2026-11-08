@@ -81,18 +81,13 @@ export class OracleDefinitionView implements TabContent {
             h(
               "dl",
               { class: "design-details" },
-              ...facts.flatMap(([name, value]) => [
-                h("dt", {}, name),
-                h("dd", { class: value === "INVALID" ? "oracle-invalid" : "" }, value),
-              ]),
+              ...facts.flatMap(([name, value]) => [h("dt", {}, name), h("dd", { class: value === "INVALID" ? "oracle-invalid" : "" }, value)]),
             ),
           ]
         : []),
     );
     this.errors.replaceChildren(
-      ...(errors.length > 0
-        ? [h("div", { class: "section-title" }, "Compile errors"), h("ul", {}, ...errors.map((text) => h("li", {}, text)))]
-        : []),
+      ...(errors.length > 0 ? [h("div", { class: "section-title" }, "Compile errors"), h("ul", {}, ...errors.map((text) => h("li", {}, text)))] : []),
     );
     this.ddl.textContent = description.ddl ?? "(the server reports no definition for this object)";
   }
