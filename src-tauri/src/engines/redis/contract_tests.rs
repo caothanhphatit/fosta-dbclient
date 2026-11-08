@@ -17,7 +17,8 @@ use crate::{
     contract::{
         errors::CONFLICT,
         testing::suites::{self, Fixture},
-        CallContext, Category, ConnectSecrets, ConnectionSpec, Filter, NodeKey, NodeKind, ObjectRef, TreeRequest,
+        CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Filter, NodeKey, NodeKind, ObjectRef, RunOptions, RunRequest,
+        Session, SessionOptions, TreeRequest, Value,
     },
     runtime::Handle,
 };
@@ -496,4 +497,79 @@ async fn contract_redis_kv_info_and_slowlog() {
     assert!(slow["slowerThanUs"].is_string());
     let wrong = call(&handle, "redis.flush", json!({})).await.unwrap_err();
     assert_eq!(wrong.code(), Some("UNSUPPORTED_CAPABILITY"));
+}
+
+async fn run_in(handle: &Handle, session: &std::sync::Arc<dyn Session>, text: &str, database: Option<&str>) -> CollectSink {
+    let mut sink = CollectSink::default();
+    let request = RunRequest {
+        text: text.to_owned(),
+        database: database.map(str::to_owned),
+        offset: 0,
+    };
+    handle
+        .run(std::sync::Arc::clone(session), request, RunOptions::default(), &mut sink)
+        .await
+        .unwrap_or_else(|error| panic!("{text}: {error}"));
+    sink
+}
+
+fn first_cell(sink: &CollectSink) -> Value {
+    sink.sets
+        .last()
+        .and_then(|set| set.rows.first())
+        .map(|row| row[0].clone())
+        .expect("a reply")
+}
+
+/// The console's database picker and "Flush database…" send the database with each run: it must land there, not on the
+/// database the session was opened on (here 14, the profile's).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/redis.yml"]
+async fn contract_redis_a_run_lands_in_the_database_it_names() {
+    let (_manager, handle) = suites::connect(&fixture()).await;
+    let session = handle
+        .call("opened a session", |conn| async move {
+            conn.open_session(&SessionOptions::default(), &CallContext::default()).await
+        })
+        .await
+        .expect("session")
+        .session;
+    for db in [14, 15] {
+        edit(&handle, db, json!({ "op": "delete", "keys": [key("contract:dbprobe")] }))
+            .await
+            .unwrap();
+    }
+    run_in(&handle, &session, "SET contract:dbprobe fifteen", Some("15")).await;
+    let in15 = call(&handle, "redis.scan", json!({ "db": 15, "pattern": "contract:dbprobe" }))
+        .await
+        .unwrap();
+    let in14 = call(&handle, "redis.scan", json!({ "db": 14, "pattern": "contract:dbprobe" }))
+        .await
+        .unwrap();
+    assert_eq!(in15["keys"].as_array().unwrap().len(), 1, "the write must land in db15");
+    assert!(in14["keys"].as_array().unwrap().is_empty(), "and not in the profile's db14");
+    // The session stays where the last run put it, and another database reads what is there.
+    let stays = run_in(&handle, &session, "GET contract:dbprobe", None).await;
+    assert_eq!(first_cell(&stays), Value::Text("fifteen".into()));
+    let other = run_in(&handle, &session, "GET contract:dbprobe", Some("db14")).await;
+    assert_eq!(first_cell(&other), Value::Null);
+    // A typed SELECT moves the session too.
+    run_in(&handle, &session, "SELECT 15", None).await;
+    let typed = run_in(&handle, &session, "GET contract:dbprobe", None).await;
+    assert_eq!(first_cell(&typed), Value::Text("fifteen".into()));
+    // A database that does not exist is the server's error.
+    let mut sink = CollectSink::default();
+    let request = RunRequest {
+        text: "PING".into(),
+        database: Some("99".into()),
+        offset: 0,
+    };
+    let error = handle
+        .run(session.clone(), request, RunOptions::default(), &mut sink)
+        .await
+        .unwrap_err();
+    assert!(error.field("vendorCode").is_some(), "{error:?}");
+    edit(&handle, 15, json!({ "op": "delete", "keys": [key("contract:dbprobe")] }))
+        .await
+        .unwrap();
 }

@@ -307,7 +307,7 @@ impl Connection for RedisConnection {
             return Err(AppError::new(format!("Redis consoles do not run the '{language}' language.")));
         }
         let db = self.database_of_options(options.database.as_deref())?;
-        let (session, canceller) = RedisSession::open(self.engine_for(db).await?).await?;
+        let (session, canceller) = RedisSession::open(self.engine_for(db).await?, db).await?;
         Ok(OpenedSession {
             session: Arc::new(session),
             canceller: Some(canceller),

@@ -20,6 +20,7 @@ import {
 } from "./model";
 import { commandLine, hitRate } from "./serverView";
 import { validStreamId } from "./streamEditor";
+import { isCanonicalJson } from "./valueEditors";
 
 describe("bytes", () => {
   it("shows text as is and binary as hex", () => {
@@ -161,6 +162,17 @@ describe("creating keys", () => {
     expect(typeof creation("zset", "k", "a", "x")).toBe("string");
     expect(typeof creation("zset", "k", "a", "")).toBe("string");
     expect(typeof creation("", "k", "a", "")).toBe("string");
+  });
+});
+
+describe("pretty JSON", () => {
+  it("is offered only where re-serialising gives back the stored text", () => {
+    expect(isCanonicalJson('{"a":1,"b":[1,2]}')).toBe(true);
+    expect(isCanonicalJson("[]")).toBe(true);
+    expect(isCanonicalJson('{ "a": 1 }')).toBe(false);
+    expect(isCanonicalJson('{"id":12345678901234567890}')).toBe(false);
+    expect(isCanonicalJson('{"a":1.0}')).toBe(false);
+    expect(isCanonicalJson("{broken")).toBe(false);
   });
 });
 

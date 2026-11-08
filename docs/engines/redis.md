@@ -78,6 +78,10 @@ text. A server error stops the run with the error name (`WRONGTYPE`, `ERR`, `NOP
 the position. **Stop** unblocks a blocking command (`CLIENT UNBLOCK`) and otherwise closes the tab's connection, which the next
 run replaces. `SELECT`, `MULTI` and `CLIENT SETNAME` stay inside the tab.
 
+The database picker of the console (and "New console" or "Flush database…" on a database in the tree) names the database of each
+run: the tab sends `SELECT n` on its own connection first, so a command always lands in the database the picker shows, whatever
+database the profile connects to. A `SELECT` typed in the console moves the tab as well, and "(no database)" stays where the tab is.
+
 ### Safety rules
 
 Commands are classified for the statement gateway before they run:

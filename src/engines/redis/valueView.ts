@@ -113,7 +113,11 @@ export class ValueView implements TabContent {
     this.banner.hidden = true;
     try {
       const result = await this.api.edit(edit, expect);
-      if (result === null) return false;
+      if (result === null) {
+        // Declined: redraw, so a cell the user edited does not keep showing text that was never saved.
+        await this.load(false);
+        return false;
+      }
       if (!result.applied) toast("Nothing changed: the server did not apply it.");
       await this.load(false);
       return result.applied;

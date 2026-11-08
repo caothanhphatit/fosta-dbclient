@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 
 use super::{
     connection::RedisEngine,
-    console::{split_lines, RedisConsole, RedisReply},
+    console::{split_lines, tokenize, RedisConsole, RedisReply},
     types::as_i64,
 };
 use crate::{
@@ -42,14 +42,43 @@ struct Shared {
     cancelled: AtomicBool,
 }
 
+/// The session's connection and the logical database it is on now (the database of the engine it was opened with, until a
+/// run asks for another one or the user types `SELECT`).
+struct State {
+    console: RedisConsole,
+    db: i64,
+}
+
 pub struct RedisSession {
     engine: RedisEngine,
-    console: Mutex<RedisConsole>,
+    /// The database `engine` is bound to: where a reopened connection starts.
+    initial_db: i64,
+    state: Mutex<State>,
     shared: Arc<Shared>,
 }
 
+/// The database a run asks for: `3` or `db3`; `None` for no preference (the session stays where it is).
+fn database_number(text: Option<&str>) -> AppResult<Option<i64>> {
+    let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) else {
+        return Ok(None);
+    };
+    text.trim_start_matches("db")
+        .parse::<i64>()
+        .ok()
+        .filter(|db| *db >= 0)
+        .map(Some)
+        .ok_or_else(|| AppError::new(format!("The Redis database is a number such as 0 or 3, not `{text}`.")))
+}
+
+/// The database a typed `SELECT n` line moves to.
+fn select_target(line: &str) -> Option<i64> {
+    let args = tokenize(line).ok()?;
+    std::str::from_utf8(args.get(1)?).ok()?.trim().parse().ok()
+}
+
 impl RedisSession {
-    pub async fn open(engine: RedisEngine) -> AppResult<(Self, Arc<dyn Canceller>)> {
+    /// A session on `engine`, whose connection is bound to logical database `db`.
+    pub async fn open(engine: RedisEngine, db: i64) -> AppResult<(Self, Arc<dyn Canceller>)> {
         let console = engine.open_console().await?;
         let shared = Arc::new(Shared::default());
         shared.client_id.store(console.client_id().unwrap_or(0), Ordering::SeqCst);
@@ -60,7 +89,8 @@ impl RedisSession {
         Ok((
             Self {
                 engine,
-                console: Mutex::new(console),
+                initial_db: db,
+                state: Mutex::new(State { console, db }),
                 shared,
             },
             canceller,
@@ -160,14 +190,26 @@ impl Session for RedisSession {
         if lines.is_empty() {
             return Err(AppError::new("Type a command, for example PING or GET user:1."));
         }
-        let mut console = self.console.lock().await;
+        let wanted = database_number(request.database.as_deref())?;
+        let mut guard = self.state.lock().await;
+        let State { console, db } = &mut *guard;
         self.shared.cancelled.store(false, Ordering::SeqCst);
         if self.shared.killed.swap(false, Ordering::SeqCst) {
             *console = self.engine.open_console().await?;
+            *db = self.initial_db;
             self.shared.client_id.store(console.client_id().unwrap_or(0), Ordering::SeqCst);
         }
         if let Some(timeout) = options.timeout {
             console.set_timeout(timeout);
+        }
+        // The run names its database (the console's database picker, "Flush database…" on db5): this connection is the
+        // session's own, so `SELECT` is safe here and what runs lands where the user pointed.
+        if let Some(wanted) = wanted.filter(|wanted| wanted != db) {
+            match console.exec_line(&format!("SELECT {wanted}")).await {
+                Ok((_, RedisReply::Error { code, message })) => return Err(reply_error(&code, message.as_deref())),
+                Err(error) => return Err(error),
+                Ok(_) => *db = wanted,
+            }
         }
         for (index, (line_number, line)) in lines.into_iter().enumerate() {
             sink.event(StreamEvent::Statement {
@@ -190,7 +232,14 @@ impl Session for RedisSession {
                     let cancelled = code == "UNBLOCKED" && self.shared.cancelled.load(Ordering::SeqCst);
                     return Err(failed(reply_error(&code, message.as_deref()), cancelled));
                 }
-                Ok((_, reply)) => reply,
+                Ok((classification, reply)) => {
+                    if classification.command == "SELECT" {
+                        if let Some(selected) = select_target(line) {
+                            *db = selected;
+                        }
+                    }
+                    reply
+                }
                 Err(error) => {
                     let cancelled = self.shared.cancelled.load(Ordering::SeqCst);
                     return Err(failed(error, cancelled));
@@ -286,5 +335,20 @@ mod tests {
         assert_eq!(detail["vendorCode"], "WRONGTYPE");
         assert_eq!(detail["engine"], "redis");
         assert_eq!(reply_error("ERR", None).message(), "The server returned an error (ERR)");
+    }
+
+    #[test]
+    fn a_run_names_its_database_as_a_number_or_dbn() {
+        assert_eq!(database_number(None).unwrap(), None);
+        assert_eq!(database_number(Some("  ")).unwrap(), None);
+        assert_eq!(database_number(Some("5")).unwrap(), Some(5));
+        assert_eq!(database_number(Some("db12")).unwrap(), Some(12));
+        for bad in ["x", "-1", "db", "1.5"] {
+            assert!(database_number(Some(bad)).is_err(), "{bad}");
+        }
+        assert_eq!(select_target("SELECT 3"), Some(3));
+        assert_eq!(select_target("select 15"), Some(15));
+        assert_eq!(select_target("SELECT"), None);
+        assert_eq!(select_target("SELECT x"), None);
     }
 }

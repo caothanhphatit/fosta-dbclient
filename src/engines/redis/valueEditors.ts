@@ -48,7 +48,8 @@ export const stringEditor: EditorRenderer = (host, read) => {
     }
   };
   const save = button("Save", () => void commit(), "tool-button primary");
-  const revert = button("Revert", () => show(pretty && data.json !== null ? JSON.stringify(data.json, null, 2) : rawText));
+  const prettyText = (): string => JSON.stringify(JSON.parse(rawText), null, 2);
+  const revert = button("Revert", () => show(pretty ? prettyText() : rawText));
   const refresh = () => {
     const changed = dirty();
     save.disabled = !changed || data.truncated || host.readonly;
@@ -74,7 +75,14 @@ export const stringEditor: EditorRenderer = (host, read) => {
   area.readOnly = data.truncated || host.readonly;
   area.addEventListener("input", refresh);
   const tools: HTMLElement[] = [save, revert];
-  if (data.format === "json" && !data.truncated) {
+  // The pretty view re-serialises the text in JavaScript when saving, so it is offered only where that gives back exactly what
+  // is stored (compact, canonical JSON with numbers a double holds); other JSON is shown as stored.
+  const canonical = data.format === "json" && !data.truncated && isCanonicalJson(rawText);
+  const notes: HTMLElement[] = [];
+  if (data.format === "json" && !data.truncated && !canonical) {
+    notes.push(note("This JSON is not in compact form or has numbers a double cannot hold exactly, so it is shown as stored: formatting it would rewrite it."));
+  }
+  if (canonical) {
     const toggle = h("label", { class: "inline-field" }, h("input", { type: "checkbox" }), h("span", {}, "Pretty JSON"));
     const box = toggle.querySelector("input") as HTMLInputElement;
     box.addEventListener("change", () => {
@@ -93,14 +101,23 @@ export const stringEditor: EditorRenderer = (host, read) => {
     // A JSON string opens in the pretty view; saving writes it compact again.
     pretty = true;
     box.checked = true;
-    area.value = JSON.stringify(data.json, null, 2);
+    area.value = prettyText();
     area.classList.add("pretty");
   } else {
     area.value = rawText;
   }
   refresh();
-  return h("div", { class: "rd-editor" }, bar(...tools, status), area);
+  return h("div", { class: "rd-editor" }, bar(...tools, status), ...notes, area);
 };
+
+/** True when `text` is JSON that `JSON.stringify(JSON.parse(text))` reproduces byte for byte. */
+export function isCanonicalJson(text: string): boolean {
+  try {
+    return JSON.stringify(JSON.parse(text)) === text;
+  } catch {
+    return false;
+  }
+}
 
 // --- Hash -------------------------------------------------------------------------------------------------------------------
 
