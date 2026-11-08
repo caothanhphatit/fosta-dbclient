@@ -1,0 +1,20 @@
+{
+  "id": "oracle",
+  "compose": "dev/compose/oracle.yml",
+  "versions": ["23-slim-faststart"],
+  "versionEnv": "ORACLE_TAG",
+  "seed": "sudo apt-get update -qq && sudo apt-get install -y -qq libaio1t64 && sudo ln -sf /usr/lib/x86_64-linux-gnu/libaio.so.1t64 /usr/lib/x86_64-linux-gnu/libaio.so.1 && cd src-tauri && cargo test --no-default-features --features web,engines-all live_oracle_instant_client_download -- --ignored",
+  "paths": [
+    "src-tauri/src/engines/oracle/**",
+    "src-tauri/src/engines/common/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "dev/compose/oracle.yml",
+    "dev/seed/oracle.sql",
+    "dev/seed/oracle/**",
+    "ci/engines/oracle.json"
+  ],
+  "nightlyOnly": true,
+  "filter": "contract_oracle"
+}

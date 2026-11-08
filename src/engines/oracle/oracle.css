@@ -1,0 +1,63 @@
+/* Oracle: the definition view of PL/SQL units, sequences and synonyms, and the Instant Client prompt. */
+.oracle-definition-view {
+  overflow: auto;
+}
+
+.oracle-invalid {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.oracle-compile-errors ul {
+  margin: 0;
+  padding: 4px 14px 10px 32px;
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.oracle-client-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.oracle-client-prompt p {
+  margin: 0;
+}
+
+.oracle-client-license,
+.oracle-client-steps {
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.oracle-client-steps {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.oracle-client-download {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.oracle-client-download[hidden] {
+  display: none;
+}
+
+.oracle-client-progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
+.oracle-client-status {
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.oracle-client-error {
+  color: var(--danger);
+}

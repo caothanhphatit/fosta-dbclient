@@ -1,0 +1,4 @@
+- Oracle is now a ready engine: schemas with tables, views, materialized views, sequences, synonyms, packages, procedures and functions; PL/SQL source with status and compile errors; typed values, keyset paging, exact or estimated counts; ER diagrams per schema.
+- Oracle Instant Client is set up from the app: when it is missing, connecting offers to download the pinned client from Oracle (with progress and cancel) or to use a folder with an installed one (the connection's new "Instant Client folder" setting), then retries.
+- Oracle edits fail with a conflict instead of overwriting when the row changed since you loaded it (original values, NULL-safe); tables without a primary key are edited by ROWID.
+- Oracle query tabs commit each statement unless a transaction is begun, stop a running statement with OCIBreak, show native JSON columns, and report ORA codes with the error position; PL/SQL blocks count as writes, or as destructive when they drop or truncate.

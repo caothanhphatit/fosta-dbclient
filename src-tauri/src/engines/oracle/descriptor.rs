@@ -1,5 +1,6 @@
-//! The Oracle descriptor: EZConnect host/port/service name or a full connect descriptor, capabilities (the upper bound
-//! once the adapter is wired), languages and filter box. Connecting needs Oracle Instant Client on the machine.
+//! The Oracle descriptor: EZConnect host/port/service name or a full connect descriptor, the Instant Client folder,
+//! capabilities, languages and filter box. Connecting needs Oracle Instant Client on the machine (Fosta Studio offers to
+//! download it, see `instant_client.rs`).
 
 use crate::contract::{
     AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec,
@@ -15,12 +16,14 @@ pub fn descriptor() -> EngineDescriptor {
         label: LABEL.into(),
         family: EngineFamily::Sql,
         icon: "database".into(),
-        status: EngineStatus::Planned,
+        status: EngineStatus::Ready,
         sql_dialect: Some(SqlDialectId::Oracle),
+        // Schemas (users) are listed where other engines list databases, so `MultipleDatabases` and not `Schemas`.
+        // Sessions have no read-only switch: the gateway's rules block writes in read-only workspaces.
         capabilities: CapabilitySet::of(&[
             Capability::Tree,
             Capability::Describe,
-            Capability::Schemas,
+            Capability::MultipleDatabases,
             Capability::BrowseRows,
             Capability::EditRows,
             Capability::RawFilter,
@@ -30,7 +33,6 @@ pub fn descriptor() -> EngineDescriptor {
             Capability::Query,
             Capability::Cancel,
             Capability::Transactions,
-            Capability::ReadOnlySession,
             Capability::StatementTimeout,
             Capability::StreamingResults,
             Capability::SchemaGraph,
@@ -58,6 +60,14 @@ pub fn descriptor() -> EngineDescriptor {
                 FieldSpec::new("options.connectTimeout", FieldKind::Number, "Connect timeout (s)")
                     .placeholder("10")
                     .section(FormSection::Advanced),
+                FieldSpec::new("options.clientDir", FieldKind::Text, "Instant Client folder")
+                    .placeholder("C:\\oracle\\instantclient_23_26")
+                    .hint(
+                        "A folder with Oracle Instant Client 19c or newer (oci.dll, or libclntsh.so on Linux). Leave it empty to \
+                         use PATH, ORACLE_HOME or the client Fosta Studio downloads. The first client loaded stays in use until \
+                         the app restarts.",
+                    )
+                    .section(FormSection::Advanced),
             ],
             ssh: true,
             // TLS (tcps) is verified by Instant Client against its wallet; it cannot skip verification.
@@ -75,7 +85,9 @@ pub fn descriptor() -> EngineDescriptor {
             editor: "sql".into(),
             dialect: Some(SqlDialectId::Oracle),
             default: true,
-            hint: "Oracle SQL and PL/SQL blocks; end a PL/SQL block with '/' on its own line. Ctrl+Enter runs the query.".into(),
+            hint: "Oracle SQL and PL/SQL blocks; end a PL/SQL block with '/' on its own line. Each statement commits unless a \
+                   transaction is begun. Ctrl+Enter runs the query."
+                .into(),
         }],
         filter: FilterSupport {
             structured: true,

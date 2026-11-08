@@ -14,7 +14,7 @@ import { showError } from "../../core/errorPanel";
 import { dialectOf } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
 import type { AppConfig, ConnectionProfile } from "../../core/types";
-import { loadEngineUi, nodeIcon, type ViewRole } from "../../core/views";
+import { loadEngineUi, nodeIcon, recoverConnectError, type ViewRole } from "../../core/views";
 import { withConfirmation } from "../safety/confirmationDialog";
 import { databaseDialog } from "./databaseDialog";
 import { fillTemplate, plainName, ROOT, TreeModel, type VisibleRow } from "./treeModel";
@@ -217,8 +217,17 @@ export class ConnectionTree {
       conn.message = needsPassword ? null : message;
       this.render();
       if (needsPassword) await this.askPasswordAndConnect(conn);
+      else if (await this.recover(conn, error)) await this.connect(conn, password);
       else showError(error, `Connect to ${conn.profile.name}`);
     }
+  }
+
+  /** The engine's UI module may fix a failed connect (e.g. install a missing client library); true means retry. */
+  private recover(conn: ConnectionNode, error: unknown): Promise<boolean> {
+    return recoverConnectError(conn.profile.driver, error, {
+      profile: conn.profile,
+      saveProfile: async (profile) => this.host.configChanged(await api.saveConnection(profile, null)),
+    });
   }
 
   private async askPasswordAndConnect(conn: ConnectionNode): Promise<void> {

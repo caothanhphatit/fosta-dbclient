@@ -17,6 +17,7 @@ import { h, icon, iconOrDefault } from "../../core/dom";
 import { describeServer, engineInfo, visibleEngines, type EngineInfo } from "../../core/engines";
 import { renderError } from "../../core/errorPanel";
 import type { AppConfig, ConnectionProfile } from "../../core/types";
+import { recoverConnectError } from "../../core/views";
 import {
   applySpec,
   AUTH_LABELS,
@@ -382,6 +383,7 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
             if (passwordInput) passwordInput.value = answer.password;
             continue;
           }
+          if (await recoverConnectError(draft.profile.driver, error, { profile: draft.profile })) continue;
           if (UNTRUSTED_CERTIFICATE.test(errorText(error))) tls.pointAtAcceptInvalid();
           showFeedback(errorHost, error, "Test connection");
           return false;

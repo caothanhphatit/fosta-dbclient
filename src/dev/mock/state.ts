@@ -61,6 +61,18 @@ const workspaces: Workspace[] = [
         savePassword: false,
         options: { attach: "audit=C:\\data\\audit.db" },
       },
+      {
+        // Oracle: schemas as databases, PL/SQL source; the first connect asks for Instant Client (download demo).
+        id: "c-local-oracle",
+        name: "Local Oracle",
+        driver: "oracle",
+        host: "127.0.0.1",
+        port: 1521,
+        user: "shop",
+        database: "FREEPDB1",
+        savePassword: true,
+        options: {},
+      },
     ],
     tasks: [],
   },
