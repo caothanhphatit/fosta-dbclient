@@ -7,6 +7,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Transactions**: Begin is disabled while a transaction is open, and the backend refuses a nested Begin. On MariaDB/MySQL a second
+  Begin used to commit the open transaction silently; on SQL Server it nested. Running DDL in an open MariaDB/MySQL transaction asks
+  first, since it commits.
+- **Toolbars and tabs**: toolbars wrap instead of hiding controls behind an invisible scrollbar, so the pager and the transaction
+  controls are reachable from 1024 px wide. The tab strip scrolls with the mouse wheel, keeps the active tab in view and lists every tab
+  when they overflow.
+- **Dialogs**: Esc and Enter act on the top-most dialog only, and global shortcuts are ignored while a dialog is open.
+- **MongoDB**: grid edits keep the stored BSON type (dates, numbers, ObjectIds; nested values through Extended JSON), query-tab
+  commands read past the first batch of 101 documents, and grid columns show their BSON types.
+- **SQL Server**: column filters, foreign-key navigation and `INSERT` export use bracket quoting; batches return every result set and
+  row count in order; server errors are readable; an untrusted TLS certificate explains how to trust it.
+- **Grids**: SQL type names instead of driver wire types; Read-only workspaces make grids read-only up front; stale page loads no
+  longer overwrite newer ones.
+- **Query history** records execution time, not the time spent in a confirmation dialog. Text typed while the editor loads is kept.
+- **Toasts** appear at the top centre instead of covering dialog footers and the Apply/Discard bar.
+- **Export** stops when its dialog is closed; an empty file name gets the chosen format's extension; CSV for Excel uses the locale's
+  list separator.
+- **Assistant**: hosted providers need an API key before they can be saved.
+- **Web edition**: no `127.0.0.1` connection is seeded inside a container; unknown `/api/*` paths return a JSON 404 after the sign-in
+  check; a failed sign-in no longer leaves the browser on the form post.
+- **Security**: the desktop app runs under a strict Content Security Policy; "Show in folder" only opens files the app exported;
+  unknown driver ids are refused instead of opening MySQL.
+- The tree no longer shows a stale `~0` row estimate for tables that hold data.
+
 ## [0.1.0] - 2026-11-08
 
 First public release for Windows.
