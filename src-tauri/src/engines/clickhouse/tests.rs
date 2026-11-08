@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::engines::common::{
-    parse_input, CollectSink, ErrorKind, FilterCond, FilterOp, RunOptions, SortKey, StatementKind, TxState, ValueKind,
+    parse_input, BrowseRequest, CollectSink, ErrorKind, FilterCond, FilterOp, RunOptions, SortKey, StatementKind, TxState, ValueKind,
 };
 
 fn opts() -> ChOptions {
@@ -183,15 +183,20 @@ async fn live_engine_clickhouse_typed_values_round_trip() {
         values.push((col.name.clone(), typed));
     }
     let zoo = t("type_zoo");
-    e.apply_changes(&zoo, vec![RowChange::Insert { values }]).await.unwrap();
+    use crate::contract::{Field, RowChange as Change};
+    let fields = values.into_iter().map(|(name, value)| Field::new(&name, value)).collect();
+    e.apply(&change_set(&zoo, vec![Change::Insert { values: fields }])).await.unwrap();
     req.filter = vec![FilterCond::new("id", FilterOp::Eq, &["3"])];
     let again = e.browse(&req).await.unwrap();
-    e.apply_changes(
+    e.apply(&change_set(
         &zoo,
-        vec![RowChange::Delete {
-            key: vec![("id".into(), Value::Int(3))],
+        vec![Change::Delete {
+            key: vec![Field::new("id", Value::Int(3))],
+            original: vec![],
+            version: None,
+            force: false,
         }],
-    )
+    ))
     .await
     .unwrap();
     for (i, col) in again.columns.iter().enumerate().skip(1) {
@@ -199,46 +204,76 @@ async fn live_engine_clickhouse_typed_values_round_trip() {
     }
 }
 
+fn change_set(table: &ObjectRef, changes: Vec<crate::contract::RowChange>) -> crate::contract::RowChangeSet {
+    crate::contract::RowChangeSet {
+        object: crate::contract::ObjectRef::new(Some("shop"), None, &table.name, crate::contract::NodeKind::TABLE),
+        changes,
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn live_engine_clickhouse_row_changes() {
+    use crate::contract::{Field, RowChange as Change};
     let e = engine().await;
     let cats = t("categories");
+    let id = |n: i64| vec![Field::new("id", Value::Int(n))];
+    let name = |text: &str| Field::new("name", Value::Text(text.into()));
     let s = e
-        .apply_changes(
+        .apply(&change_set(
             &cats,
-            vec![
-                RowChange::Insert {
-                    values: vec![("id".into(), Value::Int(100)), ("name".into(), Value::Text("Garden".into()))],
-                },
-                RowChange::Update {
-                    key: vec![("id".into(), Value::Int(100))],
-                    values: vec![("name".into(), Value::Text("Garden & Patio".into()))],
-                },
-            ],
-        )
+            vec![Change::Insert {
+                values: vec![Field::new("id", Value::Int(100)), name("Garden")],
+            }],
+        ))
         .await
         .unwrap();
-    assert_eq!((s.inserted, s.updated), (1, 1));
+    assert_eq!(s.inserted, 1);
+    let s = e
+        .apply(&change_set(
+            &cats,
+            vec![Change::Update {
+                key: id(100),
+                values: vec![name("Garden & Patio")],
+                original: vec![name("Garden")],
+                version: None,
+                force: false,
+            }],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(s.updated, 1);
     let mut req = BrowseRequest::new(cats.clone(), 5);
     req.filter = vec![FilterCond::new("id", FilterOp::Eq, &["100"])];
     assert_eq!(e.browse(&req).await.unwrap().rows[0][1], Value::Text("Garden & Patio".into()));
-    let err = e
-        .apply_changes(
-            &cats,
-            vec![RowChange::Delete {
-                key: vec![("id".into(), Value::Int(999))],
-            }],
-        )
-        .await
-        .unwrap_err();
-    assert!(err.message.contains("matched 0 rows"), "{err}");
-    e.apply_changes(
+    // A stale original is a conflict, a missing row too, and neither changes anything.
+    let stale = Change::Update {
+        key: id(100),
+        values: vec![name("Lost update")],
+        original: vec![name("Garden")],
+        version: None,
+        force: false,
+    };
+    let error = e.apply(&change_set(&cats, vec![stale])).await.unwrap_err();
+    assert_eq!(error.code(), Some("CONFLICT"), "{error}");
+    let gone = Change::Delete {
+        key: id(999),
+        original: vec![],
+        version: None,
+        force: false,
+    };
+    let error = e.apply(&change_set(&cats, vec![gone])).await.unwrap_err();
+    assert_eq!(error.code(), Some("CONFLICT"), "{error}");
+    assert_eq!(e.browse(&req).await.unwrap().rows[0][1], Value::Text("Garden & Patio".into()));
+    e.apply(&change_set(
         &cats,
-        vec![RowChange::Delete {
-            key: vec![("id".into(), Value::Int(100))],
+        vec![Change::Delete {
+            key: id(100),
+            original: vec![name("Garden & Patio")],
+            version: None,
+            force: false,
         }],
-    )
+    ))
     .await
     .unwrap();
     assert!(e.browse(&req).await.unwrap().rows.is_empty());

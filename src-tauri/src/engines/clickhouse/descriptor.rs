@@ -15,14 +15,14 @@ pub fn descriptor() -> EngineDescriptor {
         label: LABEL.into(),
         family: EngineFamily::Sql,
         icon: "database".into(),
-        status: EngineStatus::Planned,
+        status: EngineStatus::Ready,
         sql_dialect: Some(SqlDialectId::ClickHouse),
         capabilities: CapabilitySet::of(&[
             Capability::Tree,
             Capability::Describe,
             Capability::MultipleDatabases,
             Capability::BrowseRows,
-            // Row edits run as synchronous mutations, one by one (no transactions).
+            // Row edits are asynchronous mutations (MergeTree tables only), applied one by one: see edit.rs.
             Capability::EditRows,
             Capability::RawFilter,
             Capability::KeysetPaging,

@@ -1,4 +1,4 @@
-# ClickHouse 25.8 for the ClickHouse engine.
+# ClickHouse 25.8 (CLICKHOUSE_TAG overrides the image tag) for the ClickHouse engine.
 # Test-only credentials; never reuse them.
 # docker compose -f dev/compose/clickhouse.yml up -d --wait
 # 127.0.0.1:8123 (HTTP), 9000 (native)  studio / studio-root  database shop
@@ -7,7 +7,7 @@ name: fosta-dev-sql
 
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:25.8
+    image: clickhouse/clickhouse-server:${CLICKHOUSE_TAG:-25.8}
     environment:
       CLICKHOUSE_USER: studio
       CLICKHOUSE_PASSWORD: studio-root

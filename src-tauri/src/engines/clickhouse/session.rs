@@ -8,6 +8,14 @@ use crate::engines::common::{
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// A script statement that failed: its index, text and start in the script, and the server's error.
+pub struct FailedStatement {
+    pub index: usize,
+    pub text: String,
+    pub start: usize,
+    pub error: EngineError,
+}
+
 pub struct ChSession {
     http: Http,
     session_id: String,
@@ -58,6 +66,21 @@ impl ChSession {
 
     /// Runs a script statement by statement (the HTTP interface takes one statement per request). Stops at the first error.
     pub async fn run(&self, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> Result<()> {
+        self.run_script(sql, None, opts, sink).await.map_err(|failed| failed.error)
+    }
+
+    /// [`run`](Self::run) in `database` (default: the connection's), reporting which statement failed.
+    pub async fn run_script(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        opts: &RunOptions,
+        sink: &mut dyn ResultSink,
+    ) -> std::result::Result<(), Box<FailedStatement>> {
+        let mut http = self.http.clone();
+        if let Some(database) = database.filter(|name| !name.is_empty()) {
+            http.database = database.to_owned();
+        }
         for (index, st) in split::split(Dialect::ClickHouse, sql).into_iter().enumerate() {
             sink.event(StreamEvent::Statement {
                 index,
@@ -65,21 +88,40 @@ impl ChSession {
             });
             let query_id = new_query_id();
             self.set_running(Some(query_id.clone()));
-            let r = self.run_statement(index, &st.text, &query_id, opts, sink).await;
+            let r = self.run_statement(&http, index, &st.text, &query_id, opts, sink).await;
             self.set_running(None);
-            r?;
+            if let Err(error) = r {
+                return Err(Box::new(FailedStatement {
+                    index,
+                    text: st.text,
+                    start: st.start,
+                    error,
+                }));
+            }
         }
         Ok(())
     }
 
-    async fn run_statement(&self, index: usize, sql: &str, query_id: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> Result<()> {
+    async fn run_statement(
+        &self,
+        http: &Http,
+        index: usize,
+        sql: &str,
+        query_id: &str,
+        opts: &RunOptions,
+        sink: &mut dyn ResultSink,
+    ) -> Result<()> {
         let started = Instant::now();
         let mut settings = vec![("session_id".to_owned(), self.session_id.clone())];
         if let Some(t) = opts.timeout {
             settings.push(("max_execution_time".into(), format!("{:.3}", t.as_secs_f64())));
             settings.push(("timeout_overflow_mode".into(), "throw".into()));
         }
-        let resp = self.http.send(sql, query_id, &settings).await?;
+        if opts.read_only {
+            // 2 = no writes, but the settings above can still be changed (1 would refuse them).
+            settings.push(("readonly".into(), "2".into()));
+        }
+        let resp = http.send(sql, query_id, &settings).await?;
         let summary = resp
             .inner
             .headers()
@@ -130,7 +172,7 @@ impl ChSession {
                     // Closing the connection stops a read-only query; KILL also stops anything else still running.
                     drop(inner);
                     // SYNC: the session stays locked until the query has stopped.
-                    let _ = self.http.kill(query_id, true).await;
+                    let _ = http.kill(query_id, true).await;
                 }
                 sink.event(StreamEvent::Done {
                     index,
