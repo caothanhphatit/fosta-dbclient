@@ -2,8 +2,8 @@
 //! filter box.
 
 use crate::contract::{
-    AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec,
-    FilterSupport, FormSection, LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
+    AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind,
+    FieldSpec, FilterSupport, FormSection, LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
 };
 
 pub const ID: &str = "postgres";
@@ -78,11 +78,13 @@ pub fn descriptor() -> EngineDescriptor {
             dialect: Some(SqlDialectId::Postgres),
             default: true,
             hint: "PostgreSQL SQL; separate statements with ';'. Ctrl+Enter runs the query.".into(),
+            fences: LanguageSpec::fence_tags(&["sql", "postgresql", "postgres", "pgsql"]),
         }],
         filter: FilterSupport {
             structured: true,
             raw: Some(RawFilterLang::Sql),
             placeholder: "Filter: SQL WHERE, e.g. status = 'PAID' AND total > 10".into(),
         },
+        assistant: AssistantHints::sql(LABEL),
     }
 }

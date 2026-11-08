@@ -4,6 +4,7 @@ use crate::{
     ai::{self, AiConnection, AiSettings, ChatRequest, ChatSink},
     config::AppConfig,
     error::{AppError, AppResult, PASSWORD_REQUIRED},
+    gateway::{assistant::reads_allowed, Context},
     secrets, AppState,
 };
 
@@ -52,8 +53,35 @@ pub async fn test_ai(state: &AppState, settings: AiSettings, api_key: Option<Str
 
 /// Streams one assistant reply over `on_event`; resolves with the full text.
 pub async fn ai_chat(state: &AppState, request: ChatRequest, on_event: &dyn ChatSink) -> AppResult<String> {
-    let (settings, api_key) = chat_settings(&state.config.snapshot(), &request)?;
-    ai::chat(&settings, api_key, &state.engines, &state.ai, request, on_event).await
+    let config = state.config.snapshot();
+    let (settings, api_key) = chat_settings(&config, &request)?;
+    let reads = request
+        .context
+        .connection_id
+        .as_deref()
+        .and_then(|connection_id| read_query_context(&config, connection_id));
+    ai::chat(&settings, api_key, &state.engines, &state.ai, request, reads, on_event).await
+}
+
+/// Settings → "Allow the assistant to run read-only queries"; each workspace can override it.
+pub fn set_assistant_read_queries(state: &AppState, enabled: bool) -> AppResult<AppConfig> {
+    state.config.update(|config| {
+        config.assistant_read_queries = enabled;
+        Ok(())
+    })
+}
+
+/// The gateway context for the assistant's read-only queries on `connection_id`, when the user allows them there.
+fn read_query_context(config: &AppConfig, connection_id: &str) -> Option<Context> {
+    let (workspace, _) = config.connection_scope(connection_id)?;
+    let context = Context::for_connection(config, connection_id).ok()?;
+    reads_allowed(
+        config.assistant_read_queries,
+        workspace.assistant_queries,
+        &context.safety,
+        &workspace.icon,
+    )
+    .then_some(context)
 }
 
 pub fn ai_cancel(state: &AppState, id: String) {
@@ -106,7 +134,39 @@ fn chat_settings(config: &AppConfig, request: &ChatRequest) -> AppResult<(AiSett
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::AiProvider;
+    use crate::{
+        ai::AiProvider,
+        config::ConnectionProfile,
+        gateway::{
+            assistant::AssistantQueries,
+            rules::{Preset, SafetySettings, PRODUCTION_ICON},
+        },
+    };
+
+    #[test]
+    fn read_queries_follow_the_setting_the_workspace_and_the_connection() {
+        let mut config = AppConfig::default();
+        config.workspaces[0].connections.push(ConnectionProfile {
+            id: "c".into(),
+            name: "C".into(),
+            engine: "mariadb".into(),
+            ..ConnectionProfile::default()
+        });
+        config.workspaces[0].safety = Some(SafetySettings::preset(Preset::Guarded));
+        assert!(read_query_context(&config, "c").is_some(), "on by default");
+        assert!(read_query_context(&config, "missing").is_none());
+        config.assistant_read_queries = false;
+        assert!(read_query_context(&config, "c").is_none());
+        config.workspaces[0].assistant_queries = AssistantQueries::Allow;
+        assert!(read_query_context(&config, "c").is_some(), "the workspace overrides the setting");
+        config.assistant_read_queries = true;
+        config.workspaces[0].assistant_queries = AssistantQueries::Default;
+        config.workspaces[0].icon = PRODUCTION_ICON.into();
+        assert!(read_query_context(&config, "c").is_none(), "off for Production");
+        config.workspaces[0].icon = "laptop".into();
+        config.workspaces[0].connections[0].safety = Some(SafetySettings::preset(Preset::ReadOnly));
+        assert!(read_query_context(&config, "c").is_none(), "off for a Read-only connection");
+    }
 
     #[test]
     fn saved_keys_are_bound_to_provider_and_endpoint() {

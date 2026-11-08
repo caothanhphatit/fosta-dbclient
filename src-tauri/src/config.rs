@@ -12,7 +12,7 @@ use crate::{
     contract::{AuthMethodId, ConnectionSpec, SshConfig, TlsConfig, TlsMode},
     embedding::EmbeddingSettings,
     error::{AppError, AppResult},
-    gateway::rules::SafetySettings,
+    gateway::{assistant::AssistantQueries, rules::SafetySettings},
     lock::lock,
     secrets::LEGACY_AI_CONNECTION,
     tasks::TaskDef,
@@ -151,6 +151,9 @@ pub struct WorkspaceMeta {
     /// The workspace's safety rules; `None` keeps the current ones (or the default for a new workspace).
     #[serde(default)]
     pub safety: Option<SafetySettings>,
+    /// Whether the assistant may run read-only queries here; `None` keeps the current choice.
+    #[serde(default)]
+    pub assistant_queries: Option<AssistantQueries>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -166,6 +169,9 @@ pub struct Workspace {
     /// the gateway existed get the default for their icon (Production → Read-only, else Open).
     #[serde(default)]
     pub safety: Option<SafetySettings>,
+    /// Overrides the global "Allow the assistant to run read-only queries" setting for this workspace.
+    #[serde(default)]
+    pub assistant_queries: AssistantQueries,
     #[serde(default)]
     pub connections: Vec<ConnectionProfile>,
     #[serde(default)]
@@ -181,6 +187,7 @@ impl Workspace {
             color: meta.color,
             icon: meta.icon,
             safety: Some(safety),
+            assistant_queries: meta.assistant_queries.unwrap_or_default(),
             connections: Vec::new(),
             tasks: Vec::new(),
         }
@@ -192,6 +199,9 @@ impl Workspace {
         self.icon = meta.icon;
         if let Some(safety) = meta.safety {
             self.safety = Some(safety);
+        }
+        if let Some(choice) = meta.assistant_queries {
+            self.assistant_queries = choice;
         }
     }
 
@@ -216,6 +226,8 @@ pub struct AppConfig {
     pub query_history: bool,
     /// Write debug-level entries to the application log (Settings → Debug logging).
     pub debug_logging: bool,
+    /// Settings → "Allow the assistant to run read-only queries" (on unless turned off; each workspace can override it).
+    pub assistant_read_queries: bool,
     /// Shown once by the UI after startup (a corrupt config file was set aside). Never written to disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup_notice: Option<String>,
@@ -244,6 +256,8 @@ struct StoredConfig {
     query_history: Option<bool>,
     #[serde(default)]
     debug_logging: bool,
+    #[serde(default)]
+    assistant_read_queries: Option<bool>,
     /// Legacy single assistant setting, migrated into one connection.
     #[serde(default)]
     ai: Option<AiSettings>,
@@ -269,6 +283,7 @@ impl From<StoredConfig> for AppConfig {
                 color: DEFAULT_WORKSPACE_COLOR.into(),
                 icon: DEFAULT_WORKSPACE_ICON.into(),
                 safety: None,
+                assistant_queries: AssistantQueries::Default,
                 connections: stored.connections,
                 tasks: stored.tasks,
             }),
@@ -305,6 +320,7 @@ impl From<StoredConfig> for AppConfig {
             ai_active,
             query_history: stored.query_history.unwrap_or(true),
             debug_logging: stored.debug_logging,
+            assistant_read_queries: stored.assistant_read_queries.unwrap_or(true),
             startup_notice: None,
         };
         config.repair_ai_active();
@@ -968,6 +984,7 @@ mod tests {
             color: String::new(),
             icon: icon.into(),
             safety: None,
+            assistant_queries: None,
         };
         config.put_workspace(meta("n", "cloud"));
         assert_eq!(

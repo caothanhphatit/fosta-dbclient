@@ -1,12 +1,13 @@
 //! Chat assistant. Talks to an LLM API with the user's own key and streams
-//! the reply to the UI. The model only sees metadata (table names, column
-//! definitions) and what the user shares (editor text, errors, log lines);
-//! it never runs anything. SQL it writes goes into the editor for the user
-//! to run by hand.
+//! the reply to the UI. The model sees metadata (table names, column
+//! definitions), what the user shares (editor text, errors, log lines) and,
+//! where the user allows it, the rows of read-only queries it runs itself
+//! (`run_read_query`, through `gateway::assistant`). Anything else it writes
+//! goes into a code block for the user to insert or run.
 //!
 //! - this module: settings types, the chat loop and model listing
 //! - [`prompt`]: the system prompt built from the UI context
-//! - [`tools`]: the read-only metadata tools and the "open a view" actions
+//! - [`tools`]: the read-only metadata tools, the read-only query tool and the "open a view" actions
 //! - [`anthropic`] / [`openai`]: the two streaming wire formats
 //! - [`http`]: HTTP client, error mapping and Server-Sent Events parsing
 
@@ -31,6 +32,7 @@ use self::{
 };
 use crate::{
     error::{AppError, AppResult},
+    gateway,
     lock::lock,
     runtime::ConnectionManager,
 };
@@ -247,6 +249,19 @@ pub enum ChatEvent {
     Action {
         action: UiAction,
     },
+    /// The model ran a read-only query (`run_read_query`): the statement, the row count and the rows it was sent
+    /// (cells as text, cut like the model saw them). Shown as an expandable tool call.
+    #[serde(rename_all = "camelCase")]
+    Query {
+        statement: String,
+        database: Option<String>,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        truncated: bool,
+        elapsed_ms: u64,
+        /// Set when the gateway refused the statement or the engine failed.
+        error: Option<String>,
+    },
     Done,
 }
 
@@ -320,19 +335,23 @@ struct Turn {
     assistant: Value,
 }
 
+/// Streams one reply. `reads` is the gateway context of the chat's connection when the user allows the assistant to run
+/// read-only queries there (`gateway::assistant::reads_allowed`); `None` leaves the query tool out entirely.
 pub async fn chat(
     settings: &AiSettings,
     api_key: Option<String>,
     db: &ConnectionManager,
     runs: &AiRuns,
     request: ChatRequest,
+    reads: Option<gateway::Context>,
     events: &dyn ChatSink,
 ) -> AppResult<String> {
     let token = runs.begin(&request.id);
     let id = request.id.clone();
+    // Stopping drops the run; a query the model started is cancelled and its session closed by `gateway::assistant`.
     let result = tokio::select! {
         _ = token.cancelled() => Err(AppError::new(STOPPED)),
-        outcome = run(settings, api_key, db, request, events) => outcome,
+        outcome = run(settings, api_key, db, request, reads.as_ref(), events) => outcome,
     };
     runs.finish(&id);
     let _ = events.send(ChatEvent::Done);
@@ -399,6 +418,7 @@ async fn run(
     api_key: Option<String>,
     db: &ConnectionManager,
     request: ChatRequest,
+    reads: Option<&gateway::Context>,
     events: &dyn ChatSink,
 ) -> AppResult<String> {
     if request.messages.is_empty() {
@@ -406,9 +426,11 @@ async fn run(
     }
     let client = http_client()?;
     let context = request.context;
-    let system = system_prompt(db, &context).await;
+    // The query tool only for the chat's own connection.
+    let reads = reads.filter(|reads| context.connection_id.as_deref() == Some(reads.connection_id.as_str()));
+    let system = system_prompt(db, &context, reads.is_some()).await;
     let tools = if context.connection_id.is_some() {
-        tool_definitions()
+        tool_definitions(reads.is_some())
     } else {
         Vec::new()
     };
@@ -431,7 +453,7 @@ async fn run(
             let _ = events.send(ChatEvent::Tool {
                 label: describe_call(call, &context),
             });
-            let outcome = run_tool(db, &context, call, events).await;
+            let outcome = run_tool(db, &context, reads, call, events).await;
             results.push((call, outcome));
         }
         append_tool_results(settings.provider.wire(), &mut history, &results);
@@ -463,5 +485,37 @@ async fn stream_turn(
                 outcome => outcome,
             }
         }
+    }
+}
+
+/// The assistant's tools without a model, for the contract suites (`contract::testing::suites::suite_assistant`).
+#[cfg(test)]
+pub(crate) mod testing {
+    use serde_json::Value;
+
+    use super::{tools, ChatContext, ChatEvent, ToolCall};
+    use crate::{gateway, runtime::ConnectionManager};
+
+    /// Runs tool `name` on `connection_id` as the model would; `reads` allows `run_read_query`.
+    pub async fn tool(
+        db: &ConnectionManager,
+        connection_id: &str,
+        database: Option<&str>,
+        reads: Option<&gateway::Context>,
+        name: &str,
+        input: Value,
+    ) -> Result<String, String> {
+        let context = ChatContext {
+            connection_id: Some(connection_id.to_owned()),
+            database: database.map(str::to_owned),
+            ..ChatContext::default()
+        };
+        let call = ToolCall {
+            id: "suite".into(),
+            name: name.to_owned(),
+            input,
+        };
+        let events = |_: ChatEvent| {};
+        tools::run_tool(db, &context, reads, &call, &events).await
     }
 }

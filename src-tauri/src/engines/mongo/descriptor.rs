@@ -1,8 +1,8 @@
 //! The MongoDB descriptor.
 
 use crate::contract::{
-    AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FilterSupport, LanguageSpec,
-    RawFilterLang, TlsModeId, TlsSupport, UrlSpec,
+    AssistantHints, AssistantPrompt, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus,
+    FilterSupport, LanguageSpec, RawFilterLang, TlsModeId, TlsSupport, UrlSpec,
 };
 
 pub const ID: &str = "mongodb";
@@ -65,11 +65,23 @@ pub fn descriptor() -> EngineDescriptor {
             default: true,
             hint: r#"Write a database command as JSON and press Ctrl+Enter, e.g. { "find": "products", "filter": { "stock": 0 }, "limit": 50 }"#
                 .into(),
+            fences: LanguageSpec::fence_tags(&["json", "mongodb", "mongo"]),
         }],
         filter: FilterSupport {
             structured: true,
             raw: Some(RawFilterLang::MongoJson),
             placeholder: r#"Filter: JSON query, e.g. { "status": "ACTIVE", "stock": { "$gt": 0 } }"#.into(),
+        },
+        assistant: AssistantHints {
+            test_data: "an insertMany command".into(),
+            prompts: vec![AssistantPrompt {
+                label: "Aggregation pipeline".into(),
+                icon: "layers".into(),
+                prompt: "Write an aggregation pipeline that ".into(),
+            }],
+            translate_from: false,
+            translate_to: Some("a MongoDB command or aggregation pipeline".into()),
+            translate_label: Some("MongoDB (command / pipeline)".into()),
         },
     }
 }

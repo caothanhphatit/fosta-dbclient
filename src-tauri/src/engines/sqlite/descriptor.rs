@@ -2,8 +2,8 @@
 //! and filter box.
 
 use crate::contract::{
-    AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec,
-    FilterSupport, FormSection, LanguageSpec, RawFilterLang, SqlDialectId, UrlSpec,
+    AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind,
+    FieldSpec, FilterSupport, FormSection, LanguageSpec, RawFilterLang, SqlDialectId, UrlSpec,
 };
 
 pub const ID: &str = "sqlite";
@@ -83,11 +83,13 @@ pub fn descriptor() -> EngineDescriptor {
             dialect: Some(SqlDialectId::Sqlite),
             default: true,
             hint: "SQLite SQL; separate statements with ';'. Ctrl+Enter runs the query.".into(),
+            fences: LanguageSpec::fence_tags(&["sql", "sqlite"]),
         }],
         filter: FilterSupport {
             structured: true,
             raw: Some(RawFilterLang::Sql),
             placeholder: "Filter: SQL WHERE, e.g. status = 'PAID' AND total > 10".into(),
         },
+        assistant: AssistantHints::sql(LABEL),
     }
 }

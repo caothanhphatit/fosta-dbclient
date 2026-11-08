@@ -1,8 +1,8 @@
 //! MariaDB and MySQL descriptors: one module, two engine ids.
 
 use crate::contract::{
-    AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FilterSupport, LanguageSpec,
-    RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
+    AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FilterSupport,
+    LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
 };
 
 /// Which server the engine id stands for.
@@ -107,11 +107,20 @@ pub fn descriptor(flavor: Flavor) -> EngineDescriptor {
             dialect: Some(flavor.dialect()),
             default: true,
             hint: "Ctrl+Enter runs the query. Selected text runs on its own.".into(),
+            fences: match flavor {
+                Flavor::MariaDb => LanguageSpec::fence_tags(&["sql", "mariadb", "mysql"]),
+                Flavor::MySql => LanguageSpec::fence_tags(&["sql", "mysql"]),
+            },
         }],
         filter: FilterSupport {
             structured: true,
             raw: Some(RawFilterLang::Sql),
             placeholder: "Filter: SQL WHERE, e.g. status = 'ACTIVE'".into(),
+        },
+        // MySQL stands for both as a translation target.
+        assistant: match flavor {
+            Flavor::MariaDb => AssistantHints::sql(flavor.label()).not_a_target(),
+            Flavor::MySql => AssistantHints::sql(flavor.label()),
         },
     }
 }

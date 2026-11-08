@@ -5,13 +5,15 @@
 //! 1. The statement is classified by its engine (`Engine::classify`, helpers in [`classify`]): SQL is parsed per
 //!    dialect, other languages are classified by the engine's own rules. Grid filters must be a single condition ([`filter`]).
 //! 2. The workspace's rules ([`rules`]) give an [`Action`] per category: allow, confirm,
-//!    typed confirm or block. The assistant can only ever read metadata.
+//!    typed confirm or block. The assistant can only ever read: metadata, and single Read statements where the user
+//!    allows it ([`assistant`]); it can never answer a confirmation.
 //! 3. A confirmation is a structured `CONFIRMATION_REQUIRED` error with a one-time token
 //!    bound to the exact statement text and session; the UI asks the user and calls again
-//!    with the token. Blocked and confirmed operations go to the local audit log.
+//!    with the token. Blocked and confirmed operations go to the local audit log, and so do the assistant's runs.
 //! 4. The rules also set engine-level backstops passed to the engine as [`Limits`]:
 //!    read-only sessions, statement timeouts and the result row limit.
 
+pub mod assistant;
 pub mod classify;
 #[cfg(test)]
 mod engine_tests;
@@ -214,8 +216,10 @@ impl Gateway {
             ));
         }
         let action = match request.caller {
-            // The assistant never changes anything, whatever the rules say.
+            // The assistant never changes anything, whatever the rules say, and cannot answer a confirmation: anything but
+            // a read the rules allow outright is refused.
             Caller::Assistant if statements.iter().any(|statement| statement.category != Category::Read) => Action::Block,
+            Caller::Assistant if effective.rules.action(Category::Read) != Action::Allow => Action::Block,
             Caller::Transaction => Action::Allow,
             _ => statements
                 .iter()
@@ -228,7 +232,7 @@ impl Gateway {
             Action::Block => {
                 let worst = worst_category(request.classification);
                 let message = if request.caller == Caller::Assistant {
-                    "The assistant cannot run statements that change anything.".to_owned()
+                    assistant::refusal_message(worst, &request.context.workspace_name)
                 } else {
                     format!(
                         "Blocked: {} statements are not allowed by the {} rules of workspace {}. \
@@ -552,14 +556,28 @@ pub async fn apply_edits(
         .await
 }
 
-/// `run` from a query tab: classified by the engine in the session's language, checked against the rules, then run with
-/// the limits, streaming into `sink`.
+/// `run` from a query tab (or a Run button in the assistant panel, which runs as the user): classified by the engine in
+/// the session's language, checked against the rules, then run with the limits, streaming into `sink`.
 pub async fn run(
     mgr: &ConnectionManager,
     context: &Context,
     session_id: &str,
     request: &RunRequest,
     confirmation: Option<&Confirmation>,
+    sink: &mut dyn ResultSink,
+) -> AppResult<RunSummary> {
+    run_limited(mgr, context, session_id, request, confirmation, None, sink).await
+}
+
+/// [`run`], keeping at most `max_rows` rows per result set when that is fewer than the rules allow (the assistant
+/// panel shows 200); never more.
+pub async fn run_limited(
+    mgr: &ConnectionManager,
+    context: &Context,
+    session_id: &str,
+    request: &RunRequest,
+    confirmation: Option<&Confirmation>,
+    max_rows: Option<usize>,
     sink: &mut dyn ResultSink,
 ) -> AppResult<RunSummary> {
     let (handle, session) = mgr.session(session_id)?;
@@ -579,7 +597,11 @@ pub async fn run(
         reusable: false,
     })?;
     tracing::debug!(session = session_id, statement = %crate::logging::statement_excerpt(&request.text), "run");
-    handle.run(session, request.clone(), context.limits().run_options(), sink).await
+    let mut options = context.limits().run_options();
+    if let Some(max_rows) = max_rows {
+        options.row_limit = options.row_limit.min(max_rows.max(1));
+    }
+    handle.run(session, request.clone(), options, sink).await
 }
 
 /// Begin / Commit / Rollback / auto-commit from the query toolbar: always allowed, even in a Read-only workspace (Begin
@@ -676,11 +698,14 @@ pub async fn invoke(
 }
 
 /// What an assistant tool may do. Every tool the model can call must be listed here; the
-/// assistant has no tool that runs a statement or changes data.
+/// assistant has no tool that changes data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssistantToolEffect {
     /// Reads catalog metadata (names, columns, DDL) through the engine contract; never row data.
     ReadMetadata,
+    /// Runs one Read statement through [`assistant::read`] (capped rows, read-only session); offered to the model only
+    /// where the user allows it.
+    ReadRows,
     /// Asks the UI to open a view; the UI pre-fills it and runs nothing on its own.
     OpenView,
 }
@@ -688,6 +713,7 @@ pub enum AssistantToolEffect {
 pub fn assistant_tool_effect(name: &str) -> AppResult<AssistantToolEffect> {
     match name {
         "list_databases" | "list_tables" | "describe_table" | "schema_overview" => Ok(AssistantToolEffect::ReadMetadata),
+        "run_read_query" => Ok(AssistantToolEffect::ReadRows),
         "open_diagram" | "open_table" | "open_query" => Ok(AssistantToolEffect::OpenView),
         other => Err(AppError::new(format!("The assistant has no tool called {other}"))),
     }

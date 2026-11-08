@@ -712,6 +712,95 @@ pub async fn suite_transactions(f: &Fixture) {
     session.close().await;
 }
 
+/// The assistant may run only the Read samples (`run_read_query` with the setting on): every write, DDL, destructive or
+/// administrative sample is refused by the gateway with a message sending the model to a code block. Pure, like
+/// [`suite_classify`].
+pub fn suite_assistant_reads_only(f: &Fixture) {
+    use crate::gateway::{assistant, rules::Preset, Context, Gateway};
+    let engine = registry().get(f.engine).unwrap();
+    let path = std::env::temp_dir().join(format!("fosta-assistant-suite-{}-{}.jsonl", f.engine, std::process::id()));
+    let gateway = Gateway::with_audit(crate::audit::AuditLog::new(path.clone(), 1000));
+    // Open rules: the user may run anything, the assistant still only reads.
+    let context = Context {
+        workspace_id: "w".into(),
+        workspace_name: "Team".into(),
+        connection_id: CONNECTION.into(),
+        connection_name: "Contract".into(),
+        safety: crate::gateway::rules::SafetySettings::preset(Preset::Open),
+    };
+    let mut refused = 0;
+    for (text, category) in f.classify_samples {
+        let outcome = assistant::check(&gateway, engine, &context, f.language, text);
+        if *category == Category::Read {
+            assert!(outcome.is_ok(), "{}: the assistant may read with {text}: {outcome:?}", f.engine);
+        } else {
+            let error = outcome.expect_err(&format!("{}: the assistant ran a {category:?} statement: {text}", f.engine));
+            assert!(assistant::is_refusal(&error), "{}: {text}: {error}", f.engine);
+            assert!(error.to_string().contains("code block"), "{}: {error}", f.engine);
+            refused += 1;
+        }
+    }
+    assert!(refused > 0, "{}: no non-read sample to refuse", f.engine);
+    let _ = std::fs::remove_file(path);
+}
+
+/// The assistant's metadata tools and its read-only query tool through the contract, on the seeded table.
+pub async fn suite_assistant(f: &Fixture) {
+    use crate::{
+        ai::testing::tool,
+        gateway::{rules::Preset, Context},
+    };
+    let (manager, _handle) = connect(f).await;
+    let database = f.table.database.clone().or_else(|| f.seed_database.map(str::to_owned));
+    let run = |name: &'static str, input: serde_json::Value, reads: Option<Context>| {
+        let (manager, database) = (&manager, database.clone());
+        async move { tool(manager, CONNECTION, database.as_deref(), reads.as_ref(), name, input).await }
+    };
+    let databases = run("list_databases", serde_json::json!({}), None).await.expect("list_databases");
+    if let Some(database) = &database {
+        assert!(databases.lines().any(|line| line == database), "{}: {databases}", f.engine);
+    }
+    let tables = run("list_tables", serde_json::json!({}), None).await.expect("list_tables");
+    assert!(
+        tables.lines().any(|line| line.split('\t').next() == Some(f.table.name.as_str())),
+        "{}: {} not listed in
+{tables}",
+        f.engine,
+        f.table.name
+    );
+    // A key-value engine lists a bounded sample of its keys (the Redis seed has more than that), and says so.
+    if registry().get(f.engine).unwrap().descriptor().family == crate::contract::EngineFamily::KeyValue {
+        let objects = tables.lines().filter(|line| !line.starts_with("Note:")).count();
+        assert!(objects <= crate::ai::catalog::MAX_KEYS, "{}: {objects} keys listed", f.engine);
+        if objects == crate::ai::catalog::MAX_KEYS {
+            assert!(tables.contains("Note: only the first"), "{}: {tables}", f.engine);
+        }
+    }
+    let described = run("describe_table", serde_json::json!({ "table": f.table.name }), None)
+        .await
+        .unwrap_or_else(|error| panic!("{}: describe_table: {error}", f.engine));
+    assert!(!described.is_empty());
+    run("schema_overview", serde_json::json!({}), None)
+        .await
+        .unwrap_or_else(|error| panic!("{}: schema_overview: {error}", f.engine));
+    let reads = Context {
+        workspace_id: "w".into(),
+        workspace_name: "Team".into(),
+        connection_id: CONNECTION.into(),
+        connection_name: "Contract".into(),
+        safety: crate::gateway::rules::SafetySettings::preset(Preset::Guarded),
+    };
+    let read = run("run_read_query", serde_json::json!({ "query": f.count_probe }), Some(reads.clone()))
+        .await
+        .unwrap_or_else(|error| panic!("{}: run_read_query: {error}", f.engine));
+    assert!(read.contains("row(s)") || read.contains("no result set"), "{}: {read}", f.engine);
+    let write = run("run_read_query", serde_json::json!({ "query": f.insert_probe }), Some(reads))
+        .await
+        .expect_err("the assistant must not insert");
+    assert!(write.contains("code block"), "{}: {write}", f.engine);
+    manager.disconnect(CONNECTION).await;
+}
+
 /// Generates the tests of one engine as a module named `contract_<engine>`, so `cargo test contract_<engine>` selects
 /// them. The classification test always runs; the live suites are ignored by default: start the engine's compose file,
 /// then `cargo test contract_<engine> -- --ignored --test-threads=1`.
@@ -728,8 +817,14 @@ macro_rules! contract_tests {
                 suites::suite_classify(&$fixture);
             }
 
+            #[test]
+            fn assistant_reads_only() {
+                suites::suite_assistant_reads_only(&$fixture);
+            }
+
             $crate::contract_tests!(@live $fixture;
-                suite_connect suite_tree suite_describe suite_browse suite_edit suite_query suite_cancel suite_transactions);
+                suite_connect suite_tree suite_describe suite_browse suite_edit suite_query suite_cancel suite_transactions
+                suite_assistant);
         }
     };
     (@live $fixture:expr; $($suite:ident)*) => {

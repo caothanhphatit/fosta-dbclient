@@ -131,7 +131,12 @@ mod contract_redis {
         suites::suite_classify(&fixture());
     }
 
-    crate::contract_tests!(@live fixture(); suite_connect suite_query suite_cancel);
+    #[test]
+    fn assistant_reads_only() {
+        suites::suite_assistant_reads_only(&fixture());
+    }
+
+    crate::contract_tests!(@live fixture(); suite_connect suite_query suite_cancel suite_assistant);
 }
 
 // --- Key-value suites --------------------------------------------------------------------------------------------------

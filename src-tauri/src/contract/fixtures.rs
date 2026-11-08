@@ -113,11 +113,21 @@ fn descriptor() -> EngineDescriptor {
             dialect: Some(SqlDialectId::MariaDb),
             default: true,
             hint: "Ctrl+Enter runs the query.".into(),
+            fences: LanguageSpec::fence_tags(&["sql", "mariadb"]),
         }],
         filter: FilterSupport {
             structured: true,
             raw: Some(RawFilterLang::Sql),
             placeholder: "Filter: SQL WHERE, e.g. status = 'PAID'".into(),
+        },
+        assistant: crate::contract::AssistantHints {
+            prompts: vec![crate::contract::AssistantPrompt {
+                label: "Window functions".into(),
+                icon: "layers".into(),
+                prompt: "Write a query with a window function that ".into(),
+            }],
+            translate_label: Some("MariaDB".into()),
+            ..crate::contract::AssistantHints::sql("MariaDB")
         },
     }
 }

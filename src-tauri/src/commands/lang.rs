@@ -140,6 +140,7 @@ async fn build_schema(handle: &Handle, state: &AppState, connection_id: &str, da
     };
     let nodes: Vec<ObjectNode> = catalog::objects(handle, &ctx, &database)
         .await?
+        .objects
         .into_iter()
         .filter(|node| node.kind.is_relation())
         .collect();

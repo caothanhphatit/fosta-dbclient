@@ -2,8 +2,8 @@
 //! adapter is wired; no transactions), languages and filter box.
 
 use crate::contract::{
-    AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind, FieldSpec,
-    FilterSupport, FormSection, LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
+    AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind,
+    FieldSpec, FilterSupport, FormSection, LanguageSpec, RawFilterLang, SqlDialectId, TlsModeId, TlsSupport, UrlSpec,
 };
 
 pub const ID: &str = "clickhouse";
@@ -71,11 +71,13 @@ pub fn descriptor() -> EngineDescriptor {
             dialect: Some(SqlDialectId::ClickHouse),
             default: true,
             hint: "ClickHouse SQL; separate statements with ';'. Ctrl+Enter runs the query.".into(),
+            fences: LanguageSpec::fence_tags(&["sql", "clickhouse"]),
         }],
         filter: FilterSupport {
             structured: true,
             raw: Some(RawFilterLang::Sql),
             placeholder: "Filter: SQL WHERE, e.g. event_date >= today() - 7".into(),
         },
+        assistant: AssistantHints::sql(LABEL),
     }
 }
