@@ -34,6 +34,8 @@ pub enum Gap {
     ErrorMapping,
     /// Foreign keys pointing at a table are not listed.
     ReferencedBy,
+    /// The engine has no foreign keys at all (ClickHouse), so neither direction is checked.
+    ForeignKeys,
 }
 
 pub struct Fixture {
@@ -309,7 +311,7 @@ pub async fn suite_describe(f: &Fixture) {
         f.engine
     );
     assert!(items.column(f.key_column).unwrap().hints.primary);
-    if handle.engine.descriptor().family == crate::contract::EngineFamily::Sql {
+    if handle.engine.descriptor().family == crate::contract::EngineFamily::Sql && !f.has_gap(Gap::ForeignKeys) {
         let child = describe(f.child.clone()).await;
         assert!(
             child.foreign_keys.iter().any(|fk| fk.ref_table.ends_with(&f.table.name)),

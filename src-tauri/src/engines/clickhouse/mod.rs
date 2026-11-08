@@ -13,21 +13,28 @@
 //! one (inserts, then lightweight `ALTER TABLE … UPDATE`/`DELETE FROM` with `mutations_sync`).
 
 pub mod adapter;
+mod browse;
+mod connect;
+#[cfg(test)]
+mod contract_tests;
 pub mod descriptor;
+mod edit;
+mod ops;
 pub mod session;
 #[cfg(test)]
 mod tests;
+mod tree;
 pub mod types;
 
 pub use adapter::{ClickHouseAdapter, CLICKHOUSE};
 pub use session::ChSession;
 
 use crate::engines::common::split::Dialect;
-use crate::engines::common::sqlbuild::{self, Binder, ParamTarget, SqlDialect};
+use crate::engines::common::sqlbuild::{self, ParamTarget, SqlDialect};
 use crate::engines::common::value::percent_decode;
 use crate::engines::common::{
-    classify, BrowseRequest, CatalogNode, ChangeSummary, Classification, ColumnInfo, EngineError, ErrorKind, IndexInfo, KeyInfo, NodeKind,
-    ObjectDescription, ObjectRef, Page, Result, RowChange, TlsMode, Value,
+    classify, CatalogNode, Classification, ColumnInfo, EngineError, ErrorKind, IndexInfo, KeyInfo, NodeKind, ObjectDescription, ObjectRef,
+    Result, TlsMode, Value,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -46,11 +53,14 @@ pub struct ChOptions {
     /// `Disable` = http, otherwise https (verified against the system roots plus `ca_file`, or not verified).
     pub tls: TlsMode,
     pub connect_timeout: Duration,
+    /// Where to connect when it is not `host:port` (the local end of an SSH tunnel); `host` stays the URL's host.
+    pub connect_to: Option<std::net::SocketAddr>,
 }
 
 impl Default for ChOptions {
     fn default() -> Self {
         Self {
+            connect_to: None,
             host: "localhost".into(),
             port: 8123,
             user: "default".into(),
@@ -170,6 +180,8 @@ pub struct Http {
     user: String,
     password: String,
     pub database: String,
+    /// Ask the server for errors as plain text at the end of the stream (`http_write_exception_in_output_format = 0`).
+    pub plain_exceptions: bool,
 }
 
 /// What came back from one request.
@@ -181,10 +193,25 @@ pub struct Response {
 
 impl Http {
     pub fn new(o: &ChOptions) -> Result<Self> {
+        Self::with_tls(o, None)
+    }
+
+    /// `tls` is the rustls configuration the connect code builds from the profile (`net::tls::rustls_client_config`);
+    /// it replaces the core's own `TlsMode` handling, which stays for connection URLs and the core's tests.
+    pub fn with_tls(o: &ChOptions, tls: Option<rustls::ClientConfig>) -> Result<Self> {
         let mut b = reqwest::Client::builder()
             .connect_timeout(o.connect_timeout)
             .pool_idle_timeout(Duration::from_secs(30));
+        let preconfigured = tls.is_some();
+        if let Some(config) = tls {
+            b = b.use_preconfigured_tls(config);
+        }
+        // Through an SSH tunnel the URL keeps the database host (certificate names) and connects to the tunnel's end.
+        if let Some(addr) = o.connect_to {
+            b = b.resolve(&o.host, addr);
+        }
         match &o.tls {
+            _ if preconfigured => {}
             TlsMode::SkipVerify => b = b.danger_accept_invalid_certs(true),
             TlsMode::Verify { ca_file: Some(path) } => {
                 let pem = std::fs::read(path).map_err(|e| EngineError::input(format!("Could not read the CA file '{path}': {e}.")))?;
@@ -203,6 +230,7 @@ impl Http {
             user: o.user.clone(),
             password: o.password.clone().unwrap_or_default(),
             database: o.database.clone(),
+            plain_exceptions: false,
         })
     }
 
@@ -219,6 +247,9 @@ impl Http {
             ("output_format_json_validate_utf8".into(), "1".into()),
             ("cancel_http_readonly_queries_on_client_close".into(), "1".into()),
         ];
+        if self.plain_exceptions {
+            q.push(("http_write_exception_in_output_format".into(), "0".into()));
+        }
         q.extend(settings.iter().cloned());
         let resp = self
             .client
@@ -319,13 +350,24 @@ pub fn server_error(text: &str) -> EngineError {
         Some("516" | "192" | "193" | "194" | "81") => ErrorKind::Connect,
         _ => ErrorKind::Server,
     };
+    // "Syntax error: failed at position 8 (FORM) (line 1, col 8): … Expected one of: …": the position is 1-based, and the
+    // list of expected tokens is long, so it moves to the detail.
+    let position = message
+        .split_once("failed at position ")
+        .and_then(|(_, rest)| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|digits| digits.parse::<u32>().ok())
+        .map(|position| position.saturating_sub(1));
+    let (message, detail) = match message.find(". Expected ") {
+        Some(i) => (format!("{}.", &message[..i]), Some(message[i + 2..].trim().to_owned())),
+        None => (message, None),
+    };
     EngineError {
         message,
         code,
         kind,
-        detail: None,
+        detail,
         hint: None,
-        position: None,
+        position,
     }
 }
 
@@ -371,6 +413,8 @@ impl RowReader {
             }
             let json: serde_json::Value = match serde_json::from_slice(&line) {
                 Ok(j) => j,
+                // A failure after the first rows: `__exception__`, then the message (the setting `plain_exceptions` asks for this).
+                Err(_) if line.trim_ascii() == b"__exception__" => continue,
                 Err(_) => return Err(server_error(&String::from_utf8_lossy(&line))),
             };
             if let Some(e) = json.get("exception").and_then(|e| e.as_str()) {
@@ -460,14 +504,48 @@ pub struct ChEngine {
 
 impl ChEngine {
     pub async fn connect(opts: ChOptions) -> Result<Self> {
-        let http = Http::new(&opts)?;
+        Self::connect_with(opts, None).await
+    }
+
+    /// Connects with a rustls configuration built from the profile (see [`Http::with_tls`]).
+    pub async fn connect_with(opts: ChOptions, tls: Option<rustls::ClientConfig>) -> Result<Self> {
+        let http = Http::with_tls(&opts, tls)?;
         let (_, rows) = http.query("SELECT version()", &[]).await?;
         let version = rows.first().and_then(|r| r.first()).and_then(Value::display).unwrap_or_default();
-        Ok(Self { opts, http, version })
+        let mut engine = Self { opts, http, version };
+        // Since 23.3 a failure after the first rows is written into the result as one more JSON row, which looks like data;
+        // asking for the plain text keeps errors recognisable.
+        engine.http.plain_exceptions = engine.version_numbers() >= (23, 3);
+        Ok(engine)
     }
 
     pub fn server_version(&self) -> &str {
         &self.version
+    }
+
+    /// The server's `(major, minor)`, for settings that only newer servers know.
+    pub fn version_numbers(&self) -> (u32, u32) {
+        let mut parts = self.version.split('.').map(|part| part.parse::<u32>().unwrap_or(0));
+        (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+    }
+
+    /// An engine that is not connected to anything, for tests of statement building.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        let opts = ChOptions::default();
+        Self {
+            http: Http::new(&opts).expect("an HTTP client"),
+            opts,
+            version: "25.8.1.1".into(),
+        }
+    }
+
+    pub fn http(&self) -> &Http {
+        &self.http
+    }
+
+    pub fn default_database(&self) -> &str {
+        &self.opts.database
     }
 
     pub fn classify(sql: &str) -> Classification {
@@ -476,10 +554,10 @@ impl ChEngine {
 
     /// A session: its own `session_id`, so `SET` and temporary tables carry over between runs.
     pub fn open_session(&self) -> Result<ChSession> {
-        Ok(ChSession::new(Http::new(&self.opts)?))
+        Ok(ChSession::new(self.http.clone()))
     }
 
-    async fn strings(&self, sql: &str, params: &[(&str, &str)]) -> Result<Vec<Vec<String>>> {
+    pub(super) async fn strings(&self, sql: &str, params: &[(&str, &str)]) -> Result<Vec<Vec<String>>> {
         let p: Vec<(String, String)> = params.iter().map(|(k, v)| (format!("param_{k}"), (*v).to_owned())).collect();
         let (_, rows) = self.http.query(sql, &p).await?;
         Ok(rows
@@ -643,118 +721,6 @@ impl ChEngine {
         d.ddl = ddl.into_iter().next().and_then(|r| r.into_iter().next());
         Ok(d)
     }
-
-    /// Browses a table. The key is ClickHouse's (non-unique) primary key, so keyset paging follows the sorting order.
-    pub async fn browse(&self, req: &BrowseRequest) -> Result<Page> {
-        let d = self.describe(&req.object).await?;
-        let key = if d.object.kind == NodeKind::Table {
-            d.primary_key.as_ref().map(|k| k.columns.clone()).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let mut req = req.clone();
-        req.object = d.object.clone();
-        let built = sqlbuild::build_browse(&ChDialect, &req, &d.columns, &key)?;
-        let (_, rows) = self.http.query(&built.sql, &params_of(&built.params)).await?;
-        let estimated_total = if !req.estimate_total {
-            None
-        } else if built.where_sql.is_empty() {
-            d.row_estimate
-        } else {
-            // EXPLAIN ESTIMATE gives the rows the filter will read from parts (an upper bound from the primary index).
-            let n = built.params.len() - req.after.as_ref().map_or(0, |a| a.len() * (a.len() + 1) / 2);
-            let sql = format!(
-                "EXPLAIN ESTIMATE SELECT 1 FROM {} WHERE {}",
-                ChDialect.table_sql(&d.object),
-                built.where_sql
-            );
-            match self.http.query(&sql, &params_of(&built.params[..n])).await {
-                Ok((cols, rows)) => {
-                    let i = cols.iter().position(|c| c.name == "rows");
-                    i.map(|i| rows.iter().filter_map(|r| r[i].display()?.parse::<i64>().ok()).sum())
-                }
-                Err(_) => None,
-            }
-        };
-        Ok(sqlbuild::finish_page(d.columns, rows, req.limit, &built, key, estimated_total))
-    }
-
-    /// Applies changes one by one; ClickHouse has no transactions, so a failure leaves earlier changes applied. Updates and
-    /// deletes first check that the key matches exactly one row, then run as synchronous mutations.
-    pub async fn apply_changes(&self, obj: &ObjectRef, changes: Vec<RowChange>) -> Result<ChangeSummary> {
-        let d = self.describe(obj).await?;
-        let table = ChDialect.table_sql(&d.object);
-        let mut summary = ChangeSummary::default();
-        for ch in &changes {
-            match ch {
-                RowChange::Insert { values } => {
-                    let mut b = Binder::new(&ChDialect);
-                    let mut names = Vec::new();
-                    let mut exprs = Vec::new();
-                    for (name, v) in values {
-                        let col = d
-                            .column(name)
-                            .ok_or_else(|| EngineError::input(format!("The table has no column named '{name}'.")))?;
-                        names.push(ChDialect.quote_ident(name));
-                        exprs.push(if v.is_null() {
-                            "NULL".to_owned()
-                        } else {
-                            b.bind_column(v.clone(), col)
-                        });
-                    }
-                    let sql = format!("INSERT INTO {table} ({}) SELECT {}", names.join(", "), exprs.join(", "));
-                    self.http.execute(&sql, &params_of(&b.params)).await?;
-                    summary.inserted += 1;
-                }
-                RowChange::Update { key, values } => {
-                    let built = sqlbuild::build_update(&ChDialect, &d.object, key, values, &d.columns)?;
-                    let where_sql = built.sql.split_once(" WHERE ").map(|(_, w)| w.to_owned()).unwrap_or_default();
-                    self.expect_one(&table, &where_sql, &built.params, values.len()).await?;
-                    let sql = built
-                        .sql
-                        .replacen(&format!("UPDATE {table} SET"), &format!("ALTER TABLE {table} UPDATE"), 1);
-                    let mut p = params_of(&built.params);
-                    p.push(("mutations_sync".into(), "2".into()));
-                    self.http.execute(&sql, &p).await?;
-                    summary.updated += 1;
-                }
-                RowChange::Delete { key } => {
-                    let built = sqlbuild::build_delete(&ChDialect, &d.object, key, &d.columns)?;
-                    let where_sql = built.sql.split_once(" WHERE ").map(|(_, w)| w.to_owned()).unwrap_or_default();
-                    self.expect_one(&table, &where_sql, &built.params, 0).await?;
-                    let mut p = params_of(&built.params);
-                    p.push(("mutations_sync".into(), "2".into()));
-                    p.push(("lightweight_deletes_sync".into(), "2".into()));
-                    self.http.execute(&built.sql, &p).await?;
-                    summary.deleted += 1;
-                }
-            }
-        }
-        Ok(summary)
-    }
-
-    /// Counts the rows a key matches; `skip` leading parameters belong to the SET list.
-    async fn expect_one(&self, table: &str, where_sql: &str, params: &[sqlbuild::Param], skip: usize) -> Result<()> {
-        // Renumber is not needed: the WHERE clause keeps its {pN} names and the parameters keep their numbers.
-        let all = params_of(params);
-        let p: Vec<(String, String)> = all.into_iter().skip(skip).collect();
-        let (_, rows) = self
-            .http
-            .query(&format!("SELECT count() FROM {table} WHERE {where_sql}"), &p)
-            .await?;
-        let n = rows
-            .first()
-            .and_then(|r| r.first())
-            .and_then(Value::display)
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-        if n != 1 {
-            return Err(EngineError::input(format!(
-                "A change matched {n} rows instead of one, so it was not applied. ClickHouse keys are not unique; edit this table with a statement."
-            )));
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -790,6 +756,33 @@ mod unit_tests {
             ErrorKind::Cancelled
         );
         assert_eq!(server_error("Code: 159. DB::Exception: Timeout exceeded").kind, ErrorKind::Timeout);
+    }
+
+    #[test]
+    fn syntax_errors_carry_a_position_and_move_the_expected_list_to_the_detail() {
+        let text = "Code: 62. DB::Exception: Syntax error: failed at position 12 (FORM) (line 1, col 12): FORM t. Expected one of: FROM, WHERE. (SYNTAX_ERROR) (version 25.8.1.1)";
+        let e = server_error(text);
+        assert_eq!((e.code.as_deref(), e.position), (Some("62"), Some(11)));
+        assert!(
+            e.message.starts_with("Syntax error: failed at position 12") && e.message.ends_with("FORM t."),
+            "{}",
+            e.message
+        );
+        assert!(
+            e.detail.as_deref().is_some_and(|d| d.starts_with("Expected one of: FROM")),
+            "{:?}",
+            e.detail
+        );
+    }
+
+    #[test]
+    fn a_failure_after_the_first_rows_is_an_error_not_a_row() {
+        let body = b"[\"n\"]\n[\"UInt8\"]\n[0]\n__exception__\r\nCode: 159. DB::Exception: Timeout exceeded. (TIMEOUT_EXCEEDED)\n";
+        let mut reader = RowReader::default();
+        reader.feed(body, true).unwrap();
+        assert_eq!(reader.next_row().unwrap(), Some(vec![Value::Int(0)]));
+        let error = reader.next_row().unwrap_err();
+        assert_eq!((error.code.as_deref(), error.kind), (Some("159"), ErrorKind::Timeout));
     }
 
     #[test]
