@@ -47,7 +47,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
+  height: var(--tree-row-h);
   margin: 0 6px;
   padding-right: 8px;
   border-radius: 5px;

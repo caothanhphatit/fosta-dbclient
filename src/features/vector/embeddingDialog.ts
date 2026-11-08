@@ -39,11 +39,7 @@ export function embeddingDialog(existing: EmbeddingSettings | null): Promise<App
     const body = h(
       "div",
       { class: "form-grid" },
-      h(
-        "p",
-        { class: "form-intro" },
-        "Any OpenAI-compatible /embeddings endpoint. Use the same model that produced the stored vectors, otherwise distances are meaningless.",
-      ),
+      h("p", { class: "form-intro" }, "OpenAI-compatible /embeddings endpoint; use the model that produced the stored vectors."),
       field("Endpoint URL", url),
       field("Model", model),
       field("Authentication", auth),

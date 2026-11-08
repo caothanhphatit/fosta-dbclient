@@ -36,7 +36,7 @@
 }
 
 .result-tab {
-  padding: 5px 12px;
+  padding: var(--bar-pad);
   border: 1px solid transparent;
   border-bottom: none;
   border-radius: var(--radius) var(--radius) 0 0;

@@ -65,7 +65,6 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
     const body = h(
       "div",
       { class: "form-grid" },
-      h("p", { class: "form-intro" }, "A workspace keeps its own connections and startup tasks. Switch between them from the rail on the left."),
       h("div", { class: "ws-preview-row" }, preview, field("Workspace name", name)),
       field("Kind", h("div", { class: "icon-choices" }, ...icons)),
       field("Color", h("div", { class: "swatches" }, ...swatches)),
@@ -73,11 +72,7 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
         "div",
         { class: "field" },
         h("span", { class: "field-label" }, "Safety"),
-        h(
-          "span",
-          { class: "field-hint" },
-          "What statements from query tabs, grid edits, imports and filters may run here. The assistant never runs anything, whatever is chosen.",
-        ),
+        h("span", { class: "field-hint" }, "What query tabs, grid edits, imports and filters may run here"),
         safety.element,
       ),
       warningHost,

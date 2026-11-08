@@ -67,17 +67,20 @@ export function layoutBoxes(boxes: LayoutBox[], links: { from: string; to: strin
   };
   const connected = names.filter((name) => (neighbours.get(name)?.size ?? 0) > 0);
   const isolated = names.filter((name) => (neighbours.get(name)?.size ?? 0) === 0).sort();
-  const columns: string[][] = [];
+  const byRank = new Map<number, string[]>();
   for (const name of connected.sort()) {
     const index = rankOf(name);
-    (columns[index] ??= []).push(name);
+    const column = byRank.get(index) ?? [];
+    column.push(name);
+    byRank.set(index, column);
   }
+  // A cycle can leave gaps between ranks; keep only the used columns, in rank order.
+  const columns = [...byRank.entries()].sort((a, b) => a[0] - b[0]).map(([, column]) => column);
   const order = new Map<string, number>();
   const index = () => columns.forEach((column) => column.forEach((name, position) => order.set(name, position)));
   index();
   for (let pass = 0; pass < 4; pass += 1) {
     for (const column of columns) {
-      if (!column) continue;
       const score = (name: string) => {
         const around = [...(neighbours.get(name) ?? [])].map((other) => order.get(other) ?? 0);
         return around.length ? around.reduce((sum, value) => sum + value, 0) / around.length : (order.get(name) ?? 0);
@@ -88,10 +91,9 @@ export function layoutBoxes(boxes: LayoutBox[], links: { from: string; to: strin
   }
   let x = 0;
   let bottom = 0;
-  const heights = columns.map((column) => (column ?? []).reduce((sum, name) => sum + byName.get(name)!.height + GAP_Y, -GAP_Y));
+  const heights = columns.map((column) => column.reduce((sum, name) => sum + byName.get(name)!.height + GAP_Y, -GAP_Y));
   const tallest = Math.max(0, ...heights);
   columns.forEach((column, columnIndex) => {
-    if (!column) return;
     const width = Math.max(...column.map((name) => byName.get(name)!.width));
     let y = (tallest - heights[columnIndex]) / 2;
     for (const name of column) {

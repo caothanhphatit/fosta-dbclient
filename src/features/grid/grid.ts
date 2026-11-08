@@ -17,6 +17,7 @@ import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
 import { clamp, copyText, h, icon } from "../../core/dom";
 import { EXPORT_LABELS, exportRows, type ExportFormat } from "../importExport/exporters";
+import { density, onDensityChange } from "../../core/density";
 import { displayValue, isNumericKind, valuesEqual } from "../../core/values";
 import {
   EXPORT_FORMATS,
@@ -44,9 +45,13 @@ const OVERSCAN = 12;
 const WINDOW_CHUNK = 16;
 /** Viewport assumed before the grid is attached and sized. */
 const DEFAULT_VIEWPORT = 800;
-/** Row height (26px cell incl. its 1px border), refined by measuring once. */
-let rowHeight = 26;
+/** Row height (22px compact, 26px comfortable cell incl. its 1px border), refined by measuring once. */
+let rowHeight = density() === "compact" ? 22 : 26;
 let rowHeightMeasured = false;
+onDensityChange(() => {
+  rowHeight = density() === "compact" ? 22 : 26;
+  rowHeightMeasured = false;
+});
 
 export class DataGrid {
   readonly element: HTMLElement;

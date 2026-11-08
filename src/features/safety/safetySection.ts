@@ -148,6 +148,6 @@ export function relaxationWarning(previous: SafetySettings, next: SafetySettings
     h("ul", {}, ...changes.map((change) => h("li", {}, change.text))),
     examples.length > 0 ? h("p", {}, "What could go wrong:") : null,
     examples.length > 0 ? h("ul", { class: "relax-examples" }, ...examples.map((example) => h("li", {}, example))) : null,
-    h("p", { class: "field-hint" }, "The change is recorded in the local audit log, and the workspace shows a warning badge while it is relaxed."),
+    h("p", { class: "field-hint" }, "Recorded in the local audit log; the workspace shows a warning badge while relaxed."),
   );
 }

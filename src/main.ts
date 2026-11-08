@@ -8,13 +8,15 @@ import { showError } from "./core/errorPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { assistantContext as buildAssistantContext, isQueryView, taskLogContext } from "./app/assistantContext";
 import { AppNavigation, preloadQueryView } from "./app/navigation";
-import { welcomeScreen } from "./app/welcome";
+import { showWelcomeEngines, welcomeScreen } from "./app/welcome";
+import { renderStatusContext } from "./app/statusBar";
 import { buildLayout, ASSISTANT_STORAGE_KEY } from "./app/layout";
 import { shellMenus } from "./app/menus";
 import { guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
 import { api } from "./core/api";
 import { hideUnsupported, loadCapabilities } from "./core/capabilities";
 import { loadEngines } from "./core/engines";
+import { initDensity } from "./core/density";
 // Shared view registrations and the lazy engine UI modules (`src/engines/`).
 import "./engines";
 import { isTauri } from "./core/transport";
@@ -34,7 +36,8 @@ import { connectionSafety, relaxedFromBaseline, safetyLabel, safetyOf, writesBlo
 import { workspaceDialog } from "./features/workspaces/workspaceDialog";
 import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./features/workspaces/workspaceRail";
 
-const statusText = h("span", { class: "status-text" }, "Ready");
+const statusText = h("span", { class: "status-text" });
+const statusContext = h("span", { class: "status-context" });
 const taskSummary = h("span", { class: "status-tasks" });
 /** The active workspace's safety preset; a warning while its rules are relaxed. */
 const safetyStatus = h("span", { class: "status-safety" });
@@ -67,7 +70,10 @@ const navigation = new AppNavigation(tabs, {
   tasksPanel: () => tasksPanel,
   configureEmbedding: () => void configureEmbedding(),
   queryChanged: (view) => {
-    if (tabs.activeContent() === view) assistant.refreshContext();
+    if (tabs.activeContent() === view) {
+      assistant.refreshContext();
+      refreshStatusContext();
+    }
   },
   connectionName: (connectionId) =>
     currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name ?? connectionId,
@@ -134,7 +140,14 @@ const tasksPanel = new TasksPanel({
   },
 });
 
-tabs.onActiveChange = () => assistant.refreshContext();
+tabs.onActiveChange = () => {
+  assistant.refreshContext();
+  refreshStatusContext();
+};
+
+function refreshStatusContext(): void {
+  renderStatusContext(statusContext, assistantContext(), tabs.activeContent());
+}
 
 function assistantContext(): AssistantContext {
   return buildAssistantContext(tabs.activeContent(), currentConfig, tree);
@@ -205,6 +218,7 @@ async function editAiProvider(connection: AiConnection | null): Promise<void> {
 
 /** Recomputes the per-workspace badges on the rail from live connection and task state. */
 function refreshActivity(): void {
+  refreshStatusContext();
   if (!currentConfig) return;
   const connected = tree.connectedIds();
   const running = tasksPanel.runningIds();
@@ -293,7 +307,7 @@ function newQueryFromSelection(): void {
 }
 
 async function editConnection(profile: ConnectionProfile | null): Promise<void> {
-  const config = await connectionDialog(profile, workspace?.name ?? "");
+  const config = await connectionDialog(profile);
   if (config) applyConfig(config);
 }
 
@@ -359,11 +373,14 @@ async function bootstrap(): Promise<void> {
       return [];
     }),
   ]);
+  showWelcomeEngines(welcome);
+  initDensity();
   initTheme();
   onThemeChange(() => rail.refreshTheme());
   workspaceArea = buildLayout({
     workspaceHeader,
     statusText,
+    statusContext,
     safetyStatus,
     taskSummary,
     tree,

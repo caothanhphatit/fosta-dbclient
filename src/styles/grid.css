@@ -18,8 +18,8 @@
 .grid-table th,
 .grid-table td {
   max-width: 360px;
-  height: 26px;
-  padding: 0 8px;
+  height: var(--row-h);
+  padding: 0 var(--cell-pad-x);
   overflow: hidden;
   border-right: 1px solid var(--grid-line);
   border-bottom: 1px solid var(--grid-line);
@@ -31,7 +31,7 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  height: 28px;
+  height: var(--head-h);
   background: var(--grid-head);
   color: var(--fg-2);
   font-size: 12px;
@@ -130,8 +130,8 @@
 .cell-editor {
   width: 100%;
   min-width: 120px;
-  height: 25px;
-  padding: 0 7px;
+  height: calc(var(--row-h) - 1px);
+  padding: 0 calc(var(--cell-pad-x) - 1px);
   border: none;
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -148,9 +148,9 @@
 }
 
 .grid-table .filter-row th {
-  top: 28px;
-  height: 28px;
-  padding: 2px 3px;
+  top: var(--head-h);
+  height: var(--filter-h);
+  padding: 1px 3px;
   background: var(--surface-2);
   box-shadow: inset 0 -1px 0 var(--border);
 }

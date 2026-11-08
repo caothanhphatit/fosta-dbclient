@@ -1,4 +1,5 @@
 import { h, icon, type IconName } from "../core/dom";
+import { visibleEngines } from "../core/engines";
 
 const SHORTCUTS: [string, string][] = [
   ["Ctrl+N", "New connection"],
@@ -19,13 +20,13 @@ export interface WelcomeActions {
 
 /** The screen shown when no tab is open. `workspaceName` is updated by the caller. */
 export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeActions): HTMLElement {
-  const card = (iconName: IconName, title: string, detail: string, run: () => void) => {
+  const card = (iconName: IconName, title: string, detail: string, run: () => void, detailClass = "") => {
     const button = h(
       "button",
       { class: "welcome-action", type: "button" },
       icon(iconName),
       h("span", { class: "welcome-action-title" }, title),
-      h("span", { class: "welcome-action-detail" }, detail),
+      h("span", { class: `welcome-action-detail ${detailClass}`.trim() }, detail),
     );
     button.addEventListener("click", run);
     return button;
@@ -37,20 +38,29 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
       "div",
       { class: "welcome-inner" },
       h("div", { class: "welcome-brand" }, icon("database", "welcome-icon"), h("h1", {}, "Fosta Studio")),
-      h("p", { class: "welcome-sub" }, "Workspace ", workspaceName, ". Connect on the left, then open a table or a query."),
+      h("p", { class: "welcome-sub" }, "Workspace ", workspaceName),
       h(
         "div",
         { class: "welcome-actions" },
-        card("plug", "New connection", "Save a MariaDB, MySQL, SQL Server or MongoDB server in this workspace", () => actions.newConnection()),
-        card("query", "New query", "Open a SQL editor on the selected connection", () => actions.newQuery()),
+        card("plug", "New connection", "", () => actions.newConnection(), "welcome-engines"),
+        card("query", "New query", "On the selected connection", () => actions.newQuery()),
         requires(
-          card("task", "New startup task", "Keep a port-forward alive while this workspace is open", () => actions.newTask()),
+          card("task", "New startup task", "Port-forward or other background command", () => actions.newTask()),
           "tasks",
         ),
       ),
       h("ul", { class: "shortcuts" }, ...SHORTCUTS.map(([keys, action]) => h("li", {}, h("kbd", {}, keys), h("span", {}, action)))),
     ),
   );
+}
+
+/** Fills the engine list of the connection card from the registry; call once the descriptors are loaded. */
+export function showWelcomeEngines(welcome: HTMLElement): void {
+  const target = welcome.querySelector(".welcome-engines");
+  if (target)
+    target.textContent = visibleEngines()
+      .map((engine) => engine.label)
+      .join(", ");
 }
 
 /** Hidden by `hideUnsupported` when the edition lacks `capability` (startup tasks in the web edition). */

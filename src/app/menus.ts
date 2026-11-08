@@ -6,6 +6,7 @@ import { confirmDialog, toast } from "../core/dialogs";
 import { signOut } from "../core/transport";
 import type { MenuItem } from "../core/contextMenu";
 import type { IconName } from "../core/dom";
+import { density, setDensity } from "../core/density";
 import { describeTheme, setTheme, themePreference, type ThemePreference } from "../core/theme";
 import type { AppConfig, Workspace } from "../core/types";
 import { copyDiagnostics, openLogFolder, setDebugLogging } from "./diagnostics";
@@ -51,6 +52,11 @@ export function shellMenus(host: MenuHost): ShellMenus {
       { label: "LLM providers…", icon: "sparkle", run: () => void host.configureAssistant() },
       { label: "Embedding API…", icon: "vector", run: () => void host.configureEmbedding() },
       "separator",
+      {
+        label: "Comfortable density",
+        icon: density() === "comfortable" ? "check" : undefined,
+        run: () => setDensity(density() === "comfortable" ? "compact" : "comfortable"),
+      },
       {
         label: "Record query history",
         icon: host.config()?.queryHistory !== false ? "check" : undefined,

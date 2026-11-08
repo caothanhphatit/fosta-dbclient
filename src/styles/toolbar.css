@@ -6,7 +6,7 @@
   display: flex;
   align-items: stretch;
   gap: 2px;
-  padding: 5px 10px;
+  padding: var(--toolbar-pad);
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
 }
@@ -17,8 +17,8 @@
   align-items: center;
   justify-content: center;
   gap: 3px;
-  min-width: 64px;
-  padding: 5px 8px;
+  min-width: 56px;
+  padding: var(--button-pad);
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: transparent;

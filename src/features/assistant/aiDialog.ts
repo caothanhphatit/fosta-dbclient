@@ -140,7 +140,7 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
       h(
         "p",
         { class: "form-intro" },
-        "The assistant calls the provider directly from this computer with your key. It only sees table and column names, your editor text and the errors you ask about; it never runs queries.",
+        "Calls the provider directly with your key. Sees schema names, editor text and errors you ask about; never runs queries.",
       ),
       field("Provider", h("div", { class: "driver-cards provider-cards" }, ...cards)),
       hint,

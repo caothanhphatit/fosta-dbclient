@@ -59,9 +59,7 @@ export class VectorHealthView implements TabContent {
 
   private async loadColumns(preferred: string): Promise<void> {
     if (!capabilityOf(this.target.connectionId, "vector")) {
-      this.checks.replaceChildren(
-        h("div", { class: "empty-hint" }, "This connection has no vector support (the engine does not report the vector capability)."),
-      );
+      this.checks.replaceChildren(h("div", { class: "empty-hint" }, "No vector support"));
       return;
     }
     try {

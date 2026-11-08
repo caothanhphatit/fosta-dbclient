@@ -98,6 +98,15 @@ const MIN_RESULTS_HEIGHT = 120;
 /** While rows stream in, a grid is reloaded at most this often (its count label updates every frame). */
 const GRID_RELOAD_MS = 1000;
 
+/** Live state a query tab reports to the status bar (read from what the tab already shows). */
+export interface QueryStatus {
+  /** "2 statement(s) · 14 row(s) · 31 ms", or empty before the first run. */
+  lastRun: string;
+  /** "Auto-commit", "Transaction open"; null when the engine has no transactions. */
+  transaction: string | null;
+  transactionOpen: boolean;
+}
+
 export class QueryView implements TabContent {
   readonly element: HTMLElement;
   readonly connectionId: string;
@@ -484,6 +493,16 @@ export class QueryView implements TabContent {
     }
   }
 
+  /** What the status bar shows for this tab: the last run's summary and the transaction state. */
+  statusInfo(): QueryStatus {
+    const lastRun = this.running ? "" : (this.runStatus.textContent?.trim() ?? "");
+    return {
+      lastRun: lastRun.startsWith("Running") ? "" : lastRun,
+      transaction: this.transaction?.supported ? transactionLabel(this.transaction) : null,
+      transactionOpen: this.transaction?.open === true,
+    };
+  }
+
   private showTransaction(state: TransactionState | null): void {
     const wasOpen = this.transaction?.open === true;
     this.transaction = state;
@@ -513,6 +532,7 @@ export class QueryView implements TabContent {
     commit.disabled = !usable.commit;
     rollback.disabled = !usable.rollback;
     this.element?.classList.toggle("tx-open", open);
+    this.onChanged?.();
   }
 
   private remindIdleTransaction(): void {

@@ -41,7 +41,7 @@ function invalid(message: string): AppError {
   return { code: "INVALID_INPUT", message };
 }
 
-export function connectionDialog(existing: ConnectionProfile | null, workspaceName: string): Promise<AppConfig | null> {
+export function connectionDialog(existing: ConnectionProfile | null): Promise<AppConfig | null> {
   return new Promise((resolve) => {
     let saved: AppConfig | null = null;
     const id = existing?.id ?? crypto.randomUUID();
@@ -405,7 +405,6 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
     const body = h(
       "div",
       { class: "form-grid connection-dialog" },
-      h("p", { class: "form-intro" }, "Saved in workspace ", h("strong", {}, workspaceName), "."),
       field("Database type", h("div", { class: "driver-cards" }, ...cards)),
       availability,
       field("Connection name", name),

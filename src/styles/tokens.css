@@ -66,6 +66,31 @@
   --sidebar-width: 290px;
   --rail-width: 88px;
   color-scheme: light;
+
+  /* Density: compact is the default, comfortable restores the roomier spacing (Settings → Density). */
+  --row-h: 22px;
+  --head-h: 24px;
+  --filter-h: 24px;
+  --tree-row-h: 22px;
+  --tab-h: 30px;
+  --toolbar-pad: 3px 8px;
+  --button-pad: 3px 6px;
+  --cell-pad-x: 6px;
+  --bar-pad: 4px 10px;
+  --btn-h: 24px;
+}
+
+html[data-density="comfortable"] {
+  --row-h: 26px;
+  --head-h: 28px;
+  --filter-h: 28px;
+  --tree-row-h: 26px;
+  --tab-h: 36px;
+  --toolbar-pad: 5px 10px;
+  --button-pad: 5px 8px;
+  --cell-pad-x: 8px;
+  --bar-pad: 7px 14px;
+  --btn-h: 28px;
 }
 
 html[data-theme="dark"] {
