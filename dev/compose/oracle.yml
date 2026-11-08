@@ -2,13 +2,14 @@
 # Test-only credentials; never reuse them.
 # docker compose -f dev/compose/oracle.yml up -d --wait
 # 127.0.0.1:1521  shop / studio-root  service FREEPDB1 (SYSTEM password studio-root)
-# The Oracle tests also need Oracle Instant Client (19c or newer) on PATH.
+# The Oracle tests also need Oracle Instant Client (19c or newer): on PATH, or downloaded with
+# `cargo test live_oracle_instant_client_download -- --ignored` (see docs/engines/oracle.md).
 
 name: fosta-dev-sql
 
 services:
   oracle:
-    image: gvenzl/oracle-free:23-slim-faststart
+    image: gvenzl/oracle-free:${ORACLE_TAG:-23-slim-faststart}
     environment:
       ORACLE_PASSWORD: studio-root
       APP_USER: shop
