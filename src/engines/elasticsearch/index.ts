@@ -1,14 +1,18 @@
 /**
- * Elasticsearch UI module (a stub: Elasticsearch uses the shared views from `../shared.ts`).
- *
- * The Elasticsearch agent adds here: index and mapping views, the Console (REST) language, ES|QL and SQL languages, cluster health overview. Views go through `register`, editor languages through `languages`, node icons
- * through `icons`, and styles in `src/engines/elasticsearch/*.css` imported by those views (never `src/styles.css`).
+ * Elasticsearch UI module. Indices, data streams and aliases are `collection` nodes, so the shared document grid (typed
+ * by the mapping, Query DSL raw filters, keyset paging) and the design view (the mapping) open them. The engine adds
+ * the Dev Tools console language (`es-console`: highlighting, completion of endpoints, index names, Query DSL keys and
+ * fields, run-current-request, body formatting); ES|QL and SQL use the SQL editor. Console runs show a hits table and
+ * the JSON response per request.
  */
 import type { EngineUiModule } from "../index";
 
 const elasticsearch: EngineUiModule = {
   id: "elasticsearch",
   register: () => undefined,
+  languages: {
+    "es-console": async () => (await import("./language")).consoleLanguage(),
+  },
 };
 
 export default elasticsearch;

@@ -1,0 +1,19 @@
+{
+  "id": "elasticsearch",
+  "compose": "dev/compose/elasticsearch.yml",
+  "versions": ["8.19.23"],
+  "versionEnv": "ELASTICSEARCH_TAG",
+  "seed": null,
+  "paths": [
+    "src-tauri/src/engines/elasticsearch/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "src-tauri/src/net/**",
+    "dev/compose/elasticsearch.yml",
+    "ci/engines/elasticsearch.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_elasticsearch",
+  "note": "The suites recreate contract_items and contract_children themselves. The point-in-time test pages the logs-app data stream of dev/seed-nosql.sh and skips with a note when it is not seeded. https with the generated certificate; elastic / studio-elastic as in dev/compose/elasticsearch.yml."
+}

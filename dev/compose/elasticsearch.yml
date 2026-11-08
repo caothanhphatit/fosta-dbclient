@@ -7,7 +7,7 @@ name: fosta-dev-nosql
 
 services:
   elasticsearch:
-    image: elasticsearch:8.19.23
+    image: elasticsearch:${ELASTICSEARCH_TAG:-8.19.23}
     environment:
       ELASTIC_PASSWORD: studio-elastic
       discovery.type: single-node

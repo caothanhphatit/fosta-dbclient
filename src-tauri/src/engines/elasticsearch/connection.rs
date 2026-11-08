@@ -156,7 +156,12 @@ pub struct EsEngine {
 impl EsEngine {
     /// Calls `/` (checks the URL, credentials and TLS) and detects the distribution and version.
     pub async fn connect(options: &EsConnectOptions) -> AppResult<Self> {
-        let client = EsClient::new(options)?;
+        Self::connect_with(options, None).await
+    }
+
+    /// [`Self::connect`] with a rustls configuration from the connection's TLS settings.
+    pub async fn connect_with(options: &EsConnectOptions, tls: Option<rustls::ClientConfig>) -> AppResult<Self> {
+        let client = EsClient::with_tls(options, tls)?;
         let root = client.get("/").await?;
         let info = ClusterInfo::from_root(&root)?;
         Ok(Self { client, info })
@@ -192,7 +197,15 @@ impl EsEngine {
 }
 
 /// Percent-encodes one path segment (index names, ids, template names).
+///
+/// `.` and `..` are dot segments the URL parser resolves away (`/products/_doc/..` would be sent as `/products/`, a
+/// different and more dangerous request), and their percent-encoded forms are dot segments too. So they are encoded
+/// twice: the server then sees a literal `%2E` name, which addresses nothing. Callers refuse such names first
+/// ([`is_dot_segment`]); this keeps a missed check harmless.
 pub fn segment(text: &str) -> String {
+    if is_dot_segment(text) {
+        return text.replace('.', "%252E");
+    }
     let mut out = String::with_capacity(text.len());
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'*' | b',' | b'+' | b':' | b'@') {
@@ -204,10 +217,27 @@ pub fn segment(text: &str) -> String {
     out
 }
 
+/// `.` or `..`: a name that cannot be addressed in a URL path.
+pub fn is_dot_segment(text: &str) -> bool {
+    text == "." || text == ".."
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn dot_names_never_become_dot_segments() {
+        for name in [".", ".."] {
+            let encoded = segment(name);
+            let url = reqwest::Url::parse(&format!("http://h/products/_doc/{encoded}")).unwrap();
+            assert!(url.path().starts_with("/products/_doc/"), "{name} -> {}", url.path());
+            assert!(is_dot_segment(name));
+        }
+        assert_eq!(segment(".kibana"), ".kibana");
+        assert!(!is_dot_segment("..."));
+    }
 
     #[test]
     fn detects_distributions() {

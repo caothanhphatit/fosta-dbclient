@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use super::{
     classify::RequestClass,
     client::EsRequest,
-    connection::{segment, EsEngine},
+    connection::{is_dot_segment, segment, EsEngine},
 };
 use crate::error::{AppError, AppResult};
 
@@ -148,7 +148,7 @@ impl DocumentOp {
             }
         }
         let check_index = |index: &str| {
-            if index.trim().is_empty() || index.contains('*') || index.contains(',') {
+            if index.trim().is_empty() || index.contains('*') || index.contains(',') || is_dot_segment(index) {
                 Err(AppError::new(
                     "Document operations need one concrete index (no wildcards or lists).",
                 ))
@@ -156,6 +156,16 @@ impl DocumentOp {
                 Ok(segment(index))
             }
         };
+        // `.` and `..` would be resolved out of the URL and change which resource the request hits.
+        let id = match self {
+            Self::Index { id, .. } => id.as_deref().unwrap_or_default(),
+            Self::Update { id, .. } | Self::UpdateScript { id, .. } | Self::Delete { id, .. } => id.as_str(),
+        };
+        if is_dot_segment(id) {
+            return Err(AppError::new(
+                "A document id of '.' or '..' cannot be addressed over the REST API; use _bulk in the console.",
+            ));
+        }
         Ok(match self {
             Self::Index {
                 index,
@@ -212,7 +222,7 @@ impl DocumentOp {
 impl ByQueryOp {
     pub fn class(&self) -> RequestClass {
         match self.kind {
-            ByQueryKind::Update => RequestClass::Write,
+            ByQueryKind::Update => RequestClass::Destructive,
             ByQueryKind::Delete => RequestClass::Destructive,
         }
     }
@@ -227,7 +237,7 @@ impl EsEngine {
         }
         let response = self.client.send(&EsRequest::new(Method::GET, path)).await?;
         if response.status >= 400 && !(response.status == 404 && response.body["found"] == false) {
-            return Err(AppError::new(super::client::error_message(response.status, &response.body)));
+            return Err(super::errors::from_response(response.status, &response.body));
         }
         let body = response.body;
         Ok(Document {
@@ -246,7 +256,7 @@ impl EsEngine {
         let response = self.client.send(&op.request()?).await?;
         // Deleting a missing document answers 404 with `result: not_found`; report it rather than fail.
         if response.status >= 400 && response.body["result"] != "not_found" {
-            return Err(AppError::new(super::client::error_message(response.status, &response.body)));
+            return Err(super::errors::from_response(response.status, &response.body));
         }
         let body = response.body;
         Ok(WriteResult {
@@ -363,5 +373,41 @@ mod tests {
             max_docs: None,
         };
         assert_eq!(delete.class(), RequestClass::Destructive);
+    }
+
+    #[test]
+    fn dot_ids_and_indices_are_refused_so_the_url_keeps_its_target() {
+        // `/products/_doc/..` would be sent as `/products/`: a document delete would delete the index.
+        for (index, id) in [("products", ".."), ("products", "."), ("..", "1"), (".", "1")] {
+            let delete = DocumentOp::Delete {
+                index: index.into(),
+                id: id.into(),
+                options: Default::default(),
+            };
+            assert!(delete.request().is_err(), "{index} / {id}");
+            let update = DocumentOp::Update {
+                index: index.into(),
+                id: id.into(),
+                doc: json!({}),
+                upsert: false,
+                options: Default::default(),
+            };
+            assert!(update.request().is_err(), "{index} / {id}");
+        }
+        let index = DocumentOp::Index {
+            index: "products".into(),
+            id: Some("..".into()),
+            source: json!({}),
+            create_only: false,
+            options: Default::default(),
+        };
+        assert!(index.request().is_err());
+        // Dots inside a name are fine.
+        let dotted = DocumentOp::Delete {
+            index: ".ds-logs-1".into(),
+            id: "a.b".into(),
+            options: Default::default(),
+        };
+        assert_eq!(dotted.request().unwrap().path, "/.ds-logs-1/_doc/a.b");
     }
 }

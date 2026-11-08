@@ -36,6 +36,8 @@ pub struct EsRequest {
     pub path: String,
     pub body: Option<EsBody>,
     pub timeout: Option<Duration>,
+    /// Sent as `X-Opaque-Id`, so a cancelled run can find and cancel its tasks on the cluster.
+    pub opaque_id: Option<String>,
 }
 
 impl EsRequest {
@@ -45,6 +47,7 @@ impl EsRequest {
             path: path.into(),
             body: None,
             timeout: None,
+            opaque_id: None,
         }
     }
 
@@ -83,13 +86,21 @@ pub struct EsClient {
 
 impl EsClient {
     pub fn new(options: &EsConnectOptions) -> AppResult<Self> {
+        Self::with_tls(options, None)
+    }
+
+    /// Like [`Self::new`], with a rustls configuration built by the caller (the connection's `spec.tls` through
+    /// `net::tls::rustls_client_config`); it replaces the CA / fingerprint options of `options.tls`.
+    pub fn with_tls(options: &EsConnectOptions, tls: Option<rustls::ClientConfig>) -> AppResult<Self> {
         let urls = options.base_urls()?;
         let mut builder = reqwest::Client::builder()
             .connect_timeout(Duration::from_millis(
                 options.connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS),
             ))
             .user_agent(concat!("fosta-studio/", env!("CARGO_PKG_VERSION")));
-        if let Some(fingerprint) = options.tls.ca_fingerprint.as_deref().filter(|text| !text.trim().is_empty()) {
+        if let Some(config) = tls {
+            builder = builder.use_preconfigured_tls(config);
+        } else if let Some(fingerprint) = options.tls.ca_fingerprint.as_deref().filter(|text| !text.trim().is_empty()) {
             builder = builder.use_preconfigured_tls(pinned_tls_config(normalize_fingerprint(fingerprint)?)?);
         } else {
             if let Some(pem) = options.tls.ca_pem.as_deref().filter(|pem| !pem.trim().is_empty()) {
@@ -148,6 +159,9 @@ impl EsClient {
         if let Some(authorization) = &self.authorization {
             builder = builder.header(header::AUTHORIZATION, authorization);
         }
+        if let Some(opaque_id) = &request.opaque_id {
+            builder = builder.header("X-Opaque-Id", opaque_id);
+        }
         builder = match &request.body {
             None => builder,
             Some(EsBody::Json(value)) => builder
@@ -166,11 +180,11 @@ impl EsClient {
         builder.send().await
     }
 
-    /// Sends a request and fails on HTTP errors with the server's reason.
+    /// Sends a request and fails on HTTP errors with a structured error (`ENGINE_ERROR`, the error type as vendor code).
     pub async fn call(&self, request: &EsRequest) -> AppResult<Value> {
         let response = self.send(request).await?;
         if response.status >= 400 {
-            return Err(AppError::new(error_message(response.status, &response.body)));
+            return Err(super::errors::from_response(response.status, &response.body));
         }
         Ok(response.body)
     }
@@ -234,7 +248,7 @@ fn too_large() -> AppError {
 
 fn transport_error(error: reqwest::Error, timeout: Duration) -> AppError {
     if error.is_timeout() {
-        AppError::new(format!("The cluster did not answer within {} s.", timeout.as_secs_f32()))
+        AppError::coded("TIMEOUT", format!("The cluster did not answer within {} s.", timeout.as_secs_f32())).retryable(true)
     } else if error.is_connect() {
         // reqwest says only "client error (Connect)"; the cause (rustls "invalid peer certificate", "connection
         // refused") sits at the bottom of the source chain.
@@ -247,13 +261,18 @@ fn transport_error(error: reqwest::Error, timeout: Duration) -> AppError {
         let detail = chain.last().cloned().unwrap_or_else(|| error.to_string());
         let lower = format!("{error} {}", chain.join(" ")).to_ascii_lowercase();
         if lower.contains("certificate") || lower.contains("tls") || lower.contains("ssl") {
-            AppError::new(format!(
-                "TLS handshake failed: {detail}. Check the CA certificate or fingerprint, or allow self-signed certificates."
-            ))
+            AppError::coded(
+                "CONNECTION_ERROR",
+                format!("TLS handshake failed: {detail}. Check the CA certificate or fingerprint, or allow self-signed certificates."),
+            )
+            .with_cause(chain)
         } else {
-            AppError::new(format!(
-                "Could not connect to the cluster: {detail}. Check the URL and that the node is running."
-            ))
+            AppError::coded(
+                "CONNECTION_ERROR",
+                format!("Could not connect to the cluster: {detail}. Check the URL and that the node is running."),
+            )
+            .with_cause(chain)
+            .retryable(true)
         }
     } else {
         AppError::new(error.to_string())

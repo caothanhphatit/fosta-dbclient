@@ -1,0 +1,1 @@
+- OpenSearch is a ready engine on the Elasticsearch adapter: the same tree, document grid, console and safety rules, SQL through `_plugins/_sql`, point-in-time paging on 2.4+, and basic auth for the security plugin. An Elasticsearch server is refused with a message naming the right engine (and the reverse).

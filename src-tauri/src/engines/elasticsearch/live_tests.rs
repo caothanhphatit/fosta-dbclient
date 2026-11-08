@@ -410,12 +410,14 @@ async fn live_engine_elasticsearch_documents_and_admin() {
         upsert: false,
         options: stale,
     };
-    assert!(engine
-        .apply_document_op(&update)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("version_conflict"));
+    // Errors are structured: the error type is the vendor code, the reason the message, the HTTP status a field.
+    let conflict = engine.apply_document_op(&update).await.unwrap_err();
+    assert_eq!(
+        conflict.field("vendorCode").and_then(|code| code.as_str()),
+        Some("version_conflict_engine_exception")
+    );
+    assert_eq!(conflict.field("status").and_then(|status| status.as_u64()), Some(409));
+    assert!(conflict.to_string().contains("version conflict"), "{conflict}");
     let update = DocumentOp::Update {
         index: TEST_INDEX.into(),
         id: "3".into(),

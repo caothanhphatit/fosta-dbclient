@@ -7,7 +7,7 @@ name: fosta-dev-nosql
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:2.19.6
+    image: opensearchproject/opensearch:${OPENSEARCH_TAG:-2.19.6}
     environment:
       discovery.type: single-node
       DISABLE_SECURITY_PLUGIN: "true"
