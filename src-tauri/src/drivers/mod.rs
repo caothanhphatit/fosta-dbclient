@@ -84,7 +84,7 @@ pub trait Driver: Send + Sync {
 
 /// Opens the right driver for the profile and returns it with the server version.
 pub async fn open(profile: &ConnectionProfile, password: &str) -> AppResult<(Arc<dyn Driver>, String)> {
-    match profile.driver.as_str() {
+    match profile.engine.as_str() {
         "mssql" => {
             let (driver, version) = MssqlConnection::open(profile, password).await?;
             Ok((Arc::new(driver), version))
@@ -145,14 +145,10 @@ mod tests {
         let profile = ConnectionProfile {
             id: "x".into(),
             name: "x".into(),
-            driver: "postgress".into(),
+            engine: "postgress".into(),
             host: "127.0.0.1".into(),
             port: 1,
-            user: String::new(),
-            database: None,
-            save_password: false,
-            options: Default::default(),
-            safety: None,
+            ..Default::default()
         };
         let error = open(&profile, "").await.err().expect("refused");
         assert!(error.to_string().starts_with("Unknown database type 'postgress'"), "{error}");

@@ -2,7 +2,7 @@
 //! Ignored by default; run with:
 //!   cargo test perf_ -- --ignored --nocapture --test-threads=1
 
-use std::{collections::HashMap, time::Instant};
+use std::time::Instant;
 
 use crate::{
     config::ConnectionProfile,
@@ -13,14 +13,12 @@ fn mariadb() -> ConnectionProfile {
     ConnectionProfile {
         id: "perf-mariadb".into(),
         name: "perf".into(),
-        driver: "mariadb".into(),
+        engine: "mariadb".into(),
         host: "127.0.0.1".into(),
         port: 3306,
         user: "root".into(),
         database: Some("shop".into()),
-        save_password: false,
-        options: HashMap::new(),
-        safety: None,
+        ..Default::default()
     }
 }
 

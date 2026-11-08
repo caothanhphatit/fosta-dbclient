@@ -1,4 +1,4 @@
-import type { ConnectInfo } from "./contract";
+import type { ConnectInfo, SecretSlot } from "./contract";
 import { downloadInBrowser, invoke, invokeStreaming, isTauri, listen, type UnlistenFn } from "./transport";
 import type {
   AiConnection,
@@ -40,8 +40,13 @@ export const PASSWORD_REQUIRED = "PASSWORD_REQUIRED";
 
 export const api = {
   getConfig: () => invoke<AppConfig>("get_config"),
-  saveConnection: (profile: ConnectionProfile, password: string | null, workspaceId: string | null = null) =>
-    invoke<AppConfig>("save_connection", { profile, password, workspaceId }),
+  /** `secrets` holds other slots (SSH password, API key…); `password` stays for the password slot. */
+  saveConnection: (
+    profile: ConnectionProfile,
+    password: string | null,
+    workspaceId: string | null = null,
+    secrets: Partial<Record<SecretSlot, string>> | null = null,
+  ) => invoke<AppConfig>("save_connection", { profile, password, workspaceId, secrets }),
   deleteConnection: (id: string) => invoke<AppConfig>("delete_connection", { id }),
   testConnection: (profile: ConnectionProfile, password: string | null) => invoke<ConnectInfo>("test_connection", { profile, password }),
   connect: (id: string, password: string | null) => invoke<ConnectInfo>("connect", { id, password }),

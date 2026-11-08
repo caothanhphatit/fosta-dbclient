@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ai::{AiActive, AiConnection, AiSettings},
+    contract::{AuthMethodId, ConnectionSpec, SshConfig, TlsConfig, TlsMode},
     embedding::EmbeddingSettings,
     error::{AppError, AppResult},
     gateway::rules::SafetySettings,
@@ -24,46 +25,116 @@ const DEFAULT_WORKSPACE_ID: &str = "default";
 const DEFAULT_WORKSPACE_NAME: &str = "Local";
 const DEFAULT_WORKSPACE_COLOR: &str = "blue";
 const DEFAULT_WORKSPACE_ICON: &str = "laptop";
-const DEFAULT_DRIVER: &str = "mariadb";
+const DEFAULT_ENGINE: &str = "mariadb";
+/// The `configVersion` this build writes; a file without one is version 1.
+pub const CONFIG_VERSION: u32 = 2;
+/// Copy of the last version-1 file, made once before the first version-2 write.
+const V1_BACKUP_SUFFIX: &str = ".v1.bak";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
     pub id: String,
     pub name: String,
-    #[serde(default = "default_driver")]
-    pub driver: String,
+    /// The engine id. The JSON key stays `driver` so older versions can still read the file.
+    #[serde(rename = "driver", default = "default_engine")]
+    pub engine: String,
+    #[serde(default)]
     pub host: String,
+    #[serde(default)]
     pub port: u16,
+    #[serde(default)]
     pub user: String,
     #[serde(default)]
     pub database: Option<String>,
+    /// SQLite database file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// A connection string without its password (Mongo SRV / replica sets, ES node lists or Cloud ID).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     #[serde(default)]
     pub save_password: bool,
-    /// Driver-specific settings (TLS flags, a MongoDB URI, …), kept opaque here.
+    /// Engine-specific settings, kept opaque here.
     #[serde(default)]
     pub options: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthMethodId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<TlsConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<SshConfig>,
     /// Safety rules for this connection only, replacing the workspace's (see `crate::gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub safety: Option<SafetySettings>,
 }
 
-fn default_driver() -> String {
-    DEFAULT_DRIVER.into()
+fn default_engine() -> String {
+    DEFAULT_ENGINE.into()
 }
 
 impl ConnectionProfile {
     /// What the engine needs to connect (secrets are passed separately).
-    pub fn spec(&self) -> crate::contract::ConnectionSpec {
-        crate::contract::ConnectionSpec {
-            engine: self.driver.clone(),
+    pub fn spec(&self) -> ConnectionSpec {
+        let non_empty = |value: &Option<String>| value.clone().filter(|value| !value.trim().is_empty());
+        ConnectionSpec {
+            engine: self.engine.clone(),
             host: self.host.clone(),
             port: self.port,
             user: self.user.clone(),
-            database: self.database.clone().filter(|database| !database.is_empty()),
+            database: non_empty(&self.database),
+            file: non_empty(&self.file),
+            url: non_empty(&self.url),
             options: self.options.clone(),
-            ..Default::default()
+            tls: self.tls.clone(),
+            ssh: self.ssh.clone(),
+            auth: self.auth,
         }
+    }
+
+    /// Moves version-1 options into the version-2 fields; running it again changes nothing.
+    /// mongodb: `options.uri` → `url`. mssql: `options.encrypt` / `options.trustServerCertificate` → `tls`.
+    /// Options present win over the typed fields, since the connection dialog still writes them.
+    pub fn normalize(&mut self) {
+        match self.engine.as_str() {
+            "mongodb" => {
+                if let Some(uri) = self.options.remove("uri") {
+                    let uri = uri.trim();
+                    if !uri.is_empty() {
+                        self.url = Some(uri.to_owned());
+                    }
+                }
+            }
+            "mssql" => {
+                let encrypt = self.options.remove("encrypt");
+                let trust = self.options.remove("trustServerCertificate");
+                if encrypt.is_some() || trust.is_some() {
+                    let tls = self.tls.get_or_insert_with(TlsConfig::default);
+                    tls.mode = if encrypt.as_deref() == Some("false") {
+                        TlsMode::Disable
+                    } else {
+                        TlsMode::Require
+                    };
+                    tls.accept_invalid_certs = trust.as_deref() == Some("true");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether `other` points at the same server as this saved profile, so this profile's saved secrets may be
+    /// sent there.
+    pub fn same_target(&self, other: &ConnectionProfile) -> bool {
+        let (mut saved, mut draft) = (self.clone(), other.clone());
+        saved.normalize();
+        draft.normalize();
+        let blank = |value: &Option<String>| value.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned);
+        saved.engine == draft.engine
+            && saved.host.trim() == draft.host.trim()
+            && saved.port == draft.port
+            && saved.user.trim() == draft.user.trim()
+            && blank(&saved.url) == blank(&draft.url)
+            && blank(&saved.file) == blank(&draft.file)
     }
 }
 
@@ -133,6 +204,8 @@ impl Workspace {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", from = "StoredConfig")]
 pub struct AppConfig {
+    /// Always [`CONFIG_VERSION`] once loaded.
+    pub config_version: u32,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: String,
     pub embedding: Option<EmbeddingSettings>,
@@ -143,6 +216,9 @@ pub struct AppConfig {
     pub query_history: bool,
     /// Write debug-level entries to the application log (Settings → Debug logging).
     pub debug_logging: bool,
+    /// Shown once by the UI after startup (a corrupt config file was set aside). Never written to disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_notice: Option<String>,
 }
 
 /// On-disk shape. Accepts both the current layout (`workspaces`) and the
@@ -151,6 +227,9 @@ pub struct AppConfig {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredConfig {
+    /// Missing in version-1 files.
+    #[serde(default)]
+    config_version: Option<u32>,
     #[serde(default)]
     workspaces: Vec<Workspace>,
     #[serde(default)]
@@ -198,6 +277,8 @@ impl From<StoredConfig> for AppConfig {
             if workspace.safety.is_none() {
                 workspace.safety = Some(SafetySettings::default_for_icon(&workspace.icon));
             }
+            // Version 1 → 2; also applied to version-2 files, where it changes nothing.
+            workspace.connections.iter_mut().for_each(ConnectionProfile::normalize);
         }
         let active_workspace = stored
             .active_workspace
@@ -216,6 +297,7 @@ impl From<StoredConfig> for AppConfig {
             ai_active = None;
         }
         let mut config = Self {
+            config_version: CONFIG_VERSION,
             workspaces,
             active_workspace,
             embedding: stored.embedding,
@@ -223,6 +305,7 @@ impl From<StoredConfig> for AppConfig {
             ai_active,
             query_history: stored.query_history.unwrap_or(true),
             debug_logging: stored.debug_logging,
+            startup_notice: None,
         };
         config.repair_ai_active();
         config
@@ -245,14 +328,11 @@ impl AppConfig {
         config.workspaces[0].connections.push(ConnectionProfile {
             id: "local-mariadb".into(),
             name: "Local MariaDB".into(),
-            driver: DEFAULT_DRIVER.into(),
+            engine: DEFAULT_ENGINE.into(),
             host: "127.0.0.1".into(),
             port: 3306,
             user: "root".into(),
-            database: None,
-            save_password: false,
-            options: HashMap::new(),
-            safety: None,
+            ..Default::default()
         });
         config
     }
@@ -311,6 +391,7 @@ impl AppConfig {
     /// already there and removing it from any other workspace first.
     pub fn put_connection(&mut self, workspace_id: &str, mut profile: ConnectionProfile) -> AppResult<()> {
         self.workspace(workspace_id)?;
+        profile.normalize();
         if profile.safety.is_none() {
             // The connection dialog does not edit per-connection rules; saving keeps them.
             profile.safety = self.connection(&profile.id).and_then(|existing| existing.safety.clone());
@@ -442,13 +523,7 @@ pub struct ConfigStore {
 impl ConfigStore {
     pub fn load(local_connection: bool) -> AppResult<Self> {
         let path = config_path()?;
-        let current = if path.exists() {
-            serde_json::from_str(&fs::read_to_string(&path)?)?
-        } else {
-            let starter = AppConfig::starter(local_connection);
-            write_config(&path, &starter)?;
-            starter
-        };
+        let current = load_file(&path, local_connection)?;
         Ok(Self {
             path,
             current: Mutex::new(current),
@@ -487,6 +562,7 @@ impl ConfigStore {
     pub fn update(&self, change: impl FnOnce(&mut AppConfig) -> AppResult<()>) -> AppResult<AppConfig> {
         let mut current = self.current();
         let mut next = current.clone();
+        next.startup_notice = None;
         change(&mut next)?;
         write_config(&self.path, &next)?;
         *current = next.clone();
@@ -548,14 +624,282 @@ fn move_legacy_file(path: &Path, legacy: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// Reads the config at `path`: a missing file becomes the starter config (written), a version-1 file is migrated
+/// (after a one-time `.v1.bak` copy), and an unreadable one is moved aside to `.corrupt-<unix ts>` and replaced by
+/// the starter config, with a `startup_notice` for the UI.
+fn load_file(path: &Path, local_connection: bool) -> AppResult<AppConfig> {
+    if !path.exists() {
+        let starter = AppConfig::starter(local_connection);
+        write_config(path, &starter)?;
+        return Ok(starter);
+    }
+    let bytes = fs::read(path)?;
+    match serde_json::from_slice::<StoredConfig>(&bytes) {
+        Ok(stored) => {
+            if stored.config_version.unwrap_or(1) < CONFIG_VERSION {
+                backup_v1(path)?;
+            }
+            Ok(stored.into())
+        }
+        Err(error) => {
+            let aside = sibling(path, &format!(".corrupt-{}", unix_seconds()));
+            fs::rename(path, &aside)?;
+            let mut starter = AppConfig::starter(local_connection);
+            write_config(path, &starter)?;
+            starter.startup_notice = Some(format!(
+                "The settings file could not be read ({error}). It was moved to {} and Fosta Studio started with new settings.",
+                aside.display()
+            ));
+            Ok(starter)
+        }
+    }
+}
+
+/// Copies a version-1 file to `<name>.v1.bak`, once: an existing backup is kept.
+fn backup_v1(path: &Path) -> AppResult<()> {
+    let backup = sibling(path, V1_BACKUP_SUFFIX);
+    if !backup.exists() {
+        fs::copy(path, &backup)?;
+    }
+    Ok(())
+}
+
+/// `path` with `suffix` appended to its file name.
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
+fn unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+/// Writes `<name>.tmp`, syncs it, then renames it over `path`, so a crash never leaves a half-written config.
 fn write_config(path: &Path, config: &AppConfig) -> AppResult<()> {
-    fs::write(path, serde_json::to_string_pretty(config)?)?;
+    use std::io::Write;
+    let mut value = serde_json::to_value(config)?;
+    if let Some(object) = value.as_object_mut() {
+        object.remove("startupNotice");
+    }
+    let temporary = sibling(path, ".tmp");
+    let mut file = fs::File::create(&temporary)?;
+    file.write_all(serde_json::to_string_pretty(&value)?.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&temporary, path)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A version-1 file as 0.1.x wrote it: all four engines, the mssql TLS flags and a MongoDB URI in `options`.
+    const V1_FIXTURE: &str = r#"{
+      "workspaces": [{
+        "id": "default", "name": "Local", "color": "blue", "icon": "laptop",
+        "connections": [
+          { "id": "m1", "name": "MariaDB", "driver": "mariadb", "host": "127.0.0.1", "port": 3306, "user": "root",
+            "database": "shop", "savePassword": true, "options": {} },
+          { "id": "y1", "name": "MySQL", "driver": "mysql", "host": "db", "port": 3307, "user": "app", "database": null,
+            "savePassword": false, "options": { "ssl": "true" } },
+          { "id": "s1", "name": "SQL Server", "driver": "mssql", "host": "sql", "port": 1433, "user": "sa", "database": "ERP",
+            "savePassword": true, "options": { "encrypt": "true", "trustServerCertificate": "true", "appName": "x" } },
+          { "id": "s2", "name": "SQL Server plain", "driver": "mssql", "host": "sql", "port": 1433, "user": "sa",
+            "savePassword": true, "options": { "encrypt": "false" } },
+          { "id": "g1", "name": "Mongo", "driver": "mongodb", "host": "rs0", "port": 27017, "user": "admin",
+            "savePassword": true, "options": { "uri": "mongodb+srv://admin@cluster.example.net/app", "connectionMode": "string" } },
+          { "id": "d1", "name": "No driver", "host": "h", "port": 1, "user": "u" },
+          { "id": "x1", "name": "Future", "driver": "postgres", "host": "pg", "port": 5432, "user": "pg", "options": { "uri": "keep" } }
+        ]
+      }]
+    }"#;
+
+    fn migrate(text: &str) -> AppConfig {
+        serde_json::from_str(text).unwrap()
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!("fosta-config-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn v1_profiles_migrate_to_v2() {
+        let config = migrate(V1_FIXTURE);
+        assert_eq!(config.config_version, CONFIG_VERSION);
+        let profile = |id: &str| config.connection(id).unwrap();
+
+        let mariadb = profile("m1");
+        assert_eq!(
+            (mariadb.engine.as_str(), mariadb.tls.as_ref(), mariadb.url.as_ref()),
+            ("mariadb", None, None)
+        );
+        assert_eq!(
+            profile("y1").options.get("ssl").map(String::as_str),
+            Some("true"),
+            "other ids are untouched"
+        );
+
+        let mssql = profile("s1");
+        let tls = mssql.tls.as_ref().unwrap();
+        assert_eq!((tls.mode, tls.accept_invalid_certs), (TlsMode::Require, true));
+        assert_eq!(mssql.options.keys().collect::<Vec<_>>(), ["appName"]);
+        let plain = profile("s2").tls.as_ref().unwrap();
+        assert_eq!((plain.mode, plain.accept_invalid_certs), (TlsMode::Disable, false));
+
+        let mongo = profile("g1");
+        assert_eq!(mongo.url.as_deref(), Some("mongodb+srv://admin@cluster.example.net/app"));
+        assert!(!mongo.options.contains_key("uri"));
+        assert_eq!(mongo.spec().url, mongo.url);
+
+        assert_eq!(profile("d1").engine, "mariadb", "a missing driver still means mariadb");
+        let future = profile("x1");
+        assert_eq!(
+            (future.engine.as_str(), future.options.get("uri").map(String::as_str)),
+            ("postgres", Some("keep"))
+        );
+    }
+
+    #[test]
+    fn migration_round_trips_and_is_idempotent() {
+        let once = serde_json::to_value(migrate(V1_FIXTURE)).unwrap();
+        let twice = serde_json::to_value(migrate(&once.to_string())).unwrap();
+        assert_eq!(once, twice);
+        assert_eq!(once["configVersion"], 2);
+        let parsed: AppConfig = serde_json::from_value(once.clone()).unwrap();
+        assert_eq!(
+            parsed.connection("s1").unwrap().tls,
+            migrate(V1_FIXTURE).connection("s1").unwrap().tls
+        );
+    }
+
+    #[test]
+    fn v2_output_stays_readable_by_older_versions() {
+        let saved = serde_json::to_value(migrate(V1_FIXTURE)).unwrap();
+        for connection in saved["workspaces"][0]["connections"].as_array().unwrap() {
+            for key in ["id", "name", "driver", "host", "port", "user"] {
+                assert!(connection.get(key).is_some(), "{key} missing in {connection}");
+            }
+            assert!(connection.get("engine").is_none());
+            assert!(
+                connection.get("ssh").is_none() && connection.get("auth").is_none(),
+                "unset fields are left out"
+            );
+        }
+        assert!(saved.get("startupNotice").is_none());
+    }
+
+    #[test]
+    fn saving_normalizes_profiles_from_the_dialog() {
+        let mut config = AppConfig::default();
+        let mut profile = ConnectionProfile {
+            id: "s".into(),
+            name: "s".into(),
+            engine: "mssql".into(),
+            ..Default::default()
+        };
+        profile.options.insert("trustServerCertificate".into(), "true".into());
+        config.put_connection("default", profile).unwrap();
+        let saved = config.connection("s").unwrap();
+        assert!(saved.options.is_empty());
+        let tls = saved.tls.as_ref().unwrap();
+        assert_eq!(
+            (tls.mode, tls.accept_invalid_certs),
+            (TlsMode::Require, true),
+            "missing encrypt means on"
+        );
+    }
+
+    #[test]
+    fn saved_secrets_are_bound_to_the_target() {
+        let saved = migrate(V1_FIXTURE).connection("g1").unwrap().clone();
+        let mut draft = saved.clone();
+        draft.name = "renamed".into();
+        draft.database = Some("other".into());
+        assert!(saved.same_target(&draft), "name and database do not matter");
+        let mut v1_draft = draft.clone();
+        v1_draft.url = None;
+        v1_draft
+            .options
+            .insert("uri".into(), "mongodb+srv://admin@cluster.example.net/app".into());
+        assert!(saved.same_target(&v1_draft), "the dialog's options.uri compares as url");
+        let changes: [fn(&mut ConnectionProfile); 6] = [
+            |p: &mut ConnectionProfile| p.host = "evil".into(),
+            |p: &mut ConnectionProfile| p.port = 1,
+            |p: &mut ConnectionProfile| p.user = "root".into(),
+            |p: &mut ConnectionProfile| p.engine = "mysql".into(),
+            |p: &mut ConnectionProfile| p.url = Some("mongodb://evil".into()),
+            |p: &mut ConnectionProfile| p.file = Some("x.db".into()),
+        ];
+        for change in changes {
+            let mut moved = saved.clone();
+            change(&mut moved);
+            assert!(!saved.same_target(&moved), "{moved:?}");
+        }
+    }
+
+    #[test]
+    fn a_v1_file_is_backed_up_once() {
+        let directory = scratch("v1bak");
+        let path = directory.join(CONFIG_FILE);
+        fs::write(&path, V1_FIXTURE).unwrap();
+        let config = load_file(&path, true).unwrap();
+        assert!(config.startup_notice.is_none());
+        let backup = directory.join("fosta-studio.json.v1.bak");
+        assert_eq!(fs::read_to_string(&backup).unwrap(), V1_FIXTURE);
+        write_config(&path, &config).unwrap();
+        fs::write(&backup, "older backup").unwrap();
+        fs::write(&path, V1_FIXTURE).unwrap();
+        load_file(&path, true).unwrap();
+        assert_eq!(fs::read_to_string(&backup).unwrap(), "older backup", "an existing backup is kept");
+        fs::write(&path, serde_json::to_string(&config).unwrap()).unwrap();
+        fs::remove_file(&backup).unwrap();
+        load_file(&path, true).unwrap();
+        assert!(!backup.exists(), "version-2 files are not backed up");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn config_writes_are_atomic_and_leave_out_the_notice() {
+        let directory = scratch("atomic");
+        let path = directory.join(CONFIG_FILE);
+        fs::write(&path, "old").unwrap();
+        let mut config = AppConfig::starter(false);
+        config.startup_notice = Some("hello".into());
+        write_config(&path, &config).unwrap();
+        assert!(!directory.join("fosta-studio.json.tmp").exists());
+        let written: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(written.get("startupNotice").is_none());
+        assert_eq!(written["configVersion"], 2);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_corrupt_file_is_set_aside_and_replaced_by_the_starter() {
+        let directory = scratch("corrupt");
+        let path = directory.join(CONFIG_FILE);
+        fs::write(&path, "{ not json").unwrap();
+        let config = load_file(&path, true).unwrap();
+        let notice = config.startup_notice.as_deref().unwrap();
+        assert!(notice.contains("fosta-studio.json.corrupt-"), "{notice}");
+        assert_eq!(config.workspaces[0].connections[0].id, "local-mariadb");
+        let aside: Vec<_> = fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("fosta-studio.json.corrupt-"))
+            .collect();
+        assert_eq!(aside.len(), 1);
+        assert_eq!(fs::read_to_string(directory.join(&aside[0])).unwrap(), "{ not json");
+        let reloaded = load_file(&path, true).unwrap();
+        assert!(reloaded.startup_notice.is_none(), "the notice is not persisted");
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn containers_start_without_a_localhost_connection() {

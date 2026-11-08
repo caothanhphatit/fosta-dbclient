@@ -97,7 +97,7 @@ impl AiProvider {
 }
 
 /// One saved LLM provider account, like a database connection. Its key is in
-/// the secret store under `secrets::ai_account(id)`.
+/// the secret store under `secrets::SecretKey::AiKey(id)`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConnection {

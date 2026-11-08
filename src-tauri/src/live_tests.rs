@@ -24,7 +24,7 @@ fn profile(id: &str, driver: &str, port: u16, user: &str, database: &str, option
     ConnectionProfile {
         id: id.into(),
         name: id.into(),
-        driver: driver.into(),
+        engine: driver.into(),
         host: "127.0.0.1".into(),
         port,
         user: user.into(),
@@ -34,7 +34,7 @@ fn profile(id: &str, driver: &str, port: u16, user: &str, database: &str, option
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect::<HashMap<_, _>>(),
-        safety: None,
+        ..Default::default()
     }
 }
 
@@ -120,7 +120,7 @@ async fn exercise(driver: &dyn Driver, database: &str, table: &str, filter: &str
 async fn live_saved_passwords_are_readable() {
     for id in ["local-mariadb", "local-mssql", "local-mongo"] {
         assert!(
-            crate::secrets::load_password(id).expect("keyring").is_some(),
+            crate::secrets::contains(&crate::secrets::SecretKey::connection(id, crate::contract::SecretSlot::Password)).expect("keyring"),
             "no saved password for {id}"
         );
     }
@@ -607,7 +607,7 @@ async fn live_gateway_rejects_injected_filters() {
             .await
             .expect("connect");
         let id = profile.id.as_str();
-        let create = if profile.driver == "mssql" {
+        let create = if profile.engine == "mssql" {
             "IF OBJECT_ID('dbo.gate_probe') IS NULL CREATE TABLE dbo.gate_probe (id INT PRIMARY KEY); \
              DELETE FROM dbo.gate_probe; INSERT INTO dbo.gate_probe VALUES (1)"
         } else {
@@ -627,9 +627,9 @@ async fn live_gateway_rejects_injected_filters() {
             probe_rows(&manager, id, database).await,
             1,
             "{}: the probe row survived",
-            profile.driver
+            profile.engine
         );
-        if profile.driver == "mariadb" {
+        if profile.engine == "mariadb" {
             // Defence in depth: the driver itself runs browse queries as prepared statements.
             let direct = manager.legacy_driver(id).unwrap().browse_table(&injected, &Limits::default()).await;
             assert!(direct.is_err(), "a prepared statement cannot carry a second statement");
@@ -643,7 +643,7 @@ async fn live_gateway_rejects_injected_filters() {
             gateway::legacy_browse(&manager, &context, &fine).await.expect("valid filter").total,
             1
         );
-        println!("{}: injected filter rejected with: {error}", profile.driver);
+        println!("{}: injected filter rejected with: {error}", profile.engine);
         setup(&manager, id, database, "DROP TABLE gate_probe").await;
         manager.disconnect(id).await;
     }
@@ -766,7 +766,7 @@ async fn live_transactions() {
             .await
             .expect("connect");
         let id = profile.id.as_str();
-        let create = if profile.driver == "mssql" {
+        let create = if profile.engine == "mssql" {
             "IF OBJECT_ID('dbo.gate_probe') IS NULL CREATE TABLE dbo.gate_probe (id INT PRIMARY KEY); DELETE FROM dbo.gate_probe"
         } else {
             "CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe"
@@ -779,33 +779,33 @@ async fn live_transactions() {
         let idle = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Status)
             .await
             .expect("status");
-        assert!(idle.supported && !idle.open && idle.auto_commit, "{}: {idle:?}", profile.driver);
+        assert!(idle.supported && !idle.open && idle.auto_commit, "{}: {idle:?}", profile.engine);
         let begun = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Begin)
             .await
             .expect("begin");
-        assert!(begun.open, "{}: begin opens a transaction", profile.driver);
+        assert!(begun.open, "{}: begin opens a transaction", profile.engine);
         let inserted = run("INSERT INTO gate_probe VALUES (1)").await.expect("insert");
         assert!(inserted.transaction.open, "still open after the run");
         // A second Begin must be refused, not commit (MySQL) or nest (SQL Server) the open one.
         let nested = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Begin)
             .await
             .expect_err("nested begin refused");
-        assert_eq!(nested.to_string(), drivers::types::TRANSACTION_ALREADY_OPEN, "{}", profile.driver);
+        assert_eq!(nested.to_string(), drivers::types::TRANSACTION_ALREADY_OPEN, "{}", profile.engine);
         let rolled = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Rollback)
             .await
             .expect("rollback");
         assert!(!rolled.open);
         let count = run("SELECT COUNT(*) FROM gate_probe").await.expect("count");
-        assert_eq!(count.sets[0].rows[0][0].as_deref(), Some("0"), "{}: rolled back", profile.driver);
+        assert_eq!(count.sets[0].rows[0][0].as_deref(), Some("0"), "{}: rolled back", profile.engine);
         assert!(!count.transaction.open);
 
         // Auto-commit off: the first write opens a transaction implicitly.
         let manual = gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::AutoCommitOff)
             .await
             .expect("autocommit off");
-        assert!(!manual.auto_commit && !manual.open, "{}: {manual:?}", profile.driver);
+        assert!(!manual.auto_commit && !manual.open, "{}: {manual:?}", profile.engine);
         let pending = run("INSERT INTO gate_probe VALUES (2)").await.expect("insert");
-        assert!(pending.transaction.open, "{}: implicit transaction", profile.driver);
+        assert!(pending.transaction.open, "{}: implicit transaction", profile.engine);
         gateway::legacy_transaction(&manager, &context, "tx", TransactionOp::Commit)
             .await
             .expect("commit");
@@ -814,8 +814,8 @@ async fn live_transactions() {
             .expect("autocommit on");
         assert!(back.auto_commit && !back.open);
         let count = run("SELECT COUNT(*) FROM gate_probe").await.expect("count");
-        assert_eq!(count.sets[0].rows[0][0].as_deref(), Some("1"), "{}: committed", profile.driver);
-        println!("{}: transaction states {idle:?} → {begun:?} → {rolled:?}", profile.driver);
+        assert_eq!(count.sets[0].rows[0][0].as_deref(), Some("1"), "{}: committed", profile.engine);
+        println!("{}: transaction states {idle:?} → {begun:?} → {rolled:?}", profile.engine);
 
         manager.close_session("tx").await;
         setup(&manager, id, database, "DROP TABLE gate_probe").await;

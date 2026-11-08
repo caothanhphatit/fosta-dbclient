@@ -141,14 +141,14 @@ fn profile_of(request: &ConnectRequest) -> ConnectionProfile {
     ConnectionProfile {
         id: String::new(),
         name: String::new(),
-        driver: spec.engine.clone(),
+        engine: spec.engine.clone(),
         host: request.endpoint.host.clone(),
         port: request.endpoint.port,
         user: spec.user.clone(),
         database: spec.database.clone(),
         save_password: false,
         options,
-        safety: None,
+        ..Default::default()
     }
 }
 

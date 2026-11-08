@@ -546,7 +546,9 @@ async function bootstrap(): Promise<void> {
   revealWindowAfterFirstPaint();
   preloadQueryView();
   try {
-    applyConfig(await api.getConfig());
+    const config = await api.getConfig();
+    applyConfig(config);
+    if (config.startupNotice) toast(config.startupNotice, "info");
     if (supported.tasks) await tasksPanel.init();
   } catch (error) {
     toast(errorText(error), "error");

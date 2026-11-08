@@ -69,7 +69,7 @@ pub async fn delete_workspace(state: &AppState, id: String) -> AppResult<AppConf
     }
     for profile in &doomed.connections {
         state.engines.disconnect(&profile.id).await;
-        secrets::forget_password(&profile.id)?;
+        secrets::delete_connection(&profile.id)?;
     }
     state.config.update(|config| config.remove_workspace(&id).map(|_| ()))
 }

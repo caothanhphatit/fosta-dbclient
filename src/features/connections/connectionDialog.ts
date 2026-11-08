@@ -13,6 +13,17 @@ import {
   type ParsedConnection,
 } from "./connectionString";
 
+/** The dialog still edits the version-1 option keys; the backend stores them as `url` and `tls`. */
+function dialogOptions(profile: ConnectionProfile | null): Record<string, string> {
+  const options = { ...(profile?.options ?? {}) };
+  if (profile?.driver === "mongodb" && profile.url) options.uri ??= profile.url;
+  if (profile?.driver === "mssql" && profile.tls) {
+    options.encrypt ??= String(profile.tls.mode !== "disable");
+    options.trustServerCertificate ??= String(profile.tls.acceptInvalidCerts);
+  }
+  return options;
+}
+
 export function connectionDialog(existing: ConnectionProfile | null, workspaceName: string): Promise<AppConfig | null> {
   return new Promise((resolve) => {
     let saved: AppConfig | null = null;
@@ -32,9 +43,9 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
     const remember = checkbox(`Save password in ${capabilities().secretStore}`, existing?.savePassword ?? true);
     const optionsHost = h("div", { class: "form-grid driver-options" });
     const availability = h("p", { class: "driver-note" });
-    const options: Record<string, string> = { ...(existing?.options ?? {}) };
+    const options = dialogOptions(existing);
     const optionInputs = new Map<string, HTMLInputElement>();
-    let mode: "params" | "string" = existing?.options[MODE_OPTION] === "string" || existing?.options.uri ? "string" : "params";
+    let mode: "params" | "string" = options[MODE_OPTION] === "string" || options.uri ? "string" : "params";
     const connectionString = h("textarea", { class: "input mono connection-string", rows: "3", spellcheck: "false" });
     const stringHint = h("span", { class: "field-hint" });
     /** In the Docker edition, localhost is the container: suggest host.docker.internal. */
@@ -201,7 +212,7 @@ export function connectionDialog(existing: ConnectionProfile | null, workspaceNa
       if (mode === "string") return stringPassword ?? (existing?.savePassword ? null : "");
       return password.value === "" && existing?.savePassword ? null : password.value;
     };
-    if (mode === "string") connectionString.value = existing?.options.uri ?? formatConnectionString(driver.id, currentFields());
+    if (mode === "string") connectionString.value = options.uri ?? formatConnectionString(driver.id, currentFields());
     paramsSection.append(
       h("div", { class: "field-row" }, field("Host", host), h("div", { class: "narrow" }, field("Port", port))),
       h("div", { class: "field-row even" }, field("User", user), field("Password", password)),

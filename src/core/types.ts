@@ -1,3 +1,5 @@
+import type { AuthMethodId, SshConfig, TlsConfig } from "./contract";
+
 export type Cell = string | null;
 
 export type DriverId = "mariadb" | "mysql" | "mssql" | "mongodb";
@@ -10,9 +12,17 @@ export interface ConnectionProfile {
   port: number;
   user: string;
   database: string | null;
+  /** SQLite database file. */
+  file?: string;
+  /** Connection string without its password (MongoDB SRV / replica sets); the backend moves `options.uri` here. */
+  url?: string;
   savePassword: boolean;
   /** Driver-specific settings, see drivers.ts for the keys each driver reads. */
   options: Record<string, string>;
+  auth?: AuthMethodId;
+  /** TLS settings; the backend moves the SQL Server `options.encrypt` / `options.trustServerCertificate` here. */
+  tls?: TlsConfig;
+  ssh?: SshConfig;
   /** Safety rules for this connection only (replacing the workspace's); not edited by the dialog yet. */
   safety?: SafetySettings | null;
 }
@@ -192,6 +202,10 @@ export interface AppConfig {
   queryHistory: boolean;
   /** Debug-level entries in the application log (Settings → Debug logging). */
   debugLogging?: boolean;
+  /** Settings file version; 2 since the engine contract. */
+  configVersion?: number;
+  /** Set once after startup when the settings file could not be read and was set aside. */
+  startupNotice?: string;
 }
 
 export interface ChatMessage {
