@@ -72,7 +72,8 @@ fn is_listed(kind: &NodeKind) -> bool {
     kind.is_relation() || *kind == NodeKind::SEARCH_INDEX || *kind == NodeKind::KEY
 }
 
-/// The objects of `database`: the database node's children, looking inside schema and folder nodes on the way.
+/// The objects of `database`: the database node's children, looking inside schema and folder nodes on the way, in the
+/// engine's order.
 pub async fn objects(handle: &Handle, ctx: &CallContext, database: &str) -> AppResult<Vec<ObjectNode>> {
     let root = database_nodes(handle, ctx)
         .await?
@@ -80,20 +81,31 @@ pub async fn objects(handle: &Handle, ctx: &CallContext, database: &str) -> AppR
         .find(|node| database_name(node) == database)
         .ok_or_else(|| AppError::new(format!("There is no database {database} on this connection")))?;
     let mut found = Vec::new();
-    let mut pending = vec![(root.key, 0)];
-    while let Some((parent, depth)) = pending.pop() {
+    collect(handle, ctx, root.key, 0, &mut found).await?;
+    Ok(found)
+}
+
+/// Adds the listed objects under `parent` to `found`, visiting containers where they appear (boxed: it recurses).
+fn collect<'a>(
+    handle: &'a Handle,
+    ctx: &'a CallContext,
+    parent: NodeKey,
+    depth: usize,
+    found: &'a mut Vec<ObjectNode>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = AppResult<()>> + Send + 'a>> {
+    Box::pin(async move {
         for node in children(handle, ctx, Some(parent)).await? {
+            if found.len() >= MAX_OBJECTS {
+                break;
+            }
             if is_listed(&node.kind) {
                 found.push(node);
             } else if node.expandable && depth < MAX_DEPTH && matches!(node.kind.as_str(), "schema" | "folder") {
-                pending.push((node.key.clone(), depth + 1));
-            }
-            if found.len() >= MAX_OBJECTS {
-                return Ok(found);
+                collect(handle, ctx, node.key, depth + 1, found).await?;
             }
         }
-    }
-    Ok(found)
+        Ok(())
+    })
 }
 
 /// The reference of the object called `name` (`table`, or `schema.table`), matched exactly first, then ignoring case.

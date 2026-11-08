@@ -534,4 +534,87 @@ mod tests {
         assert!(reply.contains("```"), "no code block");
         db.disconnect("shop").await;
     }
+
+    async fn connect(id: &str, spec: crate::contract::ConnectionSpec, password: &str) -> ConnectionManager {
+        let db = ConnectionManager::default();
+        db.connect(id, spec, crate::contract::ConnectSecrets::password(password))
+            .await
+            .expect("connect");
+        db
+    }
+
+    fn named_env(engine: &str, name: &str, default: &str) -> String {
+        std::env::var(format!("FOSTA_CONTRACT_{engine}_{name}")).unwrap_or_else(|_| default.to_owned())
+    }
+
+    /// SQL Server: tables sit under schema and folder nodes; `schema.T` and a bare `T` both resolve.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs dev/compose/mssql.yml"]
+    async fn contract_mssql_assistant_tools() {
+        let env = |name: &str, default: &str| named_env("MSSQL", name, default);
+        let spec = crate::contract::ConnectionSpec {
+            engine: "mssql".into(),
+            host: env("HOST", "127.0.0.1"),
+            port: env("PORT", "1433").parse().unwrap_or(1433),
+            user: env("USER", "sa"),
+            database: Some("ERP".into()),
+            tls: Some(crate::contract::TlsConfig {
+                mode: crate::contract::TlsMode::Require,
+                accept_invalid_certs: true,
+                ..crate::contract::TlsConfig::default()
+            }),
+            ..crate::contract::ConnectionSpec::default()
+        };
+        let db = connect("erp", spec, &env("PASSWORD", "Studio#Pass2026")).await;
+        let context: ChatContext = serde_json::from_value(json!({ "connectionId": "erp", "database": "ERP" })).unwrap();
+        let events = |_: ChatEvent| {};
+        let tool = |name: &str, input: Value| {
+            let (db, context, call) = (&db, &context, call(name, input));
+            async move { run_tool(db, context, &call, &events).await }
+        };
+        let tables = tool("list_tables", json!({})).await.unwrap();
+        assert!(tables.lines().any(|line| line.contains("Customers")), "{tables}");
+        assert!(tables.lines().any(|line| line.contains("Invoices")), "{tables}");
+        for name in ["sales.Invoices", "Invoices"] {
+            let described = tool("describe_table", json!({ "table": name })).await.unwrap();
+            assert!(described.contains("InvoiceId") && described.contains("[PK]"), "{name}: {described}");
+        }
+        let overview = tool("schema_overview", json!({})).await.unwrap();
+        assert_eq!(overview.matches(" -> ").count(), 3, "{overview}");
+        db.disconnect("erp").await;
+    }
+
+    /// MongoDB: collections are listed and described from sampled fields.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs dev/compose/mongo.yml"]
+    async fn contract_mongo_assistant_tools() {
+        let env = |name: &str, default: &str| named_env("MONGO", name, default);
+        let spec = crate::contract::ConnectionSpec {
+            engine: "mongodb".into(),
+            host: env("HOST", "127.0.0.1"),
+            port: env("PORT", "27017").parse().unwrap_or(27017),
+            user: env("USER", "root"),
+            database: Some("admin".into()),
+            ..crate::contract::ConnectionSpec::default()
+        };
+        let db = connect("events", spec, &env("PASSWORD", "studio-root")).await;
+        let context: ChatContext = serde_json::from_value(json!({ "connectionId": "events", "database": "events" })).unwrap();
+        let events = |_: ChatEvent| {};
+        let tool = |name: &str, input: Value| {
+            let (db, context, call) = (&db, &context, call(name, input));
+            async move { run_tool(db, context, &call, &events).await }
+        };
+        let collections = tool("list_tables", json!({})).await.unwrap();
+        let first = collections
+            .lines()
+            .find(|line| line.contains("\tcollection"))
+            .and_then(|line| line.split('\t').next())
+            .unwrap_or_else(|| panic!("no collection in {collections}"))
+            .to_owned();
+        let described = tool("describe_table", json!({ "table": first })).await.unwrap();
+        assert!(described.contains("- _id "), "{described}");
+        let overview = tool("schema_overview", json!({})).await.unwrap();
+        assert!(overview.contains("No foreign keys are declared."), "{overview}");
+        db.disconnect("events").await;
+    }
 }
