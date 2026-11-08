@@ -34,7 +34,6 @@ pub mod runtime;
 pub mod schema;
 pub mod secrets;
 pub mod tasks;
-pub mod vector;
 
 use std::sync::Arc;
 

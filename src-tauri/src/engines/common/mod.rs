@@ -7,6 +7,7 @@ pub mod adapt;
 pub mod classify;
 pub mod split;
 pub mod sqlbuild;
+pub mod sqlclassify;
 pub mod value;
 
 use serde::Serialize;

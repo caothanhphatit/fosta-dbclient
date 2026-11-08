@@ -374,7 +374,8 @@ pub async fn suite_browse(f: &Fixture) {
         (FilterOp::Gt, k, vec!["990"], 10),
         (FilterOp::Ge, k, vec!["991"], 10),
         (FilterOp::Contains, f.name_column, vec!["ITEM 000"], 9),
-        (FilterOp::NotContains, f.name_column, vec!["item 0"], 0),
+        // "item 1000" is the only name without "item 0".
+        (FilterOp::NotContains, f.name_column, vec!["item 0"], 1),
         (FilterOp::StartsWith, f.name_column, vec!["item 01"], 100),
         (FilterOp::EndsWith, f.name_column, vec!["999"], 1),
         (FilterOp::Like, f.name_column, vec!["item 00_1"], 10),

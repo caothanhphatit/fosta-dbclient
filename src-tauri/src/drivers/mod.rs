@@ -28,8 +28,6 @@ use crate::{
     schema::BulkSchema,
 };
 
-pub const NEEDS_MYSQL: &str = "This feature needs a MariaDB or MySQL connection";
-
 /// The engine behind a driver: picks the SQL dialect and the engine-level backstops.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Engine {
@@ -76,10 +74,6 @@ pub trait Driver: Send + Sync {
     }
     /// Releases pools and sockets; the driver is dropped right after.
     async fn close(&self) {}
-    /// MariaDB-only tooling (vector search) downcasts through this.
-    fn as_mysql(&self) -> Option<&MysqlConnection> {
-        None
-    }
 }
 
 /// Opens the right driver for the profile and returns it with the server version.

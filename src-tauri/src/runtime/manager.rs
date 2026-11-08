@@ -187,13 +187,22 @@ async fn open(spec: ConnectionSpec, secrets: ConnectSecrets) -> AppResult<(&'sta
     };
     let label = engine.descriptor().label.clone();
     let id = engine.id().to_owned();
-    let legacy = super::legacy::handles(&id);
+    let (legacy, wrapped) = (super::legacy::handles(&id), super::legacy::wrapped(&id));
     let (conn, driver) = contained(&label, "connected", async move {
-        if legacy {
+        if wrapped {
             let (conn, driver) = super::legacy::connect(&request).await?;
-            Ok((conn, Some(driver)))
-        } else {
-            Ok((engine.connect(request).await?, None))
+            return Ok((conn, Some(driver)));
+        }
+        let conn = engine.connect(request.clone()).await?;
+        if !legacy {
+            return Ok((conn, None));
+        }
+        match super::legacy::open_driver(&request).await {
+            Ok(driver) => Ok((conn, Some(driver))),
+            Err(error) => {
+                conn.close().await;
+                Err(error)
+            }
         }
     })
     .await
@@ -257,14 +266,22 @@ impl ConnectionManager {
     pub async fn probe(spec: ConnectionSpec, secrets: ConnectSecrets) -> AppResult<ConnectInfo> {
         let (_, opened) = open(spec, secrets).await?;
         opened.conn.close().await;
+        if let Some(driver) = opened.legacy {
+            driver.close().await;
+        }
         Ok(opened.info)
     }
 
     async fn close_entry(&self, entry: ConnEntry) {
         let conn = entry.conn;
+        // A wrapped legacy driver is closed by its connection; one next to a native connection is closed here.
+        let legacy = entry.legacy.filter(|_| !super::legacy::wrapped(entry.engine.id()));
         let label = entry.engine.descriptor().label.clone();
         let _ = contained(&label, "disconnected", async move {
             conn.close().await;
+            if let Some(driver) = legacy {
+                driver.close().await;
+            }
             Ok(())
         })
         .await;
@@ -417,19 +434,6 @@ impl ConnectionManager {
         let handle = self.handle(connection_id)?;
         let driver = self.legacy_driver(connection_id)?;
         handle.call(what, move |_| call(driver)).await
-    }
-
-    /// A pooled MariaDB/MySQL connection for the vector tooling (until it moves to `invoke`).
-    pub async fn mysql_conn(&self, connection_id: &str) -> AppResult<mysql_async::Conn> {
-        self.call_legacy(connection_id, "opened a connection", |driver| async move {
-            let mysql = driver.as_mysql().ok_or_else(|| AppError::new(crate::drivers::NEEDS_MYSQL))?;
-            mysql.pooled().await
-        })
-        .await
-    }
-
-    pub fn is_mysql(&self, connection_id: &str) -> AppResult<bool> {
-        Ok(self.legacy_driver(connection_id)?.as_mysql().is_some())
     }
 
     /// Registers a legacy driver directly (tests use fakes that record what they were asked to do).

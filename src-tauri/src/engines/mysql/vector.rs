@@ -1,21 +1,66 @@
+//! MariaDB vector tooling (VECTOR columns, MariaDB 11.7+), served as the engine operations `vector.info`,
+//! `vector.fetch`, `vector.search`, `vector.health` and `vector.recall` (`Connection::invoke`). Arguments and results are
+//! the JSON shapes of the vector commands; result sets are text cells like the old query results, with vectors
+//! summarised.
+
 use std::{
     collections::{HashMap, HashSet},
     time::Instant,
 };
 
-use mysql_async::{prelude::*, Conn, Row, Value};
+use mysql_async::{consts::ColumnType, prelude::*, Column, Conn, QueryResult, Row, Value};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    drivers::{
-        mysql::{
-            binary_columns, bind_values, create_statement, key_condition, primary_key, qualified, quote_ident, read_result_sets, row_texts,
-            text_rows, where_clause, VectorHint,
-        },
-        types::{elapsed_millis, CellValue, ResultSet},
-    },
-    error::{AppError, AppResult},
+use super::{
+    catalog::{create_statement, qualified, quote_ident, text_rows},
+    values::{guess_vector_dims, plain_text, sql_type_name, vector_text as vector_literal, BINARY_CHARSET},
 };
+use crate::error::{AppError, AppResult};
+
+pub use super::values::{decode_vector, parse_vector as parse_literal};
+
+/// `0x…` with upper-case digits, as the vector view has always shown binary cells.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::with_capacity(2 + bytes.len() * 2);
+    text.push_str("0x");
+    for byte in bytes {
+        let _ = write!(text, "{byte:02X}");
+    }
+    text
+}
+
+/// The engine operations this module answers.
+pub const OPERATIONS: [&str; 5] = ["vector.info", "vector.fetch", "vector.search", "vector.health", "vector.recall"];
+
+/// A key cell of a row, as the grid sends it (`0x…` for binary columns).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeyCell {
+    pub column: String,
+    pub value: Option<String>,
+}
+
+/// A result column as the vector view reads it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextColumn {
+    pub name: String,
+    pub type_name: String,
+    pub numeric: bool,
+    pub binary: bool,
+    pub primary: bool,
+    pub vector_dims: Option<u32>,
+}
+
+/// A result set with text cells.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultSet {
+    pub columns: Vec<TextColumn>,
+    pub rows: Vec<Vec<Option<String>>>,
+    pub affected_rows: u64,
+    pub truncated: bool,
+}
 
 const PREVIEW_VALUES: usize = 4;
 const NORM_TOLERANCE: f32 = 0.01;
@@ -25,7 +70,7 @@ const MAX_RECALL_QUERIES: u32 = 100;
 const MAX_SAMPLE: u32 = 50_000;
 const KEY_SEPARATOR: &str = "\u{1f}";
 
-pub(crate) struct TableColumn {
+pub struct TableColumn {
     pub name: String,
     pub vector_dims: Option<u32>,
 }
@@ -54,7 +99,7 @@ pub struct VectorInfo {
     pub indexes: Vec<VectorIndex>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Metric {
     Auto,
@@ -80,25 +125,287 @@ impl Metric {
     }
 }
 
-#[derive(Debug, Deserialize)]
+/// The query vector of a search: a row's vector, a typed literal, or floats already computed (an embedded text).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-pub enum QueryVector {
-    Row { key: Vec<CellValue> },
+pub enum SearchQuery {
+    Row { key: Vec<KeyCell> },
     Literal { text: String },
-    Text { text: String },
+    Vector { values: Vec<f32> },
+}
+
+/// `vector.search` arguments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchArgs {
+    pub database: String,
+    pub table: String,
+    pub column: String,
+    pub query: SearchQuery,
+    pub k: u32,
+    pub metric: Metric,
+    pub filter: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct VectorSearchRequest {
-    pub connection_id: String,
-    pub database: String,
-    pub table: String,
-    pub column: String,
-    pub query: QueryVector,
-    pub k: u32,
-    pub metric: Metric,
-    pub filter: Option<String>,
+struct TableArgs {
+    database: String,
+    table: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FetchArgs {
+    database: String,
+    table: String,
+    column: String,
+    key: Vec<KeyCell>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HealthArgs {
+    database: String,
+    table: String,
+    column: String,
+    sample: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecallArgs {
+    database: String,
+    table: String,
+    column: String,
+    k: u32,
+    queries: u32,
+}
+
+fn args<T: serde::de::DeserializeOwned>(name: &str, value: serde_json::Value) -> AppResult<T> {
+    serde_json::from_value(value).map_err(|error| AppError::new(format!("Invalid arguments for {name}: {error}")))
+}
+
+fn json<T: Serialize>(value: T) -> AppResult<serde_json::Value> {
+    Ok(serde_json::to_value(value)?)
+}
+
+/// Runs one vector operation on `conn`.
+pub async fn invoke(conn: &mut Conn, name: &str, value: serde_json::Value) -> AppResult<serde_json::Value> {
+    match name {
+        "vector.info" => {
+            let a: TableArgs = args(name, value)?;
+            json(vector_info(conn, &a.database, &a.table).await?)
+        }
+        "vector.fetch" => {
+            let a: FetchArgs = args(name, value)?;
+            json(fetch_vector(conn, &a.database, &a.table, &a.column, &a.key).await?)
+        }
+        "vector.search" => {
+            let a: SearchArgs = args(name, value)?;
+            let query = match &a.query {
+                SearchQuery::Row { key } => fetch_vector(conn, &a.database, &a.table, &a.column, key).await?,
+                SearchQuery::Literal { text } => parse_literal(text)?,
+                SearchQuery::Vector { values } => values.clone(),
+            };
+            json(search(conn, &a, &query).await?)
+        }
+        "vector.health" => {
+            let a: HealthArgs = args(name, value)?;
+            json(health(conn, &a.database, &a.table, &a.column, a.sample).await?)
+        }
+        "vector.recall" => {
+            let a: RecallArgs = args(name, value)?;
+            json(index_recall(conn, &a.database, &a.table, &a.column, a.k, a.queries).await?)
+        }
+        other => Err(crate::contract::unsupported_capability(other)),
+    }
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    started.elapsed().as_millis() as u64
+}
+
+/// Columns of a table whose vectors are known (`DATA_TYPE = 'vector'`), or a guess from result metadata.
+pub enum VectorHint<'a> {
+    Known(&'a HashMap<String, u32>),
+    Guess,
+}
+
+impl VectorHint<'_> {
+    fn dims(&self, column: &Column) -> Option<u32> {
+        match self {
+            Self::Known(columns) => columns.get(column.name_str().as_ref()).copied(),
+            Self::Guess => guess_vector_dims(column),
+        }
+    }
+}
+
+fn is_numeric(column_type: ColumnType) -> bool {
+    use ColumnType::*;
+    matches!(
+        column_type,
+        MYSQL_TYPE_DECIMAL
+            | MYSQL_TYPE_NEWDECIMAL
+            | MYSQL_TYPE_TINY
+            | MYSQL_TYPE_SHORT
+            | MYSQL_TYPE_LONG
+            | MYSQL_TYPE_INT24
+            | MYSQL_TYPE_LONGLONG
+            | MYSQL_TYPE_FLOAT
+            | MYSQL_TYPE_DOUBLE
+            | MYSQL_TYPE_YEAR
+    )
+}
+
+fn text_column(column: &Column, hint: &VectorHint<'_>) -> TextColumn {
+    let column_type = column.column_type();
+    let vector_dims = hint.dims(column);
+    let binary_charset = column.character_set() == BINARY_CHARSET;
+    let byte_string = matches!(
+        column_type,
+        ColumnType::MYSQL_TYPE_STRING
+            | ColumnType::MYSQL_TYPE_VAR_STRING
+            | ColumnType::MYSQL_TYPE_VARCHAR
+            | ColumnType::MYSQL_TYPE_TINY_BLOB
+            | ColumnType::MYSQL_TYPE_BLOB
+            | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+            | ColumnType::MYSQL_TYPE_LONG_BLOB
+            | ColumnType::MYSQL_TYPE_BIT
+    );
+    TextColumn {
+        name: column.name_str().into_owned(),
+        type_name: if vector_dims.is_some() {
+            "vector".to_owned()
+        } else {
+            sql_type_name(column_type, binary_charset, column.flags()).to_owned()
+        },
+        numeric: is_numeric(column_type),
+        binary: vector_dims.is_none() && binary_charset && byte_string,
+        primary: column.flags().contains(mysql_async::consts::ColumnFlags::PRI_KEY_FLAG),
+        vector_dims,
+    }
+}
+
+/// How a cell is shown.
+#[derive(Clone, Copy)]
+enum CellFormat {
+    Text,
+    Hex,
+    Vector,
+}
+
+impl CellFormat {
+    fn of(column: &TextColumn) -> Self {
+        if column.vector_dims.is_some() {
+            Self::Vector
+        } else if column.binary {
+            Self::Hex
+        } else {
+            Self::Text
+        }
+    }
+}
+
+fn cell_text(value: Value, format: CellFormat) -> Option<String> {
+    match value {
+        Value::Bytes(bytes) => Some(match format {
+            CellFormat::Vector => decode_vector(&bytes)
+                .map(|values| summarize(&values))
+                .unwrap_or_else(|| hex(&bytes)),
+            CellFormat::Hex => hex(&bytes),
+            CellFormat::Text => String::from_utf8(bytes).unwrap_or_else(|error| hex(error.as_bytes())),
+        }),
+        other => plain_text(other),
+    }
+}
+
+fn row_cells(row: Row, formats: &[CellFormat]) -> Vec<Option<String>> {
+    row.unwrap()
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| cell_text(value, formats.get(index).copied().unwrap_or(CellFormat::Text)))
+        .collect()
+}
+
+/// Every result set of a query, as text cells.
+async fn read_result_sets<P: Protocol>(mut result: QueryResult<'_, 'static, P>, hint: &VectorHint<'_>) -> AppResult<Vec<ResultSet>> {
+    let mut sets = Vec::new();
+    while let Some(columns) = result.columns() {
+        let columns: Vec<TextColumn> = columns.iter().map(|column| text_column(column, hint)).collect();
+        let affected_rows = result.affected_rows();
+        let formats: Vec<CellFormat> = columns.iter().map(CellFormat::of).collect();
+        let mut rows = Vec::new();
+        while let Some(row) = result.next().await? {
+            rows.push(row_cells(row, &formats));
+        }
+        sets.push(ResultSet {
+            columns,
+            rows,
+            affected_rows,
+            truncated: false,
+        });
+    }
+    // A failed later statement is held as a pending error that `columns()` does not report.
+    result.next().await?;
+    Ok(sets)
+}
+
+fn where_clause(filter: Option<&str>) -> String {
+    filter
+        .map(str::trim)
+        .filter(|filter| !filter.is_empty())
+        .map(|filter| format!(" WHERE {filter}"))
+        .unwrap_or_default()
+}
+
+async fn primary_key(conn: &mut Conn, database: &str, table: &str) -> AppResult<Vec<String>> {
+    let rows = text_rows(
+        conn,
+        "SELECT COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE \
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND CONSTRAINT_NAME = 'PRIMARY' ORDER BY ORDINAL_POSITION",
+        (database.to_owned(), table.to_owned()),
+    )
+    .await?;
+    Ok(rows.iter().map(|row| row.text(0)).collect())
+}
+
+async fn binary_columns(conn: &mut Conn, database: &str, table: &str) -> AppResult<HashSet<String>> {
+    let rows = text_rows(
+        conn,
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
+         AND DATA_TYPE IN ('binary', 'varbinary', 'tinyblob', 'blob', 'mediumblob', 'longblob', 'bit')",
+        (database.to_owned(), table.to_owned()),
+    )
+    .await?;
+    Ok(rows.iter().map(|row| row.text(0)).collect())
+}
+
+fn key_condition(key: &[KeyCell]) -> AppResult<String> {
+    if key.is_empty() {
+        return Err(AppError::new("Cannot identify the row"));
+    }
+    Ok(key
+        .iter()
+        .map(|cell| format!("{} <=> ?", quote_ident(&cell.column)))
+        .collect::<Vec<_>>()
+        .join(" AND "))
+}
+
+fn bind_values(key: &[KeyCell], binary: &HashSet<String>) -> Vec<Value> {
+    key.iter()
+        .map(|cell| match &cell.value {
+            None => Value::NULL,
+            Some(text) => {
+                let decoded = if binary.contains(&cell.column) {
+                    crate::contract::value::unhex(text, false)
+                } else {
+                    None
+                };
+                Value::Bytes(decoded.unwrap_or_else(|| text.as_bytes().to_vec()))
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -213,7 +520,7 @@ impl SampleStats {
     }
 }
 
-pub(crate) async fn table_columns(conn: &mut Conn, database: &str, table: &str) -> AppResult<Vec<TableColumn>> {
+pub async fn table_columns(conn: &mut Conn, database: &str, table: &str) -> AppResult<Vec<TableColumn>> {
     let rows = text_rows(
         conn,
         "SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE FROM information_schema.COLUMNS \
@@ -234,7 +541,7 @@ pub(crate) async fn table_columns(conn: &mut Conn, database: &str, table: &str) 
         .collect())
 }
 
-pub(crate) async fn vector_columns(conn: &mut Conn, database: &str, table: &str) -> AppResult<HashMap<String, u32>> {
+pub async fn vector_columns(conn: &mut Conn, database: &str, table: &str) -> AppResult<HashMap<String, u32>> {
     Ok(table_columns(conn, database, table)
         .await?
         .into_iter()
@@ -242,7 +549,7 @@ pub(crate) async fn vector_columns(conn: &mut Conn, database: &str, table: &str)
         .collect())
 }
 
-pub(crate) async fn vector_info(conn: &mut Conn, database: &str, table: &str) -> AppResult<VectorInfo> {
+pub async fn vector_info(conn: &mut Conn, database: &str, table: &str) -> AppResult<VectorInfo> {
     let supported = conn.query_drop("SELECT VEC_FromText('[1]')").await.is_ok();
     let mut columns: Vec<VectorColumn> = vector_columns(conn, database, table)
         .await?
@@ -285,7 +592,7 @@ async fn vector_indexes(conn: &mut Conn, database: &str, table: &str) -> AppResu
         .collect())
 }
 
-pub(crate) async fn fetch_vector(conn: &mut Conn, database: &str, table: &str, column: &str, key: &[CellValue]) -> AppResult<Vec<f32>> {
+pub async fn fetch_vector(conn: &mut Conn, database: &str, table: &str, column: &str, key: &[KeyCell]) -> AppResult<Vec<f32>> {
     let binary = binary_columns(conn, database, table).await?;
     let sql = format!(
         "SELECT {} FROM {} WHERE {} LIMIT 1",
@@ -302,7 +609,7 @@ pub(crate) async fn fetch_vector(conn: &mut Conn, database: &str, table: &str, c
     }
 }
 
-pub(crate) async fn search(conn: &mut Conn, request: &VectorSearchRequest, query: &[f32]) -> AppResult<VectorSearchResult> {
+pub async fn search(conn: &mut Conn, request: &SearchArgs, query: &[f32]) -> AppResult<VectorSearchResult> {
     let columns = table_columns(conn, &request.database, &request.table).await?;
     let dims = columns
         .iter()
@@ -328,23 +635,9 @@ pub(crate) async fn search(conn: &mut Conn, request: &VectorSearchRequest, query
         k: request.k.clamp(1, MAX_K),
     };
     let runnable_sql = statement.render(&format!("VEC_FromText('{}')", vector_literal(query)));
-    let plan = first_set(
-        read_result_sets(
-            conn.query_iter(format!("EXPLAIN {runnable_sql}")).await?,
-            usize::MAX,
-            &VectorHint::Guess,
-        )
-        .await?,
-    );
+    let plan = first_set(read_result_sets(conn.query_iter(format!("EXPLAIN {runnable_sql}")).await?, &VectorHint::Guess).await?);
     let started = Instant::now();
-    let result = first_set(
-        read_result_sets(
-            conn.query_iter(runnable_sql.clone()).await?,
-            usize::MAX,
-            &VectorHint::Known(&vectors),
-        )
-        .await?,
-    );
+    let result = first_set(read_result_sets(conn.query_iter(runnable_sql.clone()).await?, &VectorHint::Known(&vectors)).await?);
     let elapsed_ms = elapsed_millis(started);
     let primary_key = primary_key(conn, &request.database, &request.table).await?;
     Ok(VectorSearchResult {
@@ -359,7 +652,7 @@ pub(crate) async fn search(conn: &mut Conn, request: &VectorSearchRequest, query
     })
 }
 
-pub(crate) async fn health(conn: &mut Conn, database: &str, table: &str, column: &str, sample: u32) -> AppResult<Vec<HealthCheck>> {
+pub async fn health(conn: &mut Conn, database: &str, table: &str, column: &str, sample: u32) -> AppResult<Vec<HealthCheck>> {
     let dims = vector_columns(conn, database, table)
         .await?
         .get(column)
@@ -381,14 +674,7 @@ pub(crate) async fn health(conn: &mut Conn, database: &str, table: &str, column:
     Ok(checks)
 }
 
-pub(crate) async fn index_recall(
-    conn: &mut Conn,
-    database: &str,
-    table: &str,
-    column: &str,
-    k: u32,
-    queries: u32,
-) -> AppResult<RecallReport> {
+pub async fn index_recall(conn: &mut Conn, database: &str, table: &str, column: &str, k: u32, queries: u32) -> AppResult<RecallReport> {
     let index = vector_indexes(conn, database, table)
         .await?
         .into_iter()
@@ -447,13 +733,6 @@ pub(crate) async fn index_recall(
     })
 }
 
-pub fn decode_vector(bytes: &[u8]) -> Option<Vec<f32>> {
-    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
-        return None;
-    }
-    Some(bytes.as_chunks::<4>().0.iter().map(|chunk| f32::from_le_bytes(*chunk)).collect())
-}
-
 pub fn summarize(values: &[f32]) -> String {
     let preview = values
         .iter()
@@ -463,21 +742,6 @@ pub fn summarize(values: &[f32]) -> String {
         .join(", ");
     let more = if values.len() > PREVIEW_VALUES { ", …" } else { "" };
     format!("[{}] ‖{:.3}‖ {preview}{more}", values.len(), norm(values))
-}
-
-pub fn parse_literal(text: &str) -> AppResult<Vec<f32>> {
-    let values = text
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .split(|character: char| character == ',' || character.is_whitespace())
-        .filter(|part| !part.is_empty())
-        .map(|part| part.parse::<f32>().map_err(|_| AppError::new(format!("'{part}' is not a number"))))
-        .collect::<AppResult<Vec<_>>>()?;
-    if values.is_empty() {
-        return Err(AppError::new("The vector is empty"));
-    }
-    Ok(values)
 }
 
 pub fn ensure_dims(actual: usize, expected: u32) -> AppResult<()> {
@@ -490,11 +754,6 @@ pub fn ensure_dims(actual: usize, expected: u32) -> AppResult<()> {
     }
 }
 
-fn vector_literal(values: &[f32]) -> String {
-    let joined = values.iter().map(f32::to_string).collect::<Vec<_>>().join(",");
-    format!("[{joined}]")
-}
-
 fn norm(values: &[f32]) -> f32 {
     values.iter().map(|value| value * value).sum::<f32>().sqrt()
 }
@@ -503,9 +762,11 @@ fn parse_dims(column_type: &str) -> Option<u32> {
     column_type.split_once('(')?.1.trim_end_matches(')').trim().parse().ok()
 }
 
+/// `DISTANCE=cosine` or, as MariaDB 11.8 writes it, `DISTANCE='cosine'` (backticks already removed).
 fn option_value<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     let start = line.find(name)? + name.len();
     line[start..]
+        .trim_start_matches(['\'', '"'])
         .split(|character: char| !character.is_ascii_alphanumeric())
         .next()
         .filter(|value| !value.is_empty())
@@ -534,7 +795,7 @@ async fn timed_keys(conn: &mut Conn, sql: String) -> AppResult<(HashSet<String>,
     let keys = rows
         .into_iter()
         .map(|row| {
-            row_texts(row)
+            row_cells(row, &[])
                 .into_iter()
                 .map(Option::unwrap_or_default)
                 .collect::<Vec<_>>()
@@ -692,5 +953,50 @@ impl SearchStatement {
             "SELECT {distance} AS `vec_distance`{separator}{} FROM {}{} ORDER BY {distance} LIMIT {}",
             self.select_list, self.target, self.filter, self.k
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_arguments_keep_the_command_shape() {
+        let args: SearchArgs = serde_json::from_value(serde_json::json!({
+            "database": "shop", "table": "products", "column": "embedding",
+            "query": { "kind": "row", "key": [ { "column": "id", "value": "7" } ] },
+            "k": 5, "metric": "cosine", "filter": "stock > 0"
+        }))
+        .unwrap();
+        assert!(matches!(&args.query, SearchQuery::Row { key } if key[0].value.as_deref() == Some("7")));
+        assert_eq!(args.metric, Metric::Cosine);
+        let vector: SearchQuery = serde_json::from_value(serde_json::json!({ "kind": "vector", "values": [0.5, 1.0] })).unwrap();
+        assert!(matches!(vector, SearchQuery::Vector { values } if values == [0.5, 1.0]));
+    }
+
+    #[test]
+    fn statements_and_cells_render_like_the_vector_view_expects() {
+        let statement = SearchStatement {
+            target: qualified("shop", "products"),
+            column: quote_ident("embedding"),
+            function: Metric::Cosine.function(),
+            select_list: "`id`".into(),
+            filter: where_clause(Some(" stock > 0 ")),
+            k: 3,
+        };
+        assert_eq!(
+            statement.render("VEC_FromText(?)"),
+            "SELECT VEC_DISTANCE_COSINE(`embedding`, VEC_FromText(?)) AS `vec_distance`, `id` FROM `shop`.`products` \
+             WHERE stock > 0 ORDER BY VEC_DISTANCE_COSINE(`embedding`, VEC_FromText(?)) LIMIT 3"
+        );
+        assert_eq!(vector_literal(&[0.5, 1.0]), "[0.5,1]");
+        assert_eq!(summarize(&[3.0, 4.0]), "[2] ‖5.000‖ 3.0000, 4.0000");
+        assert_eq!(cell_text(Value::Bytes(vec![0xab, 1]), CellFormat::Hex).as_deref(), Some("0xAB01"));
+        assert!(ensure_dims(3, 4).is_err());
+        let line = "VECTOR KEY idx_embedding (embedding) M='6' DISTANCE='cosine',";
+        assert_eq!(option_value(line, "DISTANCE="), Some("cosine"));
+        assert_eq!(option_value(line, " M="), Some("6"));
+        assert_eq!(option_value("KEY i (e) M=8 DISTANCE=euclidean", " M="), Some("8"));
+        assert_eq!(key_condition(&[]).unwrap_err().to_string(), "Cannot identify the row");
     }
 }

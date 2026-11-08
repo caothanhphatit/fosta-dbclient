@@ -4,6 +4,7 @@
 
 use super::value::{parse_input, Value};
 use super::{BrowseRequest, ColumnInfo, EngineError, FilterOp, ObjectRef, Page, Result};
+use crate::contract::tabular::{Field, RowChange, RowCheck};
 
 /// What a parameter is compared with: a column (bind with the column's type) or plain text (LIKE patterns).
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +50,22 @@ pub trait SqlDialect {
         } else {
             format!("LIMIT {limit}")
         }
+    }
+
+    /// The NULL-safe equality operator (`<=>`, `IS NOT DISTINCT FROM`) used by row checks; `None` writes
+    /// `(col = ? OR (col IS NULL AND ? IS NULL))`.
+    fn null_safe_eq(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// A parameter compared with `col` in a row check (MySQL compares a JSON column only with a JSON value).
+    fn compare_param(&self, placeholder: String, _col: &ColumnInfo) -> String {
+        placeholder
+    }
+
+    /// Appended to guarded updates and deletes so a duplicated key changes one row (MySQL `LIMIT 1`).
+    fn single_row(&self) -> &'static str {
+        ""
     }
 }
 
@@ -109,18 +126,33 @@ pub struct BrowseSql {
 
 /// Builds `SELECT … FROM … WHERE <filter> [AND <keyset>] ORDER BY … LIMIT limit+1`. `key` are the row-identifying columns.
 pub fn build_browse<D: SqlDialect + ?Sized>(d: &D, req: &BrowseRequest, columns: &[ColumnInfo], key: &[String]) -> Result<BrowseSql> {
+    build_browse_with_raw(d, req, columns, key, None)
+}
+
+/// [`build_browse`] plus a raw filter in the engine's SQL, appended as `(…)`. The caller has validated it as one
+/// condition (the gateway parses raw filters).
+pub fn build_browse_with_raw<D: SqlDialect + ?Sized>(
+    d: &D,
+    req: &BrowseRequest,
+    columns: &[ColumnInfo],
+    key: &[String],
+    raw: Option<&str>,
+) -> Result<BrowseSql> {
     let mut b = Binder::new(d);
     let mut conds = Vec::new();
     for f in &req.filter {
         let col = find_column(columns, &f.column)?;
         conds.push(filter_sql(&mut b, f.op, col, &f.values)?);
     }
-    let filter_sql = if conds.is_empty() {
-        String::new()
-    } else {
+    let mut filter_parts = Vec::new();
+    if !conds.is_empty() {
         let joiner = if req.match_any { " OR " } else { " AND " };
-        format!("({})", conds.join(joiner))
-    };
+        filter_parts.push(format!("({})", conds.join(joiner)));
+    }
+    if let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) {
+        filter_parts.push(format!("({raw})"));
+    }
+    let filter_sql = filter_parts.join(" AND ");
 
     let mut order: Vec<(String, bool)> = Vec::new();
     for s in &req.sort {
@@ -403,6 +435,108 @@ pub fn build_delete<D: SqlDialect + ?Sized>(d: &D, obj: &ObjectRef, key: &[(Stri
     })
 }
 
+// ---------------------------------------------------------------------------------------------------------------------------
+// Guarded row changes (optimistic concurrency, see `contract::tabular`)
+
+fn pairs(fields: &[Field]) -> Vec<(String, Value)> {
+    fields.iter().map(|field| (field.column.clone(), field.value.clone())).collect()
+}
+
+/// `col <=> ?` in the dialect's NULL-safe form.
+fn null_safe_eq<D: SqlDialect + ?Sized>(b: &mut Binder<D>, col: &ColumnInfo, value: &Value) -> String {
+    let c = b.dialect.quote_ident(&col.name);
+    match b.dialect.null_safe_eq() {
+        Some(op) => {
+            let p = b.bind_column(value.clone(), col);
+            format!("{c} {op} {}", b.dialect.compare_param(p, col))
+        }
+        None => {
+            let p = b.bind_column(value.clone(), col);
+            let p = b.dialect.compare_param(p, col);
+            let again = b.bind_column(value.clone(), col);
+            format!("({c} = {p} OR ({c} IS NULL AND {again} IS NULL))")
+        }
+    }
+}
+
+/// The WHERE clause of a guarded update or delete: the key, then what `check` asks for. `version_column` is the
+/// engine's row-version column (`xmin`, a `rowversion` column); without one a version check is a key-only check.
+pub fn guarded_where<D: SqlDialect + ?Sized>(
+    b: &mut Binder<D>,
+    key: &[Field],
+    check: RowCheck<'_>,
+    columns: &[ColumnInfo],
+    version_column: Option<&str>,
+) -> Result<String> {
+    let mut parts = vec![key_where(b, &pairs(key), columns)?];
+    match check {
+        RowCheck::KeyOnly => {}
+        RowCheck::Version(version) => {
+            if let Some(name) = version_column {
+                let p = b.bind(version.clone(), ParamTarget::Text);
+                parts.push(format!("{} = {p}", b.dialect.quote_ident(name)));
+            }
+        }
+        RowCheck::Original(fields) => {
+            for field in fields.iter().filter(|field| !key.iter().any(|k| k.column == field.column)) {
+                let col = find_column(columns, &field.column)?;
+                parts.push(null_safe_eq(b, col, &field.value));
+            }
+        }
+    }
+    Ok(parts.join(" AND "))
+}
+
+/// The statement for one contract row change: inserts as [`build_insert`], updates and deletes guarded by
+/// `RowChange::check()`. The engine must treat an update or delete that matches no row as a conflict.
+pub fn build_guarded<D: SqlDialect + ?Sized>(
+    d: &D,
+    obj: &ObjectRef,
+    change: &RowChange,
+    columns: &[ColumnInfo],
+    version_column: Option<&str>,
+) -> Result<ChangeSql> {
+    match change {
+        RowChange::Insert { values } => build_insert(d, obj, &pairs(values), columns),
+        RowChange::Update { key, values, .. } => {
+            if values.is_empty() {
+                return Err(EngineError::input("The update changes no columns."));
+            }
+            let mut b = Binder::new(d);
+            let mut sets = Vec::new();
+            for (name, v) in pairs(values) {
+                let col = find_column(columns, &name)?;
+                let p = if v.is_null() { "NULL".to_owned() } else { b.bind_column(v, col) };
+                sets.push(format!("{} = {p}", d.quote_ident(&name)));
+            }
+            let w = guarded_where(&mut b, key, change.check(), columns, version_column)?;
+            Ok(ChangeSql {
+                sql: format!("UPDATE {} SET {} WHERE {w}{}", d.table_sql(obj), sets.join(", "), d.single_row()),
+                params: b.params,
+            })
+        }
+        RowChange::Delete { key, .. } => {
+            let mut b = Binder::new(d);
+            let w = guarded_where(&mut b, key, change.check(), columns, version_column)?;
+            Ok(ChangeSql {
+                sql: format!("DELETE FROM {} WHERE {w}{}", d.table_sql(obj), d.single_row()),
+                params: b.params,
+            })
+        }
+    }
+}
+
+/// `SELECT <columns> FROM <table> WHERE <key>`: re-reads a row after a conflict.
+pub fn build_reread<D: SqlDialect + ?Sized>(d: &D, obj: &ObjectRef, key: &[Field], columns: &[ColumnInfo]) -> Result<ChangeSql> {
+    let mut b = Binder::new(d);
+    let w = key_where(&mut b, &pairs(key), columns)?;
+    let select_list = columns.iter().map(|c| d.select_expr(c)).collect::<Vec<_>>().join(", ");
+    Ok(ChangeSql {
+        sql: format!("SELECT {select_list} FROM {} WHERE {w} {}", d.table_sql(obj), d.limit_offset(1, 0)),
+        params: b.params,
+    })
+}
+
 /// Doubles `quote` inside `name` and wraps it: the standard identifier quoting.
 pub fn quote_with(name: &str, quote: char) -> String {
     let mut s = String::with_capacity(name.len() + 2);
@@ -518,5 +652,99 @@ mod tests {
         let del = build_delete(&Ansi, &obj, &[("name".into(), Value::Null)], &cols()).unwrap();
         assert_eq!(del.sql, "DELETE FROM \"t\" WHERE \"name\" IS NULL");
         assert!(build_delete(&Ansi, &obj, &[], &cols()).is_err());
+    }
+
+    struct NullSafe;
+    impl SqlDialect for NullSafe {
+        fn quote_ident(&self, name: &str) -> String {
+            quote_with(name, '`')
+        }
+        fn placeholder(&self, _n: usize, _t: &ParamTarget) -> String {
+            "?".to_owned()
+        }
+        fn text_expr(&self, col_sql: &str, _c: &ColumnInfo) -> String {
+            col_sql.to_owned()
+        }
+        fn like(&self, lhs: &str, rhs: &str, _ci: bool, negate: bool) -> String {
+            format!("{lhs} {}LIKE {rhs}", if negate { "NOT " } else { "" })
+        }
+        fn null_safe_eq(&self) -> Option<&'static str> {
+            Some("<=>")
+        }
+        fn single_row(&self) -> &'static str {
+            " LIMIT 1"
+        }
+    }
+
+    fn field(column: &str, value: Value) -> Field {
+        Field::new(column, value)
+    }
+
+    #[test]
+    fn guarded_changes_check_original_values_null_safely() {
+        let obj = ObjectRef::table(None, "t");
+        let update = RowChange::Update {
+            key: vec![field("id", Value::Int(1))],
+            values: vec![field("name", Value::Text("new".into()))],
+            original: vec![field("name", Value::Text("old".into())), field("created", Value::Null)],
+            version: None,
+            force: false,
+        };
+        let generic = build_guarded(&Ansi, &obj, &update, &cols(), None).unwrap();
+        assert_eq!(
+            generic.sql,
+            "UPDATE \"t\" SET \"name\" = $1 WHERE \"id\" = $2 AND (\"name\" = $3 OR (\"name\" IS NULL AND $4 IS NULL)) \
+             AND (\"created\" = $5 OR (\"created\" IS NULL AND $6 IS NULL))"
+        );
+        assert_eq!(generic.params.len(), 6);
+        let mysql = build_guarded(&NullSafe, &obj, &update, &cols(), None).unwrap();
+        assert_eq!(
+            mysql.sql,
+            "UPDATE `t` SET `name` = ? WHERE `id` = ? AND `name` <=> ? AND `created` <=> ? LIMIT 1"
+        );
+        assert_eq!(mysql.params[3].value, Value::Null);
+        let delete = RowChange::Delete {
+            key: vec![field("id", Value::Int(2))],
+            original: vec![field("id", Value::Int(2)), field("name", Value::Text("x".into()))],
+            version: None,
+            force: false,
+        };
+        let built = build_guarded(&NullSafe, &obj, &delete, &cols(), None).unwrap();
+        assert_eq!(built.sql, "DELETE FROM `t` WHERE `id` = ? AND `name` <=> ? LIMIT 1");
+    }
+
+    #[test]
+    fn forced_and_versioned_changes_check_the_key_or_the_version() {
+        let obj = ObjectRef::table(None, "t");
+        let forced = RowChange::Update {
+            key: vec![field("id", Value::Int(1))],
+            values: vec![field("name", Value::Text("new".into()))],
+            original: vec![field("name", Value::Text("old".into()))],
+            version: None,
+            force: true,
+        };
+        let built = build_guarded(&NullSafe, &obj, &forced, &cols(), None).unwrap();
+        assert_eq!(built.sql, "UPDATE `t` SET `name` = ? WHERE `id` = ? LIMIT 1");
+        let versioned = RowChange::Delete {
+            key: vec![field("id", Value::Int(1))],
+            original: vec![],
+            version: Some(Value::Int(42)),
+            force: false,
+        };
+        let built = build_guarded(&Ansi, &obj, &versioned, &cols(), Some("xmin")).unwrap();
+        assert_eq!(built.sql, "DELETE FROM \"t\" WHERE \"id\" = $1 AND \"xmin\" = $2");
+        let without = build_guarded(&Ansi, &obj, &versioned, &cols(), None).unwrap();
+        assert_eq!(without.sql, "DELETE FROM \"t\" WHERE \"id\" = $1");
+        let reread = build_reread(&NullSafe, &obj, &[field("id", Value::Int(1))], &cols()).unwrap();
+        assert_eq!(reread.sql, "SELECT `id`, `name`, `created` FROM `t` WHERE `id` = ? LIMIT 1");
+    }
+
+    #[test]
+    fn raw_filters_are_appended_as_one_condition() {
+        let mut req = BrowseRequest::new(ObjectRef::table(None, "t"), 10);
+        req.filter = vec![FilterCond::new("id", FilterOp::Gt, &["1"])];
+        let b = build_browse_with_raw(&NullSafe, &req, &cols(), &["id".to_owned()], Some(" name = 'a' OR id = 2 ")).unwrap();
+        assert!(b.sql.contains("WHERE (`id` > ?) AND (name = 'a' OR id = 2) ORDER BY"), "{}", b.sql);
+        assert_eq!(b.where_sql, "(`id` > ?) AND (name = 'a' OR id = 2)");
     }
 }

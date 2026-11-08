@@ -1,10 +1,11 @@
-//! Transitional: the engine contract over the pre-contract `drivers::Driver`s (MariaDB/MySQL, SQL Server, MongoDB), so
-//! the core, the new commands and the contract tests use one path while the native adapters are written. Values are
-//! converted at the boundary (text cells become `Value::Text`, `Value::Bytes` for binary columns, numbers keep their
-//! text). Removed once every engine has a native adapter.
+//! Transitional: the engine contract over the pre-contract `drivers::Driver`s (SQL Server, MongoDB), so the core, the
+//! new commands and the contract tests use one path while the native adapters are written. Values are converted at the
+//! boundary (text cells become `Value::Text`, `Value::Bytes` for binary columns, numbers keep their text). Removed once
+//! every engine has a native adapter.
 //!
 //! The old commands still call the `Driver` directly; [`connect`] returns it next to the contract connection and the
-//! `ConnectionManager` keeps both.
+//! `ConnectionManager` keeps both. MariaDB/MySQL have a native adapter; [`open_driver`] opens their legacy driver next
+//! to it for the old commands.
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -52,16 +53,6 @@ impl LegacyEngine {
     }
 }
 
-fn mariadb_descriptor() -> EngineDescriptor {
-    mysql::descriptor::descriptor(mysql::descriptor::Flavor::MariaDb)
-}
-
-fn mysql_descriptor() -> EngineDescriptor {
-    mysql::descriptor::descriptor(mysql::descriptor::Flavor::MySql)
-}
-
-pub static MARIADB: LegacyEngine = LegacyEngine::new(drivers::Engine::MariaDb, mariadb_descriptor);
-pub static MYSQL: LegacyEngine = LegacyEngine::new(drivers::Engine::MySql, mysql_descriptor);
 pub static MSSQL: LegacyEngine = LegacyEngine::new(drivers::Engine::SqlServer, mssql::descriptor::descriptor);
 pub static MONGODB: LegacyEngine = LegacyEngine::new(drivers::Engine::MongoDb, mongo::descriptor::descriptor);
 
@@ -123,6 +114,19 @@ pub fn handles(engine_id: &str) -> bool {
     matches!(engine_id, "mariadb" | "mysql" | "mssql" | "mongodb")
 }
 
+/// Whether the contract connection itself is still [`LegacyConnection`] (no native adapter yet). Engines with a native
+/// adapter (MariaDB/MySQL) still get a legacy driver next to it (a second pool) for the old commands, until those are
+/// removed.
+pub fn wrapped(engine_id: &str) -> bool {
+    matches!(engine_id, "mssql" | "mongodb")
+}
+
+/// Opens only the legacy driver (next to a native connection).
+pub async fn open_driver(request: &ConnectRequest) -> AppResult<Arc<dyn Driver>> {
+    let (driver, _) = drivers::open(&profile_of(request), request.secrets.password_or_empty()).await?;
+    Ok(driver)
+}
+
 /// The profile a legacy driver opens, rebuilt from the spec (the endpoint replaces host and port).
 fn profile_of(request: &ConnectRequest) -> ConnectionProfile {
     let spec = &request.spec;
@@ -159,11 +163,11 @@ pub async fn connect(request: &ConnectRequest) -> AppResult<(Arc<dyn Connection>
     Ok((wrap(Arc::clone(&driver), &version), driver))
 }
 
-/// The engine statics per legacy driver kind.
-pub fn engine_for(kind: drivers::Engine) -> &'static LegacyEngine {
+/// The registered engine per legacy driver kind.
+pub fn engine_for(kind: drivers::Engine) -> &'static dyn Engine {
     match kind {
-        drivers::Engine::MariaDb => &MARIADB,
-        drivers::Engine::MySql => &MYSQL,
+        drivers::Engine::MariaDb => &mysql::MARIADB,
+        drivers::Engine::MySql => &mysql::MYSQL,
         drivers::Engine::SqlServer => &MSSQL,
         drivers::Engine::MongoDb => &MONGODB,
     }
@@ -673,7 +677,7 @@ mod tests {
 
     #[test]
     fn legacy_engines_classify_with_the_gateway_classifiers() {
-        let sql = MARIADB.classify(&ClassifyInput::Statement {
+        let sql = MSSQL.classify(&ClassifyInput::Statement {
             language: "sql",
             text: "DELETE FROM t",
         });
@@ -688,7 +692,8 @@ mod tests {
             args: &serde_json::Value::Null,
         });
         assert!(unknown.refusal().is_some());
-        assert_eq!(MARIADB.descriptor().id, "mariadb");
-        assert!(!MYSQL.descriptor().capabilities.contains(Capability::Vector));
+        assert_eq!(MSSQL.descriptor().id, "mssql");
+        assert_eq!(engine_for(drivers::Engine::MariaDb).id(), "mariadb");
+        assert!(!handles("postgres") && handles("mysql") && !wrapped("mysql"));
     }
 }

@@ -1,20 +1,19 @@
-//! Everything an ER diagram needs for one database: tables with their
-//! columns and the foreign keys between them. SQL engines answer with a few
-//! bulk catalog queries ([`Driver::schema_bulk`]); other drivers fall back to
-//! the generic per-table [`Driver`] calls. MongoDB has no foreign keys; its
-//! columns come from sampled documents and the UI may infer links from field names.
+//! Everything an ER diagram needs for one database, from a pre-contract driver: tables with their columns and the
+//! foreign keys between them. SQL drivers answer with a few bulk catalog queries ([`Driver::schema_bulk`]); other
+//! drivers fall back to the generic per-table [`Driver`] calls. MongoDB has no foreign keys; its columns come from
+//! sampled documents and the UI may infer links from field names. The graph itself is built by
+//! [`SchemaGraph::assemble`], which the native engines use too.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use futures_util::{stream, StreamExt};
 
 use crate::{
+    contract::schema::MAX_DIAGRAM_TABLES,
     drivers::{relations::Relation, types::TableInfo, Driver},
     error::AppResult,
 };
 
-/// Large schemas are capped so the diagram stays usable; the UI says so.
-const MAX_TABLES: usize = 400;
 /// Describe calls in flight at once; keeps small servers responsive.
 const CONCURRENCY: usize = 8;
 
@@ -38,6 +37,16 @@ pub async fn schema_graph(driver: &dyn Driver, database: &str) -> AppResult<Sche
     }
 }
 
+fn schema_table(info: &TableInfo, columns: Vec<SchemaColumn>) -> SchemaTable {
+    SchemaTable {
+        name: info.name.clone(),
+        kind: info.kind.clone(),
+        rows: info.rows,
+        comment: info.comment.clone(),
+        columns,
+    }
+}
+
 fn from_bulk(bulk: BulkSchema, database: &str) -> SchemaGraph {
     let BulkSchema {
         tables: listed,
@@ -45,60 +54,19 @@ fn from_bulk(bulk: BulkSchema, database: &str) -> SchemaGraph {
         relations,
     } = bulk;
     let total_tables = listed.len();
-    let shown: Vec<TableInfo> = listed.into_iter().take(MAX_TABLES).collect();
-    let mut outgoing: HashMap<String, Vec<Relation>> = HashMap::new();
-    for relation in relations {
-        if relation.database.is_empty() || relation.database == database {
-            outgoing.entry(relation.table.clone()).or_default().push(relation);
-        }
-    }
-    let names: HashSet<&str> = shown.iter().map(|info| info.name.as_str()).collect();
-    let mut seen = HashSet::new();
-    let mut links = Vec::new();
-    for info in &shown {
-        if info.kind == "view" {
-            continue;
-        }
-        for relation in outgoing.remove(&info.name).unwrap_or_default() {
-            keep_relation(relation, database, &names, &mut seen, &mut links);
-        }
-    }
-    let tables = shown
+    let tables = listed
         .iter()
-        .map(|info| SchemaTable {
-            name: info.name.clone(),
-            kind: info.kind.clone(),
-            rows: info.rows,
-            comment: info.comment.clone(),
-            columns: columns.remove(&info.name).unwrap_or_default(),
-        })
+        .take(MAX_DIAGRAM_TABLES)
+        .map(|info| schema_table(info, columns.remove(&info.name).unwrap_or_default()))
         .collect();
-    SchemaGraph {
-        tables,
-        relations: links,
-        total_tables,
-    }
-}
-
-fn keep_relation(
-    relation: Relation,
-    database: &str,
-    names: &HashSet<&str>,
-    seen: &mut HashSet<(String, String)>,
-    links: &mut Vec<Relation>,
-) {
-    let same_database = relation.referenced_database.is_empty() || relation.referenced_database == database;
-    let key = (relation.table.clone(), relation.constraint.clone());
-    if same_database && names.contains(relation.referenced_table.as_str()) && seen.insert(key) {
-        links.push(relation);
-    }
+    SchemaGraph::assemble(database, tables, total_tables, relations)
 }
 
 /// The generic path: one describe + relations call per table.
 pub(crate) async fn schema_graph_per_table(driver: &dyn Driver, database: &str) -> AppResult<SchemaGraph> {
     let listed = driver.list_tables(database).await?;
     let total_tables = listed.len();
-    let shown: Vec<_> = listed.into_iter().take(MAX_TABLES).collect();
+    let shown: Vec<_> = listed.into_iter().take(MAX_DIAGRAM_TABLES).collect();
     // Owned (name, is_view) pairs: a closure over borrowed items trips the Send bound on Tauri commands.
     let work: Vec<(String, bool)> = shown.iter().map(|info| (info.name.clone(), info.kind == "view")).collect();
     let described: Vec<_> = stream::iter(work)
@@ -115,8 +83,6 @@ pub(crate) async fn schema_graph_per_table(driver: &dyn Driver, database: &str) 
         .collect()
         .await;
 
-    let names: HashSet<&str> = shown.iter().map(|info| info.name.as_str()).collect();
-    let mut seen = HashSet::new();
     let mut tables = Vec::with_capacity(shown.len());
     let mut relations = Vec::new();
     for (info, (design, links)) in shown.iter().zip(described) {
@@ -135,20 +101,8 @@ pub(crate) async fn schema_graph_per_table(driver: &dyn Driver, database: &str) 
                     .collect()
             })
             .unwrap_or_default();
-        tables.push(SchemaTable {
-            name: info.name.clone(),
-            kind: info.kind.clone(),
-            rows: info.rows,
-            comment: info.comment.clone(),
-            columns,
-        });
-        for relation in links.map(|links| links.outgoing).unwrap_or_default() {
-            keep_relation(relation, database, &names, &mut seen, &mut relations);
-        }
+        tables.push(schema_table(info, columns));
+        relations.extend(links.map(|links| links.outgoing).unwrap_or_default());
     }
-    Ok(SchemaGraph {
-        tables,
-        relations,
-        total_tables,
-    })
+    Ok(SchemaGraph::assemble(database, tables, total_tables, relations))
 }

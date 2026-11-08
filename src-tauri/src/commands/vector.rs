@@ -1,27 +1,67 @@
-//! MariaDB vector tooling and the embedding API it can call.
+//! MariaDB vector tooling and the embedding API it can call. The vector operations are engine operations
+//! (`vector.*`) run through the statement gateway; `vector_search` embeds a text query here first.
+
+use serde::Deserialize;
+use serde_json::{json, Value};
 
 use crate::{
     config::AppConfig,
-    drivers::types::CellValue,
+    contract::Capability,
     embedding::{self, EmbeddingSettings},
+    engines::mysql::vector::{KeyCell, Metric, SearchArgs, SearchQuery},
     error::{AppError, AppResult},
-    gateway, secrets,
-    vector::{self, HealthCheck, QueryVector, RecallReport, VectorInfo, VectorSearchRequest, VectorSearchResult},
-    AppState,
+    gateway::{self, Caller},
+    secrets, AppState,
 };
 
 const EMBEDDING_PROBE: &str = "Fosta Studio embedding test";
 
-pub async fn vector_info(state: &AppState, connection_id: String, database: String, table: String) -> AppResult<VectorInfo> {
-    if !state.engines.is_mysql(&connection_id)? {
-        return Ok(VectorInfo {
-            supported: false,
-            columns: Vec::new(),
-            indexes: Vec::new(),
-        });
+/// The query vector as the vector view sends it.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum QueryVector {
+    Row { key: Vec<KeyCell> },
+    Literal { text: String },
+    Text { text: String },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VectorSearchRequest {
+    pub connection_id: String,
+    pub database: String,
+    pub table: String,
+    pub column: String,
+    pub query: QueryVector,
+    pub k: u32,
+    pub metric: Metric,
+    pub filter: Option<String>,
+}
+
+/// Runs one vector operation through the gateway, as an engine view.
+async fn invoke(state: &AppState, connection_id: &str, name: &str, args: Value) -> AppResult<Value> {
+    let context = super::data::gateway_context(state, connection_id)?;
+    gateway::invoke(&state.engines, &context, Caller::EngineView, name, args, None).await
+}
+
+pub async fn vector_info(state: &AppState, connection_id: String, database: String, table: String) -> AppResult<Value> {
+    // Other engines (and MariaDB before 11.7) simply have no vector support.
+    if !state
+        .engines
+        .handle(&connection_id)?
+        .conn
+        .capabilities()
+        .contains(Capability::Vector)
+    {
+        return Ok(json!({ "supported": false, "columns": [], "indexes": [] }));
     }
-    let mut conn = state.engines.mysql_conn(&connection_id).await?;
-    vector::vector_info(&mut conn, &database, &table).await
+    invoke(
+        state,
+        &connection_id,
+        "vector.info",
+        json!({ "database": database, "table": table }),
+    )
+    .await
 }
 
 pub async fn fetch_vector(
@@ -30,23 +70,33 @@ pub async fn fetch_vector(
     database: String,
     table: String,
     column: String,
-    key: Vec<CellValue>,
+    key: Vec<KeyCell>,
 ) -> AppResult<Vec<f32>> {
-    let mut conn = state.engines.mysql_conn(&connection_id).await?;
-    vector::fetch_vector(&mut conn, &database, &table, &column, &key).await
+    let args = json!({ "database": database, "table": table, "column": column, "key": key });
+    Ok(serde_json::from_value(invoke(state, &connection_id, "vector.fetch", args).await?)?)
 }
 
-pub async fn vector_search(state: &AppState, request: VectorSearchRequest) -> AppResult<VectorSearchResult> {
+pub async fn vector_search(state: &AppState, request: VectorSearchRequest) -> AppResult<Value> {
     // The optional filter is spliced into the search query: it must be one condition, like a grid filter.
     let context = super::data::gateway_context(state, &request.connection_id)?;
     gateway::check_filter(&state.engines, &context, &request.connection_id, request.filter.as_deref())?;
-    let mut conn = state.engines.mysql_conn(&request.connection_id).await?;
-    let query = match &request.query {
-        QueryVector::Row { key } => vector::fetch_vector(&mut conn, &request.database, &request.table, &request.column, key).await?,
-        QueryVector::Literal { text } => vector::parse_literal(text)?,
-        QueryVector::Text { text } => embed_text(state, text).await?,
+    let query = match request.query {
+        QueryVector::Row { key } => SearchQuery::Row { key },
+        QueryVector::Literal { text } => SearchQuery::Literal { text },
+        QueryVector::Text { text } => SearchQuery::Vector {
+            values: embed_text(state, &text).await?,
+        },
     };
-    vector::search(&mut conn, &request, &query).await
+    let args = SearchArgs {
+        database: request.database,
+        table: request.table,
+        column: request.column,
+        query,
+        k: request.k,
+        metric: request.metric,
+        filter: request.filter,
+    };
+    invoke(state, &request.connection_id, "vector.search", serde_json::to_value(args)?).await
 }
 
 pub async fn vector_health(
@@ -56,9 +106,9 @@ pub async fn vector_health(
     table: String,
     column: String,
     sample: u32,
-) -> AppResult<Vec<HealthCheck>> {
-    let mut conn = state.engines.mysql_conn(&connection_id).await?;
-    vector::health(&mut conn, &database, &table, &column, sample).await
+) -> AppResult<Value> {
+    let args = json!({ "database": database, "table": table, "column": column, "sample": sample });
+    invoke(state, &connection_id, "vector.health", args).await
 }
 
 pub async fn index_recall(
@@ -69,9 +119,9 @@ pub async fn index_recall(
     column: String,
     k: u32,
     queries: u32,
-) -> AppResult<RecallReport> {
-    let mut conn = state.engines.mysql_conn(&connection_id).await?;
-    vector::index_recall(&mut conn, &database, &table, &column, k, queries).await
+) -> AppResult<Value> {
+    let args = json!({ "database": database, "table": table, "column": column, "k": k, "queries": queries });
+    invoke(state, &connection_id, "vector.recall", args).await
 }
 
 pub fn save_embedding_settings(state: &AppState, settings: Option<EmbeddingSettings>, api_key: Option<String>) -> AppResult<AppConfig> {

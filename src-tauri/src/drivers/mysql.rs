@@ -1,5 +1,5 @@
-//! MariaDB / MySQL driver built on mysql_async. Also exposes the SQL helpers
-//! the MariaDB-only vector tooling (`crate::vector`) builds on.
+//! The pre-contract MariaDB / MySQL driver built on mysql_async, kept for the old commands until they are removed.
+//! The contract connection is the native adapter in `engines::mysql`.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -29,10 +29,10 @@ use super::{
 };
 use crate::{
     config::ConnectionProfile,
+    engines::mysql::vector,
     error::{AppError, AppResult},
     lock::lock,
     schema::{BulkSchema, SchemaColumn},
-    vector,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -480,10 +480,6 @@ impl Driver for MysqlConnection {
     async fn close(&self) {
         let _ = self.pool.clone().disconnect().await;
     }
-
-    fn as_mysql(&self) -> Option<&MysqlConnection> {
-        Some(self)
-    }
 }
 
 fn build_opts(profile: &ConnectionProfile, password: &str) -> Opts {
@@ -584,10 +580,6 @@ pub(crate) async fn text_rows(conn: &mut Conn, sql: &str, params: impl Into<Para
     let params: Params = params.into();
     let rows: Vec<Row> = conn.exec(sql, params).await?;
     Ok(rows.into_iter().map(|row| TextRow(row_cells(row, &[]))).collect())
-}
-
-pub(crate) fn row_texts(row: Row) -> Vec<Cell> {
-    row_cells(row, &[])
 }
 
 fn column_meta(column: &Column, hint: &VectorHint<'_>) -> ColumnMeta {

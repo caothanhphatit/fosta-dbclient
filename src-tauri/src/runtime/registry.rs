@@ -26,8 +26,8 @@ fn entries() -> Vec<&'static dyn Engine> {
     let mut engines: Vec<&'static dyn Engine> = Vec::new();
     #[cfg(feature = "engine-mysql")]
     {
-        engines.push(&super::legacy::MARIADB);
-        engines.push(&super::legacy::MYSQL);
+        engines.push(&crate::engines::mysql::MARIADB);
+        engines.push(&crate::engines::mysql::MYSQL);
     }
     #[cfg(feature = "engine-mssql")]
     engines.push(&super::legacy::MSSQL);

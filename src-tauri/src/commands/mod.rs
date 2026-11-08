@@ -132,15 +132,15 @@ macro_rules! for_each_command {
             [async] delete_workspace(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::delete_workspace;
 
             [async] vector_info(connection_id: String, database: String, table: String)
-                -> $crate::error::AppResult<$crate::vector::VectorInfo> = $crate::commands::vector::vector_info;
-            [async] fetch_vector(connection_id: String, database: String, table: String, column: String, key: Vec<$crate::drivers::types::CellValue>)
+                -> $crate::error::AppResult<serde_json::Value> = $crate::commands::vector::vector_info;
+            [async] fetch_vector(connection_id: String, database: String, table: String, column: String, key: Vec<$crate::engines::mysql::vector::KeyCell>)
                 -> $crate::error::AppResult<Vec<f32>> = $crate::commands::vector::fetch_vector;
-            [async] vector_search(request: $crate::vector::VectorSearchRequest)
-                -> $crate::error::AppResult<$crate::vector::VectorSearchResult> = $crate::commands::vector::vector_search;
+            [async] vector_search(request: $crate::commands::vector::VectorSearchRequest)
+                -> $crate::error::AppResult<serde_json::Value> = $crate::commands::vector::vector_search;
             [async] vector_health(connection_id: String, database: String, table: String, column: String, sample: u32)
-                -> $crate::error::AppResult<Vec<$crate::vector::HealthCheck>> = $crate::commands::vector::vector_health;
+                -> $crate::error::AppResult<serde_json::Value> = $crate::commands::vector::vector_health;
             [async] index_recall(connection_id: String, database: String, table: String, column: String, k: u32, queries: u32)
-                -> $crate::error::AppResult<$crate::vector::RecallReport> = $crate::commands::vector::index_recall;
+                -> $crate::error::AppResult<serde_json::Value> = $crate::commands::vector::index_recall;
             [sync] save_embedding_settings(settings: Option<$crate::embedding::EmbeddingSettings>, api_key: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::vector::save_embedding_settings;
             [async] test_embedding() -> $crate::error::AppResult<usize> = $crate::commands::vector::test_embedding;

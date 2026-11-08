@@ -1,6 +1,6 @@
 //! Engine modules (ADR 0001): one self-contained adapter per engine, with its own connection options, typed values and
-//! statement classification. They are wired into the core ports in the engine-module refactor; until then nothing outside
-//! the live tests calls them.
+//! statement classification, registered in `runtime::registry`. [`mysql`] is a native adapter; the others are wired
+//! into the contract one by one (planned engines refuse to connect until then).
 //!
 //! The SQL engines (PostgreSQL, SQLite, ClickHouse, Oracle) share [`common`]: the neutral typed value, catalog nodes and
 //! descriptions, browse requests with structured filters and keyset paging, row changes, result streaming with row limits,
