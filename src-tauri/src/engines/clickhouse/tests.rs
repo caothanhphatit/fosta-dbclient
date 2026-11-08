@@ -1,4 +1,4 @@
-//! Live tests against the `clickhouse` service of dev/docker-compose.engines-sql.yml. Run with
+//! Live tests against the `clickhouse` service of dev/compose/{postgres,clickhouse,oracle}.yml. Run with
 //! `cargo test live_engine_ -- --ignored --test-threads=1`.
 
 use super::*;
@@ -13,7 +13,7 @@ fn opts() -> ChOptions {
 async fn engine() -> ChEngine {
     ChEngine::connect(opts())
         .await
-        .expect("connect to the dev ClickHouse (docker compose -f dev/docker-compose.engines-sql.yml up -d)")
+        .expect("connect to the dev ClickHouse (docker compose -f dev/compose/{postgres,clickhouse,oracle}.yml up -d)")
 }
 
 fn t(name: &str) -> ObjectRef {

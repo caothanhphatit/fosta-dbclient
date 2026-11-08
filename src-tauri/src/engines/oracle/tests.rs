@@ -1,4 +1,4 @@
-//! Live tests against the `oracle` service of dev/docker-compose.engines-sql.yml. Run with
+//! Live tests against the `oracle` service of dev/compose/{postgres,clickhouse,oracle}.yml. Run with
 //! `cargo test live_engine_ -- --ignored --test-threads=1`. They need Oracle Instant Client on PATH; without it each test checks
 //! the "missing client" error, prints a note and passes.
 
@@ -19,7 +19,7 @@ async fn engine() -> Option<OraEngine> {
             eprintln!("note: Oracle Instant Client is not installed; skipping the Oracle live test ({e})");
             None
         }
-        Err(e) => panic!("connect to the dev Oracle (docker compose -f dev/docker-compose.engines-sql.yml up -d oracle): {e}"),
+        Err(e) => panic!("connect to the dev Oracle (docker compose -f dev/compose/oracle.yml up -d --wait): {e}"),
     }
 }
 

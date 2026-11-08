@@ -1,4 +1,4 @@
-//! Live tests against `dev/docker-compose.engines-nosql.yml` (Redis on 127.0.0.1:6379, password `studio-redis`).
+//! Live tests against `dev/compose/{redis,elasticsearch,opensearch}.yml` (Redis on 127.0.0.1:6379, password `studio-redis`).
 //! Run with `cargo test live_engine_ -- --ignored --test-threads=1`. Each test writes its own keys under `fosta-test:`
 //! so it does not depend on the seed script, and the seed keys (users:*, sessions:*, ...) are checked when present.
 
@@ -30,7 +30,7 @@ fn options(resp3: bool) -> RedisConnectOptions {
 async fn engine(resp3: bool) -> RedisEngine {
     RedisEngine::connect(options(resp3))
         .await
-        .expect("Redis from dev/docker-compose.engines-nosql.yml must be running")
+        .expect("Redis from dev/compose/{redis,elasticsearch,opensearch}.yml must be running")
 }
 
 fn key(name: &str) -> Blob {

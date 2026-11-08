@@ -1,0 +1,24 @@
+# Elasticsearch 8.19 for the Elasticsearch engine (512 MiB heap, 1.5 GiB limit).
+# Test-only credentials; never reuse them.
+# docker compose -f dev/compose/elasticsearch.yml up -d --wait   then: sh dev/seed-nosql.sh
+# https://127.0.0.1:9200  elastic / studio-elastic  (CA: docker exec fosta-dev-nosql-elasticsearch-1 cat config/certs/http_ca.crt)
+
+name: fosta-dev-nosql
+
+services:
+  elasticsearch:
+    image: elasticsearch:8.19.23
+    environment:
+      ELASTIC_PASSWORD: studio-elastic
+      discovery.type: single-node
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      cluster.name: fosta-dev
+      xpack.ml.enabled: "false"
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ports:
+      - "127.0.0.1:9200:9200"
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -k -u elastic:studio-elastic https://localhost:9200/_cluster/health | grep -q '\"status\":\"\\(green\\|yellow\\)\"'"]
+      interval: 5s
+      retries: 60

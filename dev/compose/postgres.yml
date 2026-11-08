@@ -1,0 +1,21 @@
+# PostgreSQL 17 for the PostgreSQL engine.
+# Test-only credentials; never reuse them.
+# docker compose -f dev/compose/postgres.yml up -d --wait
+# 127.0.0.1:5432  postgres / studio-root  database shop (schemas public, sales)
+
+name: fosta-dev-sql
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: studio-root
+      POSTGRES_DB: shop
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ../seed/postgres.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "shop"]
+      interval: 5s
+      retries: 30

@@ -1,0 +1,18 @@
+# Redis 8.2 for the Redis engine.
+# Test-only credentials; never reuse them.
+# docker compose -f dev/compose/redis.yml up -d --wait   then: sh dev/seed-nosql.sh
+# 127.0.0.1:6379  no ACL user, password studio-redis
+
+name: fosta-dev-nosql
+
+services:
+  redis:
+    image: redis:8.2
+    command: ["redis-server", "--requirepass", "studio-redis", "--maxmemory", "256mb", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "studio-redis", "--no-auth-warning", "ping"]
+      interval: 3s
+      retries: 30

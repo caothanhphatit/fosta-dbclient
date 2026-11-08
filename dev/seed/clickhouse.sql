@@ -1,4 +1,4 @@
--- ClickHouse sample data for the engine live tests (dev/docker-compose.engines-sql.yml). Runs once on an empty volume.
+-- ClickHouse sample data for the engine live tests (dev/compose/{postgres,clickhouse,oracle}.yml). Runs once on an empty volume.
 
 CREATE DATABASE IF NOT EXISTS shop;
 

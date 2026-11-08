@@ -1,4 +1,4 @@
-//! Live tests against `dev/docker-compose.engines-nosql.yml` after `sh dev/seed-nosql.sh`:
+//! Live tests against `dev/compose/{redis,elasticsearch,opensearch}.yml` after `sh dev/seed-nosql.sh`:
 //! Elasticsearch 8 on https://127.0.0.1:9200 (elastic / studio-elastic, generated certificates) and, when it runs,
 //! OpenSearch 2 on http://127.0.0.1:9201. Run with `cargo test live_engine_ -- --ignored --test-threads=1`.
 
@@ -37,7 +37,7 @@ async fn es() -> EsEngine {
     options.tls.accept_invalid_certs = true;
     EsEngine::connect(&options)
         .await
-        .expect("Elasticsearch from dev/docker-compose.engines-nosql.yml must be running")
+        .expect("Elasticsearch from dev/compose/{redis,elasticsearch,opensearch}.yml must be running")
 }
 
 /// The cluster's generated CA, read from the container.

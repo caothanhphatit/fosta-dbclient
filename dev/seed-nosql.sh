@@ -1,5 +1,5 @@
 #!/bin/sh
-# Loads sample data into the NoSQL test engines of dev/docker-compose.engines-nosql.yml. Re-runnable: it replaces what it
+# Loads sample data into the NoSQL test engines of dev/compose/{redis,elasticsearch,opensearch}.yml. Re-runnable: it replaces what it
 # created before. Needs curl and awk (Git Bash on Windows is fine).
 #
 #   sh dev/seed-nosql.sh            # Redis + Elasticsearch (+ OpenSearch when it answers on 9201)

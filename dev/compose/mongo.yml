@@ -1,0 +1,18 @@
+# MongoDB 8 for the live and contract tests.
+# Test-only credentials; never reuse them.
+# docker compose -f dev/compose/mongo.yml up -d --wait
+# 127.0.0.1:27017  root / studio-root  database events (auth db admin); contract data in fosta_contract
+
+name: db-studio-dev
+
+services:
+  mongo:
+    image: mongo:8
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: studio-root
+      MONGO_INITDB_DATABASE: events
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - ../seed/mongo.js:/docker-entrypoint-initdb.d/01-seed.js:ro

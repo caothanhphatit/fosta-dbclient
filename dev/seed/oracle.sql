@@ -1,4 +1,4 @@
--- Oracle sample data for the engine live tests (dev/docker-compose.engines-sql.yml). Runs once, as SYSDBA, on an empty volume;
+-- Oracle sample data for the engine live tests (dev/compose/{postgres,clickhouse,oracle}.yml). Runs once, as SYSDBA, on an empty volume;
 -- the objects belong to the application user SHOP in the pluggable database FREEPDB1.
 
 ALTER SESSION SET CONTAINER = FREEPDB1;

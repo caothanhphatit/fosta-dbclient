@@ -1,4 +1,4 @@
--- PostgreSQL sample data for the engine live tests (dev/docker-compose.engines-sql.yml). Runs once in database `shop`.
+-- PostgreSQL sample data for the engine live tests (dev/compose/{postgres,clickhouse,oracle}.yml). Runs once in database `shop`.
 -- Deterministic: every generated value derives from generate_series, so the tests can assert exact rows.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;

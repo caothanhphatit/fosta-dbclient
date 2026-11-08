@@ -280,6 +280,7 @@ pub fn cell_of(value: &Value) -> Cell {
     match value {
         Value::Null => None,
         Value::Bytes(bytes) => Some(crate::contract::value::hex(bytes)),
+        Value::Bool(flag) => Some(if *flag { "1" } else { "0" }.to_owned()),
         other => other.display(),
     }
 }

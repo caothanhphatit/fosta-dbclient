@@ -1,4 +1,4 @@
--- Sample keys for the Redis test engine (dev/docker-compose.engines-nosql.yml). Loaded by dev/seed-nosql.sh with
+-- Sample keys for the Redis test engine (dev/compose/{redis,elasticsearch,opensearch}.yml). Loaded by dev/seed-nosql.sh with
 --   redis-cli EVAL "$(cat redis.lua)" 0
 -- Idempotent: every run replaces the same keys.
 

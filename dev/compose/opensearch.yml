@@ -1,0 +1,24 @@
+# OpenSearch 2.19 for the OpenSearch flavour of the Elasticsearch engine.
+# Test-only credentials; never reuse them.
+# docker compose -f dev/compose/opensearch.yml up -d --wait   then: sh dev/seed-nosql.sh
+# http://127.0.0.1:9201  security plugin disabled (plain HTTP, no auth)
+
+name: fosta-dev-nosql
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.19.6
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      cluster.name: fosta-dev-os
+      cluster.routing.allocation.disk.threshold_enabled: "false"
+    ports:
+      - "127.0.0.1:9201:9200"
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"\\(green\\|yellow\\)\"'"]
+      interval: 5s
+      retries: 60

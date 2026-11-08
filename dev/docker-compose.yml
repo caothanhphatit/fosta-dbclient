@@ -1,45 +1,14 @@
-# Local test databases for Fosta Studio. Test-only credentials; never reuse them.
+# Local test databases for Fosta Studio: the three engines the app has shipped with. Test-only credentials.
 #   docker compose -f dev/docker-compose.yml up -d
 #   then: dev/seed-mssql.sh  (SQL Server has no init directory)
 #
-# MariaDB  127.0.0.1:3306   root / studio-root   database shop (vector column included)
-# SQL Server 127.0.0.1:1433 sa / Studio#Pass2026   database ERP
-# MongoDB  127.0.0.1:27017  root / studio-root   database events (auth db admin)
+# One file per engine lives in dev/compose/ (also PostgreSQL, ClickHouse, Oracle, Redis, Elasticsearch, OpenSearch);
+# start any of them on its own, e.g. docker compose -f dev/compose/postgres.yml up -d --wait. The contract tests run
+# against them: cd src-tauri && cargo test contract_<engine> -- --ignored --test-threads=1
 
 name: db-studio-dev
 
-services:
-  mariadb:
-    image: mariadb:11.8
-    environment:
-      MARIADB_ROOT_PASSWORD: studio-root
-    ports:
-      - "127.0.0.1:3306:3306"
-    volumes:
-      - ./seed/mariadb.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 5s
-      retries: 30
-
-  mssql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    environment:
-      ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: "Studio#Pass2026"
-      MSSQL_PID: Developer
-    ports:
-      - "127.0.0.1:1433:1433"
-    volumes:
-      - ./seed/mssql.sql:/seed/mssql.sql:ro
-
-  mongo:
-    image: mongo:8
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: studio-root
-      MONGO_INITDB_DATABASE: events
-    ports:
-      - "127.0.0.1:27017:27017"
-    volumes:
-      - ./seed/mongo.js:/docker-entrypoint-initdb.d/01-seed.js:ro
+include:
+  - compose/mariadb.yml
+  - compose/mssql.yml
+  - compose/mongo.yml

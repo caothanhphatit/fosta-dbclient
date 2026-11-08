@@ -1,0 +1,20 @@
+# MariaDB 11.8 for the live and contract tests.
+# Test-only credentials; never reuse them.
+# docker compose -f dev/compose/mariadb.yml up -d --wait
+# 127.0.0.1:3306  root / studio-root  database shop (vector column included); contract data in fosta_contract
+
+name: db-studio-dev
+
+services:
+  mariadb:
+    image: mariadb:11.8
+    environment:
+      MARIADB_ROOT_PASSWORD: studio-root
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - ../seed/mariadb.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      retries: 30

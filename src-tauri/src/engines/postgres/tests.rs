@@ -1,4 +1,4 @@
-//! Live tests against the `postgres` service of dev/docker-compose.engines-sql.yml. Run with
+//! Live tests against the `postgres` service of dev/compose/{postgres,clickhouse,oracle}.yml. Run with
 //! `cargo test live_engine_ -- --ignored --test-threads=1`.
 
 use super::*;
@@ -13,7 +13,7 @@ fn opts() -> PgOptions {
 async fn engine() -> PgEngine {
     PgEngine::connect(opts())
         .await
-        .expect("connect to the dev PostgreSQL (docker compose -f dev/docker-compose.engines-sql.yml up -d)")
+        .expect("connect to the dev PostgreSQL (docker compose -f dev/compose/{postgres,clickhouse,oracle}.yml up -d)")
 }
 
 fn t(schema: &str, name: &str) -> ObjectRef {

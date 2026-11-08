@@ -1,0 +1,18 @@
+# SQL Server 2022 for the live and contract tests.
+# Test-only credentials; never reuse them.
+# docker compose -f dev/compose/mssql.yml up -d --wait   then: dev/seed-mssql.sh (SQL Server has no init directory)
+# 127.0.0.1:1433  sa / Studio#Pass2026  database ERP; contract data in fosta_contract
+
+name: db-studio-dev
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Studio#Pass2026"
+      MSSQL_PID: Developer
+    ports:
+      - "127.0.0.1:1433:1433"
+    volumes:
+      - ../seed/mssql.sql:/seed/mssql.sql:ro

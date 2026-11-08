@@ -1,0 +1,23 @@
+# Oracle 23ai Free for the Oracle engine (~2 GB RAM; start it last).
+# Test-only credentials; never reuse them.
+# docker compose -f dev/compose/oracle.yml up -d --wait
+# 127.0.0.1:1521  shop / studio-root  service FREEPDB1 (SYSTEM password studio-root)
+# The Oracle tests also need Oracle Instant Client (19c or newer) on PATH.
+
+name: fosta-dev-sql
+
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim-faststart
+    environment:
+      ORACLE_PASSWORD: studio-root
+      APP_USER: shop
+      APP_USER_PASSWORD: studio-root
+    ports:
+      - "127.0.0.1:1521:1521"
+    volumes:
+      - ../seed/oracle.sql:/container-entrypoint-initdb.d/01-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      retries: 60
