@@ -1,0 +1,21 @@
+{
+  "id": "clickhouse",
+  "compose": "dev/compose/clickhouse.yml",
+  "versions": ["25.8"],
+  "versionEnv": "CLICKHOUSE_TAG",
+  "seed": null,
+  "paths": [
+    "src-tauri/src/engines/clickhouse/**",
+    "src-tauri/src/engines/common/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "dev/compose/clickhouse.yml",
+    "dev/seed/clickhouse.sql",
+    "dev/seed/clickhouse/**",
+    "ci/engines/clickhouse.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "contract_clickhouse",
+  "note": "The contract suites create and seed the fosta_contract database themselves (dev/seed/clickhouse/contract.sql); dev/seed/clickhouse.sql (the shop demo database) is mounted by the compose file for the core's live_engine_clickhouse tests. Only 25.8 is verified. Servers older than 23.3 take the ALTER TABLE ... DELETE and default-error paths, which have not been run."
+}

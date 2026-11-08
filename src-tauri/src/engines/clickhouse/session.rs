@@ -76,7 +76,7 @@ impl ChSession {
         database: Option<&str>,
         opts: &RunOptions,
         sink: &mut dyn ResultSink,
-    ) -> std::result::Result<(), FailedStatement> {
+    ) -> std::result::Result<(), Box<FailedStatement>> {
         let mut http = self.http.clone();
         if let Some(database) = database.filter(|name| !name.is_empty()) {
             http.database = database.to_owned();
@@ -91,12 +91,12 @@ impl ChSession {
             let r = self.run_statement(&http, index, &st.text, &query_id, opts, sink).await;
             self.set_running(None);
             if let Err(error) = r {
-                return Err(FailedStatement {
+                return Err(Box::new(FailedStatement {
                     index,
                     text: st.text,
                     start: st.start,
                     error,
-                });
+                }));
             }
         }
         Ok(())
