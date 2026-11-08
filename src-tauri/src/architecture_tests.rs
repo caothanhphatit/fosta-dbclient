@@ -108,3 +108,141 @@ fn the_matcher_finds_direct_and_grouped_engine_paths() {
     assert!(engine_references("crate::engines::mysqlish", &engines).is_empty());
     assert_eq!(removed_references("use crate::drivers::Driver;"), ["drivers::"]);
 }
+
+/// Driver crates: only engine modules may talk to a database library.
+const DRIVER_CRATES: [&str; 8] = [
+    "mysql_async::",
+    "mongodb::",
+    "tokio_postgres::",
+    "rusqlite::",
+    "oracle::",
+    "redis::",
+    "tiberius::",
+    "elasticsearch::",
+];
+
+/// The code lines of a source file: comments (`//`, `///`, `//!`) dropped, so docs may name what code must not use.
+fn code_lines(text: &str) -> impl Iterator<Item = &str> {
+    text.lines().filter(|line| !line.trim_start().starts_with("//"))
+}
+
+/// Files under `src/<layer>` that satisfy `keep`, as (relative path, text).
+fn layer_sources(layer: &str, keep: impl Fn(&str) -> bool) -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    rust_files(&src().join(layer), &mut files);
+    assert!(!files.is_empty(), "no sources in src/{layer}");
+    files
+        .into_iter()
+        .map(|file| {
+            let relative = file
+                .strip_prefix(src())
+                .unwrap_or(&file)
+                .display()
+                .to_string()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            let text = std::fs::read_to_string(&file).expect("readable source");
+            (relative, text)
+        })
+        .filter(|(relative, _)| keep(relative))
+        .collect()
+}
+
+fn is_test_source(relative: &str) -> bool {
+    relative.contains("/testing/") || relative.ends_with("_tests.rs") || relative.ends_with("/tests.rs")
+}
+
+/// Lines of `text` that contain one of `patterns`, as `path: pattern`.
+fn pattern_violations(relative: &str, text: &str, patterns: &[&str]) -> Vec<String> {
+    code_lines(text)
+        .flat_map(|line| patterns.iter().filter(move |pattern| line.contains(**pattern)))
+        .map(|pattern| format!("{relative}: {pattern}"))
+        .collect()
+}
+
+#[test]
+fn commands_gateway_and_ai_do_not_use_driver_crates() {
+    let mut violations = Vec::new();
+    for layer in NEUTRAL_LAYERS {
+        for (relative, text) in layer_sources(layer, |_| true) {
+            violations.extend(pattern_violations(&relative, &text, &DRIVER_CRATES));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "database libraries belong to engine modules:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn the_contract_depends_on_no_other_layer() {
+    let mut violations = Vec::new();
+    for (relative, text) in layer_sources("contract", |relative| !is_test_source(relative)) {
+        violations.extend(pattern_violations(
+            &relative,
+            &text,
+            &[
+                "crate::engines",
+                "crate::commands",
+                "crate::gateway",
+                "crate::ai",
+                "crate::runtime",
+                "crate::server",
+            ],
+        ));
+        violations.extend(pattern_violations(&relative, &text, &DRIVER_CRATES));
+    }
+    assert!(
+        violations.is_empty(),
+        "contract types and traits are the layer everything else depends on:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn engines_do_not_reach_back_into_commands_gateway_or_the_assistant() {
+    let mut violations = Vec::new();
+    for (relative, text) in layer_sources("engines", |relative| !is_test_source(relative)) {
+        violations.extend(pattern_violations(
+            &relative,
+            &text,
+            &["crate::commands", "crate::gateway", "crate::ai"],
+        ));
+    }
+    assert!(
+        violations.is_empty(),
+        "engines implement the contract; callers reach them through the registry:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn engine_modules_do_not_use_each_others_driver_code() {
+    // Only the shared toolkit (`engines::common`) and MariaDB's MySQL base are shared; any other engine path is a leak.
+    let engines = engine_modules();
+    let mut violations = Vec::new();
+    for (relative, text) in layer_sources("engines", |relative| !is_test_source(relative)) {
+        let own = relative.split('/').nth(1).unwrap_or_default().to_owned();
+        let text: String = code_lines(&text).collect::<Vec<_>>().join("\n");
+        for name in engine_references(&text, &engines) {
+            if name != own && !(own == "mariadb" && name == "mysql") {
+                violations.push(format!("{relative}: engines::{name}"));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "engines must not name each other:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn the_helpers_ignore_comments_and_name_driver_crates() {
+    let text = "//! uses crate::engines::mysql\nlet pool = mysql_async::Pool::new();\n";
+    assert_eq!(code_lines(text).count(), 1);
+    assert_eq!(pattern_violations("a.rs", text, &DRIVER_CRATES), ["a.rs: mysql_async::"]);
+    assert!(is_test_source("contract/testing/suites.rs"));
+    assert!(is_test_source("engines/mssql/contract_tests.rs"));
+    assert!(!is_test_source("engines/mssql/adapter.rs"));
+}
