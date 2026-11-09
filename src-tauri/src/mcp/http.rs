@@ -150,6 +150,8 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 /// The checks every request passes, in order: peer, host, origin, enabled, token, protocol version.
+// The error is the HTTP response itself, built at most once per request.
+#[allow(clippy::result_large_err)]
 fn guard(endpoint: &Endpoint, peer: Option<IpAddr>, headers: &HeaderMap) -> Result<Arc<AppState>, Response> {
     let app = endpoint
         .app

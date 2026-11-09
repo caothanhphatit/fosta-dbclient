@@ -112,7 +112,7 @@ pub struct ReadResult {
     pub elapsed_ms: u64,
 }
 
-//// Keeps the first result set, at most `max_rows` rows; later ones (and notices) are not part of the answer.
+/// Keeps the first result set, at most `max_rows` rows; later ones (and notices) are not part of the answer.
 struct Collect {
     result: ReadResult,
     sets: usize,
