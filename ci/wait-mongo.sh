@@ -18,4 +18,6 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 echo "MongoDB did not become ready" >&2
+$COMPOSE ps -a >&2
+$COMPOSE logs --no-color --tail 80 mongo >&2
 exit 1
