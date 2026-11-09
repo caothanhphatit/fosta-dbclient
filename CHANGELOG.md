@@ -31,6 +31,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **MariaDB/MySQL query tabs** stop a read at the row cap instead of reading the rest (`SELECT *` on 1M rows: 3.4 s → 0.14 s).
+- **Paging quickly no longer exhausts the connection pool**: a replaced or closed page read is cancelled on the server (KILL
+  QUERY, PostgreSQL cancel); a busy MariaDB/MySQL pool says so instead of asking whether the server is reachable; page reads
+  stop after 120 s when the rules set no timeout.
+- **Last page** reads from the end (reversed order, no deep OFFSET) and counts exactly, so it is right on tables larger than
+  their statistics and fast when sorted.
+- **CSV and JSON export of every row** streams to the file (desktop) or the browser's download (web) instead of building it in
+  the page; the files are unchanged.
+- **PostgreSQL scripts** run in about one round trip per statement (a 3,750-statement script: 22.8 s → 4.5 s).
 - **Vector index recall**: a row as close as the exact k-th result now counts as a hit, so tables with duplicate vectors no longer
   report a recall near 0.
 - **Oracle in the web edition**: the Docker image now includes `libaio`, and the server puts its Instant Client download folder on
