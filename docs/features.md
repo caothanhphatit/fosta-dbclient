@@ -26,6 +26,12 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
   the left or with `Ctrl+1…9`; tabs of other workspaces stay open.
 - **Startup tasks**: background commands (e.g. `kubectl port-forward`) with restart and backoff, live logs, and child processes killed when
   the app exits. Auto-start tasks run when their workspace opens.
+- **Tunnel commands**: a command bound to one connection (Edit connection → Tunnel command, with a `kubectl port-forward` template).
+  Connect starts it, or reuses the running one, and waits until it is ready: its output contains the ready text, or else the
+  connection's host and port accept connections (timeout 30 s by default). If it exits or times out, connect fails with
+  `TUNNEL_FAILED` and the last log lines. It restarts with backoff while connected, and stops on disconnect, delete, a changed command,
+  workspace delete and app exit. Test connection runs a temporary one. Right-click the connection → Tunnel log. In the web edition it
+  needs `FOSTA_STUDIO_TASKS=on`, like startup tasks.
 - **Connections**: saved profiles, parameters or a connection string; passwords live in Windows Credential Manager (an encrypted file in the web edition), never in the config file.
 - **SSH tunnel and TLS**: password, key file or agent authentication, one jump host, host key checks (accept new, strict or off),
   keepalives and automatic reconnect. TLS modes run from `disable` to `verifyFull`, with your own CA, a client certificate, a server

@@ -8,7 +8,7 @@ use crate::{
         classify::Category,
         rules::{relaxations, Preset, SafetySettings, PRODUCTION_ICON},
     },
-    secrets, AppState,
+    secrets, tunnel, AppState,
 };
 
 pub const RELAX_CONFIRMATION_REQUIRED: &str = "RELAX_CONFIRMATION_REQUIRED";
@@ -158,6 +158,7 @@ pub async fn delete_workspace(state: &AppState, id: String) -> AppResult<AppConf
     }
     for profile in &doomed.connections {
         state.engines.disconnect(&profile.id).await;
+        tunnel::stop(&state.tasks, &tunnel::task_id(&profile.id)).await;
         secrets::delete_connection(&profile.id)?;
     }
     state.config.update(|config| config.remove_workspace(&id).map(|_| ()))

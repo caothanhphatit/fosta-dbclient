@@ -60,6 +60,8 @@ import { mockError, NOT_CONNECTED } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
 import { VECTOR_DIMS } from "./shop";
 import { state } from "./state";
+import { startTunnel, stopTunnel, tunnelLogs, tunnelSaved, tunnelStatus, withProbeTunnel } from "./tunnels";
+import { tunnelTaskId } from "../../features/connections/tunnelForm";
 import type { EngineMock, MockSession } from "./types";
 
 const modules = import.meta.glob<EngineMock>("./engines/*.ts", { eager: true });
@@ -397,10 +399,15 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "skip_confirmations":
       return skipConfirmations(String(payload.connectionId), payload.categories as StatementCategory[]);
     case "delete_workspace":
+      for (const profile of state.config.workspaces.find((item) => item.id === payload.id)?.connections ?? []) stopTunnel(tunnelTaskId(profile.id));
       state.config = { ...state.config, workspaces: state.config.workspaces.filter((item) => item.id !== payload.id) };
       if (state.config.activeWorkspace === payload.id) state.config.activeWorkspace = state.config.workspaces[0].id;
       return state.config;
     case "save_connection":
+      tunnelSaved(
+        profiles().find((item) => item.id === (payload.profile as ConnectionProfile).id),
+        payload.profile as ConnectionProfile,
+      );
       return saveConnection(
         payload.profile as ConnectionProfile,
         (payload.password as string | null) ?? null,
@@ -410,6 +417,7 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       );
     case "delete_connection":
       connections.delete(str("id"));
+      stopTunnel(tunnelTaskId(str("id")));
       return deleteConnection(str("id"));
     case "save_task":
     case "delete_task":
@@ -419,7 +427,12 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       return { edition: "desktop", tasks: true, revealFile: true, browserDownloads: false, secretStore: "Windows Credential Manager", inContainer: false };
     case "task_statuses":
       return [{ id: "t-a-1", state: "running", pid: 4242, restarts: 0, message: null }];
+    case "tunnel_status":
+      return tunnelStatus(str("connectionId"));
+    case "tunnel_logs":
+      return tunnelLogs(str("connectionId"));
     case "task_logs":
+      if (str("id").startsWith("tunnel:")) return tunnelLogs(str("id").slice("tunnel:".length));
       return ["▶ kubectl port-forward -n shop svc/mariadb 13306:3306", "Forwarding from 127.0.0.1:13306 -> 3306", "Handling connection for 13306"];
     case "start_task":
     case "stop_task":
@@ -480,15 +493,20 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const profile = payload.profile as ConnectionProfile;
       knownEngine(profile.driver);
       checkTestPassword(profile, (payload.password as string | null) ?? null);
-      return open(profile).info;
+      return withProbeTunnel(profile, () => open(profile).info);
     }
     case "connect": {
-      const opened = open(savedProfile(str("id")));
-      connections.set(opened.profile.id, opened);
-      return opened.info;
+      const profile = savedProfile(str("id"));
+      const connectNow = () => {
+        const opened = open(profile);
+        connections.set(opened.profile.id, opened);
+        return opened.info;
+      };
+      return profile.tunnel ? startTunnel(profile).then(connectNow) : connectNow();
     }
     case "disconnect":
       connections.delete(str("id"));
+      stopTunnel(tunnelTaskId(str("id")));
       for (const [id, item] of sessions) if (item.connectionId === payload.id) sessions.delete(id);
       return null;
 
@@ -599,16 +617,20 @@ declare global {
 
 export function installDevMock(): void {
   mockWindows("main");
-  mockIPC((command, payload) => {
-    try {
-      const result = handle(command, payload as Record<string, unknown>);
-      if (result instanceof Promise) return result.catch((error: unknown) => (record(command, error), Promise.reject(error)));
-      return result;
-    } catch (error) {
-      record(command, error);
-      throw error;
-    }
-  });
+  // Events (`listen` / `emit`) are delivered by the mock itself, so mock tunnels can report their status.
+  mockIPC(
+    (command, payload) => {
+      try {
+        const result = handle(command, payload as Record<string, unknown>);
+        if (result instanceof Promise) return result.catch((error: unknown) => (record(command, error), Promise.reject(error)));
+        return result;
+      } catch (error) {
+        record(command, error);
+        throw error;
+      }
+    },
+    { shouldMockEvents: true },
+  );
   window.__fostaMock = {
     touchRow: (connectionId, table, key, column) => touchRow(connectionId, table, key, false, column),
     deleteRow: (connectionId, table, key) => touchRow(connectionId, table, key, true),

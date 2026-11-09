@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Tunnel commands**: a command bound to a connection (e.g. `kubectl port-forward`), started and awaited before connecting, restarted
+  with backoff while connected, stopped on disconnect. Failures show `TUNNEL_FAILED` with the log tail; the log opens from the
+  connection's menu.
+
 ### Fixed
 
 - **Oracle in the web edition**: the Docker image now includes `libaio`, and the server puts its Instant Client download folder on

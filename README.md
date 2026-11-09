@@ -16,6 +16,7 @@ OpenSearch, ClickHouse and Oracle. A desktop app for Windows, or a web edition i
   `kubectl port-forward`, restarted when they drop.
 - **SSH tunnels and TLS** on every network engine: key, password or agent, a jump host, host key checks, your own CA, client
   certificates or a pinned certificate.
+- **Tunnel commands** per connection (e.g. `kubectl port-forward`): started on connect, stopped on disconnect.
 - **Safe by default**: every statement is checked against the workspace's rules (Open, Guarded, Read-only or Custom). Production
   workspaces start read-only, enforced by the database too, and a save never overwrites a row someone else changed.
 - **Query editor** with column-aware completion, a formatter, streaming results with a real Stop, transactions and per-tab history.

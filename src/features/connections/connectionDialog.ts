@@ -2,7 +2,8 @@
  * The connection dialog, rendered from the engine's descriptor (`EngineDescriptor.connection`, see `connectionForm.ts`
  * for the mapping): an engine picker (planned engines only with the developer setting), host/port/user/database/file
  * and the extra fields per section, auth methods with their secrets, a Connection URL tab parsed by the backend
- * (`parse_connection_string`), and the TLS and SSH sections (`tlsSection.ts`, `sshSection.ts`). Shared UI: no engine
+ * (`parse_connection_string`), the TLS and SSH sections (`tlsSection.ts`, `sshSection.ts`) and the tunnel command
+ * (`tunnelSection.ts`). Shared UI: no engine
  * ids here.
  *
  * Secrets never enter the profile: the password goes to `save_connection`'s `password`, other slots to `secrets`.
@@ -30,12 +31,15 @@ import {
   profileFromForm,
   sameTarget,
   switchEngine,
+  withTunnel,
   type ConnectionForm,
 } from "./connectionForm";
 import { withRelaxPrompt } from "../safety/confirmationDialog";
 import "./connectionDialog.css";
 import { renderSshSection, type SshSection } from "./sshSection";
 import { renderTlsSection, type TlsSection } from "./tlsSection";
+import { endpointForTemplate, portForwardTemplate } from "./tunnelForm";
+import { renderTunnelSection } from "./tunnelSection";
 
 /** SQL Server's untrusted (self-signed) certificate error names the TLS option that fixes it. */
 const UNTRUSTED_CERTIFICATE = /trust server certificate|accept invalid certificates/i;
@@ -54,6 +58,17 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
     let form: ConnectionForm = existing ? formFromProfile(existing, descriptor) : newForm(descriptor, defaultHost);
     let tls: TlsSection = renderTlsSection(existing, descriptor);
     let ssh: SshSection = renderSshSection(existing, descriptor);
+    // Not engine-specific: kept when the engine or the URL changes (a parsed URL never sets it).
+    const tunnel = renderTunnelSection(existing, {
+      template: () => portForwardTemplate(descriptor.id, descriptor.connection.defaultPort),
+      filled: (values) => {
+        const endpoint = formLayout(descriptor).host ? endpointForTemplate(form.host, values) : null;
+        if (!endpoint) return;
+        form.host = endpoint.host;
+        form.port = String(endpoint.port);
+        renderAll();
+      },
+    });
     // A profile whose string carries the connection (replica sets, SRV) opens on the URL tab.
     let mode: "params" | "url" = existing?.url && formLayout(descriptor).urlTab && !hasUrlField(descriptor) ? "url" : "params";
 
@@ -246,7 +261,7 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
       advanced.hidden = fields.length === 0;
     };
 
-    const renderSections = () => sectionsHost.replaceChildren(advanced, tls.element, ssh.element);
+    const renderSections = () => sectionsHost.replaceChildren(advanced, tls.element, ssh.element, tunnel.element);
 
     const renderMode = () => {
       const layout = formLayout(descriptor);
@@ -357,7 +372,7 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
         showFeedback(errorHost, invalid(`Fill in: ${missing.join(", ")}.`), context);
         return null;
       }
-      const profile = profileFromForm(id, form, descriptor, tls.read(), ssh.read(), existing);
+      const profile = withTunnel(profileFromForm(id, form, descriptor, tls.read(), ssh.read(), existing), tunnel.read());
       const secrets = formSecrets(form, descriptor, Boolean(existing?.savePassword), { ...tls.secrets(), ...ssh.secrets() });
       return { profile, ...secrets };
     };

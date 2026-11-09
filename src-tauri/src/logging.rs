@@ -241,6 +241,7 @@ infallible_outcome!(
     crate::Capabilities,
     Vec<String>,
     Vec<crate::tasks::TaskStatus>,
+    crate::tasks::TaskStatus,
     crate::commands::diagnostics::Diagnostics,
     Vec<crate::contract::EngineDescriptor>
 );
