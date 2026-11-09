@@ -3767,7 +3767,7 @@ kbd {
 }
 
 .dbchip {
-  --h: 215;
+  --brand: var(--text);
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -3791,13 +3791,15 @@ kbd {
   height: 16px;
   padding: 5px;
   border-radius: 999px;
-  background: color-mix(in srgb, hsl(var(--h) 75% 50%) 16%, transparent);
-  color: color-mix(in srgb, hsl(var(--h) 70% 48%) 78%, var(--text));
+  /* Brand marks sit on a light tile in both themes, so near-black (SQLite) and dark marks stay readable. */
+  background: #fff;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 22%, #d8dde6);
+  color: var(--brand);
 }
 
 .dbchip:hover,
 .dbchip:focus-visible {
-  border-color: color-mix(in srgb, hsl(var(--h) 70% 50%) 55%, var(--line));
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--line));
   transform: translateY(-1px);
 }
 
@@ -3824,37 +3826,37 @@ kbd {
 }
 
 .c-mariadb {
-  --h: 205;
+  --brand: #003545;
 }
 .c-mysql {
-  --h: 28;
-}
-.c-sqlserver {
-  --h: 350;
+  --brand: #4479a1;
 }
 .c-mongodb {
-  --h: 140;
+  --brand: #47a248;
 }
 .c-postgresql {
-  --h: 222;
+  --brand: #4169e1;
 }
 .c-sqlite {
-  --h: 190;
+  --brand: #003b57;
 }
 .c-redis {
-  --h: 4;
+  --brand: #ff4438;
 }
 .c-elasticsearch {
-  --h: 170;
+  --brand: #005571;
 }
 .c-opensearch {
-  --h: 245;
+  --brand: #005eb8;
 }
 .c-clickhouse {
-  --h: 46;
+  --brand: #ffcc01;
+}
+.c-sqlserver {
+  --brand: #d64545;
 }
 .c-oracle {
-  --h: 15;
+  --brand: #dc3f35;
 }
 
 @media (prefers-reduced-motion: reduce) {

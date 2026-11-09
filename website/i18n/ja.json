@@ -173,7 +173,7 @@
   "footer.roadmap": "ロードマップ",
   "footer.license": "ライセンス",
   "footer.issues": "Issues",
-  "footer.trademarks": "MariaDB、MySQL、SQL Server、MongoDB、PostgreSQL、SQLite、Redis、Elasticsearch、OpenSearch、ClickHouse、Oracle は、それぞれの所有者の商標です。Fosta Studio は独立したプロジェクトであり、これらの所有者とは提携していません。",
+  "footer.trademarks": "データベースの名称およびロゴは、それぞれの所有者の商標です。これらの使用は、所有者による推奨を意味するものではありません。Fosta Studio は独立したプロジェクトであり、これらの所有者とは提携していません。",
   "lang.label": "言語",
   "lang.current": "言語：日本語",
   "offer.prompt": "日本語で表示しますか？",

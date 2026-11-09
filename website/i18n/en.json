@@ -173,7 +173,7 @@
   "footer.roadmap": "Roadmap",
   "footer.license": "License",
   "footer.issues": "Issues",
-  "footer.trademarks": "MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle are trademarks of their respective owners. Fosta Studio is an independent project and is not affiliated with them.",
+  "footer.trademarks": "Database names and logos are trademarks of their respective owners; their use does not imply endorsement. Fosta Studio is an independent project and is not affiliated with them.",
   "lang.label": "Language",
   "lang.current": "Language: English",
   "offer.prompt": "View this page in English?",

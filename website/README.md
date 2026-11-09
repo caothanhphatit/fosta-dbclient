@@ -195,6 +195,8 @@ Server layout (installed once; kept next to the other sites without touching the
 - Stick to facts from `README.md`, `ROADMAP.md` and `ARCHITECTURE.md`. Roadmap items are labelled "coming".
 - Links to repository files must be absolute GitHub URLs (`https://github.com/caothanhphatit/fosta-dbclient/blob/main/...`),
   because the site is served from dbcl.fosta.app, not from the repository.
-- No third-party logos: engines are shown with generic labels and icons.
+- Engine logos in the home page chip strip are Simple Icons marks (CC0, v16.35.0), inlined as `i-db-*` symbols; Oracle and SQL
+  Server are not in Simple Icons and use the app's own glyphs. They sit on a light tile in both themes. Keep the trademark
+  line in the footer (`footer.trademarks`).
 - When the first release ships, update the hero note and the "Build from source" card (in every language), and consider
   linking the Download button to `releases/latest`.

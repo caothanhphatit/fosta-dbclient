@@ -173,7 +173,7 @@
   "footer.roadmap": "Lộ trình",
   "footer.license": "Giấy phép",
   "footer.issues": "Issues",
-  "footer.trademarks": "MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse và Oracle là thương hiệu của các chủ sở hữu tương ứng. Fosta Studio là dự án độc lập và không liên kết với các bên này.",
+  "footer.trademarks": "Tên và logo các cơ sở dữ liệu là thương hiệu của các chủ sở hữu tương ứng; việc sử dụng không hàm ý được họ bảo trợ. Fosta Studio là dự án độc lập và không liên kết với các bên này.",
   "lang.label": "Ngôn ngữ",
   "lang.current": "Ngôn ngữ: Tiếng Việt",
   "offer.prompt": "Xem bằng tiếng Việt?",
