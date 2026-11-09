@@ -318,7 +318,12 @@ macro_rules! signature_checks {
     };
 }
 
-/// Trusts a chain that contains a certificate with the pinned SHA-256 fingerprint.
+/// Trusts a server whose end-entity (leaf) certificate has the pinned SHA-256 fingerprint.
+///
+/// Only the leaf counts: the intermediates a server sends are not authenticated by anything (a pinned CA
+/// certificate placed after an arbitrary leaf proves nothing, since CA certificates are public), so
+/// matching them would let any server pass that copies the CA certificate into its chain. The handshake
+/// signature binds the connection to the leaf's key.
 #[derive(Debug)]
 struct PinnedVerifier {
     fingerprint: [u8; 32],
@@ -329,19 +334,16 @@ impl ServerCertVerifier for PinnedVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
-        intermediates: &[CertificateDer<'_>],
+        _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        let matches = std::iter::once(end_entity)
-            .chain(intermediates)
-            .any(|cert| ring::digest::digest(&ring::digest::SHA256, cert.as_ref()).as_ref() == self.fingerprint);
-        if matches {
+        if ring::digest::digest(&ring::digest::SHA256, end_entity.as_ref()).as_ref() == self.fingerprint {
             Ok(ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::General(format!(
-                "no certificate in the server's chain matches the pinned SHA-256 fingerprint (the server sent {})",
+                "the server's certificate does not match the pinned SHA-256 fingerprint (the server sent {}); pin the server's own certificate, not a CA",
                 certificate_sha256(end_entity.as_ref())
             )))
         }
@@ -585,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn pinning_accepts_the_leaf_or_ca_fingerprint_only() {
+    fn pinning_accepts_only_the_leaf_fingerprint() {
         let pki = pki("pin");
         let leaf = certificate_sha256(pki.server_chain[0].as_ref());
         let pinned = |fingerprint: String| TlsSpec {
@@ -596,6 +598,13 @@ mod tests {
         // Lower case without colons works too.
         let compact = leaf.replace(':', "").to_lowercase();
         handshake(rustls_client_config(&pinned(compact)).unwrap(), "x.test", pki.server(false)).unwrap();
+        // The pinned leaf is accepted when the server also sends its CA.
+        handshake(
+            rustls_client_config(&pinned(leaf.clone())).unwrap(),
+            "db.test",
+            pki.server_with_ca(),
+        )
+        .unwrap();
         let error = handshake(
             rustls_client_config(&pinned("00".repeat(32))).unwrap(),
             "db.test",
@@ -604,10 +613,48 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("pinned SHA-256"), "{error}");
         assert!(error.contains(&leaf), "{error}");
-        // A CA pin matches only when the server sends the CA certificate in its chain.
+        // A CA pin never matches, even when the server sends the CA certificate in its chain.
         let ca_pin = certificate_sha256(pki.ca_der.as_ref());
         assert!(handshake(rustls_client_config(&pinned(ca_pin.clone())).unwrap(), "db.test", pki.server(false)).is_err());
-        handshake(rustls_client_config(&pinned(ca_pin)).unwrap(), "db.test", pki.server_with_ca()).unwrap();
+        assert!(handshake(rustls_client_config(&pinned(ca_pin)).unwrap(), "db.test", pki.server_with_ca()).is_err());
+    }
+
+    #[test]
+    fn pinning_refuses_a_pinned_certificate_placed_after_another_leaf() {
+        let pki = pki("pin-chain");
+        let pinned_cert = pki.server_chain[0].clone();
+        let pinned = TlsSpec {
+            pinned_sha256: Some(certificate_sha256(pinned_cert.as_ref())),
+            ..spec(TlsMode::Require)
+        };
+        let verifier = build_verifier(&pinned, Arc::new(rustls::crypto::ring::default_provider())).unwrap();
+        let name = ServerName::try_from("db.test").unwrap();
+        // An attacker's own leaf followed by a copy of the pinned (public) certificate.
+        let other_key = KeyPair::generate().unwrap();
+        let other_leaf = CertificateParams::new(vec!["db.test".to_string()])
+            .unwrap()
+            .self_signed(&other_key)
+            .unwrap()
+            .der()
+            .clone();
+        assert!(verifier
+            .verify_server_cert(&other_leaf, std::slice::from_ref(&pinned_cert), &name, &[], UnixTime::now())
+            .is_err());
+        verifier.verify_server_cert(&pinned_cert, &[], &name, &[], UnixTime::now()).unwrap();
+        // End to end: a server presenting [other_leaf, pinned_cert] with the other leaf's key is refused.
+        let server = Arc::new(
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![other_leaf, pinned_cert],
+                    PrivateKeyDer::try_from(other_key.serialize_der()).unwrap(),
+                )
+                .unwrap(),
+        );
+        let error = handshake(rustls_client_config(&pinned).unwrap(), "db.test", server).unwrap_err();
+        assert!(error.contains("pinned SHA-256"), "{error}");
     }
 
     #[test]

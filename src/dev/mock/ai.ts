@@ -32,8 +32,11 @@ export function saveAiConnection(connection: AiConnection, apiKey: string | null
   if (!item.defaultModel) throw mockError("ERROR", "Default model is required");
   const problem = endpointProblem(item.baseUrl, item.provider);
   if (problem) throw mockError("ERROR", problem);
-  if (apiKey) browserKeys.set(item.id, apiKey);
   const previous = state.config.aiConnections.find((existing) => existing.id === item.id);
+  const url = (text: string) => text.trim().replace(/\/+$/, "");
+  // Like the backend: a saved key is never kept for another provider or endpoint.
+  if (apiKey) browserKeys.set(item.id, apiKey);
+  else if (previous && (previous.provider !== item.provider || url(previous.baseUrl) !== url(item.baseUrl))) browserKeys.delete(item.id);
   const aiConnections = previous
     ? state.config.aiConnections.map((existing) => (existing.id === item.id ? item : existing))
     : [...state.config.aiConnections, item];

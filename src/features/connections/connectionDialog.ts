@@ -28,9 +28,11 @@ import {
   formSecrets,
   newForm,
   profileFromForm,
+  sameTarget,
   switchEngine,
   type ConnectionForm,
 } from "./connectionForm";
+import { withRelaxPrompt } from "../safety/confirmationDialog";
 import "./connectionDialog.css";
 import { renderSshSection, type SshSection } from "./sshSection";
 import { renderTlsSection, type TlsSection } from "./tlsSection";
@@ -396,7 +398,12 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
       if (!draft) return false;
       try {
         const secrets = Object.keys(draft.secrets).length ? draft.secrets : null;
-        saved = await api.saveConnection(draft.profile, draft.password, null, secrets);
+        const result = await withRelaxPrompt((relax) => api.saveConnection(draft.profile, draft.password, null, secrets, relax));
+        if (result === null) return false;
+        saved = result;
+        // The backend never keeps saved secrets for another server, tunnel or TLS setting: they must be typed again.
+        if (existing?.savePassword && draft.profile.savePassword && !sameTarget(existing, draft.profile))
+          toast("The server settings changed, so saved passwords you did not enter again were cleared. You will be asked for them.", "info");
       } catch (error) {
         showFeedback(errorHost, error, "Save connection");
         return false;

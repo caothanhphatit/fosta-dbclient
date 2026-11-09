@@ -64,13 +64,18 @@ export type { CompletionSchema, FormatOptions } from "../lang/types";
 
 export const api = {
   getConfig: () => invoke<AppConfig>("get_config"),
-  /** `secrets` holds other slots (SSH password, API key…); `password` stays for the password slot. */
+  /**
+   * `secrets` holds other slots (SSH password, API key…); `password` stays for the password slot. `workspaceId` moves the
+   * connection (null keeps it where it is). `relaxConfirmation` is the Production workspace name, when the save makes the
+   * connection's rules less strict there (`RELAX_CONFIRMATION_REQUIRED`).
+   */
   saveConnection: (
     profile: ConnectionProfile,
     password: string | null,
     workspaceId: string | null = null,
     secrets: Partial<Record<SecretSlot, string>> | null = null,
-  ) => invoke<AppConfig>("save_connection", { profile, password, workspaceId, secrets }),
+    relaxConfirmation: string | null = null,
+  ) => invoke<AppConfig>("save_connection", { profile, password, workspaceId, secrets, relaxConfirmation }),
   deleteConnection: (id: string) => invoke<AppConfig>("delete_connection", { id }),
   /** `secrets`: other slots typed in the dialog (SSH password or key passphrase, TLS key passphrase). */
   testConnection: (profile: ConnectionProfile, password: string | null, secrets: Partial<Record<SecretSlot, string>> | null = null) =>

@@ -191,6 +191,14 @@ export function relaxations(previous: SafetySettings, next: SafetySettings): Rel
   return changes;
 }
 
+/**
+ * Removing the Production marking (shield icon) from a workspace whose `rules` are looser than Read-only: that counts as
+ * relaxing and needs the workspace name typed, like the backend's `save_workspace`.
+ */
+export function unmarksLooserThanReadOnly(savedIcon: string | null | undefined, icon: string, rules: SafetySettings): boolean {
+  return savedIcon === PRODUCTION_ICON && icon !== PRODUCTION_ICON && relaxations(presetSettings("readOnly"), rules).length > 0;
+}
+
 /** A concrete example of what could go wrong for each relaxed category. */
 export function riskExamples(changes: Relaxation[]): string[] {
   return changes.flatMap((change) => (change.category ? [RISK_EXAMPLES[change.category]] : []));

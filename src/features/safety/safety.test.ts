@@ -15,6 +15,7 @@ import {
   transactionButtons,
   transactionLabel,
   typedMatches,
+  unmarksLooserThanReadOnly,
   withoutConfirmation,
   writesBlocked,
 } from "./safety";
@@ -66,6 +67,14 @@ describe("relaxations", () => {
 
   it("tightening is not a relaxation", () => {
     expect(relaxations(presetSettings("open"), presetSettings("readOnly"))).toEqual([]);
+  });
+
+  it("removing the Production marking relaxes unless the rules stay Read-only", () => {
+    expect(unmarksLooserThanReadOnly("shield", "laptop", presetSettings("guarded"))).toBe(true);
+    expect(unmarksLooserThanReadOnly("shield", "laptop", presetSettings("readOnly"))).toBe(false);
+    expect(unmarksLooserThanReadOnly("shield", "shield", presetSettings("open"))).toBe(false);
+    expect(unmarksLooserThanReadOnly("laptop", "cloud", presetSettings("open"))).toBe(false);
+    expect(unmarksLooserThanReadOnly(undefined, "laptop", presetSettings("open"))).toBe(false);
   });
 
   it("marks workspaces looser than their baseline", () => {

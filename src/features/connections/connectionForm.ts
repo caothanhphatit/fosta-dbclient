@@ -311,3 +311,43 @@ export function formSecrets(
   for (const [slot, value] of Object.entries(extra) as [SecretSlot, string][]) if (value) secrets[slot] = value;
   return { password, secrets };
 }
+
+const trimmed = (value: string | null | undefined) => (value ?? "").trim();
+
+/** The SSH settings that decide where secrets go, as a comparable string; "" without a tunnel. */
+function sshRoute(ssh: SshConfig | null | undefined): string {
+  if (!ssh?.enabled) return "";
+  const auth = ssh.auth.method === "privateKey" ? { method: "privateKey", keyFile: ssh.auth.keyFile.trim() } : { method: ssh.auth.method };
+  const hops = ssh.jumpHosts.map((hop) => ({ host: hop.host.trim(), port: hop.port, user: hop.user.trim() }));
+  return JSON.stringify([ssh.host.trim(), ssh.port, ssh.user.trim(), auth, hops, ssh.hostKey]);
+}
+
+/** The TLS settings as a comparable string; none compare as the default ("prefer", nothing else). */
+function tlsChecks(tls: TlsConfig | null | undefined): string {
+  return JSON.stringify([
+    tls?.mode ?? "prefer",
+    trimmed(tls?.caFile),
+    trimmed(tls?.clientCertFile),
+    trimmed(tls?.clientKeyFile),
+    trimmed(tls?.serverName),
+    tls?.acceptInvalidCerts ?? false,
+    trimmed(tls?.pinnedSha256),
+  ]);
+}
+
+/**
+ * Whether `draft` still points at the `saved` profile's server, SSH route and TLS checks, like the backend's
+ * `ConnectionProfile::same_target`. When it does not, saving without typing the password again forgets the saved secrets.
+ */
+export function sameTarget(saved: ConnectionProfile, draft: ConnectionProfile): boolean {
+  return (
+    saved.driver === draft.driver &&
+    trimmed(saved.host) === trimmed(draft.host) &&
+    saved.port === draft.port &&
+    trimmed(saved.user) === trimmed(draft.user) &&
+    trimmed(saved.url) === trimmed(draft.url) &&
+    trimmed(saved.file) === trimmed(draft.file) &&
+    sshRoute(saved.ssh) === sshRoute(draft.ssh) &&
+    tlsChecks(saved.tls) === tlsChecks(draft.tls)
+  );
+}

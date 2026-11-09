@@ -2,7 +2,7 @@ import { api } from "../../core/api";
 import { field, openModal, textInput } from "../../core/dialogs";
 import { h, icon } from "../../core/dom";
 import type { AppConfig, AssistantQueries, WorkspaceMeta } from "../../core/types";
-import { newWorkspaceSafety, PRODUCTION_ICON, relaxations, safetyOf } from "../safety/safety";
+import { newWorkspaceSafety, PRODUCTION_ICON, relaxations, safetyOf, unmarksLooserThanReadOnly } from "../safety/safety";
 import { relaxationWarning, safetyEditor } from "../safety/safetySection";
 import { WORKSPACE_COLORS, WORKSPACE_ICONS, workspaceColor, workspaceIcon } from "./workspaceRail";
 
@@ -26,7 +26,7 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
     const isProduction = () => iconName === PRODUCTION_ICON || existing?.icon === PRODUCTION_ICON;
     const refreshWarning = () => {
       const warning = relaxationWarning(savedSafety(), safety.value(), isProduction());
-      const needsName = warning !== null && isProduction();
+      const needsName = (warning !== null || unmarksLooserThanReadOnly(existing?.icon, iconName, safety.value())) && isProduction();
       const label = relaxField.querySelector(".field-label");
       if (label) label.textContent = `Type ${existing?.name ?? (name.value.trim() || "the workspace name")} to confirm`;
       const shown = warningHost.childElementCount > 0;
@@ -106,7 +106,7 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
             const trimmed = name.value.trim();
             if (!trimmed) throw new Error("Workspace name is required");
             const rules = safety.value();
-            const relaxing = relaxations(savedSafety(), rules).length > 0;
+            const relaxing = relaxations(savedSafety(), rules).length > 0 || unmarksLooserThanReadOnly(existing?.icon, iconName, rules);
             const expected = existing?.name ?? trimmed;
             if (relaxing && isProduction() && relaxName.value.trim() !== expected.trim()) {
               relaxName.scrollIntoView({ block: "center" });
