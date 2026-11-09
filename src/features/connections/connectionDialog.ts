@@ -402,8 +402,8 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
         if (result === null) return false;
         saved = result;
         // The backend never keeps saved secrets for another server, tunnel or TLS setting: they must be typed again.
-        if (existing?.savePassword && draft.profile.savePassword && draft.password === null && !sameTarget(existing, draft.profile))
-          toast("The server settings changed, so the saved password was cleared. Enter it again when connecting.", "info");
+        if (existing?.savePassword && draft.profile.savePassword && !sameTarget(existing, draft.profile))
+          toast("The server settings changed, so saved passwords you did not enter again were cleared. You will be asked for them.", "info");
       } catch (error) {
         showFeedback(errorHost, error, "Save connection");
         return false;
