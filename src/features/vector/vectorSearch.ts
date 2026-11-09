@@ -2,16 +2,16 @@ import { showError } from "../../core/errorPanel";
 import { api, errorText } from "../../core/api";
 import { toast } from "../../core/dialogs";
 import { clamp, copyText, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
-import { capabilityOf } from "../../core/engines";
+import { capabilityOf, engineInfo } from "../../core/engines";
 import { DataGrid, gridSetup } from "../grid/grid";
 import { keyCells } from "./vectorRows";
 import type { Navigator } from "../../core/navigator";
 import { RecordPanel } from "../table/recordPanel";
 import { makeSplitter } from "../../core/splitter";
-import { describeKey } from "../../core/sql";
+import { describeKey, dialectOf } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
 import { displayValue } from "../../core/values";
-import type { KeyCell, Metric, QueryVector, TableTarget, VectorInfo, VectorSearchResult } from "../../core/types";
+import type { KeyCell, Metric, QueryVector, TableTarget, VectorIndex, VectorInfo, VectorSearchResult } from "../../core/types";
 
 type SourceKind = QueryVector["kind"];
 
@@ -24,6 +24,7 @@ const METRICS: { value: Metric; label: string }[] = [
   { value: "auto", label: "Auto (index metric)" },
   { value: "cosine", label: "Cosine" },
   { value: "euclidean", label: "Euclidean" },
+  { value: "dot", label: "Inner product" },
 ];
 const DEFAULT_K = 10;
 
@@ -85,7 +86,7 @@ export class VectorSearchView implements TabContent {
       { class: "toolbar" },
       this.searchButton,
       separator(),
-      toolButton("copy", "Copy SQL", () => void this.copySql(false), "Copy the query with a ? placeholder for the vector"),
+      toolButton("copy", "Copy SQL", () => void this.copySql(false), "Copy the query with a placeholder for the vector"),
       toolButton("copy", "Copy runnable SQL", () => void this.copySql(true), "Copy the query with the vector inlined"),
       toolButton("design", "Plan", () => this.planHost.classList.toggle("open"), "Show EXPLAIN output"),
       spacer(),
@@ -126,6 +127,8 @@ export class VectorSearchView implements TabContent {
     try {
       const info = await api.vectorInfo(this.target.connectionId, this.target.database, this.target.table);
       this.info = info;
+      const metrics = METRICS.filter((metric) => metric.value === "auto" || info.metrics.includes(metric.value));
+      this.metricSelect.replaceChildren(...metrics.map((metric) => h("option", { value: metric.value }, metric.label)));
       this.columnSelect.replaceChildren(
         ...info.columns.map((column) => h("option", { value: column.name, selected: column.name === preferred }, `${column.name} (${column.dims})`)),
       );
@@ -138,15 +141,13 @@ export class VectorSearchView implements TabContent {
 
   private describeIndex(info: VectorInfo): void {
     if (!info.supported) {
-      this.setStatus("error", "This server has no vector functions. MariaDB 11.7 or newer is required.");
+      this.setStatus("error", "This database has no vector functions (server too old or extension not installed).");
       return;
     }
     const index = info.indexes.find((item) => item.column === this.columnSelect.value);
     this.setStatus(
       index ? "info" : "warn",
-      index
-        ? `Vector index ${index.name} · ${index.metric} · M=${index.m ?? "default"}`
-        : "No vector index on this column: every search scans the whole table.",
+      index ? `Vector index ${describeIndex(index)}` : "No vector index on this column: every search scans the whole table.",
     );
   }
 
@@ -166,7 +167,7 @@ export class VectorSearchView implements TabContent {
     const seedText = this.seed
       ? `Query vector from row: ${describeKey(
           this.seed.map((cell) => ({ column: cell.column, value: displayValue(cell.value) })),
-          "mysql",
+          dialectOf(engineInfo(this.target.driver).sqlDialect),
         )}`
       : "No row selected yet.";
     this.sourceHint.replaceChildren(this.source === "row" ? seedText : (current?.hint ?? ""));
@@ -267,6 +268,11 @@ export class VectorSearchView implements TabContent {
     this.status.className = `search-status ${kind}`;
     this.status.textContent = text;
   }
+}
+
+/** `idx · hnsw · cosine · m=16` */
+export function describeIndex(index: VectorIndex): string {
+  return [index.name, index.kind, index.metric, index.params].filter(Boolean).join(" · ");
 }
 
 function labelled(label: string, control: HTMLElement): HTMLElement {

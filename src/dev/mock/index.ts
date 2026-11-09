@@ -285,7 +285,7 @@ function vectorCommand(connectionId: string, command: string, payload: Record<st
   const { engine } = connection(connectionId);
   switch (command) {
     case "vector_info":
-      return engine.invoke?.("vector.info", payload) ?? { supported: false, columns: [], indexes: [] };
+      return engine.invoke?.("vector.info", payload) ?? { supported: false, columns: [], indexes: [], metrics: [] };
     case "fetch_vector":
       return engine.invoke?.("vector.fetch", payload) ?? [];
     case "vector_health":

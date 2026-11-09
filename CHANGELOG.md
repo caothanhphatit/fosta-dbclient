@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   is ready. Connections share a command; one started for them stops with the last of them. Failures show `COMMAND_FAILED` with the
   log tail; the log opens from the connection's menu.
 - **Hide the sidebar** with `Ctrl+B` or its button; the tabs take the width, the workspace rail stays.
+- **Vector tools on PostgreSQL (pgvector)**: `vector` and `halfvec` columns, HNSW and IVFFlat indexes with their metric, similarity
+  search by cosine, L2 or inner product, health checks and index recall, when the extension is installed in the database. The dev
+  and CI image is now `pgvector/pgvector`.
 - **Updates**: a daily check for a new release (Settings → Check for updates, on by default; *Check for updates now* any time) and
   an *Update X.Y.Z* item in the status bar. The installed Windows app downloads the update in the background and installs it on
   quit or with *Restart to update*, asking first about open transactions and unsaved edits, then shows what's new once. The
@@ -23,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Vector index recall**: a row as close as the exact k-th result now counts as a hit, so tables with duplicate vectors no longer
+  report a recall near 0.
 - **Oracle in the web edition**: the Docker image now includes `libaio`, and the server puts its Instant Client download folder on
   `LD_LIBRARY_PATH` at start, so the client downloaded from the connection dialog loads without a restart. On other Linux hosts the
   load error names the folder to put on `LD_LIBRARY_PATH`.

@@ -351,16 +351,22 @@ export interface VectorIndex {
   name: string;
   column: string;
   metric: string;
+  /** The index method: `mhnsw` (MariaDB), `hnsw` or `ivfflat` (pgvector). */
+  kind: string;
   m: number | null;
+  /** Build options for display (`M=6`, `m=16, ef_construction=64`). */
+  params: string;
 }
 
 export interface VectorInfo {
   supported: boolean;
-  columns: { name: string; dims: number }[];
+  columns: { name: string; dims: number; typeName: string }[];
   indexes: VectorIndex[];
+  /** The distances a search may name besides `auto`. */
+  metrics: Metric[];
 }
 
-export type Metric = "auto" | "cosine" | "euclidean";
+export type Metric = "auto" | "cosine" | "euclidean" | "dot";
 
 /** A key cell of a row for the `vector_*` commands: the column and its typed value, as the grid holds it. */
 export interface KeyCell {

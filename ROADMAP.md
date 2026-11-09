@@ -16,7 +16,7 @@ Where Fosta Studio is heading. Plans change; open an issue to discuss an item or
 - Structured errors with an error panel, an application log and copyable diagnostics; compact density and a richer status bar.
 - A built-in AI agent with the model of your choice: it explores your schema, writes and explains queries, runs code blocks under the
   safety rules, optionally runs read-only queries itself, and opens views for you.
-- MariaDB vector search tools.
+- Vector search tools for MariaDB and PostgreSQL (pgvector).
 - A web edition: one Docker image to use Fosta Studio in a browser.
 
 ## Next

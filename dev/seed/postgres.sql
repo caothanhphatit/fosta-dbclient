@@ -2,6 +2,7 @@
 -- Deterministic: every generated value derives from generate_series, so the tests can assert exact rows.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TYPE order_status AS ENUM ('new', 'paid', 'shipped', 'cancelled');
 CREATE DOMAIN positive_money AS numeric(12, 2) CHECK (VALUE >= 0);
@@ -34,9 +35,11 @@ CREATE TABLE products (
     price       positive_money NOT NULL,
     tags        text[] NOT NULL DEFAULT '{}',
     attributes  jsonb,
+    embedding   vector(4) NOT NULL,
     price_with_vat numeric(12, 2) GENERATED ALWAYS AS (price * 1.1) STORED
 );
 CREATE INDEX products_name_lower_idx ON products (lower(name));
+CREATE INDEX products_embedding_idx ON products USING hnsw (embedding vector_cosine_ops);
 
 CREATE TABLE orders (
     id          bigint PRIMARY KEY,
@@ -67,14 +70,16 @@ SELECT 'customer' || g || '@example.com',
        g % 17 = 0
 FROM generate_series(1, 2000) AS g;
 
-INSERT INTO products (id, category_id, sku, name, price, tags, attributes)
+INSERT INTO products (id, category_id, sku, name, price, tags, attributes, embedding)
 SELECT g,
        1 + g % 7,
        'SKU-' || lpad(g::text, 5, '0'),
        'Product ' || g,
        round((5 + (g * 7919) % 500 + (g % 100) / 100.0)::numeric, 2),
        ARRAY['tag' || g % 3, 'tag' || g % 5],
-       jsonb_build_object('color', (ARRAY['red', 'green', 'blue'])[1 + g % 3], 'weight', g % 40)
+       jsonb_build_object('color', (ARRAY['red', 'green', 'blue'])[1 + g % 3], 'weight', g % 40),
+       ('[' || ((g % 10) + 1) / 10.0 || ',' || ((g * 3) % 11 + 1) / 11.0 || ',' || ((g * 7) % 13 + 1) / 13.0 || ','
+            || ((g * 9) % 17 + 1) / 17.0 || ']')::vector(4)
 FROM generate_series(1, 500) AS g;
 
 INSERT INTO orders (id, customer_id, status, ordered_at, note)

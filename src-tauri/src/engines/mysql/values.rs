@@ -187,27 +187,8 @@ pub fn encode_vector(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|value| value.to_le_bytes()).collect()
 }
 
-/// `[0.1,0.2]`: the form `VEC_FromText` reads and vector cells show.
-pub fn vector_text(values: &[f32]) -> String {
-    let joined = values.iter().map(f32::to_string).collect::<Vec<_>>().join(",");
-    format!("[{joined}]")
-}
-
-/// `[0.1, 0.2]` or `0.1 0.2` as floats.
-pub fn parse_vector(text: &str) -> AppResult<Vec<f32>> {
-    let values = text
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .split(|character: char| character == ',' || character.is_whitespace())
-        .filter(|part| !part.is_empty())
-        .map(|part| part.parse::<f32>().map_err(|_| AppError::new(format!("'{part}' is not a number"))))
-        .collect::<AppResult<Vec<_>>>()?;
-    if values.is_empty() {
-        return Err(AppError::new("The vector is empty"));
-    }
-    Ok(values)
-}
+/// `[0.1,0.2]` (the form `VEC_FromText` reads and vector cells show) and its parser, shared by the vector engines.
+pub use crate::contract::vector::{parse_vector, vector_text};
 
 fn text_of(bytes: Vec<u8>) -> Value {
     match String::from_utf8(bytes) {

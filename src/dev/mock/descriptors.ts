@@ -308,6 +308,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
       "schemaGraph",
       "createDatabase",
       "explain",
+      "vector",
     ],
     objectsLabel: "tables",
     connection: {

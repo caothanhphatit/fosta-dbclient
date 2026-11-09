@@ -19,6 +19,7 @@ mod tabular;
 #[cfg(test)]
 mod tests;
 pub mod types;
+mod vector;
 
 pub use adapter::{PostgresAdapter, POSTGRES};
 pub use session::PgSession;

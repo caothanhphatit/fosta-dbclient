@@ -2,13 +2,14 @@
 //! by connections that advertise `Capability::Vector`) run through the statement gateway; `vector_search` embeds a text
 //! query here first. Arguments and results are JSON: typed key cells in, typed result sets out.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::gateway_context;
+pub use crate::contract::vector::KeyCell;
 use crate::{
     config::AppConfig,
-    contract::{self, Capability},
+    contract::Capability,
     embedding::{self, EmbeddingSettings},
     error::{AppError, AppResult},
     gateway::{self, Caller},
@@ -16,13 +17,6 @@ use crate::{
 };
 
 const EMBEDDING_PROBE: &str = "Fosta Studio embedding test";
-
-/// A key cell of a row: the column and its typed value, as the grid holds it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeyCell {
-    pub column: String,
-    pub value: contract::Value,
-}
 
 /// The query vector as the vector view sends it.
 #[derive(Debug, Deserialize)]
@@ -54,7 +48,7 @@ async fn invoke(state: &AppState, connection_id: &str, name: &str, args: Value) 
 }
 
 pub async fn vector_info(state: &AppState, connection_id: String, database: String, table: String) -> AppResult<Value> {
-    // Other engines (and MariaDB before 11.7) simply have no vector support.
+    // Engines without vectors (or a server too old, an extension not installed) do not advertise the capability.
     if !state
         .engines
         .handle(&connection_id)?
@@ -62,7 +56,7 @@ pub async fn vector_info(state: &AppState, connection_id: String, database: Stri
         .capabilities()
         .contains(Capability::Vector)
     {
-        return Ok(json!({ "supported": false, "columns": [], "indexes": [] }));
+        return Ok(json!({ "supported": false, "columns": [], "indexes": [], "metrics": [] }));
     }
     invoke(
         state,

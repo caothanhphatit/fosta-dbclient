@@ -2,17 +2,13 @@
  * The MariaDB and MySQL mocks: the shop and analytics databases, backtick quoting, MySQL error numbers, and the vector
  * operations MariaDB offers through `invoke_capability`.
  */
-import type { ColumnInfo, ConnectInfo, EngineDescriptor } from "../../core/contract";
+import type { ConnectInfo, EngineDescriptor } from "../../core/contract";
 import { builtin, MockCatalog, queryAction, viewAction, type CatalogStyle } from "./catalog";
 import { mockError } from "./errors";
 import { analyticsDatabase, mysqlSystemDatabases, shopDatabase, VECTOR_DIMS } from "./shop";
 import { classifySql, runSql, type SqlDialectMock } from "./sqlRun";
 import type { EngineMock } from "./types";
-
-/** A result-set column as the engine reports it (only the name and type are known). */
-function resultColumn(name: string, typeName: string, kind: "float" | "text"): ColumnInfo {
-  return { name, typeName, kind: { kind }, nullable: true, default: null, comment: null, identity: null, generated: null, hints: {} };
-}
+import { resultColumn, vectorOps } from "./vectors";
 
 export function mysqlFamily(descriptor: EngineDescriptor, order: number, flavor: "MariaDB" | "MySQL", version: string, label: string): EngineMock {
   const engine = descriptor.id;
@@ -51,72 +47,28 @@ export function mysqlFamily(descriptor: EngineDescriptor, order: number, flavor:
   };
   const catalog = new MockCatalog(style, [shopDatabase("shop", flavor), analyticsDatabase(), ...mysqlSystemDatabases()]);
   const dialect: SqlDialectMock = { split: { hashComments: true }, errors, version, ddlCommits: true };
-
-  const products = () => catalog.table({ database: "shop", schema: null, name: "products" });
-  const vectorOps: Record<string, (args: Record<string, unknown>) => unknown> = {
-    "vector.info": () => ({
-      supported: true,
-      columns: [{ name: "embedding", dims: VECTOR_DIMS }],
-      indexes: [{ name: "idx_embedding", column: "embedding", metric: "cosine", m: 6 }],
-    }),
-    "vector.fetch": () => [0.12, -0.4, 0.33, 0.9],
-    "vector.search": (args) => {
-      const k = Number(args.k ?? 10);
-      const page = catalog.browse({
-        object: products().object,
-        filter: { kind: "none" },
-        sort: [],
-        offset: 0,
-        limit: k,
-        after: null,
-        estimateTotal: false,
-        exactTotal: false,
-        columns: null,
-      });
-      // Like the engine: vector columns are left out of the select list, the distance comes first.
-      const kept = page.columns.flatMap((column, index) => (column.hints.vectorDims == null ? [index] : []));
-      const target = "`shop`.`products`";
-      const selectList = kept.map((index) => `\`${page.columns[index]?.name}\``).join(", ");
-      const statement = (vector: string) =>
-        `SELECT VEC_DISTANCE_COSINE(\`embedding\`, ${vector}) AS \`vec_distance\`, ${selectList} FROM ${target} ` +
-        `ORDER BY VEC_DISTANCE_COSINE(\`embedding\`, ${vector}) LIMIT ${k}`;
-      return {
-        result: {
-          columns: [resultColumn("vec_distance", "double", "float"), ...kept.map((index) => page.columns[index]!)],
-          rows: page.rows.map((row, position) => [{ t: "float", v: 0.05 + position * 0.031 }, ...kept.map((index) => row[index] ?? { t: "null", v: null })]),
-        },
-        plan: {
-          columns: [resultColumn("type", "varchar", "text"), resultColumn("key", "varchar", "text")],
-          rows: [
-            [
-              { t: "text", v: "range" },
-              { t: "text", v: "idx_embedding" },
-            ],
-          ],
-        },
-        indexUsed: "idx_embedding",
-        sql: statement("VEC_FromText(?)"),
-        runnableSql: statement("VEC_FromText('[0.12,-0.4,0.33,0.9]')"),
-        elapsedMs: 4,
-        queryDims: VECTOR_DIMS,
-        primaryKey: page.keyColumns,
-      };
+  const ops = vectorOps({
+    catalog,
+    object: catalog.table({ database: "shop", schema: null, name: "products" }).object,
+    column: "embedding",
+    dims: VECTOR_DIMS,
+    typeName: `VECTOR(${VECTOR_DIMS})`,
+    index: { name: "idx_embedding", kind: "mhnsw", metric: "cosine", m: 6, params: "M=6" },
+    metrics: ["cosine", "euclidean"],
+    quote: style.quote,
+    distance: (vector) => `VEC_DISTANCE_COSINE(\`embedding\`, ${vector})`,
+    placeholder: "VEC_FromText(?)",
+    literal: (text) => `VEC_FromText('${text}')`,
+    plan: {
+      columns: [resultColumn("type", "varchar", "text"), resultColumn("key", "varchar", "text")],
+      rows: [
+        [
+          { t: "text", v: "range" },
+          { t: "text", v: "idx_embedding" },
+        ],
+      ],
     },
-    "vector.health": () => [
-      { label: "Dimensions", status: "ok", value: String(VECTOR_DIMS), detail: "Every sampled row has 4 values" },
-      { label: "Zero vectors", status: "warn", value: "3", detail: "Cosine distance is undefined for all-zero vectors" },
-    ],
-    "vector.recall": (args) => ({
-      index: "idx_embedding",
-      metric: "cosine",
-      k: Number(args.k ?? 10),
-      queries: Number(args.queries ?? 20),
-      recall: 0.97,
-      worstRecall: 0.8,
-      annMs: 1.4,
-      exactMs: 9.8,
-    }),
-  };
+  });
 
   return {
     descriptor,
@@ -135,7 +87,7 @@ export function mysqlFamily(descriptor: EngineDescriptor, order: number, flavor:
     run: (request, emit, context) => runSql(catalog, dialect, request, emit, context),
     classify: (text) => classifySql(text, dialect.split),
     invoke: (name, args) => {
-      const op = descriptor.capabilities.includes("vector") ? vectorOps[name] : undefined;
+      const op = descriptor.capabilities.includes("vector") ? ops[name] : undefined;
       return op ? op((args ?? {}) as Record<string, unknown>) : undefined;
     },
     schemaGraph: (database) => catalog.schemaGraph(database),

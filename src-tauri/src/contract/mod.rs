@@ -12,6 +12,7 @@
 //! - [`classify`]: statement categories for the gateway.
 //! - [`limits`]: the safety rules' backstops and the per-call context.
 //! - [`errors`]: engine errors and the structured codes.
+//! - [`vector`]: the `vector.*` operations, built on an engine's [`vector::VectorStore`].
 
 pub mod capability;
 pub mod classify;
@@ -27,6 +28,7 @@ pub mod spec;
 pub mod stream;
 pub mod tabular;
 pub mod value;
+pub mod vector;
 
 pub use capability::{Capability, CapabilitySet};
 pub use classify::{Category, Classification, ClassifyInput, StatementInfo};
