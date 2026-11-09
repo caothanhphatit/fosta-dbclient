@@ -1,4 +1,4 @@
-//! Local safety audit log: blocked, confirmed and relaxed operations and the assistant's read-only runs, kept in
+//! Local safety audit log: blocked, confirmed and relaxed operations, the assistant's read-only runs and every MCP tool call, kept in
 //! `fosta-studio-audit.jsonl` next to `fosta-studio.json`.
 //!
 //! Same layout as the query history (`history.rs`): append-only JSON Lines under one mutex,
@@ -30,7 +30,7 @@ pub enum Outcome {
     Confirmed,
     /// A workspace's rules were made less strict.
     Relaxed,
-    /// The assistant ran a read-only statement (detail: row count or error).
+    /// The assistant or an MCP client ran a statement or a tool (detail: row count or error).
     Ran,
 }
 
@@ -56,6 +56,9 @@ pub struct AuditEntry {
     pub outcome: Option<Outcome>,
     #[serde(default)]
     pub detail: String,
+    /// For caller `mcp`: the name the MCP client gave when it connected (self-reported, e.g. `claude-code`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client: String,
 }
 
 pub struct AuditLog {

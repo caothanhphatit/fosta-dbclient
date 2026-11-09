@@ -84,6 +84,13 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     most 50 rows, 10 seconds, cancelled by Stop). Anything that writes, changes the schema or administers the server is refused and
     handed back as a code block. Each run is shown in the chat and written to the audit log. Turn it off in Settings or per workspace;
     the rows it reads are sent to your AI provider, and Production and Read-only workspaces stay off unless you allow them.
+- **MCP server** (Settings → MCP server, off by default): AI clients such as Claude Code, Claude Desktop, Cursor, VS Code and Zed
+  use your saved connections without seeing passwords. Streamable HTTP on `127.0.0.1:3910` with a bearer token (copy and rotate it
+  in Settings, with ready-made setup for each client), or `fosta-studio mcp` for stdio clients; `/mcp` on the web edition. Each
+  workspace chooses *MCP clients: Off / Read-only / Ask before writes* (Production and Read-only workspaces at most Read-only).
+  Tools: `list_connections`, `list_databases`, `list_tables`, `describe_table`, `schema_overview`, `run_read_query` (100 rows by
+  default, 500 at most, 30 seconds) and `run_query`, which waits for you to approve each statement in a dialog naming the client.
+  Connections open on demand, workspace commands included, and every call is in the audit log. See [mcp.md](mcp.md).
 - Light, dark or system theme.
 - **Updates**: once a day the app asks GitHub for the latest release (only the app version is sent, as the user agent; turn it off
   in Settings → Check for updates, or check now from the same menu). A newer version shows *Update X.Y.Z* in the status bar. The

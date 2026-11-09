@@ -126,6 +126,7 @@ fn authorize(gateway: &Gateway, caller: Caller, preset: Preset, classification: 
         classification,
         confirmation: None,
         reusable: false,
+        client: None,
     })
 }
 

@@ -31,7 +31,7 @@ macro_rules! tauri_command {
     ([sync] $name:ident ($($arg:ident : $type:ty),*) -> $output:ty = $function:path) => {
         #[allow(clippy::too_many_arguments)]
         #[tauri::command]
-        fn $name(state: State<'_, AppState>, $($arg: $type),*) -> $output {
+        fn $name(state: State<'_, Arc<AppState>>, $($arg: $type),*) -> $output {
             fosta_studio::logging::command_sync(stringify!($name), || $function(&state, $($arg),*))
         }
     };
@@ -39,7 +39,7 @@ macro_rules! tauri_command {
         // A wrapper has the command's arguments plus the state (apply_changes has seven).
         #[allow(clippy::too_many_arguments)]
         #[tauri::command]
-        async fn $name(state: State<'_, AppState>, $($arg: $type),*) -> $output {
+        async fn $name(state: State<'_, Arc<AppState>>, $($arg: $type),*) -> $output {
             fosta_studio::logging::command(stringify!($name), $function(&state, $($arg),*)).await
         }
     };
@@ -47,7 +47,7 @@ macro_rules! tauri_command {
         // Events go out on the `onEvent` channel; a failed send means the webview is gone, so the command stops.
         #[allow(clippy::too_many_arguments)]
         #[tauri::command]
-        async fn $name(state: State<'_, AppState>, $($arg: $type,)* on_event: Channel<$event>) -> $output {
+        async fn $name(state: State<'_, Arc<AppState>>, $($arg: $type,)* on_event: Channel<$event>) -> $output {
             let events: fosta_studio::events::EventSink<$event> = Arc::new(move |event| on_event.send(event).is_ok());
             fosta_studio::logging::command(stringify!($name), $function(&state, $($arg,)* events)).await
         }
@@ -69,7 +69,7 @@ fosta_studio::for_each_command!(desktop_commands);
 
 /// Streams one assistant reply over `on_event`; resolves with the full text.
 #[tauri::command]
-async fn ai_chat(state: State<'_, AppState>, request: ChatRequest, on_event: Channel<ChatEvent>) -> AppResult<String> {
+async fn ai_chat(state: State<'_, Arc<AppState>>, request: ChatRequest, on_event: Channel<ChatEvent>) -> AppResult<String> {
     let sink = move |event: ChatEvent| {
         let _ = on_event.send(event);
     };
@@ -99,6 +99,10 @@ fn open_release_page(url: String) -> AppResult<()> {
 }
 
 fn main() {
+    // `fosta-studio mcp`: the stdio bridge for MCP clients; it starts no window and writes only JSON-RPC to stdout.
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        std::process::exit(fosta_studio::mcp::bridge::run_desktop());
+    }
     if let Ok(data_dir) = fosta_studio::config::data_dir() {
         fosta_studio::logging::init(&data_dir, fosta_studio::logging::LogLocation::Desktop);
     }
@@ -110,7 +114,12 @@ fn main() {
         .setup(|app| {
             let executor = tauri::async_runtime::handle().inner().clone();
             let events = Arc::new(TauriEvents(app.handle().clone()));
-            app.manage(AppState::new(Capabilities::desktop(), executor, events)?);
+            let state = Arc::new(AppState::new(Capabilities::desktop(), executor, events)?);
+            state.mcp.attach(&state);
+            if let Err(error) = state.mcp.apply() {
+                tracing::warn!(%error, "the MCP server did not start");
+            }
+            app.manage(state);
             show_window_if_frontend_stalls(app);
             Ok(())
         })
@@ -119,7 +128,7 @@ fn main() {
         .expect("failed to start Fosta Studio")
         .run(|app, event| {
             if let RunEvent::Exit = event {
-                app.state::<AppState>().tasks.stop_all();
+                app.state::<Arc<AppState>>().tasks.stop_all();
             }
         });
 }

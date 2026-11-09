@@ -35,9 +35,14 @@ pub const CONNECTION_SLOTS: [SecretSlot; 6] = [
 /// What a secret belongs to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SecretKey {
-    Connection { id: String, slot: SecretSlot },
+    Connection {
+        id: String,
+        slot: SecretSlot,
+    },
     AiKey(String),
     Embedding,
+    /// The bearer token MCP clients send to the MCP server (`crate::mcp`), in both editions; never the web access token.
+    McpToken,
 }
 
 impl SecretKey {
@@ -51,6 +56,7 @@ impl SecretKey {
             Self::Connection { id, slot } => format!("conn:{id}:{}", slot_name(*slot)),
             Self::AiKey(id) => format!("ai:{id}"),
             Self::Embedding => "app:embedding".to_owned(),
+            Self::McpToken => "app:mcp-token".to_owned(),
         }
     }
 
@@ -65,6 +71,7 @@ impl SecretKey {
             Self::AiKey(id) if id == LEGACY_AI_CONNECTION => vec![format!("ai-key-{id}"), LEGACY_AI_ACCOUNT.to_owned()],
             Self::AiKey(id) => vec![format!("ai-key-{id}")],
             Self::Embedding => vec![EMBEDDING_ACCOUNT.to_owned()],
+            Self::McpToken => Vec::new(),
         }
     }
 }

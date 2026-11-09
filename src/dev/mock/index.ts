@@ -19,6 +19,9 @@
  * Tree paging demo: `__fostaMock.setTreePageSize(2)` caps every `tree_children` page at 2 nodes, so the tree shows its
  * "Load more" row; `setTreePageSize(null)` restores the requested limit.
  *
+ * MCP server (`mcp.ts`): Settings → MCP server works; `__fostaMock.mcpApproval()` (or `"typed"`, or `?mcpApproval` in the
+ * address) shows an incoming `run_query` approval from Claude Code.
+ *
  * Updates (`update.ts`): `check_update` always finds 0.1.1; `__fostaMock.setInstallKind("portable")` or `"web"` changes the
  * update dialog (or `?installKind=web` in the address), `?whatsNew` shows the "What's new" note.
  */
@@ -64,6 +67,7 @@ import { checkTestPassword, deleteConnection, parseConnectionString, profiles, s
 import { mockError, NOT_CONNECTED } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
 import { mockCheckUpdate, mockInstallKind, mockRestart, mockUpdaterCheck, mockUpdaterDownload, mockWhatsNew, setInstallKind } from "./update";
+import { mockMcpAnswer, mockMcpStatus, mockMcpToken, mockRotateMcpToken, mockSetMcpSettings, simulateMcpApproval } from "./mcp";
 import { VECTOR_DIMS } from "./shop";
 import { state } from "./state";
 import {
@@ -368,13 +372,24 @@ function saveWorkspace(meta: Workspace, relaxConfirmation: unknown) {
         ...config,
         workspaces: config.workspaces.map((item) =>
           item.id === meta.id
-            ? { ...item, name: meta.name, color: meta.color, icon: meta.icon, safety: after, assistantQueries: meta.assistantQueries ?? item.assistantQueries }
+            ? {
+                ...item,
+                name: meta.name,
+                color: meta.color,
+                icon: meta.icon,
+                safety: after,
+                assistantQueries: meta.assistantQueries ?? item.assistantQueries,
+                mcp: meta.mcp ?? item.mcp,
+              }
             : item,
         ),
       }
     : {
         ...config,
-        workspaces: [...config.workspaces, { ...meta, safety: after, assistantQueries: meta.assistantQueries ?? "default", connections: [], tasks: [] }],
+        workspaces: [
+          ...config.workspaces,
+          { ...meta, safety: after, assistantQueries: meta.assistantQueries ?? "default", mcp: meta.mcp ?? "off", connections: [], tasks: [] },
+        ],
       };
   return state.config;
 }
@@ -486,6 +501,17 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "diagnostics":
       return diagnostics();
 
+    // MCP server (mcp.ts)
+    case "mcp_status":
+      return mockMcpStatus();
+    case "set_mcp_settings":
+      return mockSetMcpSettings(Boolean(payload.enabled), (payload.port as number | null | undefined) ?? null);
+    case "mcp_token":
+      return mockMcpToken();
+    case "rotate_mcp_token":
+      return mockRotateMcpToken();
+    case "mcp_answer":
+      return mockMcpAnswer(String(payload.id), Boolean(payload.approve), (payload.typed as string | null | undefined) ?? null);
     // Updates (update.ts)
     case "check_update":
       return mockCheckUpdate();
@@ -665,6 +691,7 @@ declare global {
       connections(): string[];
       setTreePageSize(size: number | null): void;
       setInstallKind(kind: InstallKind): void;
+      mcpApproval(level?: "confirm" | "typed"): string;
     };
   }
 }
@@ -693,5 +720,6 @@ export function installDevMock(): void {
       treePageSize = size && size > 0 ? size : null;
     },
     setInstallKind,
+    mcpApproval: simulateMcpApproval,
   };
 }

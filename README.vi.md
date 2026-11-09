@@ -29,6 +29,8 @@ Elasticsearch, OpenSearch, ClickHouse và Oracle. Có bản desktop cho Windows 
 - **Import và export**: nhập CSV, TSV, JSON; xuất CSV, CSV cho Excel, JSON, câu `INSERT` SQL và Markdown.
 - **AI agent** (`Ctrl+Shift+A`) với provider và key của bạn (Fosta, OpenAI, Gemini, Claude, Ollama…). Agent hiểu schema, viết và
   sửa query, và chỉ đọc dữ liệu mẫu khi bạn cho phép.
+- **MCP server** cho Claude Code, Claude Desktop, Cursor, VS Code và Zed: các client dùng kết nối đã lưu mà không thấy mật khẩu,
+  chỉ trong những workspace bạn cho phép, và mọi lệnh ghi đều chờ bạn duyệt. Mặc định tắt; xem [docs/mcp.md](docs/mcp.md) (tiếng Anh).
 - Giao diện sáng và tối, cấu hình gói trong một file JSON (portable), mật khẩu lưu trong Windows Credential Manager.
 
 Chi tiết đầy đủ (tiếng Anh): [docs/features.md](docs/features.md).
@@ -81,6 +83,7 @@ Build, test và database để test: [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Thêm
 
 - [Bảo mật và quyền riêng tư](docs/security.md) (tiếng Anh): lưu gì ở đâu, gửi gì đi đâu, chế độ chỉ đọc hoạt động thế nào.
+- [MCP server](docs/mcp.md) (tiếng Anh): cài đặt cho các AI client, client thấy và làm được gì.
 - [ROADMAP.md](ROADMAP.md): những gì sắp làm.
 - [ARCHITECTURE.md](ARCHITECTURE.md): kiến trúc bên trong.
 - [docs/engines](docs/engines): ghi chú cho từng engine, SSH và TLS.

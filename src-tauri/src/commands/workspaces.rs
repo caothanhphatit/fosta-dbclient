@@ -76,6 +76,10 @@ pub fn save_workspace(state: &AppState, workspace: WorkspaceMeta, relax_confirma
     if previous.is_some() {
         workspace.safety = Some(after.clone());
     }
+    // MCP access: Production and Read-only rules allow at most read-only access.
+    let mcp_before = previous.as_ref().map(|previous| previous.mcp).unwrap_or_default();
+    let mcp_after = crate::mcp::capped(workspace.mcp.unwrap_or(mcp_before), &workspace.icon, &after);
+    workspace.mcp = Some(mcp_after);
     let workspace_id = workspace.id.clone();
     let workspace_name = workspace.name.clone();
     let config = state.config.update(|config| {
@@ -85,12 +89,24 @@ pub fn save_workspace(state: &AppState, workspace: WorkspaceMeta, relax_confirma
     if !changes.is_empty() {
         state.engines.gateway.audit(AuditEntry {
             caller: "settings".to_owned(),
-            workspace_id,
+            workspace_id: workspace_id.clone(),
             workspace: workspace_name,
             category: "rules".to_owned(),
             statement: format!("{:?} → {:?}", before.preset, after.preset),
             outcome: Some(Outcome::Relaxed),
             detail: changes.join("; "),
+            ..AuditEntry::default()
+        });
+    }
+    if mcp_after > mcp_before {
+        let workspace = config.workspace(&workspace_id).ok();
+        state.engines.gateway.audit(AuditEntry {
+            caller: "settings".to_owned(),
+            workspace_id: workspace_id.clone(),
+            workspace: workspace.map(|workspace| workspace.name.clone()).unwrap_or_default(),
+            category: "mcp".to_owned(),
+            statement: format!("MCP clients: {} → {}", mcp_before.label(), mcp_after.label()),
+            outcome: Some(Outcome::Relaxed),
             ..AuditEntry::default()
         });
     }
@@ -177,6 +193,7 @@ mod tests {
             icon: icon.into(),
             safety: Some(SafetySettings::preset(preset)),
             assistant_queries: Default::default(),
+            mcp: Default::default(),
             connections: Vec::new(),
             tasks: Vec::new(),
         }
@@ -190,6 +207,7 @@ mod tests {
             icon: icon.into(),
             safety: preset.map(SafetySettings::preset),
             assistant_queries: None,
+            mcp: None,
         }
     }
 

@@ -1,7 +1,8 @@
 import { api } from "../../core/api";
 import { field, openModal, textInput } from "../../core/dialogs";
 import { h, icon } from "../../core/dom";
-import type { AppConfig, AssistantQueries, WorkspaceMeta } from "../../core/types";
+import type { AppConfig, AssistantQueries, McpAccess, WorkspaceMeta } from "../../core/types";
+import { accessChoices, cappedAccess, MCP_ACCESS_LABELS } from "../mcp/mcpLogic";
 import { newWorkspaceSafety, PRODUCTION_ICON, relaxations, safetyOf, unmarksLooserThanReadOnly } from "../safety/safety";
 import { relaxationWarning, safetyEditor } from "../safety/safetySection";
 import { WORKSPACE_COLORS, WORKSPACE_ICONS, workspaceColor, workspaceIcon } from "./workspaceRail";
@@ -24,7 +25,19 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
     const relaxName = textInput("", { class: "input mono", placeholder: existing?.name ?? "" });
     const relaxField = field("", relaxName, "Required to relax a Production workspace.");
     const isProduction = () => iconName === PRODUCTION_ICON || existing?.icon === PRODUCTION_ICON;
+    const mcpSelect = h("select", { class: "input", "aria-label": "MCP clients" });
+    let mcpChoice: McpAccess = existing?.mcp ?? "off";
+    const refreshMcp = () => {
+      const rules = safety.value();
+      const choice = cappedAccess(mcpChoice, iconName, rules);
+      mcpSelect.replaceChildren(...accessChoices(iconName, rules).map((value) => h("option", { value }, MCP_ACCESS_LABELS[value])));
+      mcpSelect.value = choice;
+    };
+    mcpSelect.addEventListener("change", () => {
+      mcpChoice = mcpSelect.value as McpAccess;
+    });
     const refreshWarning = () => {
+      if (mcpSelect.options.length > 0) refreshMcp();
       const warning = relaxationWarning(savedSafety(), safety.value(), isProduction());
       const needsName = (warning !== null || unmarksLooserThanReadOnly(existing?.icon, iconName, safety.value())) && isProduction();
       const label = relaxField.querySelector(".field-label");
@@ -47,6 +60,7 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
       ).map(([value, label]) => h("option", { value }, label)),
     );
     assistantQueries.value = existing?.assistantQueries ?? "default";
+    refreshMcp();
     const swatches = WORKSPACE_COLORS.map((option) => {
       const swatch = h("button", { class: `swatch color-${option}${option === color ? " active" : ""}`, type: "button", title: option, "aria-label": option });
       swatch.addEventListener("click", () => {
@@ -93,6 +107,11 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
         assistantQueries,
         "Whether the assistant may run read-only queries itself here (Settings → Allow the assistant to run read-only queries). The rows it reads are sent to your AI provider.",
       ),
+      field(
+        "MCP clients",
+        mcpSelect,
+        "What AI clients connected to Settings → MCP server may do here. Ask before writes: you approve every statement. Production and Read-only workspaces: at most read-only.",
+      ),
     );
     openModal(
       existing ? "Edit workspace" : "New workspace",
@@ -114,7 +133,15 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
               throw new Error(`Type ${expected} to relax the rules of a Production workspace`);
             }
             saved = await api.saveWorkspace(
-              { id, name: trimmed, color, icon: iconName, safety: rules, assistantQueries: assistantQueries.value as AssistantQueries },
+              {
+                id,
+                name: trimmed,
+                color,
+                icon: iconName,
+                safety: rules,
+                assistantQueries: assistantQueries.value as AssistantQueries,
+                mcp: cappedAccess(mcpSelect.value as McpAccess, iconName, rules),
+              },
               relaxing ? relaxName.value.trim() : null,
             );
           },

@@ -18,6 +18,7 @@ pub mod classify;
 #[cfg(test)]
 mod engine_tests;
 pub mod filter;
+pub mod mcp;
 pub mod rules;
 
 use std::{
@@ -67,10 +68,17 @@ pub enum Caller {
     Settings,
     /// An engine view calling an engine-specific operation (`invoke_capability`).
     EngineView,
+    /// An MCP client's `run_query`: always asks the user in the app, whatever the rules ([`mcp`]).
+    Mcp,
+    /// An MCP client's `run_read_query`: like the assistant, Read only and never a confirmation. Audited as `mcp`.
+    McpRead,
 }
 
 impl Caller {
     fn id(self) -> String {
+        if self == Self::McpRead {
+            return Self::Mcp.id();
+        }
         serde_json::to_value(self)
             .ok()
             .and_then(|value| value.as_str().map(str::to_owned))
@@ -167,6 +175,8 @@ struct Request<'a> {
     /// One import run sends its rows in batches: its token is bound to the run (id, database,
     /// table) and stays valid for the following batches until it expires. Everything else is single-use.
     reusable: bool,
+    /// The MCP client's self-reported name, for the audit log.
+    client: Option<&'a str>,
 }
 
 #[derive(Default)]
@@ -221,6 +231,16 @@ impl Gateway {
             // a read the rules allow outright is refused.
             Caller::Assistant if statements.iter().any(|statement| statement.category != Category::Read) => Action::Block,
             Caller::Assistant if effective.rules.action(Category::Read) != Action::Allow => Action::Block,
+            Caller::McpRead if statements.iter().any(|statement| statement.category != Category::Read) => Action::Block,
+            Caller::McpRead if effective.rules.action(Category::Read) != Action::Allow => Action::Block,
+            // An MCP client's statement always waits for the user in the app, even where the rules allow it outright;
+            // what the rules block stays blocked.
+            Caller::Mcp => statements
+                .iter()
+                .map(|statement| effective.rules.action(statement.category))
+                .max()
+                .unwrap_or(Action::Allow)
+                .max(Action::Confirm),
             Caller::Transaction => Action::Allow,
             _ => statements
                 .iter()
@@ -234,6 +254,8 @@ impl Gateway {
                 let worst = worst_category(request.classification);
                 let message = if request.caller == Caller::Assistant {
                     assistant::refusal_message(worst, &request.context.workspace_name)
+                } else if matches!(request.caller, Caller::Mcp | Caller::McpRead) {
+                    mcp::refusal_message(request.caller, worst, &request.context.workspace_name)
                 } else {
                     format!(
                         "Blocked: {} statements are not allowed by the {} rules of workspace {}. \
@@ -297,6 +319,13 @@ impl Gateway {
             if !valid {
                 return Err(AppError::structured(
                     "This confirmation is no longer valid: it is single-use and bound to the exact statement. Run it again to confirm anew.",
+                    serde_json::json!({ "code": CONFIRMATION_INVALID }),
+                ));
+            }
+            // Issued for a plain confirmation, but the rules now ask for the name to be typed (they changed since).
+            if level == Action::Typed && pending.as_ref().is_some_and(|pending| pending.expected.is_none()) {
+                return Err(AppError::structured(
+                    "The rules changed since this was confirmed: it now needs a typed confirmation. Nothing was run; run it again to confirm anew.",
                     serde_json::json!({ "code": CONFIRMATION_INVALID }),
                 ));
             }
@@ -450,6 +479,7 @@ fn audit_entry(request: &Request<'_>, outcome: Outcome, detail: &str) -> AuditEn
             .join("; "),
         outcome: Some(outcome),
         detail: detail.to_owned(),
+        client: request.client.unwrap_or_default().to_owned(),
     }
 }
 
@@ -549,6 +579,7 @@ pub async fn apply_edits(
         classification: &classification,
         confirmation,
         reusable: import_run.is_some(),
+        client: None,
     })?;
     let (set, ctx) = (set.clone(), CallContext::new(context.limits()));
     handle
@@ -598,6 +629,7 @@ pub async fn run_limited(
         classification: &classification,
         confirmation,
         reusable: false,
+        client: None,
     })?;
     tracing::debug!(session = session_id, statement = %crate::logging::statement_excerpt(&request.text), "run");
     let mut options = context.limits().run_options();
@@ -621,6 +653,7 @@ pub async fn transaction(mgr: &ConnectionManager, context: &Context, session_id:
         classification: &classification,
         confirmation: None,
         reusable: false,
+        client: None,
     })?;
     let options = context.limits().run_options();
     handle
@@ -651,6 +684,7 @@ pub async fn create_database(
         classification: &classification,
         confirmation,
         reusable: false,
+        client: None,
     })?;
     let (name, first_collection, ctx) = (
         name.to_owned(),
@@ -690,6 +724,7 @@ pub async fn invoke(
         classification: &classification,
         confirmation,
         reusable: false,
+        client: None,
     })?;
     let (name, ctx) = (name.to_owned(), CallContext::new(context.limits()));
     handle
@@ -752,6 +787,7 @@ mod tests {
             classification: &classification,
             confirmation,
             reusable: false,
+            client: None,
         })
     }
 
@@ -844,6 +880,7 @@ mod tests {
             classification: &classification,
             confirmation: Some(&Confirmation { token, typed: None }),
             reusable: false,
+            client: None,
         });
         assert_eq!(elsewhere.unwrap_err().code(), Some(CONFIRMATION_INVALID));
         let audit = AuditLog::new(path.clone(), 1000).read_all().unwrap();
@@ -904,6 +941,7 @@ mod tests {
                 classification: &classification,
                 confirmation: None,
                 reusable: false,
+                client: None,
             });
             assert_eq!(outcome.is_ok(), allowed, "{sql}");
         }
@@ -924,6 +962,7 @@ mod tests {
             classification: &classification,
             confirmation,
             reusable,
+            client: None,
         };
         let error = gateway.authorize(&request("shop\0t\0import:run-1", true, None)).unwrap_err();
         let token = token_of(&error).0;

@@ -20,6 +20,8 @@ use crate::{
 
 /// The error code of a command that did not become ready for a connection.
 pub const COMMAND_FAILED: &str = "COMMAND_FAILED";
+/// The error code of a connection whose command is not running, for callers that may not start it (MCP clients).
+pub const COMMAND_NOT_RUNNING: &str = "COMMAND_NOT_RUNNING";
 
 const LOG_TAIL: usize = 15;
 const READY_POLL: Duration = Duration::from_millis(100);
@@ -75,6 +77,36 @@ pub async fn acquire(tasks: &Arc<TaskManager>, holder: &str, def: &TaskDef, read
         return Err(error);
     }
     Ok(started)
+}
+
+/// Like [`acquire`], but only reuses a command that is already running and never starts one: when `def` is not
+/// running the error is [`COMMAND_NOT_RUNNING`]. MCP clients connect through this.
+pub async fn acquire_running(tasks: &TaskManager, holder: &str, def: &TaskDef, ready: ReadyCheck) -> AppResult<()> {
+    if !tasks.enabled() {
+        return Err(AppError::new(TASKS_DISABLED));
+    }
+    if !tasks.is_active(&def.id) {
+        return Err(AppError::coded(
+            COMMAND_NOT_RUNNING,
+            format!("The command \"{}\" this connection needs is not running.", def.name),
+        ));
+    }
+    if let Some(previous) = tasks.hold(holder, &def.id) {
+        stop_if_unused(tasks, &previous).await;
+    }
+    let deadline = Instant::now() + def.ready_timeout();
+    let mut result = wait_running(tasks, def, deadline, false).await;
+    if result.is_ok() {
+        let running = tasks.running_def(&def.id).unwrap_or_else(|| def.clone());
+        if let (None, ReadyCheck::Port { host, port }) = (pattern(&running), &ready) {
+            result = wait_port(tasks, def, host, *port, deadline).await;
+        }
+    }
+    if let Err(error) = result {
+        tasks.unhold(holder);
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Lets go of the command `holder` uses; it stops when it was started for connections and nobody else uses it.
@@ -410,6 +442,23 @@ mod tests {
         assert!(tasks.is_active(&def.id), "a connection started using it meanwhile");
         release(&tasks, "b").await;
         assert!(!tasks.is_active(&def.id));
+    }
+
+    #[tokio::test]
+    async fn acquire_running_reuses_a_running_command_and_never_starts_one() {
+        let tasks = manager();
+        let (def, _) = long_running("reuse-only");
+        let error = acquire_running(&tasks, "a", &def, ReadyCheck::Spawned).await.unwrap_err();
+        assert_eq!(code(&error), Some(COMMAND_NOT_RUNNING));
+        assert!(!tasks.is_active(&def.id), "not started");
+        assert_eq!(tasks.held_by("a"), None);
+
+        tasks.start(def.clone()).unwrap();
+        acquire_running(&tasks, "a", &def, ReadyCheck::Spawned).await.unwrap();
+        assert_eq!(tasks.held_by("a").as_deref(), Some(def.id.as_str()));
+        release(&tasks, "a").await;
+        assert!(tasks.is_active(&def.id), "started by hand: it keeps running");
+        stop(&tasks, &def.id).await;
     }
 
     #[tokio::test]

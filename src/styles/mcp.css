@@ -1,0 +1,64 @@
+/* MCP server: status item, settings dialog, approval dialog (features/mcp) */
+
+.status-mcp {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.status-mcp .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.status-mcp:hover {
+  color: var(--fg);
+}
+
+.mcp-token-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.mcp-token-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-error {
+  margin: 0;
+  color: var(--danger);
+}
+
+.mcp-snippets {
+  display: grid;
+  gap: 10px;
+}
+
+.mcp-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.mcp-snippet pre,
+.mcp-statement {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
