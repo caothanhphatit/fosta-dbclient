@@ -661,6 +661,50 @@ kbd {
   font-size: 14px;
 }
 
+/* Docker commands under the download button, with a copy button. */
+.docker-cmd {
+  position: relative;
+  max-width: 760px;
+  margin: 12px auto 0;
+  text-align: left;
+}
+
+.docker-cmd .terminal {
+  padding-right: 52px;
+  font-size: 13px;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e6e8eb;
+  cursor: pointer;
+}
+
+.copy-btn:hover,
+.copy-btn:focus-visible {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.copy-btn.is-copied {
+  border-color: #3fb27f;
+  color: #3fb27f;
+}
+
+.docker-note {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
 .hero-visual {
   position: relative;
   margin-top: 52px;

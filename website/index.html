@@ -236,9 +236,32 @@
               <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span data-i18n="hero.github">View on GitHub</span>
             </a>
           </div>
-          <p class="cta-note" data-i18n="hero.note">
-            Version 0.1.0: Windows installer or portable .exe. Prefer a browser? Run the
-            <a href="https://github.com/caothanhphatit/fosta-dbclient#run-with-docker-web-edition">Docker web edition</a>.
+          <p class="cta-note" data-i18n="hero.note">Version 0.1.0 for Windows: installer or portable .exe. Or run the web edition with Docker:</p>
+          <div class="docker-cmd" id="docker">
+            <pre
+              class="terminal"
+              tabindex="0"
+              id="docker-commands"
+              data-i18n-attr="aria-label:hero.dockerLabel"
+              aria-label="Docker commands"
+            ><code><span class="prompt">$</span> docker run -d --name fosta-studio -p 127.0.0.1:8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio
+<span class="prompt">$</span> docker logs fosta-studio</code></pre>
+            <button
+              type="button"
+              class="copy-btn"
+              data-copy="docker-commands"
+              data-i18n-attr="aria-label:hero.copy; title:hero.copy; data-label-copied:hero.copied"
+              aria-label="Copy the commands"
+              title="Copy the commands"
+              data-label-copied="Copied"
+              hidden
+            >
+              <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg>
+            </button>
+          </div>
+          <p class="cta-note docker-note" data-i18n="hero.dockerNote">
+            Then open the sign-in address printed in the log.
+            <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/web-edition.md">Web edition guide</a>
           </p>
         </div>
 

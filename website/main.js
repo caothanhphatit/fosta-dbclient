@@ -37,7 +37,45 @@
   if (media && media.addEventListener) media.addEventListener("change", sync);
   else if (media && media.addListener) media.addListener(sync); // Safari before 14
 
+  // Copy buttons next to command blocks: copy the commands without their "$" prompts. Hidden without the clipboard API.
+  function initCopy() {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) return;
+    Array.prototype.forEach.call(document.querySelectorAll("[data-copy]"), function (button) {
+      var source = document.getElementById(button.getAttribute("data-copy"));
+      if (!source) return;
+      var label = button.getAttribute("aria-label") || "";
+      var timer = 0;
+      button.hidden = false;
+      button.addEventListener("click", function () {
+        var copy = source.cloneNode(true);
+        Array.prototype.forEach.call(copy.querySelectorAll(".prompt"), function (prompt) {
+          prompt.remove();
+        });
+        var text = copy.textContent
+          .split("\n")
+          .map(function (line) {
+            return line.trim();
+          })
+          .filter(Boolean)
+          .join("\n");
+        navigator.clipboard.writeText(text).then(function () {
+          var done = button.getAttribute("data-label-copied") || label;
+          button.classList.add("is-copied");
+          button.setAttribute("aria-label", done);
+          button.setAttribute("title", done);
+          window.clearTimeout(timer);
+          timer = window.setTimeout(function () {
+            button.classList.remove("is-copied");
+            button.setAttribute("aria-label", label);
+            button.setAttribute("title", label);
+          }, 2000);
+        });
+      });
+    });
+  }
+
   function init() {
+    initCopy();
     var button = document.querySelector("[data-theme-toggle]");
     if (button) {
       button.hidden = false;
