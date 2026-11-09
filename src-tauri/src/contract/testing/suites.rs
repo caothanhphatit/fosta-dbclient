@@ -763,19 +763,20 @@ pub async fn suite_assistant(f: &Fixture) {
         assert!(databases.lines().any(|line| line == database), "{}: {databases}", f.engine);
     }
     let tables = run("list_tables", serde_json::json!({}), None).await.expect("list_tables");
+    // A key-value engine lists a bounded sample of its keys (the Redis seed has more than that), and says so; the fixture's key
+    // is then only listed if SCAN happens to return it among the first ones.
+    let truncated = tables.contains("Note: only the first");
     assert!(
-        tables.lines().any(|line| line.split('\t').next() == Some(f.table.name.as_str())),
-        "{}: {} not listed in
-{tables}",
+        truncated || tables.lines().any(|line| line.split('\t').next() == Some(f.table.name.as_str())),
+        "{}: {} not listed in \n{tables}",
         f.engine,
         f.table.name
     );
-    // A key-value engine lists a bounded sample of its keys (the Redis seed has more than that), and says so.
     if registry().get(f.engine).unwrap().descriptor().family == crate::contract::EngineFamily::KeyValue {
         let objects = tables.lines().filter(|line| !line.starts_with("Note:")).count();
         assert!(objects <= crate::ai::catalog::MAX_KEYS, "{}: {objects} keys listed", f.engine);
         if objects == crate::ai::catalog::MAX_KEYS {
-            assert!(tables.contains("Note: only the first"), "{}: {tables}", f.engine);
+            assert!(truncated, "{}: {tables}", f.engine);
         }
     }
     let described = run("describe_table", serde_json::json!({ "table": f.table.name }), None)
