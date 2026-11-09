@@ -36,6 +36,9 @@ services:
     image: containrrr/watchtower
     profiles: [autoupdate]
     command: --label-enable --cleanup --interval 86400
+    environment:
+      # Docker Engine 29 refuses Watchtower's default (older) API version; 1.44 works with Docker 25 and newer.
+      DOCKER_API_VERSION: "1.44"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

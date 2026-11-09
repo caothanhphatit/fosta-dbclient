@@ -24,6 +24,10 @@ export interface UpdateHost {
   confirmRestart(): Promise<boolean>;
 }
 
+// A stalled connection falls back to the release link instead of leaving the item at "Update X…".
+const CHECK_TIMEOUT_MS = 30_000;
+const DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
+
 let host: UpdateHost | null = null;
 let info: UpdateInfo | null = null;
 let kind: InstallKind = "portable";
@@ -100,19 +104,22 @@ async function download(): Promise<void> {
   render();
   try {
     const { check: checkUpdater } = await import("@tauri-apps/plugin-updater");
-    const update = await checkUpdater();
+    const update = await checkUpdater({ timeout: CHECK_TIMEOUT_MS });
     if (!update) throw new Error("No update in latest.json");
     let total: number | null = null;
     let downloaded = 0;
-    await update.download((event) => {
-      if (event.event === "Started") total = event.data.contentLength ?? null;
-      else if (event.event === "Progress") downloaded += event.data.chunkLength;
-      const next = downloadPercent(downloaded, total);
-      if (next !== percent) {
-        percent = next;
-        render();
-      }
-    });
+    await update.download(
+      (event) => {
+        if (event.event === "Started") total = event.data.contentLength ?? null;
+        else if (event.event === "Progress") downloaded += event.data.chunkLength;
+        const next = downloadPercent(downloaded, total);
+        if (next !== percent) {
+          percent = next;
+          render();
+        }
+      },
+      { timeout: DOWNLOAD_TIMEOUT_MS },
+    );
     pending = update;
     phase = "ready";
   } catch (error) {
