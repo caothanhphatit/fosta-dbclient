@@ -115,10 +115,12 @@ module has none). Search indexes live in database 0 only, so its tree lists the 
   (`__key`); a bare id such as `7` stands for the index prefix plus `7`.
 - **Search**: a KNN query, `FT.SEARCH idx "*=>[KNN k @field $vec EF_RUNTIME ef AS vec_distance]" PARAMS 2 vec <blob> SORTBY
   vec_distance DIALECT 2`, with `EF_RUNTIME` at least k on HNSW fields and `FT.EXPLAINCLI` as the plan. A field's index serves one
-  metric, its `DISTANCE_METRIC`; *Auto* uses it. Other metrics scan the documents. Distances use Redis's scale: cosine is
-  `1 - cos`, L2 is squared, inner product is `1 - dot`. The copyable command carries the blob as `"\x…"`.
-- **Exact top-k** (recall) uses a FLAT field over the same data with the same metric when there is one. Otherwise it scans at
-  most 50,000 documents and computes distances in the app; the plan says how many documents it read.
+  metric, its `DISTANCE_METRIC`; *Auto* uses it. Other metrics scan every document. Distances use Redis's scale: cosine is
+  `1 - cos`, L2 is squared, inner product is `1 - dot`. The copyable command carries the blob as `"\x…"`. Field names are
+  escaped in the query (`@\$\.embedding`, `@my\-vec`). Searches take no filter, so the view shows no filter box.
+- **Exact top-k** (recall) uses a FLAT field over the same data with the same metric when there is one. Otherwise it scans
+  every document and computes distances in the app. An index with more than 50,000 documents refuses such a scan with an
+  error instead of returning a partial top-k.
 - **Health**: the row count is the index's `num_docs`. The index does not count documents without the field.
 
 ## Operations the views call

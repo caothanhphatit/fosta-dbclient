@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { VectorInfo } from "../../core/types";
-import { columnMetrics } from "./vectorRows";
+import { columnMetrics, searchTakesFilter } from "./vectorRows";
 
 describe("columnMetrics", () => {
   const info: VectorInfo = {
@@ -22,5 +22,13 @@ describe("columnMetrics", () => {
     expect(columnMetrics(info, "raw")).toEqual(["cosine", "euclidean", "dot"]);
     expect(columnMetrics(info, "plain")).toEqual(["cosine", "euclidean", "dot"]);
     expect(columnMetrics(info, "missing")).toEqual(["cosine", "euclidean", "dot"]);
+  });
+});
+
+describe("searchTakesFilter", () => {
+  it("follows the engine's raw filter language", () => {
+    expect(searchTakesFilter({ filter: { structured: true, raw: "sql", placeholder: "WHERE" } })).toBe(true);
+    expect(searchTakesFilter({ filter: { structured: false, raw: "esQueryDsl", placeholder: "Query DSL" } })).toBe(true);
+    expect(searchTakesFilter({ filter: { structured: false, raw: null, placeholder: "Key pattern, e.g. user:*" } })).toBe(false);
   });
 });

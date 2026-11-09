@@ -421,6 +421,8 @@ pub async fn search<S: VectorStore + ?Sized>(store: &mut S, request: &SearchArgs
         SearchQuery::Vector { values } => values.clone(),
     };
     ensure_dims(query.len(), column.dims)?;
+    // A stored row or an embedding can hold NaN or an overflow; no engine ranks those meaningfully.
+    ensure_finite(&query)?;
     let index = store.indexes(&table).await?.into_iter().find(|index| index.column == column.name);
     let filter = request.filter.as_deref().map(str::trim).filter(|filter| !filter.is_empty());
     let checked = SearchRequest {
@@ -453,6 +455,7 @@ pub fn parse_vector(text: &str) -> AppResult<Vec<f32>> {
     if values.is_empty() {
         return Err(AppError::new("The vector is empty"));
     }
+    ensure_finite(&values)?;
     Ok(values)
 }
 
@@ -475,6 +478,18 @@ pub fn ensure_dims(actual: usize, expected: u32) -> AppResult<()> {
         Err(AppError::new(format!(
             "The query vector has {actual} dimensions but the column stores {expected}"
         )))
+    }
+}
+
+/// Refuses a vector with NaN or an infinite value (`1e39` overflows f32 to infinity).
+pub fn ensure_finite(values: &[f32]) -> AppResult<()> {
+    match values.iter().position(|value| !value.is_finite()) {
+        None => Ok(()),
+        Some(position) => Err(AppError::new(format!(
+            "The query vector has a value that is not a finite number ({}) at position {}",
+            values[position],
+            position + 1
+        ))),
     }
 }
 
@@ -522,6 +537,12 @@ mod tests {
         assert_eq!(parse_vector("1 2").unwrap(), [1.0, 2.0]);
         assert!(parse_vector("[]").is_err());
         assert!(parse_vector("[a]").is_err());
+        for text in ["[NaN, 1]", "[inf, 1]", "[1, -inf]", "[1e39, 1]"] {
+            let error = parse_vector(text).unwrap_err().to_string();
+            assert!(error.contains("not a finite number"), "{text}: {error}");
+        }
+        assert!(ensure_finite(&[f32::NAN]).is_err());
+        assert!(ensure_finite(&[0.5, -1.0]).is_ok());
         assert_eq!(summarize(&[3.0, 4.0]), "[2] ‖5.000‖ 3.0000, 4.0000");
         assert!(summarize(&[1.0; 6]).ends_with(", …"));
         assert!(ensure_dims(3, 4).is_err());

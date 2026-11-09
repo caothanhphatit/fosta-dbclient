@@ -1,8 +1,12 @@
 //! ClickHouse vector tooling: the [`VectorStore`] the shared `vector.*` operations (`crate::contract::vector`) run on.
 //! Vector columns are `Array(Float32)`, `Array(Float64)` or `Array(BFloat16)`; their dimensions come from a
 //! `vector_similarity` index, a `CHECK length(column) = n` constraint or, failing both, the first non-empty row.
-//! Searches `ORDER BY` the distance function and `LIMIT k`, so a matching `vector_similarity('hnsw', …)` index is
-//! used; exact top-k is the same query with `SETTINGS use_skip_indexes = 0`. Every statement runs with `readonly = 2`.
+//! Searches `ORDER BY` the bare distance function (no conversion around it) of a typed constant
+//! (`CAST([…] AS Array(Float32))`) and `LIMIT k`, so a matching `vector_similarity('hnsw', …)` index is used; exact top-k
+//! is the same query with `SETTINGS use_skip_indexes = 0`. Searches the index cannot serve skip rows whose array has
+//! another length (`length(column) = dims`, which the distance functions need); that condition would disable the index,
+//! so the index path goes without it unless the server reports arrays of different sizes. Every statement runs with
+//! `readonly = 2`.
 
 use std::time::Instant;
 
@@ -83,6 +87,67 @@ fn distance(metric: Metric, column: &str, query: &str) -> String {
     }
 }
 
+/// The array type a query vector is cast to: the column's own for `Array(Float64)`, else `Array(Float32)` (which
+/// `BFloat16` columns compare with too).
+fn query_type(column_type: &str) -> &'static str {
+    match vector_element(column_type) {
+        Some("Float64") => "Array(Float64)",
+        _ => "Array(Float32)",
+    }
+}
+
+/// `CAST([1,0.5] AS Array(Float32))`: a bare `[1,0]` would be an `Array(UInt8)`, which the index does not serve.
+fn query_literal(values: &[f32], column_type: &str) -> String {
+    format!("CAST({} AS {})", vector_text(values), query_type(column_type))
+}
+
+/// Whether `index` can serve a search with `metric`: its distance function is the metric's (never inner product).
+fn index_serves(index: Option<&VectorIndex>, metric: Metric) -> bool {
+    metric != Metric::Dot && index.is_some_and(|index| Metric::of_name(&index.metric) == Some(metric))
+}
+
+/// ` WHERE …` of a search: the user's filter and, with `guard`, `length(column) = dims`, which keeps rows of another
+/// length (an empty array) away from the distance function (error 190 otherwise). The guard disables the index.
+fn conditions(filter: Option<&str>, guard: Option<&VectorColumn>) -> String {
+    let filter = filter.map(str::trim).filter(|filter| !filter.is_empty());
+    match (filter, guard) {
+        (None, None) => String::new(),
+        (Some(filter), None) => format!(" WHERE {filter}"),
+        (None, Some(column)) => format!(" WHERE length({}) = {}", quote(&column.name), column.dims),
+        (Some(filter), Some(column)) => format!(" WHERE ({filter}) AND length({}) = {}", quote(&column.name), column.dims),
+    }
+}
+
+/// Error 190 (`SIZES_OF_ARRAYS_DONT_MATCH`): a row's array has another length than the query vector.
+fn sizes_differ(error: &AppError) -> bool {
+    let text = error.to_string();
+    text.contains("SIZES_OF_ARRAYS_DONT_MATCH") || text.contains("Code: 190")
+}
+
+/// The top-k statement of the recall measurement. Through the index it orders by the bare distance alone: a
+/// conversion around it, or a second sort key, keeps the index from being used. Exact top-k skips the index, rows of
+/// another length, and breaks ties by key.
+pub(super) fn nearest_sql(table: &TableRef, request: &NearestRequest<'_>) -> String {
+    let metric = Metric::of_index(request.index);
+    let column = request.column;
+    let keys: Vec<String> = request.key.iter().map(|name| format!("toString({})", quote(name))).collect();
+    let guard = (request.exact || !index_serves(Some(request.index), metric)).then_some(column);
+    let (order, settings) = if request.exact {
+        let key_order = request.key.iter().map(|name| quote(name)).collect::<Vec<_>>().join(", ");
+        (format!("vec_distance, {key_order}"), " SETTINGS use_skip_indexes = 0")
+    } else {
+        ("vec_distance".to_owned(), "")
+    };
+    format!(
+        "SELECT {} AS vec_distance, {} FROM {}{} ORDER BY {order} LIMIT {}{settings}",
+        distance(metric, &column.name, &query_literal(request.query, &column.type_name)),
+        keys.join(", "),
+        target(table),
+        conditions(None, guard),
+        request.k
+    )
+}
+
 /// The metric of a `vector_similarity` distance function.
 fn function_metric(function: &str) -> String {
     match function {
@@ -123,7 +188,7 @@ fn constraint_dims(create: &str, column: &str) -> Option<u32> {
 }
 
 /// The index of a plan: the `Name:` line before a `Description: vector_similarity` line of `EXPLAIN indexes = 1`.
-fn index_in_plan(lines: &[String]) -> Option<String> {
+pub(super) fn index_in_plan(lines: &[String]) -> Option<String> {
     let position = lines
         .iter()
         .position(|line| line.trim().starts_with("Description: vector_similarity"))?;
@@ -131,6 +196,20 @@ fn index_in_plan(lines: &[String]) -> Option<String> {
         .iter()
         .rev()
         .find_map(|line| line.trim().strip_prefix("Name: ").map(str::to_owned))
+}
+
+/// The columns of `system.tables.primary_key` (`id`, `tenant, id`); empty when a part is an expression, not a column.
+fn key_columns(key: &str, columns: &[String]) -> Vec<String> {
+    let parts: Vec<String> = key
+        .split(',')
+        .map(|part| part.trim().trim_matches('`').to_owned())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.iter().all(|part| columns.contains(part)) {
+        parts
+    } else {
+        Vec::new()
+    }
 }
 
 /// A cell of `CAST(column, 'Array(Float64)')` as floats.
@@ -282,6 +361,10 @@ impl VectorStore for ChVectors<'_> {
             .collect())
     }
 
+    /// The `ORDER BY` key's columns. ClickHouse keys are not unique (two rows may share one), so a key here identifies
+    /// a row only as well as the table's data does; a key with an expression part (`toDate(ts), id`) gives no key at
+    /// all rather than a shorter one that matches more rows (recall then asks for a key, the grid keys rows by every
+    /// non-vector column).
     async fn primary_key(&mut self, table: &TableRef) -> AppResult<Vec<String>> {
         let rows = self
             .strings(
@@ -291,11 +374,8 @@ impl VectorStore for ChVectors<'_> {
             .await?;
         let key = rows.into_iter().next().and_then(|row| row.into_iter().next()).unwrap_or_default();
         let columns = self.table_columns(table).await?;
-        Ok(key
-            .split(',')
-            .map(|part| part.trim().trim_matches('`').to_owned())
-            .filter(|part| columns.iter().any(|column| &column.name == part))
-            .collect())
+        let names: Vec<String> = columns.into_iter().map(|column| column.name).collect();
+        Ok(key_columns(&key, &names))
     }
 
     async fn fetch(&mut self, table: &TableRef, column: &str, key: &[KeyCell]) -> AppResult<Vec<f32>> {
@@ -378,30 +458,52 @@ impl VectorStore for ChVectors<'_> {
             .map(|column| quote(&column.name))
             .collect();
         let metric = request.metric.resolve(request.index, Metric::Cosine);
-        let render = |query: &str| {
+        let render = |query: &str, guard: bool| {
             let separator = if select_list.is_empty() { "" } else { ", " };
             format!(
                 "SELECT {} AS vec_distance{separator}{} FROM {}{} ORDER BY vec_distance LIMIT {}",
                 distance(metric, &request.column.name, query),
                 select_list.join(", "),
                 target(table),
-                shared::where_clause(request.filter),
+                conditions(request.filter, guard.then_some(request.column)),
                 request.k
             )
         };
-        let runnable_sql = render(&vector_text(request.query));
+        let literal = query_literal(request.query, &request.column.type_name);
         let primary_key = self.primary_key(table).await?;
-        let plan: Vec<String> = self
-            .strings(&format!("EXPLAIN indexes = 1 {runnable_sql}"), &[])
-            .await?
-            .into_iter()
-            .filter_map(|row| row.into_iter().next())
-            .collect();
-        let started = Instant::now();
-        let (result_columns, rows) = self.query(&runnable_sql, &[]).await?;
-        let elapsed_ms = started.elapsed().as_millis() as u64;
+        // The index path goes without the length guard (it would disable the index), unless rows of another length
+        // make the distance function fail: then the search runs again with it, without the index.
+        let indexed = index_serves(request.index, metric);
+        let mut guard = !indexed;
+        let (runnable_sql, mut plan, result_columns, rows, elapsed_ms) = loop {
+            let runnable_sql = render(&literal, guard);
+            let plan: Vec<String> = self
+                .strings(&format!("EXPLAIN indexes = 1 {runnable_sql}"), &[])
+                .await?
+                .into_iter()
+                .filter_map(|row| row.into_iter().next())
+                .collect();
+            let started = Instant::now();
+            match self.query(&runnable_sql, &[]).await {
+                Ok((result_columns, rows)) => {
+                    break (runnable_sql, plan, result_columns, rows, started.elapsed().as_millis() as u64);
+                }
+                Err(error) if !guard && sizes_differ(&error) => guard = true,
+                Err(error) => return Err(error),
+            }
+        };
+        let index_used = index_in_plan(&plan);
+        if guard && indexed {
+            plan.insert(
+                0,
+                format!(
+                    "Some rows of {0} hold an array of another length: searched again with length({0}) = {1}, which keeps the vector index from serving the search",
+                    request.column.name, request.column.dims
+                ),
+            );
+        }
         Ok(VectorSearchResult {
-            index_used: index_in_plan(&plan),
+            index_used,
             plan: RowSet {
                 columns: vec![ColumnInfo::result("explain", "String", ValueKind::Text)],
                 rows: plan.into_iter().map(|line| vec![Value::Text(line)]).collect(),
@@ -410,7 +512,7 @@ impl VectorStore for ChVectors<'_> {
                 columns: result_columns,
                 rows,
             },
-            sql: render("{query:Array(Float32)}"),
+            sql: render(&format!("{{query:{}}}", query_type(&request.column.type_name)), guard),
             runnable_sql,
             elapsed_ms,
             query_dims: request.query.len(),
@@ -419,27 +521,23 @@ impl VectorStore for ChVectors<'_> {
     }
 
     async fn nearest(&mut self, table: &TableRef, request: &NearestRequest<'_>) -> AppResult<Vec<Neighbour>> {
-        let metric = Metric::of_index(request.index);
-        let keys: Vec<String> = request.key.iter().map(|name| format!("toString({})", quote(name))).collect();
-        let (order, settings) = if request.exact {
-            let key_order = request.key.iter().map(|name| quote(name)).collect::<Vec<_>>().join(", ");
-            (format!("vec_distance, {key_order}"), " SETTINGS use_skip_indexes = 0")
-        } else {
-            ("vec_distance".to_owned(), "")
-        };
-        let sql = format!(
-            "SELECT toFloat64({}) AS vec_distance, {} FROM {} ORDER BY {order} LIMIT {}{settings}",
-            distance(metric, &request.column.name, &vector_text(request.query)),
-            keys.join(", "),
-            target(table),
-            request.k
-        );
-        let rows = self.strings(&sql, &[]).await?;
+        let rows = self.strings(&nearest_sql(table, request), &[]).await.map_err(|error| {
+            if sizes_differ(&error) {
+                AppError::new(format!(
+                    "Some rows of {} hold an array of another length than {} (or an empty one), so the index search \
+                     fails; recall cannot be measured until they are fixed",
+                    request.column.name, request.column.dims
+                ))
+            } else {
+                error
+            }
+        })?;
         Ok(rows
             .into_iter()
             .map(|row| {
                 let mut cells = row.into_iter();
-                let distance = cells.next().and_then(|text| text.parse().ok()).unwrap_or(f64::NAN);
+                // The distance is the function's own type (Float32 for Float32 columns), read here as f64.
+                let distance = cells.next().and_then(|text| text.trim().parse().ok()).unwrap_or(f64::NAN);
                 Neighbour {
                     key: cells.collect::<Vec<_>>().join(KEY_SEPARATOR),
                     distance,
@@ -491,5 +589,77 @@ mod tests {
         assert_eq!(index_in_plan(&plan[..3]), None);
         assert_eq!(floats(&Value::Array(vec![Value::Float(0.5), Value::Int(1)])), Some(vec![0.5, 1.0]));
         assert_eq!(floats(&Value::Null), None);
+    }
+
+    fn index(metric: &str) -> VectorIndex {
+        VectorIndex {
+            name: "embedding_idx".into(),
+            column: "embedding".into(),
+            metric: metric.into(),
+            kind: "hnsw".into(),
+            m: None,
+            params: "dims=4".into(),
+        }
+    }
+
+    #[test]
+    fn query_vectors_are_typed_and_guards_skip_the_index_path() {
+        // Integers alone would be an Array(UInt8) constant, which the index does not serve.
+        assert_eq!(query_literal(&[1.0, 0.0], "Array(Float32)"), "CAST([1,0] AS Array(Float32))");
+        assert_eq!(query_literal(&[0.5], "Array(Float64)"), "CAST([0.5] AS Array(Float64))");
+        assert_eq!(query_type("Array(BFloat16)"), "Array(Float32)");
+        let cosine = index("cosine");
+        assert!(index_serves(Some(&cosine), Metric::Cosine));
+        assert!(!index_serves(Some(&cosine), Metric::Euclidean));
+        assert!(!index_serves(Some(&index("dot")), Metric::Dot));
+        assert!(!index_serves(None, Metric::Cosine));
+        let column = VectorColumn {
+            name: "embedding".into(),
+            dims: 4,
+            type_name: "Array(Float32)".into(),
+            metrics: Vec::new(),
+        };
+        assert_eq!(conditions(None, None), "");
+        assert_eq!(conditions(Some(" a = 1 "), None), " WHERE a = 1");
+        assert_eq!(conditions(None, Some(&column)), " WHERE length(`embedding`) = 4");
+        assert_eq!(
+            conditions(Some("a = 1 OR b = 2"), Some(&column)),
+            " WHERE (a = 1 OR b = 2) AND length(`embedding`) = 4"
+        );
+        assert!(sizes_differ(&AppError::new(
+            "Code: 190. DB::Exception: … (SIZES_OF_ARRAYS_DONT_MATCH)"
+        )));
+        assert!(!sizes_differ(&AppError::new("Code: 60. Unknown table")));
+
+        let table = TableRef::parse("shop", "items", false);
+        let key = ["id".to_owned()];
+        let request = |exact| NearestRequest {
+            column: &column,
+            key: &key,
+            index: &cosine,
+            query: &[1.0, 0.0, 0.0, 0.0],
+            k: 5,
+            exact,
+        };
+        // Through the index: the bare distance, ordered alone, no WHERE.
+        assert_eq!(
+            nearest_sql(&table, &request(false)),
+            "SELECT cosineDistance(`embedding`, CAST([1,0,0,0] AS Array(Float32))) AS vec_distance, toString(`id`) \
+             FROM `shop`.`items` ORDER BY vec_distance LIMIT 5"
+        );
+        assert_eq!(
+            nearest_sql(&table, &request(true)),
+            "SELECT cosineDistance(`embedding`, CAST([1,0,0,0] AS Array(Float32))) AS vec_distance, toString(`id`) \
+             FROM `shop`.`items` WHERE length(`embedding`) = 4 ORDER BY vec_distance, `id` LIMIT 5 SETTINGS use_skip_indexes = 0"
+        );
+    }
+
+    #[test]
+    fn keys_with_expressions_are_no_keys() {
+        let columns = ["id".to_owned(), "tenant".to_owned(), "ts".to_owned()];
+        assert_eq!(key_columns("id", &columns), ["id"]);
+        assert_eq!(key_columns("tenant, `id`", &columns), ["tenant", "id"]);
+        assert!(key_columns("toDate(ts), id", &columns).is_empty());
+        assert!(key_columns("", &columns).is_empty());
     }
 }

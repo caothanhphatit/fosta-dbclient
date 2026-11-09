@@ -5,8 +5,10 @@
 //!
 //! A field's index serves one metric, its `DISTANCE_METRIC`: searches with it are KNN queries
 //! (`*=>[KNN k @field $vec AS vec_distance]`); other metrics, and exact top-k on an HNSW field without a FLAT twin, scan
-//! at most [`SCAN_LIMIT`] documents and compute distances here, on Redis's scale (cosine `1 - cos`, L2 squared,
-//! inner product `1 - dot`). Search indexes exist in database 0 only. Every command only reads.
+//! the documents and compute distances here, on Redis's scale (cosine `1 - cos`, L2 squared, inner product `1 - dot`).
+//! A scan reads every document or refuses: an index with more than [`SCAN_LIMIT`] documents has no exact top-k here.
+//! Searches take no filter: Redis has no filter language in the descriptor (`filter.raw`), and a query string spliced
+//! before `=>[KNN …]` could change the query. Search indexes exist in database 0 only. Every command only reads.
 
 use std::{collections::HashMap, time::Instant};
 
@@ -41,7 +43,7 @@ static PROFILE: VectorProfile = VectorProfile {
 /// The key column of every result: the document's Redis key.
 pub const KEY_COLUMN: &str = "__key";
 const DISTANCE: &str = "vec_distance";
-/// The most documents an exact scan reads.
+/// The most documents an exact scan reads; an index with more refuses exact top-k rather than truncate it.
 pub const SCAN_LIMIT: u32 = 50_000;
 /// Documents read per `FT.SEARCH` page while scanning.
 const PAGE: u32 = 1000;
@@ -244,8 +246,12 @@ fn json_vector(text: &str) -> Option<Vec<f32>> {
     items.iter().map(|item| item.as_f64().map(|number| number as f32)).collect()
 }
 
-/// A distance on Redis's scale: cosine `1 - cos`, euclidean squared, inner product `1 - dot`.
+/// A distance on Redis's scale: cosine `1 - cos`, euclidean squared, inner product `1 - dot`; NaN for vectors of
+/// different lengths.
 fn distance(metric: Metric, left: &[f32], right: &[f32]) -> f64 {
+    if left.len() != right.len() {
+        return f64::NAN;
+    }
     let dot: f64 = left.iter().zip(right).map(|(a, b)| f64::from(*a) * f64::from(*b)).sum();
     match metric {
         Metric::Euclidean => left.iter().zip(right).map(|(a, b)| (f64::from(*a) - f64::from(*b)).powi(2)).sum(),
@@ -277,25 +283,34 @@ fn console_arg(text: &str) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// `*` or `(filter)`: the documents a query looks at.
-fn base_query(filter: Option<&str>) -> String {
-    filter.map_or_else(|| "*".to_owned(), |filter| format!("({filter})"))
+/// `@name` of a field in a query: ASCII punctuation and spaces are escaped with a backslash, so JSON attributes
+/// (`$.embedding`) and names with `-` or `.` stay one field name. Letters beyond ASCII are name characters as they are
+/// (Redis 8.2 reads `@v\é` as the field `v`).
+fn field_ref(attribute: &str) -> String {
+    let mut text = String::with_capacity(attribute.len() + 1);
+    text.push('@');
+    for character in attribute.chars() {
+        if character.is_ascii() && !(character.is_ascii_alphanumeric() || character == '_') {
+            text.push('\\');
+        }
+        text.push(character);
+    }
+    text
 }
 
-fn knn_query(filter: Option<&str>, field: &Field, k: u32) -> String {
+fn knn_query(field: &Field, k: u32) -> String {
     let ef = if field.algorithm.eq_ignore_ascii_case("HNSW") {
         format!(" EF_RUNTIME {}", k.max(DEFAULT_EF_RUNTIME))
     } else {
         String::new()
     };
-    format!("{}=>[KNN {k} @{} $vec{ef} AS {DISTANCE}]", base_query(filter), field.attribute)
+    format!("*=>[KNN {k} {} $vec{ef} AS {DISTANCE}]", field_ref(&field.attribute))
 }
 
-/// What a top-k query looks for: the query vector, the documents (a filter query), k, and the fields to return.
+/// What a top-k query looks for: the query vector, k, and the fields to return.
 #[derive(Clone, Copy)]
 struct Probe<'a> {
     query: &'a [f32],
-    filter: Option<&'a str>,
     k: u32,
     others: &'a [&'a Field],
 }
@@ -463,12 +478,13 @@ impl RedisVectors {
         metric: Metric,
         probe: &Probe<'_>,
     ) -> AppResult<(Vec<(f64, Document)>, u64, u64)> {
-        let Probe { query, filter, k, others } = *probe;
+        let Probe { query, k, others } = *probe;
+        scan_fits(info.docs, info.docs)?;
         let mut fields = vec![field];
         fields.extend_from_slice(others);
         let mut best: Vec<(f64, Document)> = Vec::new();
         let (read, total) = self
-            .scan(index, &base_query(filter), &fields, |page| {
+            .scan(index, "*", &fields, |page| {
                 for document in page {
                     let Some(vector) = document
                         .fields
@@ -485,15 +501,17 @@ impl RedisVectors {
                 best.truncate(k as usize);
             })
             .await?;
+        // Documents added while scanning (or a stale num_docs) can still leave some unread.
+        scan_fits(read, total)?;
         Ok((best, read, total))
     }
 
     /// A KNN query's documents with their distances.
     async fn knn(&self, index: &str, field: &Field, probe: &Probe<'_>) -> AppResult<Vec<(f64, Document)>> {
-        let Probe { query, filter, k, others } = *probe;
+        let Probe { query, k, others } = *probe;
         let blob = encode(field, query)?;
         let args = self.knn_args(others, k);
-        let reply = self.search_command(index, &knn_query(filter, field, k), &args, Some(&blob)).await?;
+        let reply = self.search_command(index, &knn_query(field, k), &args, Some(&blob)).await?;
         Ok(documents(reply, true)
             .1
             .into_iter()
@@ -535,6 +553,17 @@ impl RedisVectors {
     }
 }
 
+/// Refuses an exact scan that would not read every document (`read` of `total`): its top-k would not be exact.
+fn scan_fits(read: u64, total: u64) -> AppResult<()> {
+    if total <= u64::from(SCAN_LIMIT) && read >= total {
+        return Ok(());
+    }
+    Err(AppError::new(format!(
+        "The index has {total} documents; an exact scan here reads at most {SCAN_LIMIT}, so its top-k would not be exact. \
+         Search with the field's own metric (its index), or add a FLAT field with this metric over the same data"
+    )))
+}
+
 fn encode(field: &Field, query: &[f32]) -> AppResult<Vec<u8>> {
     field
         .element()
@@ -546,7 +575,7 @@ fn decode(info: &IndexInfo, field: &Field, reply: Reply) -> Option<Vec<f32>> {
     let bytes = as_bytes(reply)?;
     match info.source {
         Source::Hash => field.element()?.decode(&bytes, field.dims),
-        Source::Json => json_vector(&String::from_utf8_lossy(&bytes)),
+        Source::Json => json_vector(&String::from_utf8_lossy(&bytes)).filter(|values| values.len() == field.dims as usize),
     }
 }
 
@@ -677,7 +706,9 @@ impl VectorStore for RedisVectors {
         Err(AppError::new("Document not found"))
     }
 
-    /// Documents in the index; documents without the field are not told apart (the index does not count them).
+    /// Documents in the index, and 0 without a vector: `FT.INFO` counts documents, not the vectors of a field, and
+    /// telling them apart would need a scan of every document (or `INDEXMISSING` on the field, which indexes rarely
+    /// have).
     async fn count(&mut self, table: &TableRef, _column: &VectorColumn) -> AppResult<(u64, u64)> {
         Ok((self.info(table).await?.docs, 0))
     }
@@ -720,6 +751,11 @@ impl VectorStore for RedisVectors {
     }
 
     async fn search(&mut self, table: &TableRef, request: &SearchRequest<'_>) -> AppResult<VectorSearchResult> {
+        if request.filter.is_some() {
+            return Err(AppError::new(
+                "Redis vector search takes no filter: the query engine's filter syntax is not checked here, so it is not spliced into the KNN query",
+            ));
+        }
         let info = self.info(table).await?;
         let field = info.vector(&request.column.name)?.clone();
         let others: Vec<&Field> = info.fields.iter().filter(|other| !other.is_vector()).collect();
@@ -727,14 +763,13 @@ impl VectorStore for RedisVectors {
         let index = &table.table;
         let probe = Probe {
             query: request.query,
-            filter: request.filter,
             k: request.k,
             others: &others,
         };
         let started = Instant::now();
         let (found, plan, index_used, sql, runnable_sql) = if metric == field.metric() {
             let blob = encode(&field, request.query)?;
-            let query = knn_query(request.filter, &field, request.k);
+            let query = knn_query(&field, request.k);
             let found = self.knn(index, &field, &probe).await?;
             let args = self
                 .knn_args(&others, request.k)
@@ -758,13 +793,9 @@ impl VectorStore for RedisVectors {
                     "Exact scan: the index of {} serves {} distance only",
                     field.attribute, field.distance_metric
                 ),
-                format!("Read {read} of {total} documents (at most {SCAN_LIMIT}); distances computed by Fosta Studio on Redis's scale"),
+                format!("Read all {read} of {total} documents; distances computed by Fosta Studio on Redis's scale"),
             ];
-            let sql = format!(
-                "FT.SEARCH {} {} RETURN … LIMIT 0 {SCAN_LIMIT} DIALECT 2",
-                console_arg(index),
-                console_arg(&base_query(request.filter))
-            );
+            let sql = format!("FT.SEARCH {} * RETURN … LIMIT 0 {total} DIALECT 2", console_arg(index));
             (found, plan, None, sql.clone(), sql)
         };
         let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -797,7 +828,6 @@ impl VectorStore for RedisVectors {
         };
         let probe = Probe {
             query: request.query,
-            filter: None,
             k: request.k,
             others: &[],
         };
@@ -939,6 +969,20 @@ mod tests {
         assert_eq!(json_vector("[[1,2]]"), Some(vec![1.0, 2.0]));
         assert_eq!(json_vector("[3, 4.5]"), Some(vec![3.0, 4.5]));
         assert_eq!(json_vector("[\"a\"]"), None);
+        let info = IndexInfo {
+            source: Source::Json,
+            prefixes: Vec::new(),
+            fields: Vec::new(),
+            docs: 0,
+        };
+        let field = Field {
+            data_type: "FLOAT32".into(),
+            dims: 2,
+            ..Field::default()
+        };
+        assert_eq!(decode(&info, &field, bulk("[[1,2]]")), Some(vec![1.0, 2.0]));
+        assert_eq!(decode(&info, &field, bulk("[1,2,3]")), None, "another length than the field's");
+        assert_eq!(decode(&info, &field, bulk("[]")), None);
         assert_eq!(escaped(&[0, 255]), "\"\\x00\\xff\"");
     }
 
@@ -948,6 +992,18 @@ mod tests {
         assert!((distance(Metric::Cosine, &[1.0, 0.0], &[1.0, 1.0]) - 0.292_893).abs() < 1e-6);
         assert_eq!(distance(Metric::Euclidean, &[3.0, 4.0], &[1.0, 1.0]), 13.0);
         assert_eq!(distance(Metric::Dot, &[3.0, 4.0], &[1.0, 1.0]), -6.0);
+        assert!(distance(Metric::Euclidean, &[3.0], &[1.0, 1.0]).is_nan());
+    }
+
+    #[test]
+    fn exact_scans_read_every_document_or_refuse() {
+        assert!(scan_fits(300, 300).is_ok());
+        assert!(scan_fits(0, 0).is_ok());
+        let limit = u64::from(SCAN_LIMIT);
+        assert!(scan_fits(limit, limit).is_ok());
+        let error = scan_fits(limit, limit + 1).unwrap_err().to_string();
+        assert!(error.contains("would not be exact"), "{error}");
+        assert!(scan_fits(10, 12).is_err(), "documents left unread");
     }
 
     #[test]
@@ -957,14 +1013,17 @@ mod tests {
             algorithm: "HNSW".into(),
             ..Field::default()
         };
-        assert_eq!(
-            knn_query(None, &field, 50),
-            "*=>[KNN 50 @embedding $vec EF_RUNTIME 50 AS vec_distance]"
-        );
-        assert_eq!(
-            knn_query(Some("@city:{Lima}"), &field, 5),
-            "(@city:{Lima})=>[KNN 5 @embedding $vec EF_RUNTIME 10 AS vec_distance]"
-        );
+        assert_eq!(knn_query(&field, 50), "*=>[KNN 50 @embedding $vec EF_RUNTIME 50 AS vec_distance]");
+        let json = Field {
+            attribute: "$.embedding".into(),
+            algorithm: "FLAT".into(),
+            ..Field::default()
+        };
+        assert_eq!(knn_query(&json, 5), r"*=>[KNN 5 @\$\.embedding $vec AS vec_distance]");
+        assert_eq!(field_ref("my-vec.v2"), r"@my\-vec\.v2");
+        assert_eq!(field_ref("a b)"), r"@a\ b\)");
+        assert_eq!(field_ref("snake_case9"), "@snake_case9");
+        assert_eq!(field_ref("vé"), "@vé");
         let name = Field {
             identifier: "$.name".into(),
             attribute: "name".into(),

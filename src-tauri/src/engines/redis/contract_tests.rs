@@ -20,6 +20,7 @@ use crate::{
         CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Filter, NodeKey, NodeKind, ObjectRef, RunOptions, RunRequest,
         Session, SessionOptions, TreeRequest, Value,
     },
+    gateway,
     runtime::Handle,
 };
 
@@ -590,6 +591,9 @@ async fn contract_redis_a_run_lands_in_the_database_it_names() {
 const VECTOR_INDEX: &str = "fosta_contract_vectors";
 const VECTOR_PREFIX: &str = "fosta_contract:vec:";
 const VECTOR_DOCS: u32 = 300;
+/// A small JSON index for the attribute names a query must escape (dropped with its documents at the end).
+const JSON_INDEX: &str = "fosta_contract_vectors_json";
+const JSON_PREFIX: &str = "fosta_contract:jvec:";
 
 /// (Re)creates the vector documents and their HNSW cosine index in database 0; `None` without the Query Engine.
 async fn seed_vectors() -> Option<()> {
@@ -734,7 +738,7 @@ async fn contract_redis_vector() {
     assert_eq!(columns, ["vec_distance", "__key", "label", "rank"]);
     assert_eq!(search["result"]["rows"][0][1]["v"], format!("{VECTOR_PREFIX}1"), "{search}");
 
-    // Another metric than the field's scans the documents; a filter is a query the KNN runs within.
+    // Another metric than the field's scans every document; searches take no filter.
     let (manager, handle) = suites::connect(&fixture()).await;
     let args = |metric: &str, filter: Json| {
         json!({ "database": "0", "table": VECTOR_INDEX, "column": "embedding", "k": 3, "metric": metric, "filter": filter,
@@ -746,10 +750,154 @@ async fn contract_redis_vector() {
         scanned["plan"]["rows"][0][0]["v"].as_str().unwrap().starts_with("Exact scan"),
         "{scanned}"
     );
-    let filtered = call(&handle, "vector.search", args("auto", json!("@rank:[1 10]"))).await.unwrap();
-    let rows = filtered["result"]["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 3, "{filtered}");
-    assert!(rows.iter().all(|row| row[3]["v"].as_f64().unwrap() <= 10.0), "{filtered}");
+    assert!(
+        scanned["plan"]["rows"][1][0]["v"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("Read all {VECTOR_DOCS} of {VECTOR_DOCS}")),
+        "{scanned}"
+    );
+    // The vector_search command checks the filter with the gateway first (Redis has no filter language), and the
+    // operation itself refuses one, so a filter reached through invoke_capability is not spliced into the query either.
+    let context = gateway::Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: suites::CONNECTION.into(),
+        connection_name: suites::CONNECTION.into(),
+        safety: gateway::rules::SafetySettings::preset(gateway::rules::Preset::ReadOnly),
+    };
+    let breakout = "*) | (@label:x";
+    for filter in ["@rank:[1 10]", breakout] {
+        assert!(
+            gateway::check_filter(&manager, &context, suites::CONNECTION, Some(filter)).is_err(),
+            "{filter}"
+        );
+        let refused = gateway::invoke(
+            &manager,
+            &context,
+            gateway::Caller::EngineView,
+            "vector.search",
+            args("auto", json!(filter)),
+            None,
+        )
+        .await
+        .expect_err("a filter");
+        assert!(refused.to_string().contains("takes no filter"), "{refused}");
+    }
+    assert!(gateway::check_filter(&manager, &context, suites::CONNECTION, None).is_ok());
+    let unfiltered = gateway::invoke(
+        &manager,
+        &context,
+        gateway::Caller::EngineView,
+        "vector.search",
+        args("auto", Json::Null),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(unfiltered["result"]["rows"].as_array().unwrap().len(), 3, "{unfiltered}");
+
+    // JSON documents: the attribute `$.embedding` and a name with `-` are escaped in the KNN query.
+    let url = format!(
+        "redis://:{}@{}:{}/0",
+        env("PASSWORD", "studio-redis"),
+        env("HOST", "127.0.0.1"),
+        env("PORT", "6379")
+    );
+    let mut conn = ::redis::Client::open(url)
+        .unwrap()
+        .get_multiplexed_async_connection()
+        .await
+        .unwrap();
+    let _: ::redis::RedisResult<()> = ::redis::cmd("FT.DROPINDEX").arg(JSON_INDEX).arg("DD").query_async(&mut conn).await;
+    let mut pipe = ::redis::pipe();
+    for (id, vector) in [(1, "[1, 0]"), (2, "[0, 1]"), (3, "[1, 1]")] {
+        pipe.cmd("JSON.SET")
+            .arg(format!("{JSON_PREFIX}{id}"))
+            .arg("$")
+            .arg(format!(r#"{{"embedding": {vector}, "my-vec": {vector}}}"#))
+            .ignore();
+    }
+    // A document whose vector has another length: no index entry, and no vector that decodes.
+    pipe.cmd("JSON.SET")
+        .arg(format!("{JSON_PREFIX}4"))
+        .arg("$")
+        .arg(r#"{"embedding": [1, 0, 0], "my-vec": [1, 0, 0]}"#)
+        .ignore();
+    let _: () = pipe.query_async(&mut conn).await.expect("seed JSON documents");
+    let _: () = ::redis::cmd("FT.CREATE")
+        .arg(JSON_INDEX)
+        .arg(&["ON", "JSON", "PREFIX", "1", JSON_PREFIX, "SCHEMA"])
+        .arg(&[
+            "$.embedding",
+            "VECTOR",
+            "FLAT",
+            "6",
+            "TYPE",
+            "FLOAT32",
+            "DIM",
+            "2",
+            "DISTANCE_METRIC",
+            "COSINE",
+        ])
+        .arg(&[
+            "$.my-vec",
+            "AS",
+            "my-vec",
+            "VECTOR",
+            "FLAT",
+            "6",
+            "TYPE",
+            "FLOAT32",
+            "DIM",
+            "2",
+            "DISTANCE_METRIC",
+            "L2",
+        ])
+        .query_async(&mut conn)
+        .await
+        .expect("FT.CREATE JSON");
+    for _ in 0..50 {
+        let info: ::redis::Value = ::redis::cmd("FT.INFO").arg(JSON_INDEX).query_async(&mut conn).await.unwrap();
+        let indexed = super::types::as_pairs(info).into_iter().find_map(|(key, value)| {
+            (super::types::as_string(key).as_deref() == Some("num_docs")).then(|| super::types::as_i64(&value))?
+        });
+        if indexed.is_some_and(|docs| docs >= 3) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    for (column, metric) in [("$.embedding", "auto"), ("my-vec", "auto"), ("$.embedding", "euclidean")] {
+        let found = call(
+            &handle,
+            "vector.search",
+            json!({ "database": "0", "table": JSON_INDEX, "column": column, "k": 2, "metric": metric, "filter": null,
+                    "query": { "kind": "literal", "text": "[1, 0]" } }),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{column} {metric}: {error}"));
+        let rows = found["result"]["rows"].as_array().unwrap();
+        assert_eq!(rows[0][1]["v"], format!("{JSON_PREFIX}1"), "{column} {metric}: {found}");
+        assert!(
+            rows.iter().all(|row| row[1]["v"] != format!("{JSON_PREFIX}4")),
+            "{column} {metric}: {found}"
+        );
+    }
+    let fetched = call(
+        &handle,
+        "vector.fetch",
+        json!({ "database": "0", "table": JSON_INDEX, "column": "$.embedding",
+                "key": [{ "column": super::vector::KEY_COLUMN, "value": { "t": "text", "v": "4" } }] }),
+    )
+    .await;
+    assert!(fetched.is_err(), "a vector of another length does not decode: {fetched:?}");
+    let _: () = ::redis::cmd("FT.DROPINDEX")
+        .arg(JSON_INDEX)
+        .arg("DD")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+
     let other_db = call(&handle, "vector.info", json!({ "database": "14", "table": VECTOR_INDEX }))
         .await
         .unwrap();

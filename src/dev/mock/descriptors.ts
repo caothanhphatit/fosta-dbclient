@@ -511,6 +511,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
       "createDatabase",
       "explain",
       "serverOverview",
+      "vector",
     ],
     objectsLabel: "tables",
     connection: {
@@ -664,7 +665,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     icon: "key",
     status: "ready",
     sqlDialect: null,
-    capabilities: ["tree", "describe", "multipleDatabases", "query", "cancel", "streamingResults", "keyValue", "console", "serverOverview"],
+    capabilities: ["tree", "describe", "multipleDatabases", "query", "cancel", "streamingResults", "keyValue", "console", "serverOverview", "vector"],
     objectsLabel: "keys",
     connection: {
       usesHost: true,

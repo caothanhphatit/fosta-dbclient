@@ -624,13 +624,13 @@ async fn contract_clickhouse_vector() {
         key: 1,
         indexed: true,
     };
-    let run = suite_vector(&fixture(), &vectors).await.expect("ClickHouse has vector functions");
-    assert_eq!(run.info["columns"][0]["typeName"], "Array(Float32)");
-    let index = &run.info["indexes"][0];
+    let suite = suite_vector(&fixture(), &vectors).await.expect("ClickHouse has vector functions");
+    assert_eq!(suite.info["columns"][0]["typeName"], "Array(Float32)");
+    let index = &suite.info["indexes"][0];
     assert_eq!(index["name"], "embedding_idx");
     assert_eq!((index["kind"].as_str(), index["metric"].as_str()), (Some("hnsw"), Some("cosine")));
-    assert_eq!(run.info["metrics"], serde_json::json!(["cosine", "euclidean", "dot"]));
-    let search = &run.search;
+    assert_eq!(suite.info["metrics"], serde_json::json!(["cosine", "euclidean", "dot"]));
+    let search = &suite.search;
     let sql = search["sql"].as_str().unwrap();
     assert!(sql.contains("cosineDistance(`embedding`, {query:Array(Float32)})"), "{search}");
     assert_eq!(search["indexUsed"], "embedding_idx", "{search}");
@@ -639,4 +639,128 @@ async fn contract_clickhouse_vector() {
         columns.iter().all(|column| column["name"] != "embedding"),
         "vector columns are not selected"
     );
+
+    let (_manager, handle) = connected().await;
+    let session = open(&handle, None).await;
+    let search = |table: &str, text: &str, metric: &str| {
+        serde_json::json!({ "database": "fosta_contract", "table": table, "column": "embedding", "k": 3, "metric": metric,
+                            "filter": null, "query": { "kind": "literal", "text": text } })
+    };
+    // A query vector of integers is cast to Array(Float32), so the index still serves it.
+    let integers = invoke(&handle, "vector.search", search("contract_vectors", "[1, 0, 0, 1]", "auto"))
+        .await
+        .unwrap();
+    assert_eq!(integers["indexUsed"], "embedding_idx", "{integers}");
+    assert!(
+        integers["runnableSql"]
+            .as_str()
+            .unwrap()
+            .contains("CAST([1,0,0,1] AS Array(Float32))"),
+        "{integers}"
+    );
+
+    // The recall's top-k through the index orders by the bare distance: its plan names the index.
+    let column = crate::contract::vector::VectorColumn {
+        name: "embedding".into(),
+        dims: 4,
+        type_name: "Array(Float32)".into(),
+        metrics: Vec::new(),
+    };
+    let index = crate::contract::vector::VectorIndex {
+        name: "embedding_idx".into(),
+        column: "embedding".into(),
+        metric: "cosine".into(),
+        kind: "hnsw".into(),
+        m: None,
+        params: "dims=4".into(),
+    };
+    let key = ["id".to_owned()];
+    let table = crate::contract::vector::TableRef::parse("fosta_contract", "contract_vectors", false);
+    let plan_of = |exact| {
+        let request = crate::contract::vector::NearestRequest {
+            column: &column,
+            key: &key,
+            index: &index,
+            query: &[1.0, 0.0, 0.0, 1.0],
+            k: 5,
+            exact,
+        };
+        format!("EXPLAIN indexes = 1 {}", super::vector::nearest_sql(&table, &request))
+    };
+    for (exact, expected) in [(false, Some("embedding_idx")), (true, None)] {
+        let sink = run(&handle, &session, &plan_of(exact), None, RunOptions::default()).await.unwrap();
+        let lines: Vec<String> = sink.sets[0].rows.iter().map(|row| text(&row[0])).collect();
+        assert_eq!(
+            super::vector::index_in_plan(&lines).as_deref(),
+            expected,
+            "exact={exact}: {lines:#?}"
+        );
+    }
+
+    // Rows of another length (an empty array) are skipped where no index serves the search, and where an index was
+    // added after them (the search runs again without the index).
+    for statement in [
+        "DROP TABLE IF EXISTS fosta_contract.contract_vectors_ragged SYNC",
+        "CREATE TABLE fosta_contract.contract_vectors_ragged (id Int32, embedding Array(Float32)) ENGINE = MergeTree ORDER BY id",
+        "INSERT INTO fosta_contract.contract_vectors_ragged VALUES (1, [1, 0, 0, 0]), (2, []), (3, [1, 2]), (4, [0, 1, 0, 0])",
+        "DROP TABLE IF EXISTS fosta_contract.contract_vectors_late SYNC",
+        "CREATE TABLE fosta_contract.contract_vectors_late (id Int32, embedding Array(Float32)) ENGINE = MergeTree ORDER BY id",
+        "INSERT INTO fosta_contract.contract_vectors_late VALUES (1, [1, 0, 0, 0]), (2, []), (3, [1, 2])",
+        "ALTER TABLE fosta_contract.contract_vectors_late ADD INDEX embedding_idx embedding TYPE vector_similarity('hnsw', 'cosineDistance', 4)",
+        "INSERT INTO fosta_contract.contract_vectors_late VALUES (4, [0, 1, 0, 0])",
+    ] {
+        run(&handle, &session, statement, None, RunOptions::default())
+            .await
+            .unwrap_or_else(|error| panic!("{statement}: {error}"));
+    }
+    for (table, metric) in [
+        ("contract_vectors_ragged", "cosine"),
+        ("contract_vectors_ragged", "euclidean"),
+        ("contract_vectors_late", "auto"),
+    ] {
+        let found = invoke(&handle, "vector.search", search(table, "[1, 1, 0, 0]", metric))
+            .await
+            .unwrap_or_else(|error| panic!("{table} {metric}: {error}"));
+        let ids: Vec<String> = found["result"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| text_json(&row[1]))
+            .collect();
+        assert_eq!(ids.len(), 2, "{table} {metric}: {found}");
+        assert!(ids.iter().all(|id| id == "1" || id == "4"), "{table} {metric}: {found}");
+        assert!(
+            found["runnableSql"].as_str().unwrap().contains("length(`embedding`) = 4"),
+            "{table} {metric}: {found}"
+        );
+    }
+    let late = invoke(&handle, "vector.search", search("contract_vectors_late", "[1, 1, 0, 0]", "auto"))
+        .await
+        .unwrap();
+    assert!(
+        late["plan"]["rows"][0][0]["v"]
+            .as_str()
+            .unwrap()
+            .starts_with("Some rows of embedding hold an array of another length"),
+        "{late}"
+    );
+    for table in ["contract_vectors_ragged", "contract_vectors_late"] {
+        run(
+            &handle,
+            &session,
+            &format!("DROP TABLE fosta_contract.{table} SYNC"),
+            None,
+            RunOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+}
+
+/// A typed cell of a JSON result set as text (`{"t":"int","v":1}` → `1`).
+fn text_json(value: &serde_json::Value) -> String {
+    match &value["v"] {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
 }
