@@ -3,12 +3,15 @@
 //! syntax (PL/SQL, ClickHouse `SYSTEM`, vendor options) a keyword rule decides instead, and the result says which path was used.
 
 use super::split::{self, Dialect, TokenKind};
+use super::sqlclassify;
 use serde::Serialize;
 use sqlparser::ast::{CopyTarget, ObjectType, SetExpr, Statement as Ast};
 use sqlparser::dialect::{ClickHouseDialect, GenericDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 
 pub type ClassifyDialect = Dialect;
+
+const DYNAMIC_SQL: &str = "dynamic SQL may run any statement, including DROP or DELETE";
 
 /// Ordered by how careful the gateway must be: the overall class of a script is its most severe statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -71,22 +74,7 @@ pub fn classify(dialect: Dialect, sql: &str) -> Classification {
 fn classify_one(dialect: Dialect, s: split::Statement) -> ClassifiedStatement {
     let words = split::words(dialect, &s.text);
     let keyword = leading_keyword(&words);
-    let (kind, reason, parsed) = match parse(dialect, &s.text) {
-        Some(ast) => {
-            let (k, r) = from_ast(&ast, &s.text);
-            // The AST can miss vendor details the keywords catch (ClickHouse ALTER ... DELETE, data-modifying CTEs).
-            let (kk, kr) = from_keywords(dialect, &s.text, &words);
-            if kk > k && kk != StatementKind::Unknown {
-                (kk, kr, true)
-            } else {
-                (k, r, true)
-            }
-        }
-        None => {
-            let (k, r) = from_keywords(dialect, &s.text, &words);
-            (k, r, false)
-        }
-    };
+    let (kind, reason, parsed) = classify_text(dialect, &s.text);
     ClassifiedStatement {
         text: s.text,
         start: s.start,
@@ -95,6 +83,160 @@ fn classify_one(dialect: Dialect, s: split::Statement) -> ClassifiedStatement {
         keyword,
         reason,
         parsed,
+    }
+}
+
+/// The kind of one statement, why, and whether sqlparser understood it.
+fn classify_text(dialect: Dialect, text: &str) -> (StatementKind, Option<String>, bool) {
+    use StatementKind::*;
+    let words = split::words(dialect, text);
+    if words.first().is_some_and(|w| w == "EXPLAIN") {
+        // Only the analysing forms run their statement; they are what that statement is.
+        return match explain_target(dialect, text) {
+            Some(start) => {
+                let (k, r, parsed) = classify_text(dialect, &text[start..]);
+                let reason = (k > Read).then(|| match r {
+                    Some(r) => format!("EXPLAIN ANALYZE runs the statement: {r}"),
+                    None => "EXPLAIN ANALYZE runs the statement".to_owned(),
+                });
+                (k.max(Read), reason, parsed)
+            }
+            None => (Read, None, parse(dialect, text).is_some()),
+        };
+    }
+    let ast = parse(dialect, text);
+    let (mut kind, mut reason, parsed) = match &ast {
+        Some(ast) => {
+            let (k, r) = from_ast(dialect, ast, text);
+            // The AST can miss vendor details the keywords catch (ClickHouse ALTER ... DELETE, data-modifying CTEs).
+            let (kk, kr) = from_keywords(dialect, text, &words);
+            if kk > k && kk != Unknown {
+                (kk, kr, true)
+            } else {
+                (k, r, true)
+            }
+        }
+        None => {
+            let (k, r) = from_keywords(dialect, text, &words);
+            (k, r, false)
+        }
+    };
+    // Functions that change server state, sleep, lock, touch files or reach other servers (G5).
+    if kind < Admin {
+        let found = match &ast {
+            Some(ast) if !sqlclassify::defines_only(ast) => sqlclassify::side_effect_call(ast),
+            Some(_) => None,
+            None if matches!(words.first().map(String::as_str), Some("CREATE" | "ALTER")) => None,
+            None => sqlclassify::side_effect_in_words(&code_words(dialect, text), dialect == Dialect::ClickHouse),
+        };
+        if let Some(function) = found {
+            kind = Admin;
+            reason = Some(sqlclassify::side_effect_reason(&function));
+        }
+    }
+    // Unrecognised text that drops, truncates, restores or shuts down is at least that bad.
+    if kind == Unknown {
+        if let Some(word) = words
+            .iter()
+            .find(|w| matches!(w.as_str(), "DROP" | "TRUNCATE" | "RESTORE" | "DBCC" | "SHUTDOWN"))
+        {
+            kind = Destructive;
+            reason = Some(format!("not recognised, and it contains {word}"));
+        }
+    }
+    (kind, reason, parsed)
+}
+
+/// Where the statement of an analysing `EXPLAIN` starts: `EXPLAIN ANALYZE|ANALYSE [VERBOSE] stmt` or
+/// `EXPLAIN (ANALYZE [true|on|1], BUFFERS, …) stmt`. `None` for an EXPLAIN that only plans.
+fn explain_target(dialect: Dialect, text: &str) -> Option<usize> {
+    let tokens = split::tokenize(dialect, text);
+    let is_analyze = |i: usize| {
+        tokens
+            .get(i)
+            .is_some_and(|t| t.is_word(text, "ANALYZE") || t.is_word(text, "ANALYSE"))
+    };
+    let mut analyze = false;
+    let mut i = 1;
+    if tokens.get(1).is_some_and(|t| t.kind == TokenKind::Punct('(')) {
+        let mut depth = 0;
+        while let Some(token) = tokens.get(i) {
+            match token.kind {
+                TokenKind::Punct('(') => depth += 1,
+                TokenKind::Punct(')') => depth -= 1,
+                _ if depth == 1 && is_analyze(i) => {
+                    let off = tokens
+                        .get(i + 1)
+                        .is_some_and(|next| matches!(next.text(text).to_ascii_uppercase().as_str(), "FALSE" | "OFF" | "0"));
+                    analyze |= !off;
+                }
+                _ => {}
+            }
+            i += 1;
+            if depth == 0 {
+                break;
+            }
+        }
+    } else {
+        while tokens.get(i).is_some_and(|t| is_analyze(i) || t.is_word(text, "VERBOSE")) {
+            analyze |= is_analyze(i);
+            i += 1;
+        }
+    }
+    tokens.get(i).filter(|_| analyze).map(|t| t.start)
+}
+
+/// The unquoted words outside strings and comments, each with the token after it (for function-call detection).
+fn code_words(dialect: Dialect, text: &str) -> Vec<(String, String)> {
+    let tokens = split::tokenize(dialect, text);
+    tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.kind == TokenKind::Word)
+        .map(|(i, t)| {
+            let next = tokens.get(i + 1).map(|n| n.text(text).to_owned()).unwrap_or_default();
+            (t.text(text).to_owned(), next)
+        })
+        .collect()
+}
+
+/// `SET`, `RESET`, `DISCARD`, `BEGIN` and `START` forms that lift the read-only backstop or change who the session is:
+/// READ WRITE transactions, the protected settings (quotes ignored), `SET ROLE`, `SET SESSION AUTHORIZATION`, `RESET ALL`,
+/// `DISCARD ALL`.
+fn lifts_protection(dialect: Dialect, text: &str, words: &[String]) -> Option<String> {
+    let first = words.first().map(String::as_str)?;
+    let read_write = words.windows(2).any(|w| w[0] == "READ" && w[1] == "WRITE");
+    let authorization = words.windows(2).any(|w| w[0] == "SESSION" && w[1] == "AUTHORIZATION");
+    match first {
+        "BEGIN" | "START" if dialect != Dialect::Oracle && read_write => Some("READ WRITE lifts the read-only session".into()),
+        "SET" | "RESET" => {
+            if read_write {
+                return Some("READ WRITE lifts the read-only session".into());
+            }
+            if authorization {
+                return Some("changes the identity of the session".into());
+            }
+            // The setting's name: the first word or quoted identifier after SET/RESET [SESSION|LOCAL].
+            let name = split::tokenize(dialect, text)
+                .into_iter()
+                .skip(1)
+                .find(|t| !(t.is_word(text, "SESSION") || t.is_word(text, "LOCAL")))
+                .filter(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+                .map(|t| t.text(text).to_owned())
+                .unwrap_or_default();
+            if first == "RESET" && name.eq_ignore_ascii_case("ALL") {
+                Some("RESET ALL resets the read-only session".into())
+            } else if sqlclassify::is_protected_variable(&name) {
+                Some(format!(
+                    "{} protects this session",
+                    name.trim_matches(|c| c == '"' || c == '`').to_lowercase()
+                ))
+            } else {
+                None
+            }
+        }
+        "DISCARD" if words.get(1).is_some_and(|w| w == "ALL") => Some("DISCARD ALL resets the read-only session".into()),
+        _ => None,
     }
 }
 
@@ -147,7 +289,7 @@ fn leading_keyword(words: &[String]) -> String {
     }
 }
 
-fn from_ast(ast: &Ast, text: &str) -> (StatementKind, Option<String>) {
+fn from_ast(dialect: Dialect, ast: &Ast, text: &str) -> (StatementKind, Option<String>) {
     use StatementKind::*;
     match ast {
         Ast::Query(q) => {
@@ -158,6 +300,10 @@ fn from_ast(ast: &Ast, text: &str) -> (StatementKind, Option<String>) {
             }
             (Read, None)
         }
+        // PostgreSQL's EXECUTE runs a prepared statement and Oracle's EXECUTE IMMEDIATE runs a string: either may drop
+        // or delete anything. PREPARE readies such a statement.
+        Ast::Execute { immediate, .. } if *immediate || dialect == Dialect::Postgres => (Destructive, Some(DYNAMIC_SQL.into())),
+        Ast::Prepare { .. } => (Destructive, Some(DYNAMIC_SQL.into())),
         Ast::Insert(_)
         | Ast::Merge(_)
         | Ast::Call(_)
@@ -220,9 +366,9 @@ fn from_ast(ast: &Ast, text: &str) -> (StatementKind, Option<String>) {
                 (Read, None)
             }
         }
-        Ast::Explain { analyze, statement, .. } => {
-            if *analyze {
-                let (k, r) = from_ast(statement, text);
+        Ast::Explain { statement, .. } => {
+            if sqlclassify::explain_runs(ast) {
+                let (k, r) = from_ast(dialect, statement, text);
                 (k.max(Read), r.map(|r| format!("EXPLAIN ANALYZE runs the statement: {r}")))
             } else {
                 (Read, None)
@@ -249,13 +395,7 @@ fn from_ast(ast: &Ast, text: &str) -> (StatementKind, Option<String>) {
         Ast::StartTransaction { .. } | Ast::Commit { .. } | Ast::Rollback { .. } | Ast::Savepoint { .. } | Ast::ReleaseSavepoint { .. } => {
             (Transaction, None)
         }
-        Ast::Set(_)
-        | Ast::Use(_)
-        | Ast::Reset(_)
-        | Ast::Discard { .. }
-        | Ast::Deallocate { .. }
-        | Ast::Prepare { .. }
-        | Ast::Declare { .. } => (Session, None),
+        Ast::Set(_) | Ast::Use(_) | Ast::Reset(_) | Ast::Discard { .. } | Ast::Deallocate { .. } | Ast::Declare { .. } => (Session, None),
         Ast::Comment { .. } | Ast::RenameTable(_) => (Ddl, None),
         other => {
             let name = format!("{other:?}");
@@ -284,6 +424,9 @@ fn from_keywords(dialect: Dialect, text: &str, words: &[String]) -> (StatementKi
     let starts_with_paren = split::tokenize(dialect, text)
         .first()
         .is_some_and(|t| t.kind == TokenKind::Punct('('));
+    if let Some(reason) = lifts_protection(dialect, text, words) {
+        return (Admin, Some(reason));
+    }
     match first {
         "" if starts_with_paren => (Read, None),
         "SELECT" | "VALUES" | "TABLE" | "SHOW" | "DESCRIBE" | "DESC" | "EXISTS" | "FETCH" | "WATCH" => {
@@ -300,13 +443,14 @@ fn from_keywords(dialect: Dialect, text: &str, words: &[String]) -> (StatementKi
                 (Read, None)
             }
         }
-        "EXPLAIN" => {
-            if has("ANALYZE") && (has("INSERT") || has("UPDATE") || has("DELETE") || has("MERGE")) {
-                (Write, Some("EXPLAIN ANALYZE runs the statement".into()))
-            } else {
-                (Read, None)
-            }
-        }
+        // classify_text classifies the statement an analysing EXPLAIN runs.
+        "EXPLAIN" => (Read, None),
+        "EXECUTE" | "EXEC" if dialect == Dialect::Postgres || second == "IMMEDIATE" => (Destructive, Some(DYNAMIC_SQL.into())),
+        "PREPARE" if second != "TRANSACTION" => (Destructive, Some(DYNAMIC_SQL.into())),
+        "DO" if text.to_ascii_uppercase().contains("EXECUTE") => (
+            Destructive,
+            Some("the DO block runs dynamic SQL, which may drop or delete anything".into()),
+        ),
         "INSERT" | "UPSERT" | "MERGE" | "REPLACE" | "CALL" | "EXEC" | "EXECUTE" | "DO" | "LOCK" | "LOAD" => (Write, None),
         "UPDATE" | "DELETE" => {
             if has("WHERE") {
@@ -315,6 +459,10 @@ fn from_keywords(dialect: Dialect, text: &str, words: &[String]) -> (StatementKi
                 (Destructive, Some(format!("{first} without WHERE affects every row")))
             }
         }
+        "DECLARE" | "BEGIN" if dialect == Dialect::Oracle && words.windows(2).any(|w| w[0] == "EXECUTE" && w[1] == "IMMEDIATE") => (
+            Destructive,
+            Some("the PL/SQL block runs dynamic SQL (EXECUTE IMMEDIATE), which may drop or delete anything".into()),
+        ),
         "DECLARE" if dialect == Dialect::Oracle => (Write, Some("PL/SQL block".into())),
         "BEGIN" if dialect == Dialect::Oracle => (Write, Some("PL/SQL block".into())),
         "BEGIN" | "START" | "COMMIT" | "END" | "ROLLBACK" | "SAVEPOINT" | "RELEASE" | "ABORT" | "PREPARE"
@@ -549,5 +697,178 @@ mod tests {
             "CREATE VIEW"
         );
         assert_eq!(classify(Dialect::Postgres, "  ").kind, Read);
+    }
+
+    fn check(d: Dialect, cases: &[(&str, StatementKind)]) {
+        let wrong: Vec<String> = cases
+            .iter()
+            .filter_map(|(sql, expected)| {
+                let got = kind(d, sql);
+                (got != *expected).then(|| format!("{sql}: expected {expected:?}, got {got:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    #[test]
+    fn explain_analyse_runs_its_statement() {
+        check(
+            Dialect::Postgres,
+            &[
+                ("EXPLAIN ANALYZE DELETE FROM t WHERE id = 1", Write),
+                ("EXPLAIN ANALYSE DELETE FROM t WHERE id = 1", Write),
+                ("explain analyse delete from t", Destructive),
+                ("EXPLAIN ANALYZE VERBOSE UPDATE t SET a = 1", Destructive),
+                ("EXPLAIN (ANALYZE) DELETE FROM t WHERE id = 1", Write),
+                ("EXPLAIN (ANALYZE) DELETE FROM t", Destructive),
+                ("EXPLAIN (ANALYSE) DELETE FROM t", Destructive),
+                ("EXPLAIN (ANALYSE, BUFFERS) INSERT INTO t VALUES (1)", Write),
+                ("EXPLAIN (FORMAT JSON, ANALYZE true, BUFFERS) DELETE FROM t", Destructive),
+                ("EXPLAIN (ANALYZE) EXECUTE p", Destructive),
+                ("EXPLAIN ANALYZE EXECUTE p(1)", Destructive),
+                (
+                    "EXPLAIN (ANALYZE) WITH d AS (DELETE FROM t WHERE id = 1 RETURNING *) SELECT * FROM d",
+                    Write,
+                ),
+                ("EXPLAIN ANALYZE SELECT pg_terminate_backend(42)", Admin),
+                ("EXPLAIN ANALYZE SELECT * FROM t", Read),
+                ("EXPLAIN (ANALYZE false) DELETE FROM t", Read),
+                ("EXPLAIN (ANALYZE off, COSTS) DELETE FROM t", Read),
+                ("EXPLAIN (COSTS, VERBOSE) DELETE FROM t", Read),
+                ("EXPLAIN DELETE FROM t", Read),
+                ("EXPLAIN SELECT pg_sleep(10)", Read),
+            ],
+        );
+        let c = classify(Dialect::Postgres, "EXPLAIN (ANALYSE) DELETE FROM t");
+        assert!(c.statements[0].reason.as_deref().unwrap().contains("EXPLAIN ANALYZE runs"), "{c:?}");
+    }
+
+    #[test]
+    fn statements_that_lift_the_read_only_session_are_admin() {
+        check(
+            Dialect::Postgres,
+            &[
+                ("BEGIN", Transaction),
+                ("BEGIN ISOLATION LEVEL SERIALIZABLE", Transaction),
+                ("START TRANSACTION", Transaction),
+                ("START TRANSACTION READ ONLY", Transaction),
+                ("BEGIN READ ONLY", Transaction),
+                ("BEGIN READ WRITE", Admin),
+                ("BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED, READ WRITE", Admin),
+                ("START TRANSACTION READ WRITE", Admin),
+                ("SET TRANSACTION READ WRITE", Admin),
+                ("SET TRANSACTION READ ONLY", Transaction),
+                ("SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE", Admin),
+                ("SET default_transaction_read_only = off", Admin),
+                ("SET SESSION default_transaction_read_only TO false", Admin),
+                ("SET LOCAL transaction_read_only = off", Admin),
+                ("SET \"default_transaction_read_only\" = off", Admin),
+                ("set Default_Transaction_Read_Only = 'off'", Admin),
+                ("RESET ALL", Admin),
+                ("RESET default_transaction_read_only", Admin),
+                ("RESET ROLE", Admin),
+                ("RESET SESSION AUTHORIZATION", Admin),
+                ("RESET search_path", Session),
+                ("DISCARD ALL", Admin),
+                ("DISCARD PLANS", Session),
+                ("SET ROLE admin", Admin),
+                ("SET SESSION ROLE admin", Admin),
+                ("SET SESSION AUTHORIZATION bob", Admin),
+                ("SET search_path = sales", Session),
+                ("SELECT set_config('default_transaction_read_only', 'off', false)", Admin),
+            ],
+        );
+    }
+
+    #[test]
+    fn side_effect_functions_are_admin() {
+        check(
+            Dialect::Postgres,
+            &[
+                ("SELECT pg_terminate_backend(pid) FROM pg_stat_activity", Admin),
+                ("select PG_CATALOG.PG_TERMINATE_BACKEND(42)", Admin),
+                ("SELECT \"pg_cancel_backend\"(42)", Admin),
+                ("SELECT pg_reload_conf()", Admin),
+                ("SELECT pg_sleep(5)", Admin),
+                ("SELECT pg_sleep_for('5 minutes')", Admin),
+                ("SELECT * FROM dblink('host=x', 'DELETE FROM t') AS r(a int)", Admin),
+                ("SELECT dblink_exec('host=x', 'DROP TABLE t')", Admin),
+                ("SELECT lo_import('/etc/passwd')", Admin),
+                ("SELECT pg_read_file('postgresql.conf')", Admin),
+                ("SELECT * FROM pg_ls_dir('.')", Admin),
+                ("SELECT nextval('s')", Admin),
+                ("SELECT pg_advisory_lock(1)", Admin),
+                ("SELECT * FROM t WHERE id IN (SELECT pg_sleep(1)::int)", Admin),
+                ("WITH x AS (SELECT setval('s', 1)) SELECT * FROM x", Admin),
+                ("SELECT pg_size_pretty(pg_database_size('x'))", Read),
+                ("CREATE TABLE t (id int DEFAULT nextval('s'))", Ddl),
+                ("CREATE VIEW v AS SELECT pg_sleep(1)", Ddl),
+            ],
+        );
+        let c = classify(Dialect::Postgres, "SELECT pg_catalog.pg_terminate_backend(42)");
+        assert_eq!(
+            c.statements[0].reason.as_deref(),
+            Some("pg_terminate_backend() changes server state")
+        );
+        check(
+            Dialect::ClickHouse,
+            &[
+                ("SELECT * FROM url('http://x/a.csv', CSV, 'a String')", Admin),
+                ("SELECT * FROM remote('other:9000', db.t)", Admin),
+                ("SELECT * FROM remoteSecure('other:9440', db.t)", Admin),
+                ("SELECT * FROM s3('https://b/x.csv')", Admin),
+                ("SELECT * FROM file('x.csv')", Admin),
+                ("SELECT * FROM mysql('h:3306', 'db', 't', 'u', 'p')", Admin),
+                ("SELECT * FROM postgresql('h:5432', 'db', 't', 'u', 'p')", Admin),
+                ("SELECT count() FROM numbers(10)", Read),
+                ("SELECT url FROM t", Read),
+                (
+                    "SELECT * FROM t WHERE id IN (SELECT id FROM url('http://x', CSV, 'id UInt64'))",
+                    Admin,
+                ),
+            ],
+        );
+        check(
+            Dialect::Oracle,
+            &[
+                ("SELECT UTL_HTTP.REQUEST('http://x') FROM dual", Admin),
+                ("SELECT sys.utl_inaddr.get_host_address('x') FROM dual", Admin),
+                ("SELECT HTTPURITYPE('http://x').getclob() FROM dual", Admin),
+                ("SELECT DBMS_PIPE.RECEIVE_MESSAGE('x', 10) FROM dual", Admin),
+                ("SELECT DBMS_METADATA.GET_DDL('TABLE', 'T') FROM dual", Read),
+                ("BEGIN UTL_FILE.FREMOVE('DIR', 'x'); END;", Admin),
+                ("BEGIN DBMS_OUTPUT.PUT_LINE('x'); END;", Write),
+            ],
+        );
+        check(Dialect::Sqlite, &[("SELECT load_extension('evil')", Admin)]);
+    }
+
+    #[test]
+    fn dynamic_sql_and_unknown_drops_are_destructive() {
+        check(
+            Dialect::Postgres,
+            &[
+                ("EXECUTE p", Destructive),
+                ("EXECUTE p(1, 'a')", Destructive),
+                ("PREPARE p AS DELETE FROM t WHERE id = $1", Destructive),
+                ("PREPARE p (int) AS SELECT $1", Destructive),
+                ("PREPARE TRANSACTION 'x'", Transaction),
+                ("DO $$ BEGIN EXECUTE 'DROP TABLE t'; END $$", Destructive),
+                ("DO $$ BEGIN PERFORM 1; END $$", Write),
+                ("/* c */ DROP TABLE t", Destructive),
+                ("FROBNICATE TABLE t; ", Unknown),
+                ("FROBNICATE then DROP t", Destructive),
+                ("FROBNICATE 'DROP'", Unknown),
+            ],
+        );
+        check(
+            Dialect::Oracle,
+            &[
+                ("BEGIN EXECUTE IMMEDIATE 'DROP TABLE t'; END;", Destructive),
+                ("DECLARE s VARCHAR2(100) := 'x'; BEGIN EXECUTE IMMEDIATE s; END;", Destructive),
+                ("BEGIN UPDATE t SET a = 1 WHERE id = 2; END;", Write),
+                ("SHUTDOWN IMMEDIATE", Admin),
+            ],
+        );
     }
 }

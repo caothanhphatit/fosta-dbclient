@@ -1,40 +1,26 @@
 //! Grid filters. A SQL filter is spliced into `SELECT … WHERE <filter>`, so it must be one
 //! boolean expression and nothing else: it is parsed as `SELECT 1 WHERE <filter>` and must
 //! come back as exactly that one statement, without comments, semicolons, set operations,
-//! `INTO`, `LIMIT`, locking clauses or functions that sleep, lock or read files.
+//! `INTO`, `LIMIT`, locking clauses or functions with side effects (the classifier's deny-list: they sleep, lock,
+//! read files, change server state or reach other servers).
 //! A MongoDB filter must be a JSON query document without server-side JavaScript.
 
 use std::ops::ControlFlow;
 
 use serde::Serialize;
 use sqlparser::{
-    ast::{visit_expressions, visit_statements, Expr, SetExpr, Statement},
+    ast::{visit_statements, SetExpr, Statement},
     tokenizer::{Token, Tokenizer, Whitespace},
 };
 
 use super::classify::{dialect_for, parse};
+use crate::engines::common::sqlclassify::side_effect_call;
 use crate::{
     contract::{RawFilterLang, SqlDialectId},
     error::{AppError, AppResult},
 };
 
 pub const INVALID_FILTER: &str = "INVALID_FILTER";
-
-/// Functions a filter has no business calling: they stall the server, take locks or read files.
-const DENIED_FUNCTIONS: [&str; 12] = [
-    "sleep",
-    "benchmark",
-    "load_file",
-    "get_lock",
-    "release_lock",
-    "release_all_locks",
-    "master_pos_wait",
-    "source_pos_wait",
-    "openrowset",
-    "opendatasource",
-    "openquery",
-    "xp_cmdshell",
-];
 
 /// MongoDB operators that run JavaScript on the server.
 const DENIED_MONGO_OPERATORS: [&str; 3] = ["$where", "$function", "$accumulator"];
@@ -56,8 +42,8 @@ fn reject(filter: &str, message: impl Into<String>) -> AppError {
     )
 }
 
-/// Checks a grid filter for a SQL engine; `Ok` means it is one boolean expression.
-pub fn validate_sql_filter(engine: SqlDialectId, filter: &str) -> AppResult<()> {
+/// One reading of a grid filter: one boolean expression, nothing else.
+fn check_sql_filter(engine: SqlDialectId, filter: &str) -> AppResult<()> {
     let text = filter.trim();
     if text.is_empty() {
         return Ok(());
@@ -104,24 +90,24 @@ pub fn validate_sql_filter(engine: SqlDialectId, filter: &str) -> AppResult<()> 
     if nested != 1 {
         return Err(reject(filter, "The filter must not contain statements."));
     }
-    let denied = visit_expressions(selection, |expr| match expr {
-        Expr::Function(function) => {
-            let name = function.name.to_string().to_lowercase();
-            let short = name
-                .rsplit('.')
-                .next()
-                .unwrap_or(&name)
-                .trim_matches(|c| c == '`' || c == '[' || c == ']' || c == '"');
-            if DENIED_FUNCTIONS.contains(&short) {
-                ControlFlow::Break(short.to_owned())
-            } else {
-                ControlFlow::Continue(())
-            }
-        }
-        _ => ControlFlow::Continue(()),
-    });
-    if let ControlFlow::Break(function) = denied {
+    if let Some(function) = side_effect_call(selection) {
         return Err(reject(filter, format!("{function}() is not allowed in a filter.")));
+    }
+    Ok(())
+}
+
+/// Checks a grid filter for a SQL engine; `Ok` means it is one boolean expression. For MariaDB/MySQL the check also runs
+/// with every backslash taken literally, since a server whose `sql_mode` has `NO_BACKSLASH_ESCAPES` ends strings where the
+/// default rules see an escaped quote.
+pub fn validate_sql_filter(engine: SqlDialectId, filter: &str) -> AppResult<()> {
+    check_sql_filter(engine, filter)?;
+    if matches!(engine, SqlDialectId::MariaDb | SqlDialectId::MySql) && filter.contains('\\') {
+        check_sql_filter(engine, &filter.replace('\\', "\\\\")).map_err(|_| {
+            reject(
+                filter,
+                "The filter has a backslash before a quote, which some server settings do not treat as an escape. Double the quote instead ('').",
+            )
+        })?;
     }
     Ok(())
 }
@@ -319,6 +305,34 @@ mod tests {
             rejected(engine, "id = 1 AND BENCHMARK(1000000, MD5('x'))");
             rejected(engine, "LOAD_FILE('/etc/passwd') IS NOT NULL");
         }
+    }
+
+    #[test]
+    fn side_effect_functions_from_the_shared_list_are_rejected() {
+        let pg = SqlDialectId::Postgres;
+        let message = rejected(pg, "pg_catalog.pg_terminate_backend(42)");
+        assert!(message.contains("pg_terminate_backend()"), "{message}");
+        rejected(pg, "id = 1 AND pg_sleep(5) IS NOT NULL");
+        rejected(pg, "id IN (SELECT a FROM dblink('host=x', 'DELETE FROM t') AS r(a int))");
+        rejected(pg, "set_config('default_transaction_read_only', 'off', false) = 'off'");
+        rejected(pg, "id = nextval('s')");
+        ok(pg, "lower(name) = 'oak' AND id > 3");
+        rejected(SqlDialectId::ClickHouse, "id IN (SELECT id FROM url('http://x', CSV, 'id UInt64'))");
+        ok(SqlDialectId::ClickHouse, "url = 'http://x'");
+        rejected(SqlDialectId::MsSql, "id IN (SELECT a FROM OPENQUERY(other, 'SELECT 1'))");
+        rejected(SqlDialectId::Oracle, "UTL_HTTP.REQUEST('http://x') IS NOT NULL");
+        ok(SqlDialectId::Oracle, "name = 'x'");
+    }
+
+    #[test]
+    fn backslash_quotes_are_checked_both_ways_on_mysql() {
+        for engine in [SqlDialectId::MariaDb, SqlDialectId::MySql] {
+            ok(engine, "name LIKE 'a\\_b%'");
+            ok(engine, "path = 'C:\\\\temp'");
+            rejected(engine, "name = 'a\\' OR 1=1; DROP TABLE t; -- '");
+            rejected(engine, "name = 'a\\' OR sleep(5) = 0 OR name = '");
+        }
+        ok(SqlDialectId::MsSql, "path = 'C:\\temp\\'");
     }
 
     #[test]
