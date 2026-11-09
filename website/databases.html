@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      English template of the Databases page (/databases/). Same rules as index.html: links to other pages and to shared
+      files are written relative to the site root, and the build adds "../" for each folder level. See website/README.md.
+      Facts come from docs/engines/*.md, docs/features.md, CHANGELOG.md and ci/engines/*.json (tested versions).
+    -->
+    <title data-i18n="dbp.meta.title">Databases: what Fosta Studio supports on each engine</title>
+    <meta
+      name="description"
+      data-i18n-attr="content:dbp.meta.description"
+      content="The 11 engines of Fosta Studio, from MariaDB and PostgreSQL to Redis, Elasticsearch and Oracle: tested versions, what works on each, engine-specific views and vector tools."
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#15171b" media="(prefers-color-scheme: dark)" />
+    <link rel="canonical" href="https://dbcl.fosta.app/databases/" />
+    <!-- i18n:alternates -->
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Fosta Studio" />
+    <meta property="og:title" data-i18n-attr="content:dbp.meta.title" content="Databases: what Fosta Studio supports on each engine" />
+    <meta
+      property="og:description"
+      data-i18n-attr="content:dbp.meta.description"
+      content="The 11 engines of Fosta Studio, from MariaDB and PostgreSQL to Redis, Elasticsearch and Oracle: tested versions, what works on each, engine-specific views and vector tools."
+    />
+    <meta property="og:url" content="https://dbcl.fosta.app/databases/" />
+    <!-- i18n:og-locale -->
+    <meta property="og:image" content="https://dbcl.fosta.app/assets/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      data-i18n-attr="content:meta.ogImageAlt"
+      content="Fosta Studio logo, an F made of data rows, with the text: free, open-source database client for 11 engines, built in Rust"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" data-i18n-attr="content:dbp.meta.title" content="Databases: what Fosta Studio supports on each engine" />
+    <meta
+      name="twitter:description"
+      data-i18n-attr="content:dbp.meta.description"
+      content="The 11 engines of Fosta Studio, from MariaDB and PostgreSQL to Redis, Elasticsearch and Oracle: tested versions, what works on each, engine-specific views and vector tools."
+    />
+    <meta name="twitter:image" content="https://dbcl.fosta.app/assets/og-image.png" />
+
+    <link rel="stylesheet" href="styles.css" />
+    <script src="main.js"></script>
+  </head>
+  <body>
+    <!-- Icon sprite: the subset of the landing page's icons used here. -->
+    <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" focusable="false">
+      <symbol id="i-db" viewBox="0 0 24 24">
+        <ellipse cx="12" cy="5" rx="8" ry="3" />
+        <path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+        <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="7" />
+        <path d="M20 20l-3.5-3.5" />
+      </symbol>
+      <symbol id="i-key" viewBox="0 0 24 24">
+        <circle cx="8" cy="15" r="4" />
+        <path d="M11 12l9-9M16 7l3 3" />
+      </symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24">
+        <path d="M12 3l9 5-9 5-9-5z" />
+        <path d="M3 13l9 5 9-5" />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />
+        <path d="M9 12l2 2 4-4" />
+      </symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24">
+        <path d="M11 3l1.8 5.2L18 10l-5.2 1.8L11 17l-1.8-5.2L4 10l5.2-1.8z" />
+        <path d="M19 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" />
+      </symbol>
+      <symbol id="i-link" viewBox="0 0 24 24">
+        <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+        <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+      </symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6" /></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+      </symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z" /></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18" />
+        <path d="M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z" />
+      </symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
+    </svg>
+
+    <a class="skip-link" href="#main" data-i18n="a11y.skip">Skip to content</a>
+    <!-- i18n:lang-offer -->
+
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="./" data-i18n-attr="aria-label:a11y.home" aria-label="Fosta Studio home">
+          <img src="assets/logo.svg" alt="" width="28" height="28" />
+          <span>Fosta Studio</span>
+        </a>
+        <nav class="site-nav" data-i18n-attr="aria-label:nav.label" aria-label="Primary">
+          <ul>
+            <li class="nav-optional"><a href="./#features" data-i18n="nav.features">Features</a></li>
+            <li class="nav-optional nav-wide"><a href="./#privacy" data-i18n="nav.privacy">Privacy</a></li>
+            <li class="nav-optional nav-wide"><a href="./#roadmap" data-i18n="nav.roadmap">Roadmap</a></li>
+            <li class="nav-optional"><a href="databases/" aria-current="page" data-i18n="nav.databases">Databases</a></li>
+            <li class="nav-optional"><a href="donate/" data-i18n="nav.support">Support</a></li>
+            <li>
+              <a class="nav-github" href="https://github.com/caothanhphatit/fosta-dbclient">
+                <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span class="nav-github-text">GitHub</span>
+              </a>
+            </li>
+          </ul>
+        </nav>
+        <!-- i18n:lang-switch -->
+        <button
+          class="theme-toggle"
+          type="button"
+          hidden
+          data-theme-toggle
+          data-i18n-attr="aria-label:theme.toDark; data-label-dark:theme.toDark; data-label-light:theme.toLight"
+          aria-label="Switch to dark theme"
+          data-label-dark="Switch to dark theme"
+          data-label-light="Switch to light theme"
+        >
+          <svg class="icon icon-sun" aria-hidden="true"><use href="#i-sun" /></svg>
+          <svg class="icon icon-moon" aria-hidden="true"><use href="#i-moon" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- Intro -------------------------------------------------------- -->
+      <section class="section page-intro" aria-labelledby="dbp-title">
+        <div class="container">
+          <header class="section-head page-head">
+            <p class="kicker" data-i18n="dbp.kicker">Databases</p>
+            <h1 id="dbp-title" data-i18n="dbp.title">Eleven engines, one client</h1>
+            <p data-i18n="dbp.intro">
+              What works on each engine, the server versions the test suites run against, and the views made for each one. Every engine is a native Rust driver
+              behind one shared interface.
+            </p>
+          </header>
+        </div>
+      </section>
+
+      <!-- Matrix ------------------------------------------------------- -->
+      <section class="section section-alt section-tight" aria-labelledby="matrix-title">
+        <div class="container">
+          <h2 class="block-title" id="matrix-title" data-i18n="dbp.matrix.title">At a glance</h2>
+          <div class="matrix-wrap" tabindex="0" role="region" data-i18n-attr="aria-label:dbp.matrix.label" aria-label="Feature matrix, scrolls sideways">
+            <table class="matrix">
+              <thead>
+                <tr>
+                  <th scope="col" data-i18n="dbp.m.engine">Engine</th>
+                  <th scope="col" data-i18n="dbp.m.browse">Browse &amp; edit</th>
+                  <th scope="col" data-i18n="dbp.m.query">Query tabs</th>
+                  <th scope="col" data-i18n="dbp.m.stop">Stop</th>
+                  <th scope="col" data-i18n="dbp.m.tx">Transactions</th>
+                  <th scope="col" data-i18n="dbp.m.diagram">ER diagram</th>
+                  <th scope="col" data-i18n="dbp.m.ssh">SSH &amp; TLS</th>
+                  <th scope="col" data-i18n="dbp.m.vector">Vector tools</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row"><a href="#mariadb">MariaDB</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span> 11.7+</td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#mysql">MySQL</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#sqlserver">SQL Server</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#postgresql">PostgreSQL</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span> pgvector</td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#oracle">Oracle</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span> 23ai</td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#mongodb">MongoDB</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#redis">Redis / Valkey</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#sqlite">SQLite</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#clickhouse">ClickHouse</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#elasticsearch">Elasticsearch</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span> 8.0+</td>
+                </tr>
+                <tr>
+                  <th scope="row"><a href="#opensearch">OpenSearch</a></th>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span> k-NN</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="matrix-legend" data-i18n="dbp.matrix.legend">
+            ✓ available, — not available. Redis is edited in its key browser, and ClickHouse edits run as mutations. Vector tools need MariaDB 11.7+, PostgreSQL
+            with pgvector, Oracle 23ai, Elasticsearch 8.0+ or OpenSearch with the k-NN plugin.
+          </p>
+        </div>
+      </section>
+
+      <!-- Cards -------------------------------------------------------- -->
+      <section class="section" aria-labelledby="cards-title">
+        <div class="container">
+          <h2 class="block-title" id="cards-title" data-i18n="dbp.cards.title">Engine by engine</h2>
+          <p class="block-intro" data-i18n="dbp.cards.intro">
+            “Tested with” is the server version the CI contract suites run against. Each card links to the engine's notes in the repository.
+          </p>
+          <ul class="db-grid">
+            <li class="db-card" id="mariadb">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+                ></span>
+                <h3>MariaDB</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>11.8</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.mysql.works">
+                  Typed grid with inline edits, query tabs with Stop (<code>KILL QUERY</code>), transactions across runs, statement timeouts, design view and ER
+                  diagram, SSH and TLS.
+                </dd>
+                <dt data-i18n="dbp.vectors">Vector tools</dt>
+                <dd data-i18n="dbp.mariadb.vectors">
+                  On 11.7 and newer: embedding search, column and index health checks, and index recall against exact search.
+                </dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.mariadb.notes">A Read-only workspace also opens read-only sessions.</dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/features.md"
+                ><span data-i18n="dbp.featureDocs">Feature list</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="mysql">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+                ></span>
+                <h3>MySQL</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>8.4</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.mysql.works">
+                  Typed grid with inline edits, query tabs with Stop (<code>KILL QUERY</code>), transactions across runs, statement timeouts, design view and ER
+                  diagram, SSH and TLS.
+                </dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.mysql.notes">Same driver as MariaDB (<code>mysql_async</code>). The vector tools are for MariaDB 11.7+ only.</dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/features.md"
+                ><span data-i18n="dbp.featureDocs">Feature list</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="sqlserver">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+                ></span>
+                <h3>SQL Server</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>2022</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.mssql.works">
+                  <code>schema.table</code> names (<code>dbo</code> is hidden), <code>OFFSET/FETCH</code> paging, batches that return every result set and row
+                  count, query tabs with Stop, transactions, design view and ER diagram, SSH.
+                </dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.mssql.notes">TLS is on by default. An untrusted certificate shows an “Accept invalid certificates” hint.</dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/features.md"
+                ><span data-i18n="dbp.featureDocs">Feature list</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="postgresql">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+                ></span>
+                <h3>PostgreSQL</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>13, 17</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.postgres.works">
+                  Schemas, materialized views, functions, sequences, types and extensions; arrays, <code>jsonb</code> and <code>uuid</code> values; a Stop that
+                  cancels on the server; <code>EXPLAIN</code>; transactions across runs; design view and an ER diagram over all user schemas; SSH and TLS.
+                </dd>
+                <dt data-i18n="dbp.vectors">Vector tools</dt>
+                <dd data-i18n="dbp.postgres.vectors">
+                  With pgvector: <code>vector</code> and <code>halfvec</code> columns, HNSW and IVFFlat indexes, search by cosine, L2 or inner product, health
+                  checks and index recall.
+                </dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.postgres.notes">
+                  Client key files must be unencrypted. <code>LISTEN/NOTIFY</code>, <code>COPY</code> streams and logical replication are not supported.
+                </dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/engines/postgres.md"
+                ><span data-i18n="dbp.engineDocs">Engine notes</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="oracle">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
+                ></span>
+                <h3>Oracle</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>23ai Free</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.oracle.works">
+                  Schemas with tables, views, sequences, synonyms, packages, procedures and functions; edits by key or ROWID; Stop with <code>OCIBreak</code>;
+                  transactions from the toolbar; an ER diagram per schema; SSH and TLS.
+                </dd>
+                <dt data-i18n="dbp.views">Engine views</dt>
+                <dd data-i18n="dbp.oracle.views">PL/SQL source with compile errors, and ORA codes with the error position.</dd>
+                <dt data-i18n="dbp.vectors">Vector tools</dt>
+                <dd data-i18n="dbp.oracle.vectors">
+                  On 23ai: <code>VECTOR</code> columns, IVF and HNSW indexes, <code>VECTOR_DISTANCE</code> search, health checks and recall.
+                </dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.oracle.notes">
+                  Needs Oracle Instant Client 19c or newer. On the first connection the app offers to download Instant Client Basic Light from Oracle (about 60
+                  MB, pinned checksum) or to use a folder with an installed client. TLS is <code>tcps</code> with a wallet.
+                </dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/engines/oracle.md"
+                ><span data-i18n="dbp.engineDocs">Engine notes</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="mongodb">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg
+                ></span>
+                <h3>MongoDB</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>7, 8.0</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.mongo.works">
+                  Collections as tables with BSON-typed columns and edits, JSON filters, Atlas URIs, query tabs that run database commands as JSON, an ER
+                  diagram with inferred links between collections, SSH and TLS.
+                </dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.mongo.notes">No transactions, and no Stop for a running command.</dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/features.md"
+                ><span data-i18n="dbp.featureDocs">Feature list</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="redis">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-key" /></svg
+                ></span>
+                <h3>Redis / Valkey</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>7.4, 8.2</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.redis.works">
+                  Every logical database; keys listed with <code>SCAN</code>, with type, TTL and memory; an editor for each data type (string, hash, list, set,
+                  sorted set, stream); TTL changes; SSH and TLS (<code>rediss://</code>).
+                </dd>
+                <dt data-i18n="dbp.views">Engine views</dt>
+                <dd data-i18n="dbp.redis.views">Key browser, a console with completion and Stop, and a server view with <code>INFO</code> and the slow log.</dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.redis.notes">
+                  Also Valkey and other RESP servers. One standalone server: Redis Cluster and Sentinel are not supported yet.
+                </dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/engines/redis.md"
+                ><span data-i18n="dbp.engineDocs">Engine notes</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="sqlite">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg
+                ></span>
+                <h3>SQLite</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>3.50</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.sqlite.works">
+                  Open a file (read-only, create, <code>:memory:</code>) with attached databases; edits by primary key or <code>rowid</code>; Stop by interrupt;
+                  <code>EXPLAIN</code>; transactions; design view and ER diagram.
+                </dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.sqlite.notes">
+                  SQLite is bundled with the app. A database is a local file, so there is no SSH or TLS. Encrypted databases (SQLCipher) and extensions are not
+                  supported.
+                </dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/engines/sqlite.md"
+                ><span data-i18n="dbp.engineDocs">Engine notes</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="clickhouse">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg
+                ></span>
+                <h3>ClickHouse</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>25.8</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.clickhouse.works">
+                  Databases, tables, views, materialized views and dictionaries; keyset paging; streaming query tabs that stop with <code>KILL QUERY</code>; a
+                  design view with the sorting key and skipping indexes; SSH and TLS.
+                </dd>
+                <dt data-i18n="dbp.views">Engine views</dt>
+                <dd data-i18n="dbp.clickhouse.views">
+                  Edits as asynchronous mutations on MergeTree tables, a Parts and mutations view, and a Server view with running queries and the query log.
+                </dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.clickhouse.notes">
+                  Uses the HTTP interface. No transactions, and no ER diagram (ClickHouse has no foreign keys); mutations cannot be rolled back.
+                </dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/engines/clickhouse.md"
+                ><span data-i18n="dbp.engineDocs">Engine notes</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="elasticsearch">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg
+                ></span>
+                <h3>Elasticsearch</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>8.19</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.es.works">
+                  Indices, data streams and aliases; a document grid typed by the mapping, with structured and Query DSL filters;
+                  <code>search_after</code> paging past 10,000 documents; Mapping as the design view; SSH and TLS.
+                </dd>
+                <dt data-i18n="dbp.views">Engine views</dt>
+                <dd data-i18n="dbp.es.views">A Dev Tools console (<code>METHOD /path</code> with JSON or NDJSON bodies), plus ES|QL and SQL tabs.</dd>
+                <dt data-i18n="dbp.vectors">Vector tools</dt>
+                <dd data-i18n="dbp.es.vectors">On 8.0 and newer: <code>dense_vector</code> fields, search, health checks and index recall.</dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.es.notes">
+                  Elasticsearch 7.10 or newer. No transactions: a save checks each document's version and stops with a conflict if it changed.
+                </dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/engines/elasticsearch.md"
+                ><span data-i18n="dbp.engineDocs">Engine notes</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+            <li class="db-card" id="opensearch">
+              <div class="db-card-head">
+                <span class="engine-glyph"
+                  ><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg
+                ></span>
+                <h3>OpenSearch</h3>
+                <p class="db-tested"><span data-i18n="dbp.tested">Tested with</span> <strong>2.19</strong></p>
+              </div>
+              <dl class="db-facts">
+                <dt data-i18n="dbp.works">What works</dt>
+                <dd data-i18n="dbp.os.works">The same document grid, filters and paging as Elasticsearch; basic auth or a bearer token; SSH and TLS.</dd>
+                <dt data-i18n="dbp.views">Engine views</dt>
+                <dd data-i18n="dbp.os.views">The Dev Tools console and SQL tabs through the SQL plugin (no ES|QL).</dd>
+                <dt data-i18n="dbp.vectors">Vector tools</dt>
+                <dd data-i18n="dbp.os.vectors">With the k-NN plugin: <code>knn_vector</code> fields, search, health checks and index recall.</dd>
+                <dt data-i18n="dbp.notes">Notes</dt>
+                <dd data-i18n="dbp.os.notes">OpenSearch 1.0 or newer; point-in-time paging past 10,000 hits needs 2.4.</dd>
+              </dl>
+              <a class="db-doc" href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/engines/opensearch.md"
+                ><span data-i18n="dbp.engineDocs">Engine notes</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+              ></a>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Shared ------------------------------------------------------- -->
+      <section class="section section-alt section-tight" aria-labelledby="shared-title">
+        <div class="container">
+          <h2 class="block-title" id="shared-title" data-i18n="dbp.shared.title">The same on every engine</h2>
+          <ul class="mini-grid">
+            <li class="mini-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg
+              ></span>
+              <h3 data-i18n="dbp.shared.ws.title">Workspaces</h3>
+              <p data-i18n="dbp.shared.ws.text">Connections, commands and tabs per project or environment, whatever the engine.</p>
+            </li>
+            <li class="mini-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg
+              ></span>
+              <h3 data-i18n="dbp.shared.rules.title">Safety rules</h3>
+              <p data-i18n="dbp.shared.rules.text">Every statement passes one gateway with rules per workspace; a Production workspace starts Read-only.</p>
+            </li>
+            <li class="mini-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg
+              ></span>
+              <h3 data-i18n="dbp.shared.ai.title">AI agent</h3>
+              <p data-i18n="dbp.shared.ai.text">The agent reads the schema, writes and explains queries, and opens the right view on any engine.</p>
+            </li>
+            <li class="mini-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-link" /></svg
+              ></span>
+              <h3 data-i18n="dbp.shared.conn.title">Connection strings</h3>
+              <p data-i18n="dbp.shared.conn.text">Paste a connection string for any engine; passwords stay in Credential Manager.</p>
+            </li>
+          </ul>
+          <p class="section-more">
+            <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/features.md"
+              ><span data-i18n="dbp.shared.link">Read the full feature list</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+            ></a>
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <div class="footer-brand">
+          <a class="brand" href="./" data-i18n-attr="aria-label:a11y.home" aria-label="Fosta Studio home"
+            ><img src="assets/logo.svg" alt="" width="24" height="24" /><span>Fosta Studio</span></a
+          >
+          <p data-i18n="footer.tagline">Free and open-source database client. GPL-3.0.</p>
+        </div>
+        <nav data-i18n-attr="aria-label:footer.navLabel" aria-label="Footer">
+          <ul class="footer-links">
+            <li><a href="databases/" data-i18n="footer.databases">Databases</a></li>
+            <li><a href="donate/" data-i18n="footer.support">Support the project</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient">GitHub</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/releases" data-i18n="footer.releases">Releases</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md" data-i18n="footer.contributing">Contributing</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md" data-i18n="footer.roadmap">Roadmap</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE" data-i18n="footer.license">License</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/issues" data-i18n="footer.issues">Issues</a></li>
+          </ul>
+        </nav>
+        <!-- i18n:lang-footer -->
+        <p class="footer-note" data-i18n="footer.trademarks">
+          MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle are trademarks of their respective
+          owners. Fosta Studio is an independent project and is not affiliated with them.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

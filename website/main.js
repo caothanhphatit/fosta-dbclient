@@ -111,34 +111,41 @@
     initMotion();
 
     // Screenshot slots: each <figure data-shot="..."> shows its HTML mock until its PNG is listed in
-    // assets/screenshots/shots.json (a JSON array of file names). Listing them avoids 404s for missing files.
-    // The JSON sits next to the PNGs, so its URL follows data-shot (which is ../assets/... on translated pages).
-    var shots = document.querySelectorAll("figure[data-shot]");
-    if (!shots.length || !window.fetch) return;
-    fetch(shots[0].getAttribute("data-shot").replace(/[^/]*$/, "") + "shots.json", { cache: "no-cache" })
+    // assets/screenshots/shots.json. Donation QR slots (<figure data-qr="...">, Support page) work the same way with
+    // assets/donate/qr.json and show "QR code coming soon" until then.
+    initSlots("shot", "shots.json", "shot-img", "has-shot");
+    initSlots("qr", "qr.json", "qr-img", "has-qr");
+  }
+
+  // Optional images: each <figure data-NAME="path/file.png"> keeps its placeholder until the file name is listed in
+  // the manifest (a JSON array of file names) next to the images. Listing them avoids 404s for missing files. The
+  // manifest's URL follows the data attribute, which the build already made relative to the page (../assets/...).
+  function initSlots(name, manifest, imgClass, readyClass) {
+    var slots = document.querySelectorAll("figure[data-" + name + "]");
+    if (!slots.length || !window.fetch) return;
+    fetch(slots[0].getAttribute("data-" + name).replace(/[^/]*$/, "") + manifest, { cache: "no-cache" })
       .then(function (response) {
         return response.ok ? response.json() : [];
       })
       .then(function (available) {
         if (!Array.isArray(available)) return;
-        Array.prototype.forEach.call(shots, function (figure) {
-          var src = figure.getAttribute("data-shot");
-          var name = src.split("/").pop();
-          if (available.indexOf(name) === -1) return;
+        Array.prototype.forEach.call(slots, function (figure) {
+          var src = figure.getAttribute("data-" + name);
+          if (available.indexOf(src.split("/").pop()) === -1) return;
           var img = new Image();
-          img.className = "shot-img";
-          img.alt = figure.getAttribute("data-shot-alt") || "";
+          img.className = imgClass;
+          img.alt = figure.getAttribute("data-" + name + "-alt") || "";
           img.decoding = "async";
           img.onload = function () {
             if (!img.naturalWidth) return;
             figure.insertBefore(img, figure.firstChild);
-            figure.classList.add("has-shot");
+            figure.classList.add(readyClass);
           };
           img.src = src;
         });
       })
       .catch(function () {
-        /* keep the mocks */
+        /* keep the placeholders */
       });
   }
 
