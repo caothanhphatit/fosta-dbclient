@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Vector tools on PostgreSQL (pgvector)**: `vector` and `halfvec` columns, HNSW and IVFFlat indexes with their metric, similarity
   search by cosine, L2 or inner product, health checks and index recall, when the extension is installed in the database. The dev
   and CI image is now `pgvector/pgvector`.
+- **Vector tools on Redis 8**: search indexes with `VECTOR` fields (FLAT or HNSW, HASH or JSON documents) listed in database 0,
+  KNN search with the field's metric (other metrics scan up to 50,000 documents), health checks and index recall.
+- **Vector tools on ClickHouse**: `Array(Float32)` columns and `vector_similarity` HNSW indexes, search by cosine, L2 or inner
+  product, health checks and index recall (exact top-k with `use_skip_indexes = 0`).
 - **Updates**: a daily check for a new release (Settings → Check for updates, on by default; *Check for updates now* any time) and
   an *Update X.Y.Z* item in the status bar. The installed Windows app downloads the update in the background and installs it on
   quit or with *Restart to update*, asking first about open transactions and unsaved edits, then shows what's new once. The

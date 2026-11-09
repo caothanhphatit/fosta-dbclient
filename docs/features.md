@@ -15,11 +15,13 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     cancels on the server; `postgres.explain`; vector tools with pgvector.
   - **SQLite**: a database file (read-only, create, `:memory:`) with attached databases; edits by primary key or `rowid`.
   - **ClickHouse** (HTTP interface): streaming queries with `KILL QUERY`, edits as asynchronous mutations on MergeTree tables, a
-    Parts and mutations view and a Server view with running queries and the query log.
+    Parts and mutations view and a Server view with running queries and the query log; vector tools on `Array(Float32)` columns
+    with `vector_similarity` indexes.
   - **Oracle**: schemas, packages, procedures and PL/SQL source with compile errors, `OCIBreak` to stop a statement, edits by key or
     `ROWID`. Needs Oracle Instant Client; see the note below.
   - **Redis** (and Valkey): key browser with `SCAN`, TTL and memory, an editor for each data type (strings, hashes, lists, sets, sorted
-    sets, streams), a console with completion and a server view. Redis Cluster and Sentinel are not supported yet.
+    sets, streams), a console with completion and a server view; vector tools on search indexes with Redis 8. Redis Cluster and
+    Sentinel are not supported yet.
   - **Elasticsearch and OpenSearch**: indices, data streams and aliases, a document grid typed by the mapping, a Dev Tools console,
     ES|QL and SQL tabs, `search_after` paging past 10,000 documents, Mapping as the design view.
 - **Workspaces**: each workspace (project, customer, environment) has its own connections, commands and tabs. Switch from the rail on
@@ -60,8 +62,8 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     search; Insert or open an entry in a new tab. History stays on this machine, in `fosta-studio-history.jsonl` next to the `.exe` (newest
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
-- **Vector tools** (MariaDB 11.7+, PostgreSQL with pgvector): embedding search, column/index health checks, ANN recall versus exact
-  search (seeded, so a run can be repeated).
+- **Vector tools** (MariaDB 11.7+, PostgreSQL with pgvector, ClickHouse, Redis 8): embedding search, column/index health checks,
+  ANN recall versus exact search (seeded, so a run can be repeated).
 - **Safety rules per workspace**: a statement gateway on every engine. Every statement the app runs (query tabs, grid filters and
   edits, imports, console requests, new databases) is parsed and classified as read, write, DDL, destructive or administrative, then checked against the workspace's rules: _Open_ (everything runs;
   DROP, TRUNCATE and UPDATE/DELETE without WHERE ask once first), _Guarded_ (confirm writes and DDL, type the table or workspace name for destructive and administrative statements), _Read-only_ (reads only, with

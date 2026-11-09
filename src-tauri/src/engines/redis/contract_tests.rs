@@ -601,11 +601,19 @@ async fn seed_vectors() -> Option<()> {
     );
     let client = ::redis::Client::open(url).expect("redis url");
     let mut conn = client.get_multiplexed_async_connection().await.expect("connect to database 0");
-    let modules: String = format!(
-        "{:?}",
-        ::redis::cmd("MODULE").arg("LIST").query_async::<::redis::Value>(&mut conn).await
-    );
-    if !modules.contains("search") {
+    let modules = ::redis::cmd("MODULE")
+        .arg("LIST")
+        .query_async::<::redis::Value>(&mut conn)
+        .await
+        .map(super::types::as_items)
+        .unwrap_or_default();
+    let search = modules.into_iter().any(|module| {
+        super::types::as_pairs(module).into_iter().any(|(key, value)| {
+            super::types::as_string(key).as_deref() == Some("name")
+                && super::types::as_string(value).as_deref() == Some(super::vector::SEARCH_MODULE)
+        })
+    });
+    if !search {
         return None;
     }
     let _: ::redis::RedisResult<()> = ::redis::cmd("FT.DROPINDEX").arg(VECTOR_INDEX).query_async(&mut conn).await;

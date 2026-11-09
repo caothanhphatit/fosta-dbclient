@@ -291,6 +291,15 @@ fn knn_query(filter: Option<&str>, field: &Field, k: u32) -> String {
     format!("{}=>[KNN {k} @{} $vec{ef} AS {DISTANCE}]", base_query(filter), field.attribute)
 }
 
+/// What a top-k query looks for: the query vector, the documents (a filter query), k, and the fields to return.
+#[derive(Clone, Copy)]
+struct Probe<'a> {
+    query: &'a [f32],
+    filter: Option<&'a str>,
+    k: u32,
+    others: &'a [&'a Field],
+}
+
 /// One document of an `FT.SEARCH` reply: its key and returned fields.
 struct Document {
     key: String,
@@ -445,18 +454,16 @@ impl RedisVectors {
             .collect())
     }
 
-    /// Top-k by an exact scan; `rows` keeps the documents' other fields for a result grid.
+    /// Top-k by an exact scan, with the documents' other fields for a result grid; also (read, total) documents.
     async fn exact(
         &self,
         index: &str,
         info: &IndexInfo,
         field: &Field,
         metric: Metric,
-        query: &[f32],
-        filter: Option<&str>,
-        k: u32,
-        others: &[&Field],
+        probe: &Probe<'_>,
     ) -> AppResult<(Vec<(f64, Document)>, u64, u64)> {
+        let Probe { query, filter, k, others } = *probe;
         let mut fields = vec![field];
         fields.extend_from_slice(others);
         let mut best: Vec<(f64, Document)> = Vec::new();
@@ -482,15 +489,8 @@ impl RedisVectors {
     }
 
     /// A KNN query's documents with their distances.
-    async fn knn(
-        &self,
-        index: &str,
-        field: &Field,
-        query: &[f32],
-        filter: Option<&str>,
-        k: u32,
-        others: &[&Field],
-    ) -> AppResult<Vec<(f64, Document)>> {
+    async fn knn(&self, index: &str, field: &Field, probe: &Probe<'_>) -> AppResult<Vec<(f64, Document)>> {
+        let Probe { query, filter, k, others } = *probe;
         let blob = encode(field, query)?;
         let args = self.knn_args(others, k);
         let reply = self.search_command(index, &knn_query(filter, field, k), &args, Some(&blob)).await?;
@@ -723,11 +723,17 @@ impl VectorStore for RedisVectors {
         let others: Vec<&Field> = info.fields.iter().filter(|other| !other.is_vector()).collect();
         let metric = request.metric.resolve(request.index, field.metric());
         let index = &table.table;
+        let probe = Probe {
+            query: request.query,
+            filter: request.filter,
+            k: request.k,
+            others: &others,
+        };
         let started = Instant::now();
         let (found, plan, index_used, sql, runnable_sql) = if metric == field.metric() {
             let blob = encode(&field, request.query)?;
             let query = knn_query(request.filter, &field, request.k);
-            let found = self.knn(index, &field, request.query, request.filter, request.k, &others).await?;
+            let found = self.knn(index, &field, &probe).await?;
             let args = self
                 .knn_args(&others, request.k)
                 .iter()
@@ -744,9 +750,7 @@ impl VectorStore for RedisVectors {
             let plan = self.explain(index, &query, Some(&blob)).await;
             (found, plan, Some(index.clone()), render("$vec"), render(&escaped(&blob)))
         } else {
-            let (found, read, total) = self
-                .exact(index, &info, &field, metric, request.query, request.filter, request.k, &others)
-                .await?;
+            let (found, read, total) = self.exact(index, &info, &field, metric, &probe).await?;
             let plan = vec![
                 format!(
                     "Exact scan: the index of {} serves {} distance only",
@@ -789,14 +793,16 @@ impl VectorStore for RedisVectors {
                 && candidate.identifier == field.identifier
                 && candidate.distance_metric.eq_ignore_ascii_case(&field.distance_metric)
         };
+        let probe = Probe {
+            query: request.query,
+            filter: None,
+            k: request.k,
+            others: &[],
+        };
         let found = match (request.exact, info.fields.iter().find(flat)) {
-            (false, _) => self.knn(&table.table, &field, request.query, None, request.k, &[]).await?,
-            (true, Some(flat)) => self.knn(&table.table, flat, request.query, None, request.k, &[]).await?,
-            (true, None) => {
-                self.exact(&table.table, &info, &field, field.metric(), request.query, None, request.k, &[])
-                    .await?
-                    .0
-            }
+            (false, _) => self.knn(&table.table, &field, &probe).await?,
+            (true, Some(flat)) => self.knn(&table.table, flat, &probe).await?,
+            (true, None) => self.exact(&table.table, &info, &field, field.metric(), &probe).await?.0,
         };
         Ok(found
             .into_iter()

@@ -104,10 +104,27 @@ On the connection's context menu, **Server info and slow log**: version, mode, r
 rate; the keyspace per database; every `INFO` section with a search box; and the slow log (`SLOWLOG GET`, 32 to 512 entries) with
 the threshold and length the server reports.
 
+## Vectors (Redis 8 Query Engine)
+
+The vector tools appear when the server has the Query Engine (the `search` module, built into Redis 8; Redis 7.4 without the
+module has none). Search indexes live in database 0 only, so its tree lists the indexes with vector fields first; each opens
+*Vector search* and *Vector health*.
+
+- **Indexes as tables**: `FT._LIST` and `FT.INFO`. The columns are the `VECTOR` fields (FLAT or HNSW, `FLOAT32`, `FLOAT64` or
+  `BFLOAT16`) over HASH documents (little-endian blobs) or JSON documents (arrays). A row is a document, keyed by its Redis key
+  (`__key`); a bare id such as `7` stands for the index prefix plus `7`.
+- **Search**: a KNN query, `FT.SEARCH idx "*=>[KNN k @field $vec EF_RUNTIME ef AS vec_distance]" PARAMS 2 vec <blob> SORTBY
+  vec_distance DIALECT 2`, with `EF_RUNTIME` at least k on HNSW fields and `FT.EXPLAINCLI` as the plan. A field's index serves one
+  metric, its `DISTANCE_METRIC`; *Auto* uses it. Other metrics scan the documents. Distances use Redis's scale: cosine is
+  `1 - cos`, L2 is squared, inner product is `1 - dot`. The copyable command carries the blob as `"\x…"`.
+- **Exact top-k** (recall) uses a FLAT field over the same data with the same metric when there is one. Otherwise it scans at
+  most 50,000 documents and computes distances in the app; the plan says how many documents it read.
+- **Health**: the row count is the index's `num_docs`. The index does not count documents without the field.
+
 ## Operations the views call
 
 `redis.scan`, `redis.keyInfo`, `redis.readValue`, `redis.edit` (reads take `db`), `redis.info` and `redis.slowlog`, through
-`invoke_capability`. `redis.edit` takes a typed edit plus an optional `expect`; see `ops.rs` and `guard.rs`.
+`invoke_capability`. The shared `vector.*` operations are reads (`FT.INFO`, `FT.SEARCH`, `FT.EXPLAINCLI`, `HGET`, `JSON.GET`). `redis.edit` takes a typed edit plus an optional `expect`; see `ops.rs` and `guard.rs`.
 
 ## Tests
 
@@ -123,3 +140,7 @@ tabular suites (tree to a table, describe columns, browse, edit rows) do not app
 runs the classification, connect, query and cancel suites and adds its own: `SCAN` paging with type, TTL and memory, every value
 type, TTL set and remove, stream append, every guard, a change made between the comparison and `EXEC`, database routing and tree
 paging, `INFO` and `SLOWLOG`. CI runs them on Redis 7.4 and 8.2 (`ci/engines/redis.json`).
+
+`contract_redis_vector` runs the shared vector suite on `fosta_contract_vectors`, an HNSW cosine index over 300 HASH documents
+`fosta_contract:vec:<id>` that it recreates in database 0 (index and those keys only). Without the search module (Redis 7.4) it
+prints a note and passes. The dev seed adds `products_idx` over `products:<id>` hashes with a 4-dimensional embedding.
