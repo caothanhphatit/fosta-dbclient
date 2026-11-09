@@ -73,14 +73,14 @@ export function reportConnectionLost(connectionId: string): void {
 }
 
 /** Every command goes through here: a `NOT_CONNECTED` answer for a connection is reported to `onConnectionLost`. */
-async function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
   try {
     return await transportInvoke<T>(command, args);
   } catch (error) {
     if (codeOf(error) === NOT_CONNECTED && typeof args.connectionId === "string") reportConnectionLost(args.connectionId);
     throw error;
   }
-}
+};
 
 /** `parse_connection_string`: the profile fields a connection string sets, and its password (never stored in the profile). */
 export interface ParsedConnectionString {
