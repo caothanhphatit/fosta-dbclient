@@ -138,3 +138,17 @@
   opacity: 0.4;
   cursor: default;
 }
+
+/* Hidden sidebar (Ctrl+B): the tabs take its width; the workspace rail stays. */
+.workspace.sidebar-collapsed {
+  grid-template-columns: 1fr;
+}
+
+.workspace.sidebar-collapsed.with-assistant {
+  grid-template-columns: 1fr 4px var(--assistant-width);
+}
+
+.workspace.sidebar-collapsed > .sidebar,
+.workspace.sidebar-collapsed > .sidebar-splitter {
+  display: none;
+}

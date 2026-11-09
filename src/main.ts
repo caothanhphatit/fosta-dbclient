@@ -10,7 +10,7 @@ import { assistantContext as buildAssistantContext, isQueryView, taskLogContext 
 import { AppNavigation, preloadQueryView } from "./app/navigation";
 import { welcomeScreen } from "./app/welcome";
 import { renderStatusContext } from "./app/statusBar";
-import { buildLayout, ASSISTANT_STORAGE_KEY } from "./app/layout";
+import { buildLayout, ASSISTANT_STORAGE_KEY, toggleSidebar } from "./app/layout";
 import { shellMenus } from "./app/menus";
 import { installOnExit, startUpdates } from "./app/update";
 import { confirmQuit, guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
@@ -118,7 +118,11 @@ const tree = new ConnectionTree({
   openDiagram: (profile, database) => navigation.openDiagram(profile, database),
   editConnection: (profile) => void editConnection(profile),
   deleteConnection: (profile) => void deleteConnection(profile),
-  openTunnelLog: (profile) => navigation.openTunnelLog(profile),
+  openCommandLog: (commandId) => {
+    const task = workspace?.tasks.find((item) => item.id === commandId);
+    if (task) navigation.openLogs(task);
+  },
+  commandState: (commandId) => tasksPanel.stateOf(commandId),
   connectionClosed: (connectionId) => navigation.closeConnectionTabs(connectionId),
   configChanged: applyConfig,
   status: setStatus,
@@ -139,7 +143,7 @@ const tasksPanel = new TasksPanel({
   askAssistant: (task, logLines) => {
     navigation.openLogs(task);
     showAssistant(true);
-    assistant.ask(`Startup task "${task.name}" is not working. Read its log, explain what is wrong and how to fix it.`, taskLogContext(task, logLines));
+    assistant.ask(`Command "${task.name}" is not working. Read its log, explain what is wrong and how to fix it.`, taskLogContext(task, logLines));
   },
 });
 
@@ -204,6 +208,10 @@ function showAssistant(visible: boolean): void {
   }
 }
 
+function hideOrShowSidebar(): void {
+  if (workspaceArea) toggleSidebar(workspaceArea);
+}
+
 function toggleAssistant(): void {
   showAssistant(!workspaceArea?.classList.contains("with-assistant"));
 }
@@ -241,7 +249,7 @@ function applyConfig(config: AppConfig): void {
   rail.setConfig(config);
   renderWorkspaceHeader(workspace);
   tree.setConnections(workspace.connections);
-  tasksPanel.setTasks(workspace.tasks);
+  tasksPanel.setTasks(workspace.tasks, workspace.connections);
   tabs.setScope(workspace.id);
   assistant.setConfigured(config.aiConnections, config.aiActive);
   assistant.setScope(workspace.id);
@@ -270,6 +278,7 @@ function renderWorkspaceHeader(current: Workspace): void {
     h("span", { class: `ws-dot color-${workspaceColor(current.color)}` }, icon(workspaceIcon(current.icon))),
     h("span", { class: "ws-name", title: current.name }, current.name),
     menuButton,
+    iconButton("panel", "Hide the sidebar (Ctrl+B)", hideOrShowSidebar),
   );
 }
 
@@ -310,7 +319,10 @@ function newQueryFromSelection(): void {
 }
 
 async function editConnection(profile: ConnectionProfile | null): Promise<void> {
-  const config = await connectionDialog(profile);
+  const config = await connectionDialog(profile, {
+    commands: workspace?.tasks ?? [],
+    create: async (target) => (await tasksPanel.edit(null, { forConnection: target }))?.task ?? null,
+  });
   if (config) applyConfig(config);
 }
 
@@ -351,7 +363,7 @@ async function editWorkspace(meta: WorkspaceMeta): Promise<void> {
 async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
   const target = currentConfig?.workspaces.find((item) => item.id === meta.id);
   if (!target) return;
-  const summary = `${target.connections.length} connection(s) and ${target.tasks.length} startup task(s) will be removed, and saved passwords forgotten.`;
+  const summary = `${target.connections.length} connection(s) and ${target.tasks.length} command(s) will be removed, and saved passwords forgotten.`;
   if (!(await confirmDialog(`Delete workspace "${target.name}"?\n${summary}`, "Delete"))) return;
   try {
     navigation.closeWorkspaceTabs(target.id);
@@ -396,6 +408,7 @@ async function bootstrap(): Promise<void> {
     newDiagram: diagramFromSelection,
     configureEmbedding: () => void configureEmbedding(),
     toggleAssistant,
+    toggleSidebar: hideOrShowSidebar,
   });
   hideUnsupported(document);
   hideUnsupported(welcome);
@@ -405,6 +418,7 @@ async function bootstrap(): Promise<void> {
     newConnection: () => void editConnection(null),
     newQuery: newQueryFromSelection,
     toggleAssistant,
+    toggleSidebar: hideOrShowSidebar,
   });
   suppressBrowserContextMenu();
   guardWindowClose(tabs, installOnExit);

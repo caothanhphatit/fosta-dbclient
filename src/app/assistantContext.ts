@@ -8,9 +8,9 @@ import type { LogTabContent } from "../features/tasks/tasksPanel";
 
 const LOG_TAIL_LINES = 80;
 
-/** What the model is told about a startup task: its command and the end of its log. */
+/** What the model is told about a workspace command: its program and the end of its log. */
 export function taskLogContext(task: TaskDef, lines: string[]): string {
-  return `Startup task "${task.name}" runs: ${task.program} ${task.args.join(" ")}\nLast log lines:\n${lines.slice(-LOG_TAIL_LINES).join("\n")}`;
+  return `Command "${task.name}" runs: ${task.program} ${task.args.join(" ")}\nLast log lines:\n${lines.slice(-LOG_TAIL_LINES).join("\n")}`;
 }
 
 /** Duck-typed so the CodeMirror chunk is not pulled into the main bundle. */

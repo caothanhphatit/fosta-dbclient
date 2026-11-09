@@ -245,7 +245,7 @@ describe("sameTarget", () => {
     expect(sameTarget(plain, { ...plain, ssh: { ...saved.ssh!, enabled: false } })).toBe(true);
   });
 
-  it("notices a new server, tunnel or TLS check", () => {
+  it("notices a new server, SSH route, command or TLS check", () => {
     const changed: Partial<ConnectionProfile>[] = [
       { host: "evil" },
       { port: 1 },
@@ -258,6 +258,7 @@ describe("sameTarget", () => {
       { tls: { ...saved.tls!, acceptInvalidCerts: true } },
       { tls: { ...saved.tls!, pinnedSha256: "ab:cd" } },
       { tls: undefined },
+      { commandId: "pf" },
     ];
     for (const change of changed) expect(sameTarget(saved, { ...saved, ...change }), JSON.stringify(change)).toBe(false);
   });

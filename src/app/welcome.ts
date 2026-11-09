@@ -4,6 +4,7 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl+N", "New connection"],
   ["Ctrl+T", "New query"],
   ["Ctrl+Shift+A", "Assistant panel"],
+  ["Ctrl+B", "Show or hide the sidebar"],
   ["Ctrl+1 … 9", "Switch workspace"],
   ["Ctrl+Enter", "Run SQL (selection or all)"],
   ["Enter / F2", "Edit the selected cell"],
@@ -38,7 +39,7 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
         card("plug", "New connection", () => actions.newConnection()),
         card("query", "New query", () => actions.newQuery()),
         requires(
-          card("task", "New startup task", () => actions.newTask()),
+          card("task", "New command", () => actions.newTask()),
           "tasks",
         ),
       ),
@@ -47,7 +48,7 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
   );
 }
 
-/** Hidden by `hideUnsupported` when the edition lacks `capability` (startup tasks in the web edition). */
+/** Hidden by `hideUnsupported` when the edition lacks `capability` (commands in the web edition). */
 function requires(element: HTMLElement, capability: string): HTMLElement {
   element.dataset.requires = capability;
   return element;

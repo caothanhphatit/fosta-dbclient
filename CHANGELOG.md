@@ -9,9 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Tunnel commands**: a command bound to a connection (e.g. `kubectl port-forward`), started and awaited before connecting, restarted
-  with backoff while connected, stopped on disconnect. Failures show `TUNNEL_FAILED` with the log tail; the log opens from the
-  connection's menu.
+- **Workspace commands**: startup tasks become the workspace's *Commands* (panel, and a toolbar menu to start, stop, restart or
+  open the log of each). A command starts with the workspace or when a connection needs it, and a connection can use one (Edit
+  connection → Command, or *New command…* with a `kubectl port-forward` template): connect starts it if needed and waits until it
+  is ready. Connections share a command; one started for them stops with the last of them. Failures show `COMMAND_FAILED` with the
+  log tail; the log opens from the connection's menu.
+- **Hide the sidebar** with `Ctrl+B` or its button; the tabs take the width, the workspace rail stays.
 - **Updates**: a daily check for a new release (Settings → Check for updates, on by default; *Check for updates now* any time) and
   an *Update X.Y.Z* item in the status bar. The installed Windows app downloads the update in the background and installs it on
   quit or with *Restart to update*, asking first about open transactions and unsaved edits, then shows what's new once. The

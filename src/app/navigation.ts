@@ -10,8 +10,6 @@ import type { ConnectionProfile, KeyCell, TableTarget, TaskDef } from "../core/t
 import { nodeIcon, resolveView, type ViewContext, type ViewRegistration, type ViewRole } from "../core/views";
 import type { QueryHost, QueryView } from "../features/query/queryView";
 import { createLogView, type TasksPanel } from "../features/tasks/tasksPanel";
-import { tunnelTask } from "../features/connections/tunnelForm";
-import { api } from "../core/api";
 import { VectorHealthView } from "../features/vector/vectorHealth";
 import { VectorSearchView } from "../features/vector/vectorSearch";
 import { captureTyping } from "./typingBuffer";
@@ -256,18 +254,6 @@ export class AppNavigation implements Navigator {
       title: `${task.name} · logs`,
       icon: "logs",
       create: () => createLogView(task, this.host.tasksPanel()),
-    });
-  }
-
-  /** The log of a connection's tunnel command, in the same view as a startup task's log (without Restart). */
-  openTunnelLog(profile: ConnectionProfile): void {
-    if (!profile.tunnel) return;
-    const task = tunnelTask(profile.id, profile.name, profile.tunnel);
-    this.tabs.open({
-      key: this.tabKey("tunnel", "logs", profile.id),
-      title: `${profile.name} · tunnel log`,
-      icon: "logs",
-      create: () => createLogView(task, this.host.tasksPanel(), { load: () => api.tunnelLogs(profile.id), restart: null }),
     });
   }
 

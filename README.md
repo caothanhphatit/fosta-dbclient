@@ -12,11 +12,11 @@ OpenSearch, ClickHouse and Oracle. A desktop app for Windows, or a web edition i
 
 - **11 engines, one interface**: a tree, a typed data grid with inline edits, query tabs, a design view and ER diagrams, plus views
   made for each engine (Redis key browser, Elasticsearch Dev Tools and ES|QL, ClickHouse mutations, Oracle PL/SQL).
-- **Workspaces** per project or environment, each with its own connections, tabs and **startup tasks** such as
+- **Workspaces** per project or environment, each with its own connections, tabs and **commands** such as
   `kubectl port-forward`, restarted when they drop.
 - **SSH tunnels and TLS** on every network engine: key, password or agent, a jump host, host key checks, your own CA, client
   certificates or a pinned certificate.
-- **Tunnel commands** per connection (e.g. `kubectl port-forward`): started on connect, stopped on disconnect.
+- **Commands for connections**: a connection can use a workspace command, started with the workspace or when it connects.
 - **Safe by default**: every statement is checked against the workspace's rules (Open, Guarded, Read-only or Custom). Production
   workspaces start read-only, enforced by the database too, and a save never overwrites a row someone else changed.
 - **Query editor** with column-aware completion, a formatter, streaming results with a real Stop, transactions and per-tab history.

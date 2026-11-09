@@ -96,7 +96,7 @@ mock installs it), otherwise HTTP. `api.ts` is unchanged apart from that.
   No CORS headers are sent.
 - **Headers**: a strict Content-Security-Policy (scripts only from the server; inline styles allowed for CodeMirror),
   `frame-ancestors 'none'`, `X-Content-Type-Options`, `Referrer-Policy: same-origin`, `Cache-Control: no-store` on the API.
-- **Startup tasks** run programs, so they are off in the web edition unless `FOSTA_STUDIO_TASKS=on`; `TaskManager` refuses to start
+- **Workspace commands** run programs, so they are off in the web edition unless `FOSTA_STUDIO_TASKS=on`; `TaskManager` refuses to start
   them otherwise.
 
 ## Data flow
@@ -242,7 +242,7 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
 
 ## Config and secrets
 
-- **`fosta-studio.json`** next to the executable (portable): workspaces with their connections and startup tasks, the active workspace, LLM
+- **`fosta-studio.json`** next to the executable (portable): workspaces with their connections and commands (`tasks`), the active workspace, LLM
   provider connections, the active model, the embedding API settings and the `queryHistory` switch. No secrets. Old layouts (flat
   `connections` + `tasks`, the single `ai` setting) are migrated on load (`config.rs`).
 - **Windows Credential Manager** (`secrets.rs`, service `fosta-studio`; secrets saved under the pre-rename service `db-studio` are moved on first read, and `db-studio.json` / `db-studio-history.jsonl` are renamed on first start): connection passwords under the connection id, LLM keys under
@@ -256,11 +256,13 @@ Code: `src-tauri/src/ai/` (backend) and `src/features/assistant/` (panel, provid
 - **localStorage** (`db-studio.*`): UI preferences only (theme, assistant panel open/closed, diagram node positions, hidden columns per
   table, the history panel and cell-editor wrap toggles).
 
-## Startup tasks
+## Workspace commands
 
 `tasks.rs` runs each task as a child process, streams stdout/stderr lines to the UI as events, marks it running when a line matches the
 "ready" pattern, and restarts it with backoff when it exits. On Windows `job.rs` puts children in a job object that is killed with the
-app, so a `kubectl port-forward` never outlives Fosta Studio.
+app, so a `kubectl port-forward` never outlives Fosta Studio. A connection may use one command of its workspace
+(`connection_command.rs`): connecting holds it and starts it "for connections" when it does not run; it stops with its last
+holder only if it was started that way, not when it started with the workspace or by hand.
 
 ## The dev mock
 

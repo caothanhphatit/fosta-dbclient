@@ -94,6 +94,7 @@ const workspaces: Workspace[] = [
         database: "shop",
         savePassword: true,
         options: {},
+        commandId: "t-a-1",
       },
       {
         id: "c-a-2",
@@ -105,6 +106,8 @@ const workspaces: Workspace[] = [
         database: null,
         savePassword: false,
         options: {},
+        // Started when this connection connects, stopped when it disconnects.
+        commandId: "t-a-2",
       },
       {
         id: "c-a-3",
@@ -161,6 +164,17 @@ const workspaces: Workspace[] = [
         autoStart: true,
         autoRestart: true,
         readyPattern: "Forwarding from",
+        readyTimeoutSecs: 30,
+      },
+      {
+        id: "t-a-2",
+        name: "Analytics port-forward",
+        program: "kubectl",
+        args: ["port-forward", "-n", "analytics", "svc/mysql", "13307:3306"],
+        autoStart: false,
+        autoRestart: true,
+        readyPattern: "Forwarding from",
+        readyTimeoutSecs: 30,
       },
     ],
   },

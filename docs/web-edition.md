@@ -39,10 +39,10 @@ To build the image yourself: `docker build -t fosta-studio .` and use `fosta-stu
 | `FOSTA_STUDIO_ALLOWED_ORIGINS` | none                        | Extra origins allowed to call the API, comma-separated (e.g. `https://studio.example.com` behind a proxy).  |
 | `FOSTA_STUDIO_ALLOWED_HOSTS`   | any (loopback if auth off)  | Host names requests may use, comma-separated.                                                               |
 | `FOSTA_STUDIO_SECURE_COOKIE`   | off                         | `on` marks the session cookie `Secure`; set it when an HTTPS proxy is in front.                             |
-| `FOSTA_STUDIO_TASKS`           | off                         | `on` allows startup tasks. They run inside the container, which ships no extra programs (no `kubectl`).     |
+| `FOSTA_STUDIO_TASKS`           | off                         | `on` allows workspace commands. They run inside the container, which has no extra programs (no `kubectl`).  |
 
-Differences from the desktop app: exports and diagram images are downloaded by the browser, there is no "Show in folder", startup
-tasks are off unless `FOSTA_STUDIO_TASKS=on`, saved passwords are in the encrypted file instead of Windows Credential Manager, and
+Differences from the desktop app: exports and diagram images are downloaded by the browser, there is no "Show in folder", workspace
+commands are off unless `FOSTA_STUDIO_TASKS=on`, saved passwords are in the encrypted file instead of Windows Credential Manager, and
 assistant requests go from the server to the provider. There is one access token per server, not separate user accounts.
 For access over a network, put the server behind HTTPS (a reverse proxy) and set `FOSTA_STUDIO_SECURE_COOKIE=on`.
 

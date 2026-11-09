@@ -6,7 +6,7 @@ Where Fosta Studio is heading. Plans change; open an issue to discuss an item or
 
 - Eleven engines: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis (and Valkey), Elasticsearch, OpenSearch, ClickHouse and
   Oracle, with connection strings, an SSH tunnel and TLS, and passwords kept in the OS credential store.
-- Workspaces with their own connections, startup tasks (such as `kubectl port-forward`) and tabs.
+- Workspaces with their own connections, commands (such as `kubectl port-forward`) and tabs.
 - A fast data grid: inline editing checked against the values you loaded (a conflict dialog instead of a silent overwrite), column
   filters, show/hide columns, a cell editor for long values and JSON, a record panel with foreign-key navigation.
 - Query tabs with column-aware completion, a formatter, streaming results with a real Stop, history, an interactive ER diagram, import
