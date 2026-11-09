@@ -16,6 +16,10 @@ Connecting needs Instant Client 19c or newer. Before the first connection the ap
 ODPI-C loads a client once per process, so the first one loaded stays in use until the app restarts. A folder that does not
 hold the client library (`oci.dll`, `libclntsh.so`) is an error of its own, not silently skipped.
 
+On Linux the client folder must also be on `LD_LIBRARY_PATH` when Fosta Studio starts: `libclntsh.so` finds `libnnz.so` (which
+has no SONAME) only through the loader's search path, which is read at process start. A client downloaded while the app runs
+therefore loads after a restart with `LD_LIBRARY_PATH=<client folder>`; the load error names the folder.
+
 Without a client, connecting fails with the code `ORACLE_CLIENT`, `kind` (`notInstalled`, `load`, `network`, `cancelled`,
 `checksumMismatch`, `diskFull`, …) and `download` (the pinned package: version, size, URL and license link). The UI turns that
 into a prompt: **Download** (Instant Client Basic Light 23.26.4 from download.oracle.com, about 60 MB on Windows x64, with a

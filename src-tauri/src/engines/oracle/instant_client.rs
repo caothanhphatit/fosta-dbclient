@@ -414,8 +414,6 @@ pub fn initialize_at(configured: Option<&Path>, env: &SearchEnv, install_root: O
         let found = resolve(configured, env, install_root.unwrap_or(Path::new("")));
         let mut params = oracle::InitParams::new();
         if let Some(r) = &found {
-            #[cfg(target_os = "linux")]
-            preload_dependencies(&r.dir);
             params
                 .oracle_client_lib_dir(&r.dir)
                 .map_err(|e| ClientError::new(ClientErrorKind::Load, e.to_string()))?;
@@ -432,7 +430,11 @@ pub fn initialize_at(configured: Option<&Path>, env: &SearchEnv, install_root: O
                 return Err(match &found {
                     Some(r) => ClientError::new(
                         ClientErrorKind::Load,
-                        format!("Oracle Instant Client in {} could not be loaded: {text}", r.dir.display()),
+                        format!(
+                            "Oracle Instant Client in {} could not be loaded: {text}{}",
+                            r.dir.display(),
+                            linux_library_path_hint(&r.dir, &text)
+                        ),
                     ),
                     None => ClientError::new(ClientErrorKind::NotInstalled, text.lines().next().unwrap_or(&text).to_owned()),
                 });
@@ -442,30 +444,16 @@ pub fn initialize_at(configured: Option<&Path>, env: &SearchEnv, install_root: O
     Ok(status_at(configured, env, install_root))
 }
 
-/// On Linux the loader does not look next to `libclntsh.so` for the libraries it needs (`libclntshcore`, `libnnz`):
-/// Instant Client has no RPATH, so loading it from a folder that is not on `LD_LIBRARY_PATH` fails with
-/// "libnnz.so: cannot open shared object file". Loading those libraries first, by full path and with global symbols,
-/// lets the loader reuse them by their SONAME when ODPI-C loads `libclntsh.so`. Failures are left to that load to report.
-#[cfg(target_os = "linux")]
-fn preload_dependencies(dir: &Path) {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut names: Vec<OsString> = entries.filter_map(|entry| Some(entry.ok()?.file_name())).collect();
-    names.sort();
-    for prefix in ["libclntshcore.so", "libnnz"] {
-        for name in names.iter().filter(|name| {
-            let name = name.to_string_lossy();
-            name.starts_with(prefix) && name.contains(".so")
-        }) {
-            let Ok(path) = std::ffi::CString::new(dir.join(name).as_os_str().as_bytes()) else {
-                continue;
-            };
-            // SAFETY: `path` is a valid NUL-terminated string; the handle is kept for the life of the process (the
-            // client stays loaded once ODPI-C has it), so it is never closed.
-            unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
-        }
+/// On Linux, `libclntsh.so` finds its own libraries (`libnnz.so` has no SONAME) only through the loader's search path,
+/// which is read when the process starts: a client folder that was not on `LD_LIBRARY_PATH` then cannot be loaded.
+fn linux_library_path_hint(dir: &Path, error: &str) -> String {
+    if cfg!(target_os = "linux") && error.contains("cannot open shared object file") {
+        format!(
+            " On Linux, start Fosta Studio with this folder on LD_LIBRARY_PATH (LD_LIBRARY_PATH={}) and install libaio.",
+            dir.display()
+        )
+    } else {
+        String::new()
     }
 }
 
@@ -1145,6 +1133,12 @@ mod tests {
         .await
         .unwrap();
         assert!(has_client_lib(&dir));
+        if cfg!(target_os = "linux") {
+            // Loading needs the folder on LD_LIBRARY_PATH from process start (see `linux_library_path_hint`); CI sets it
+            // for the contract tests, which run in a new process.
+            eprintln!("downloaded to {}", dir.display());
+            return;
+        }
         let s = initialize_at(None, &SearchEnv::default(), Some(&root)).unwrap();
         assert!(s.available && s.loaded);
         assert_eq!(s.source, ClientSource::Downloaded);
