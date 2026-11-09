@@ -287,7 +287,7 @@ export class QueryView implements TabContent {
     if (!open && !unsaved) return true;
     const reasons = [
       open ? "This tab has an open transaction. Closing the tab rolls it back, so uncommitted changes are lost." : "",
-      unsaved ? "Its query text was edited and not run since; closing the tab discards it." : "",
+      unsaved ? `${open ? "Its" : "This tab's"} query text was edited and not run since; closing the tab discards it.` : "",
     ];
     return confirmDialog(`${reasons.filter(Boolean).join(" ")} Close anyway?`, "Close tab");
   }

@@ -67,13 +67,45 @@ export async function confirmQuit(tabs: TabManager, action: "Close" | "Restart")
   const contents = tabs.contents();
   const open = contents.filter((content) => isQueryView(content) && content.hasOpenTransaction()).length;
   const edited = contents.filter((content) => content.hasUnsavedChanges?.() === true).length;
-  if (open === 0 && edited === 0) return true;
+  const unrun = unsavedQueryTitles(tabs);
+  if (open === 0 && edited === 0 && unrun.length === 0) return true;
   const doing = action === "Close" ? "Closing" : "Restarting";
   const lost = [
     open > 0 ? `${open} query tab(s) have an open transaction. ${doing} Fosta Studio rolls them back, so uncommitted changes are lost.` : "",
     edited > 0 ? `${edited} tab(s) have unsaved edits, which are lost.` : "",
+    unrun.length > 0 ? `Query text not run yet: ${unrun.join(", ")}. It is kept and comes back with its tabs the next time Fosta Studio starts.` : "",
   ];
-  return confirmDialog(`${lost.filter(Boolean).join(" ")} ${action} anyway?`, action);
+  return confirmDialog(`${lost.filter(Boolean).join("\n")}\n${action} now?`, action);
+}
+
+/** Titles of the query tabs (restored ones too) whose text was edited and not run since. */
+export function unsavedQueryTitles(tabs: TabManager): string[] {
+  return tabs.contents().flatMap((content) => {
+    const unsaved = (content as { hasUnsavedText?: () => boolean }).hasUnsavedText;
+    if (typeof unsaved !== "function" || !unsaved.call(content)) return [];
+    const key = tabs.keyOf(content);
+    return key ? [tabs.titleOf(key)] : [];
+  });
+}
+
+/**
+ * The web edition: leaving or reloading the page asks first while a transaction is open, edits are unsaved or query
+ * text has not been saved yet (`beforeLeave` saves the open tabs on the way out).
+ */
+export function guardPageUnload(tabs: TabManager, beforeLeave: () => void): void {
+  if (isTauri()) return;
+  window.addEventListener("pagehide", beforeLeave);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") beforeLeave();
+  });
+  window.addEventListener("beforeunload", (event) => {
+    beforeLeave();
+    const contents = tabs.contents();
+    const risky =
+      contents.some((content) => (isQueryView(content) && content.hasOpenTransaction()) || content.hasUnsavedChanges?.() === true) ||
+      unsavedQueryTitles(tabs).length > 0;
+    if (risky) event.preventDefault();
+  });
 }
 
 /** Closing the window rolls back open transactions and drops unsaved edits; ask first. `beforeExit` runs once agreed. */

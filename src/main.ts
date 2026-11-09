@@ -13,7 +13,8 @@ import { renderStatusContext } from "./app/statusBar";
 import { buildLayout, ASSISTANT_STORAGE_KEY, toggleSidebar } from "./app/layout";
 import { shellMenus } from "./app/menus";
 import { installOnExit, startUpdates } from "./app/update";
-import { confirmQuit, guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
+import { TabPersistence } from "./app/tabPersistence";
+import { confirmQuit, guardPageUnload, guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
 import { api, onConnectionLost } from "./core/api";
 import { hideUnsupported, loadCapabilities } from "./core/capabilities";
 import { loadEngines } from "./core/engines";
@@ -82,6 +83,7 @@ const navigation = new AppNavigation(tabs, {
     currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name ?? connectionId,
   historyEnabled: () => currentConfig?.queryHistory !== false,
   ensureConnected: (connectionId): Promise<boolean> => tree.ensureConnected(connectionId),
+  taskOf: (taskId) => currentConfig?.workspaces.flatMap((item) => item.tasks).find((task) => task.id === taskId),
   writesBlocked: (connectionId) => writesBlocked(connectionSafety(currentConfig?.workspaces ?? [], connectionId)),
 });
 
@@ -154,6 +156,11 @@ tabs.onActiveChange = () => {
   assistant.refreshContext();
   refreshStatusContext();
 };
+
+/** The open tabs of every workspace come back on the next start. */
+const persistence = new TabPersistence(tabs, navigation, () => currentConfig?.workspaces.map((item) => item.id) ?? []);
+tabs.onTabsChanged = () => persistence.schedule();
+navigation.onTabEdited = () => persistence.schedule();
 
 function refreshStatusContext(): void {
   renderStatusContext(statusContext, assistantContext(), tabs.activeContent());
@@ -399,6 +406,7 @@ async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
   try {
     navigation.closeWorkspaceTabs(target.id);
     applyConfig(await api.deleteWorkspace(target.id));
+    persistence.forget(target.id);
     setStatus(`Deleted workspace ${target.name}`);
   } catch (error) {
     showError(error, "Delete workspace");
@@ -454,7 +462,11 @@ async function bootstrap(): Promise<void> {
     toggleSidebar: hideOrShowSidebar,
   });
   suppressBrowserContextMenu();
-  guardWindowClose(tabs, installOnExit);
+  guardWindowClose(tabs, async () => {
+    await persistence.flush();
+    await installOnExit();
+  });
+  guardPageUnload(tabs, () => void persistence.flush());
   revealWindowAfterFirstPaint();
   preloadQueryView();
   try {
@@ -463,6 +475,7 @@ async function bootstrap(): Promise<void> {
     if (config.startupNotice) toast(config.startupNotice, "info");
     void startUpdates({ confirmRestart: () => confirmQuit(tabs, "Restart") });
     if (supported.tasks) await tasksPanel.init();
+    await persistence.restore(config);
   } catch (error) {
     showError(error, "Load the configuration");
   }

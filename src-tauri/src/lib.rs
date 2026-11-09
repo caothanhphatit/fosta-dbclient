@@ -28,6 +28,7 @@ pub mod lang;
 mod lock;
 pub mod logging;
 pub mod net;
+pub mod open_tabs;
 #[cfg(test)]
 mod perf_tests;
 pub mod runtime;
@@ -47,6 +48,8 @@ pub struct AppState {
     pub tasks: Arc<tasks::TaskManager>,
     pub ai: ai::AiRuns,
     pub history: Arc<history::HistoryStore>,
+    /// The open tabs of each workspace, restored on the next start.
+    pub open_tabs: Arc<open_tabs::OpenTabsStore>,
     pub capabilities: Capabilities,
 }
 
@@ -67,6 +70,7 @@ impl AppState {
             tasks,
             ai: ai::AiRuns::default(),
             history: Arc::new(history::HistoryStore::open_default()?),
+            open_tabs: Arc::new(open_tabs::OpenTabsStore::new(config::data_path(open_tabs::OPEN_TABS_FILE)?)),
             capabilities,
         })
     }
@@ -84,6 +88,7 @@ impl AppState {
             tasks: Arc::new(tasks),
             ai: ai::AiRuns::default(),
             history: Arc::new(history::HistoryStore::new(directory.join("history.jsonl"), 100)),
+            open_tabs: Arc::new(open_tabs::OpenTabsStore::new(directory.join(open_tabs::OPEN_TABS_FILE))),
             capabilities,
         }
     }

@@ -152,6 +152,27 @@ function need<K extends keyof EngineMock>(engine: EngineMock, member: K, capabil
   return value as NonNullable<EngineMock[K]>;
 }
 
+// --- Open tabs (kept in localStorage, so a reload of the preview restores them like a restart of the app) ------------------
+
+const MOCK_TABS_KEY = "fosta-mock.openTabs";
+
+function readMockTabs(): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(MOCK_TABS_KEY) ?? "{}");
+    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeMockTabs(stored: Record<string, unknown>): void {
+  try {
+    localStorage.setItem(MOCK_TABS_KEY, JSON.stringify(stored));
+  } catch {
+    // Storage full or unavailable: the preview then starts without tabs.
+  }
+}
+
 // --- Sessions and streaming -----------------------------------------------------------------------------------------------
 
 function session(sessionId: string): MockSession {
@@ -472,6 +493,15 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const before = state.history.length;
       state.history = state.history.filter((entry) => !ids.has(entry.id));
       return before - state.history.length;
+    }
+    case "load_open_tabs":
+      return readMockTabs();
+    case "save_open_tabs": {
+      const stored = readMockTabs();
+      if (payload.tabs === null || payload.tabs === undefined) delete stored[str("workspaceId")];
+      else stored[str("workspaceId")] = payload.tabs;
+      writeMockTabs(stored);
+      return null;
     }
     case "history_clear":
       state.history = [];

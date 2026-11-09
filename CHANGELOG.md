@@ -28,9 +28,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   workspace, offers to move it there (read-only by default).
 - **Security and privacy** page ([docs/security.md](docs/security.md)) and [SECURITY.md](SECURITY.md); CI audits Rust and npm
   dependencies.
+- **Tabs come back after a restart**: each workspace's open tabs (tables, query tabs with their text, language and database,
+  diagrams, command logs) and the active tab are saved in `fosta-tabs.json` next to the config (the data volume on the web) and
+  restored on start. A restored tab connects only when it is shown; a tab whose connection is gone is dropped with a note.
+- **Unsaved query text**: closing a query tab whose text was edited and not run asks first, and quitting lists those tabs.
+- **Query results**: click a column header (or use its menu) to sort the loaded rows; *Refresh names* reloads the completion names.
 
 ### Fixed
 
+- **Menus** no longer end partly outside the window (they were measured during their opening animation) and scroll when taller
+  than the window; the arrow keys move through them.
+- **Scripts with many statements**: the result tabs update incrementally, and above 50 result sets one list of them replaces the
+  tabs (click one to open it), so a 15,000-statement script no longer freezes the window.
+- **Stop** in a query tab shows *Stopped* with the rows received so far instead of an error.
+- **Tab titles** name the connection, and the database, when two tabs share a title.
+- **Lost sessions**: after the backend or the server restarted, a query tab reconnects and reopens its session on the next run
+  (and says so when an open transaction was lost), and the tree no longer shows a connection the backend lost as connected.
+- **Completion** names reload after a tree Refresh and after DDL runs in the tab; a new query tab on SQLite starts in `main`.
 - **Vector index recall**: a row as close as the exact k-th result now counts as a hit, so tables with duplicate vectors no longer
   report a recall near 0.
 - **Oracle in the web edition**: the Docker image now includes `libaio`, and the server puts its Instant Client download folder on

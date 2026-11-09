@@ -205,6 +205,10 @@ export const api = {
   aiCancel: (id: string) => invoke<void>("ai_cancel", { id }),
   /** Records a query run; resolves with the stored entry, or null when history is turned off. */
   historyAppend: (entry: HistoryEntry) => invoke<HistoryEntry | null>("history_append", { entry }),
+  /** The open tabs of every workspace from the last session, by workspace id (`app/tabState.ts` reads them). */
+  loadOpenTabs: () => invoke<Record<string, unknown>>("load_open_tabs"),
+  /** Saves one workspace's open tabs; null forgets them. */
+  saveOpenTabs: (workspaceId: string, tabs: unknown) => invoke<void>("save_open_tabs", { workspaceId, tabs }),
   /** Matching entries, newest first. */
   historyList: (query: HistoryQuery) => invoke<HistoryEntry[]>("history_list", { query }),
   historyDelete: (ids: string[]) => invoke<number>("history_delete", { ids }),

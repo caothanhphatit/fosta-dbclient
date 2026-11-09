@@ -175,6 +175,10 @@ export class TabManager {
     return this.tabs.map((tab) => tab.content);
   }
 
+  keyOf(content: TabContent): string | null {
+    return this.tabs.find((tab) => tab.content === content)?.key ?? null;
+  }
+
   contentOf(key: string): TabContent | undefined {
     return this.tabs.find((tab) => tab.key === key)?.content;
   }

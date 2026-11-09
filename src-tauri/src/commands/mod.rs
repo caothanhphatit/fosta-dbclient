@@ -14,6 +14,7 @@ pub mod files;
 pub mod history;
 pub mod lang;
 pub mod objects;
+pub mod open_tabs;
 pub mod query;
 pub mod tasks;
 pub mod update;
@@ -160,6 +161,10 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<Vec<$crate::history::HistoryEntry>> = $crate::commands::history::history_list;
             [async] history_delete(ids: Vec<String>) -> $crate::error::AppResult<usize> = $crate::commands::history::history_delete;
             [async] history_clear() -> $crate::error::AppResult<()> = $crate::commands::history::history_clear;
+            [async] load_open_tabs() -> $crate::error::AppResult<serde_json::Map<String, serde_json::Value>>
+                = $crate::commands::open_tabs::load_open_tabs;
+            [async] save_open_tabs(workspace_id: String, tabs: Option<serde_json::Value>) -> $crate::error::AppResult<()>
+                = $crate::commands::open_tabs::save_open_tabs;
             [sync] set_query_history(enabled: bool) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::history::set_query_history;
 
             [sync] diagnostics() -> $crate::commands::diagnostics::Diagnostics = $crate::commands::diagnostics::diagnostics;

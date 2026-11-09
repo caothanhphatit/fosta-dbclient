@@ -327,7 +327,9 @@ impl ConnectionManager {
     /// The connection, unless it is not open (`NOT_CONNECTED`) or crashed earlier (`ENGINE_CRASHED`).
     pub fn handle(&self, connection_id: &str) -> AppResult<Handle> {
         let connections = lock(&self.connections);
-        let entry = connections.get(connection_id).ok_or_else(|| AppError::coded(NOT_CONNECTED_CODE, NOT_CONNECTED))?;
+        let entry = connections
+            .get(connection_id)
+            .ok_or_else(|| AppError::coded(NOT_CONNECTED_CODE, NOT_CONNECTED))?;
         if entry.poisoned.load(Ordering::Relaxed) {
             let label = &entry.engine.descriptor().label;
             return Err(crashed(label, "ran an earlier operation", "the connection is closed after a crash").with_engine(entry.engine.id()));
@@ -380,7 +382,9 @@ impl ConnectionManager {
     pub fn session(&self, session_id: &str) -> AppResult<(Handle, Arc<dyn Session>)> {
         let (connection_id, session) = {
             let sessions = lock(&self.sessions);
-            let entry = sessions.get(session_id).ok_or_else(|| AppError::coded(SESSION_LOST_CODE, SESSION_LOST))?;
+            let entry = sessions
+                .get(session_id)
+                .ok_or_else(|| AppError::coded(SESSION_LOST_CODE, SESSION_LOST))?;
             (entry.connection_id.clone(), Arc::clone(&entry.session))
         };
         Ok((self.handle(&connection_id)?, session))
@@ -405,7 +409,9 @@ impl ConnectionManager {
     pub async fn cancel(&self, session_id: &str) -> AppResult<()> {
         let (connection_id, canceller) = {
             let sessions = lock(&self.sessions);
-            let entry = sessions.get(session_id).ok_or_else(|| AppError::coded(SESSION_LOST_CODE, SESSION_LOST))?;
+            let entry = sessions
+                .get(session_id)
+                .ok_or_else(|| AppError::coded(SESSION_LOST_CODE, SESSION_LOST))?;
             (entry.connection_id.clone(), entry.canceller.clone())
         };
         let canceller = canceller.ok_or_else(|| AppError::coded("UNSUPPORTED_CAPABILITY", "Stop is not supported by this engine."))?;
@@ -480,9 +486,15 @@ mod tests {
         assert_eq!(read(&manager, "good").await.unwrap().rows.len(), 1);
         manager.disconnect("bad").await;
         assert_eq!(manager.handle("bad").err().map(|e| e.to_string()), Some(NOT_CONNECTED.to_owned()));
-        assert_eq!(manager.handle("bad").err().and_then(|e| e.code().map(str::to_owned)), Some(NOT_CONNECTED_CODE.to_owned()));
+        assert_eq!(
+            manager.handle("bad").err().and_then(|e| e.code().map(str::to_owned)),
+            Some(NOT_CONNECTED_CODE.to_owned())
+        );
         // A query tab whose session is gone (the app restarted) is told so by code, so it opens a new one.
-        assert_eq!(manager.session("gone").err().and_then(|e| e.code().map(str::to_owned)), Some(SESSION_LOST_CODE.to_owned()));
+        assert_eq!(
+            manager.session("gone").err().and_then(|e| e.code().map(str::to_owned)),
+            Some(SESSION_LOST_CODE.to_owned())
+        );
     }
 
     #[tokio::test]

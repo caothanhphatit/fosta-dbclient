@@ -151,3 +151,20 @@
   height: 26px;
   margin-left: 6px;
 }
+
+/* A tab from the last session that has not been shown yet (it connects when shown). */
+.restored-tab {
+  align-items: center;
+  justify-content: center;
+}
+
+.restored-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  padding: 24px;
+  color: var(--fg-3);
+  text-align: center;
+}
