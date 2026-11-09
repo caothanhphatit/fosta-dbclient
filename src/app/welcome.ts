@@ -1,5 +1,4 @@
 import { h, icon, type IconName } from "../core/dom";
-import { visibleEngines } from "../core/engines";
 
 const SHORTCUTS: [string, string][] = [
   ["Ctrl+N", "New connection"],
@@ -20,14 +19,8 @@ export interface WelcomeActions {
 
 /** The screen shown when no tab is open. `workspaceName` is updated by the caller. */
 export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeActions): HTMLElement {
-  const card = (iconName: IconName, title: string, detail: string, run: () => void, detailClass = "") => {
-    const button = h(
-      "button",
-      { class: "welcome-action", type: "button" },
-      icon(iconName),
-      h("span", { class: "welcome-action-title" }, title),
-      h("span", { class: `welcome-action-detail ${detailClass}`.trim() }, detail),
-    );
+  const card = (iconName: IconName, title: string, run: () => void) => {
+    const button = h("button", { class: "welcome-action", type: "button" }, icon(iconName), h("span", { class: "welcome-action-title" }, title));
     button.addEventListener("click", run);
     return button;
   };
@@ -42,25 +35,16 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
       h(
         "div",
         { class: "welcome-actions" },
-        card("plug", "New connection", "", () => actions.newConnection(), "welcome-engines"),
-        card("query", "New query", "On the selected connection", () => actions.newQuery()),
+        card("plug", "New connection", () => actions.newConnection()),
+        card("query", "New query", () => actions.newQuery()),
         requires(
-          card("task", "New startup task", "Port-forward or other background command", () => actions.newTask()),
+          card("task", "New startup task", () => actions.newTask()),
           "tasks",
         ),
       ),
       h("ul", { class: "shortcuts" }, ...SHORTCUTS.map(([keys, action]) => h("li", {}, h("kbd", {}, keys), h("span", {}, action)))),
     ),
   );
-}
-
-/** Fills the engine list of the connection card from the registry; call once the descriptors are loaded. */
-export function showWelcomeEngines(welcome: HTMLElement): void {
-  const target = welcome.querySelector(".welcome-engines");
-  if (target)
-    target.textContent = visibleEngines()
-      .map((engine) => engine.label)
-      .join(", ");
 }
 
 /** Hidden by `hideUnsupported` when the edition lacks `capability` (startup tasks in the web edition). */

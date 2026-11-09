@@ -8,7 +8,7 @@ import { showError } from "./core/errorPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { assistantContext as buildAssistantContext, isQueryView, taskLogContext } from "./app/assistantContext";
 import { AppNavigation, preloadQueryView } from "./app/navigation";
-import { showWelcomeEngines, welcomeScreen } from "./app/welcome";
+import { welcomeScreen } from "./app/welcome";
 import { renderStatusContext } from "./app/statusBar";
 import { buildLayout, ASSISTANT_STORAGE_KEY } from "./app/layout";
 import { shellMenus } from "./app/menus";
@@ -375,7 +375,6 @@ async function bootstrap(): Promise<void> {
       return [];
     }),
   ]);
-  showWelcomeEngines(welcome);
   initDensity();
   initTheme();
   onThemeChange(() => rail.refreshTheme());
