@@ -55,6 +55,7 @@ import type {
   HistoryQuery,
   InstallKind,
   StatementCategory,
+  TaskDef,
   Workspace,
 } from "../../core/types";
 import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf, unmarksLooserThanReadOnly, withoutConfirmation } from "../../features/safety/safety";
@@ -65,8 +66,20 @@ import { gate, refuseOperation, statementInfo } from "./gateway";
 import { mockCheckUpdate, mockInstallKind, mockRestart, mockUpdaterCheck, mockUpdaterDownload, mockWhatsNew, setInstallKind } from "./update";
 import { VECTOR_DIMS } from "./shop";
 import { state } from "./state";
-import { startTunnel, stopTunnel, tunnelLogs, tunnelSaved, tunnelStatus, withProbeTunnel } from "./tunnels";
-import { tunnelTaskId } from "../../features/connections/tunnelForm";
+import {
+  acquire,
+  connectionSaved,
+  deleteTask,
+  release,
+  restartTask,
+  saveTask,
+  startAutoCommands,
+  startTask,
+  stopTask,
+  taskLogs,
+  taskStatuses,
+  withProbe,
+} from "./commands";
 import type { EngineMock, MockSession } from "./types";
 
 const modules = import.meta.glob<EngineMock>("./engines/*.ts", { eager: true });
@@ -114,7 +127,7 @@ function open(profile: ConnectionProfile): Connection {
       vendorCode: 2002,
       kind: "connect",
       retryable: true,
-      hint: "Check that the server is running and reachable from this machine: VPN, firewall, or a port-forward startup task.",
+      hint: "Check that the server is running and reachable from this machine: VPN, firewall, or a port-forward command.",
       cause: [`connect to ${profile.host}:${profile.port}`, "operation timed out after 10 s"],
     });
   return { profile, engine, info: engine.connectInfo(profile) };
@@ -398,21 +411,22 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       return state.config;
     case "set_active_workspace":
       state.config = { ...state.config, activeWorkspace: str("id") };
+      startAutoCommands();
       return state.config;
     case "save_workspace":
       return saveWorkspace(payload.workspace as Workspace, payload.relaxConfirmation);
     case "skip_confirmations":
       return skipConfirmations(String(payload.connectionId), payload.categories as StatementCategory[]);
     case "delete_workspace":
-      for (const profile of state.config.workspaces.find((item) => item.id === payload.id)?.connections ?? []) stopTunnel(tunnelTaskId(profile.id));
+      for (const workspace of state.config.workspaces.filter((item) => item.id === payload.id)) {
+        for (const profile of workspace.connections) release(profile.id);
+        for (const task of workspace.tasks) stopTask(task.id);
+      }
       state.config = { ...state.config, workspaces: state.config.workspaces.filter((item) => item.id !== payload.id) };
       if (state.config.activeWorkspace === payload.id) state.config.activeWorkspace = state.config.workspaces[0].id;
       return state.config;
     case "save_connection":
-      tunnelSaved(
-        profiles().find((item) => item.id === (payload.profile as ConnectionProfile).id),
-        payload.profile as ConnectionProfile,
-      );
+      connectionSaved(payload.profile as ConnectionProfile);
       return saveConnection(
         payload.profile as ConnectionProfile,
         (payload.password as string | null) ?? null,
@@ -422,26 +436,26 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       );
     case "delete_connection":
       connections.delete(str("id"));
-      stopTunnel(tunnelTaskId(str("id")));
+      release(str("id"));
       return deleteConnection(str("id"));
     case "save_task":
+      return saveTask(payload.task as TaskDef, (payload.workspaceId as string | null) ?? null);
     case "delete_task":
+      return deleteTask(str("id"));
     case "save_embedding_settings":
       return state.config;
     case "capabilities":
       return { edition: "desktop", tasks: true, revealFile: true, browserDownloads: false, secretStore: "Windows Credential Manager", inContainer: false };
     case "task_statuses":
-      return [{ id: "t-a-1", state: "running", pid: 4242, restarts: 0, message: null }];
-    case "tunnel_status":
-      return tunnelStatus(str("connectionId"));
-    case "tunnel_logs":
-      return tunnelLogs(str("connectionId"));
+      return taskStatuses();
     case "task_logs":
-      if (str("id").startsWith("tunnel:")) return tunnelLogs(str("id").slice("tunnel:".length));
-      return ["▶ kubectl port-forward -n shop svc/mariadb 13306:3306", "Forwarding from 127.0.0.1:13306 -> 3306", "Handling connection for 13306"];
+      return taskLogs(str("id"));
     case "start_task":
+      return startTask(str("id"));
     case "stop_task":
+      return stopTask(str("id"));
     case "restart_task":
+      return restartTask(str("id"));
     case "reveal_file":
     case "open_log_folder":
       return null;
@@ -527,20 +541,25 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const profile = payload.profile as ConnectionProfile;
       knownEngine(profile.driver);
       checkTestPassword(profile, (payload.password as string | null) ?? null);
-      return withProbeTunnel(profile, () => open(profile).info);
+      return withProbe(profile, () => open(profile).info);
     }
     case "connect": {
       const profile = savedProfile(str("id"));
       const connectNow = () => {
-        const opened = open(profile);
-        connections.set(opened.profile.id, opened);
-        return opened.info;
+        try {
+          const opened = open(profile);
+          connections.set(opened.profile.id, opened);
+          return opened.info;
+        } catch (error) {
+          if (!connections.has(profile.id)) release(profile.id);
+          throw error;
+        }
       };
-      return profile.tunnel ? startTunnel(profile).then(connectNow) : connectNow();
+      return profile.commandId ? acquire(profile.id, profile).then(connectNow) : (release(profile.id), connectNow());
     }
     case "disconnect":
       connections.delete(str("id"));
-      stopTunnel(tunnelTaskId(str("id")));
+      release(str("id"));
       for (const [id, item] of sessions) if (item.connectionId === payload.id) sessions.delete(id);
       return null;
 
@@ -652,7 +671,7 @@ declare global {
 
 export function installDevMock(): void {
   mockWindows("main");
-  // Events (`listen` / `emit`) are delivered by the mock itself, so mock tunnels can report their status.
+  // Events (`listen` / `emit`) are delivered by the mock itself, so mock commands can report their status.
   mockIPC(
     (command, payload) => {
       try {

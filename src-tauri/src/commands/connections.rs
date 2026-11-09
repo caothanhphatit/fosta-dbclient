@@ -6,13 +6,15 @@ use crate::{
     audit::{AuditEntry, Outcome},
     commands::workspaces::require_relax_confirmation,
     config::{AppConfig, ConnectionProfile},
+    connection_command,
     contract::{spec::SshAuth, AuthMethodId, ConnectInfo, ConnectSecrets, SecretSlot},
     error::{AppError, AppResult, PASSWORD_REQUIRED},
     gateway::rules::{relaxations, Preset, PRODUCTION_ICON},
     net,
     runtime::{manager, ConnectionManager},
     secrets::{self, SecretKey},
-    tunnel, AppState,
+    tasks::{TaskDef, TASKS_DISABLED},
+    AppState,
 };
 
 /// Saves `profile` (normalised to the version-2 shape) with its secrets: `password` (kept for older callers)
@@ -34,11 +36,14 @@ pub fn save_connection(
 ) -> AppResult<AppConfig> {
     let mut profile = profile;
     profile.normalize();
-    if profile.tunnel.is_some() && !state.capabilities.tasks {
-        return Err(AppError::new(tunnel::TUNNELS_DISABLED));
-    }
     let config = state.config.snapshot();
-    let tunnel_changed = config.connection(&profile.id).is_some_and(|saved| saved.tunnel_changed(&profile));
+    if profile.command.is_some()
+        && !state.capabilities.tasks
+        && config.connection(&profile.id).is_none_or(|saved| saved.command != profile.command)
+    {
+        // Where commands are off, a saved reference is kept as it is, but no new one is made.
+        return Err(AppError::new(TASKS_DISABLED));
+    }
     let workspace_id = workspace_id.unwrap_or_else(|| match config.connection_scope(&profile.id) {
         Some((workspace, _)) => workspace.id.clone(),
         None => config.active_workspace.clone(),
@@ -57,14 +62,19 @@ pub fn save_connection(
             format!("This makes the rules of a connection in the Production workspace less strict: type \"{name}\" to confirm."),
         )?;
     }
-    remember_secrets(config.connection(&profile.id), &profile, password, secrets)?;
+    // The profile as it will be stored (a move drops the old workspace's command), and refused before any secret changes.
+    let mut trial = config.clone();
+    trial.put_connection(&workspace_id, profile.clone())?;
+    let stored = trial.connection(&profile.id).cloned().unwrap_or_else(|| profile.clone());
+    remember_secrets(config.connection(&profile.id), &stored, password, secrets)?;
     let connection_id = profile.id.clone();
     let connection_name = profile.name.clone();
     let engine = profile.engine.clone();
     let saved = state.config.update(|config| config.put_connection(&workspace_id, profile))?;
-    if tunnel_changed {
-        // The next connect starts the new command.
-        state.tasks.stop(&tunnel::task_id(&connection_id));
+    let command = saved.connection(&connection_id).and_then(|profile| profile.command.clone());
+    if state.tasks.held_by(&connection_id).is_some_and(|held| Some(held) != command) {
+        // Another command (or none, or a move): let go of the old one; the next connect starts the new one.
+        connection_command::release_now(&state.tasks, &connection_id);
     }
     if let Some(change) = change {
         state.engines.gateway.audit(AuditEntry {
@@ -144,7 +154,7 @@ fn rule_change(config: &AppConfig, workspace_id: &str, profile: &ConnectionProfi
 
 pub async fn delete_connection(state: &AppState, id: String) -> AppResult<AppConfig> {
     state.engines.disconnect(&id).await;
-    tunnel::stop(&state.tasks, &tunnel::task_id(&id)).await;
+    connection_command::release(&state.tasks, &id).await;
     secrets::delete_connection(&id)?;
     state.config.update(|config| {
         config.remove_connection(&id);
@@ -176,43 +186,51 @@ pub async fn test_connection(
             secrets.values.insert(slot, value);
         }
     }
-    let probe_tunnel = match &profile.tunnel {
-        Some(command) => Some(
-            tunnel::start_probe(
-                &state.tasks,
-                &profile.id,
-                &profile.name,
-                command,
-                tunnel::ready_check(&profile.host, profile.port),
-            )
-            .await?,
-        ),
+    let probe = match command_of(state, &profile)? {
+        Some(def) => {
+            let ready = connection_command::ready_check(&profile.host, profile.port);
+            Some(connection_command::probe(&state.tasks, &def, ready).await?)
+        }
         None => None,
     };
     let probed = ConnectionManager::probe(profile.spec(), secrets).await;
-    if let Some(probe_tunnel) = probe_tunnel {
-        probe_tunnel.finish(&state.tasks).await;
+    if let Some(probe) = probe {
+        probe.finish(&state.tasks).await;
     }
     probed
 }
 
-/// Connects a saved connection, after starting its tunnel command (or reusing the running one) when it has one.
+/// The command `profile` uses, if any.
+fn command_of(state: &AppState, profile: &ConnectionProfile) -> AppResult<Option<TaskDef>> {
+    let Some(id) = &profile.command else {
+        return Ok(None);
+    };
+    match state.config.read(|config| config.task(id).cloned()) {
+        Some(def) => Ok(Some(def)),
+        None => Err(AppError::new(format!(
+            "The command of connection '{}' no longer exists: edit the connection to pick another.",
+            profile.name
+        ))),
+    }
+}
+
+/// Connects a saved connection, after starting its command (or reusing the running one) when it uses one.
 pub async fn connect(state: &AppState, id: String, password: Option<String>) -> AppResult<ConnectInfo> {
     let profile = state.config.connection(&id)?;
     let secrets = match password {
         Some(password) => with_password(Some(&profile), password)?,
         None => saved_secrets(&profile)?,
     };
-    let started = match &profile.tunnel {
-        Some(command) => {
-            let ready = tunnel::ready_check(&profile.host, profile.port);
-            tunnel::ensure(&state.tasks, &tunnel::task_id(&id), &profile.name, command, ready).await?
+    match command_of(state, &profile)? {
+        Some(def) => {
+            let ready = connection_command::ready_check(&profile.host, profile.port);
+            connection_command::acquire(&state.tasks, &id, &def, ready).await?;
         }
-        None => false,
-    };
+        None => connection_command::release(&state.tasks, &id).await,
+    }
     let connected = state.engines.connect(&id, profile.spec(), secrets).await;
-    if connected.is_err() && started {
-        tunnel::stop(&state.tasks, &tunnel::task_id(&id)).await;
+    if connected.is_err() && state.engines.handle(&id).is_err() {
+        connection_command::release(&state.tasks, &id).await;
     }
     connected
 }
@@ -225,7 +243,7 @@ pub fn trust_host_key(_state: &AppState, host: String, port: u16, public_key: St
 
 pub async fn disconnect(state: &AppState, id: String) -> AppResult<()> {
     state.engines.disconnect(&id).await;
-    tunnel::stop(&state.tasks, &tunnel::task_id(&id)).await;
+    connection_command::release(&state.tasks, &id).await;
     Ok(())
 }
 
@@ -509,49 +527,74 @@ mod tests {
         );
     }
 
-    fn tunnelled(id: &str, command: crate::tunnel::TunnelConfig) -> ConnectionProfile {
+    use crate::connection_command::{testing, COMMAND_FAILED};
+    use crate::tasks::{ReadyCheck, TaskState};
+
+    fn using(id: &str, command: Option<&str>) -> ConnectionProfile {
         ConnectionProfile {
             id: id.into(),
-            name: "Shop".into(),
+            name: id.to_uppercase(),
             engine: "postgres".into(),
             host: "127.0.0.1".into(),
             port: 5432,
             user: "postgres".into(),
             database: Some("shop".into()),
-            tunnel: Some(command),
+            command: command.map(str::to_owned),
             ..Default::default()
         }
     }
 
-    /// A state holding `profile` in its only workspace.
-    fn state_with(name: &str, capabilities: crate::Capabilities, profile: &ConnectionProfile) -> AppState {
+    /// A state whose only workspace has the command `def` and the connections `profiles`.
+    fn state_with(name: &str, capabilities: crate::Capabilities, def: &TaskDef, profiles: &[ConnectionProfile]) -> AppState {
         let state = AppState::for_test(name, capabilities, AppConfig::default());
         let workspace = state.config.snapshot().workspaces[0].id.clone();
         state
             .config
-            .update(|config| config.put_connection(&workspace, profile.clone()))
+            .update(|config| {
+                config.put_task(&workspace, def.clone())?;
+                profiles
+                    .iter()
+                    .try_for_each(|profile| config.put_connection(&workspace, profile.clone()))
+            })
             .unwrap();
         state
     }
 
-    #[tokio::test]
-    async fn tunnels_are_refused_where_tasks_are_off() {
-        let _store = memory_store(&[]);
-        let profile = tunnelled("off", crate::tunnel::testing::long_running(None).0);
-        let state = state_with("tunnel-off", crate::Capabilities::web(false, true), &profile);
-        let error = save_connection(&state, profile.clone(), None, None, None, None).unwrap_err();
-        assert_eq!(error.to_string(), tunnel::TUNNELS_DISABLED);
-        let error = connect(&state, profile.id.clone(), Some("pw".into())).await.unwrap_err();
-        assert_eq!(error.to_string(), tunnel::TUNNELS_DISABLED);
-        // A profile without a tunnel (or with an empty one) still saves.
-        let mut plain = profile;
-        plain.tunnel.as_mut().unwrap().program = " ".into();
-        save_connection(&state, plain, None, None, None, None).unwrap();
+    /// What `connect` does before the database connects (the unit tests have no database).
+    async fn hold(state: &AppState, connection_id: &str, def: &TaskDef) -> bool {
+        connection_command::acquire(&state.tasks, connection_id, def, ReadyCheck::Spawned)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
-    async fn a_parsed_connection_string_never_sets_a_tunnel() {
-        let state = AppState::for_test("tunnel-parse", crate::Capabilities::desktop(), AppConfig::default());
+    async fn commands_are_refused_where_tasks_are_off() {
+        let _store = memory_store(&[]);
+        let (def, _) = testing::long_running("pf");
+        let profile = using("off", Some("pf"));
+        let state = state_with(
+            "command-off",
+            crate::Capabilities::web(false, true),
+            &def,
+            std::slice::from_ref(&profile),
+        );
+        // A saved reference is kept as it is (not dropped), but no new one is made.
+        let mut renamed = profile.clone();
+        renamed.name = "Renamed".into();
+        save_connection(&state, renamed, None, None, None, None).unwrap();
+        assert_eq!(state.config.connection("off").unwrap().command.as_deref(), Some("pf"));
+        let error = save_connection(&state, using("new", Some("pf")), None, None, None, None).unwrap_err();
+        assert_eq!(error.to_string(), TASKS_DISABLED);
+        let error = connect(&state, "off".into(), Some("pw".into())).await.unwrap_err();
+        assert_eq!(error.to_string(), TASKS_DISABLED);
+        save_connection(&state, using("off", None), None, None, None, None).unwrap();
+        let error = save_connection(&state, profile, None, None, None, None).unwrap_err();
+        assert_eq!(error.to_string(), TASKS_DISABLED);
+    }
+
+    #[tokio::test]
+    async fn a_parsed_connection_string_never_sets_a_command() {
+        let state = AppState::for_test("command-parse", crate::Capabilities::desktop(), AppConfig::default());
         for (engine, text) in [
             ("postgres", "postgres://app:pw@127.0.0.1:13306/shop?sslmode=disable"),
             ("mariadb", "mysql://root:pw@127.0.0.1:13306/shop"),
@@ -559,50 +602,116 @@ mod tests {
         ] {
             let parsed = crate::commands::engines::parse_connection_string(&state, engine.into(), text.into()).unwrap();
             let json = serde_json::to_value(&parsed).unwrap();
-            assert!(json["spec"].get("tunnel").is_none(), "{engine}: {json}");
-            assert!(json.get("tunnel").is_none(), "{engine}: {json}");
+            assert!(json["spec"].get("commandId").is_none(), "{engine}: {json}");
+            assert!(json.get("commandId").is_none(), "{engine}: {json}");
         }
     }
 
     #[tokio::test]
-    async fn a_tunnel_that_exits_fails_the_connect_with_its_log() {
+    async fn a_command_that_exits_fails_the_connect_with_its_log() {
         let _store = memory_store(&[]);
-        let profile = tunnelled("early", crate::tunnel::testing::exits_early());
-        let state = state_with("tunnel-early", crate::Capabilities::desktop(), &profile);
-        let error = connect(&state, profile.id.clone(), Some("pw".into())).await.unwrap_err();
-        assert_eq!(error.field("code").and_then(|code| code.as_str()), Some(tunnel::TUNNEL_FAILED));
+        let def = testing::exits_early("pf");
+        let state = state_with("command-early", crate::Capabilities::desktop(), &def, &[using("early", Some("pf"))]);
+        let error = connect(&state, "early".into(), Some("pw".into())).await.unwrap_err();
+        assert_eq!(error.field("code").and_then(|code| code.as_str()), Some(COMMAND_FAILED));
         assert!(error.to_string().contains("boom: port is in use"), "{error}");
-        assert!(!state.tasks.is_active(&tunnel::task_id("early")));
+        assert!(!state.tasks.is_active("pf"));
+        assert_eq!(state.tasks.held_by("early"), None);
     }
 
     #[tokio::test]
-    async fn the_tunnel_stops_on_disconnect_delete_edit_and_workspace_delete() {
+    async fn a_missing_command_fails_clearly() {
         let _store = memory_store(&[]);
-        let command = crate::tunnel::testing::long_running(None).0;
-        let profile = tunnelled("life", command.clone());
-        let state = state_with("tunnel-life", crate::Capabilities::desktop(), &profile);
-        let id = tunnel::task_id("life");
-        // What `connect` does before the database connects.
-        let start = || tunnel::ensure(&state.tasks, &id, "Shop", &command, crate::tasks::ReadyCheck::Spawned);
+        let state = AppState::for_test("command-missing", crate::Capabilities::desktop(), AppConfig::default());
+        let error = test_connection(&state, using("gone", Some("deleted")), Some("pw".into()), None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no longer exists"), "{error}");
+    }
 
-        start().await.unwrap();
-        disconnect(&state, "life".into()).await.unwrap();
-        assert!(!state.tasks.is_active(&id), "disconnect stops it");
+    #[tokio::test]
+    async fn a_refused_command_or_a_move_keeps_the_secrets_rule() {
+        let _store = memory_store(&[("conn:k:password", "pw")]);
+        let (def, _) = testing::long_running("pf");
+        let mut saved = using("k", Some("pf"));
+        saved.save_password = true;
+        let state = state_with(
+            "command-secrets",
+            crate::Capabilities::desktop(),
+            &def,
+            std::slice::from_ref(&saved),
+        );
+        let stored = || secrets::get(&SecretKey::connection("k", SecretSlot::Password)).unwrap();
 
-        start().await.unwrap();
-        let mut renamed = profile.clone();
-        renamed.name = "Shop (k8s)".into();
-        save_connection(&state, renamed, None, None, None, None).unwrap();
-        assert!(state.tasks.is_active(&id), "an edit that keeps the command keeps it running");
-        let mut edited = profile.clone();
-        edited.tunnel.as_mut().unwrap().args.push("-4".into());
-        save_connection(&state, edited, None, None, None, None).unwrap();
-        state.tasks.wait_until_stopped(&id).await.unwrap();
-        assert!(!state.tasks.is_active(&id), "a changed command stops it");
+        // A command that is not one of the workspace's (deleted in another window): refused, the password stays.
+        let stale = ConnectionProfile {
+            command: Some("deleted".into()),
+            ..saved.clone()
+        };
+        let error = save_connection(&state, stale, None, None, None, None).unwrap_err();
+        assert!(error.to_string().contains("not a command"), "{error}");
+        assert_eq!(stored().as_deref(), Some("pw"));
 
-        start().await.unwrap();
+        // A move drops the old workspace's command: another target, so the saved password is forgotten.
+        state
+            .config
+            .update(|config| {
+                config.put_workspace(WorkspaceMeta {
+                    id: "other".into(),
+                    name: "Other".into(),
+                    color: String::new(),
+                    icon: "box".into(),
+                    safety: None,
+                    assistant_queries: None,
+                });
+                Ok(())
+            })
+            .unwrap();
+        let moved = save_connection(&state, saved, None, Some("other".into()), None, None).unwrap();
+        assert_eq!(moved.connection("k").unwrap().command, None);
+        assert_eq!(stored(), None);
+    }
+
+    #[tokio::test]
+    async fn a_shared_command_stops_with_its_last_connection() {
+        let _store = memory_store(&[]);
+        let (def, _) = testing::long_running("pf");
+        let profiles = [using("a", Some("pf")), using("b", Some("pf"))];
+        let state = state_with("command-shared", crate::Capabilities::desktop(), &def, &profiles);
+
+        assert!(hold(&state, "a", &def).await);
+        assert!(!hold(&state, "b", &def).await, "b reuses a's command");
+        disconnect(&state, "a".into()).await.unwrap();
+        assert!(state.tasks.is_active("pf"), "b still uses it");
+        disconnect(&state, "b".into()).await.unwrap();
+        assert!(!state.tasks.is_active("pf"), "the last connection stops it");
+
+        // A command started by hand (or with the workspace) keeps running.
+        crate::commands::tasks::start_task(&state, "pf".into()).unwrap();
+        assert!(!hold(&state, "a", &def).await);
+        disconnect(&state, "a".into()).await.unwrap();
+        assert!(state.tasks.is_active("pf"));
+        crate::commands::tasks::stop_task(&state, "pf".into());
+        state.tasks.wait_until_stopped("pf").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_command_stops_on_switch_delete_and_workspace_delete() {
+        let _store = memory_store(&[]);
+        let (def, _) = testing::long_running("pf");
+        let state = state_with("command-life", crate::Capabilities::desktop(), &def, &[using("life", Some("pf"))]);
+
+        hold(&state, "life", &def).await;
+        save_connection(&state, using("life", Some("pf")), None, None, None, None).unwrap();
+        assert!(state.tasks.is_active("pf"), "an edit that keeps the command keeps it running");
+        save_connection(&state, using("life", None), None, None, None, None).unwrap();
+        state.tasks.wait_until_stopped("pf").await.unwrap();
+        assert!(!state.tasks.is_active("pf"), "switching to no command stops it");
+
+        save_connection(&state, using("life", Some("pf")), None, None, None, None).unwrap();
+        hold(&state, "life", &def).await;
         delete_connection(&state, "life".into()).await.unwrap();
-        assert!(!state.tasks.is_active(&id), "delete stops it");
+        assert!(!state.tasks.is_active("pf"), "delete stops it");
 
         let doomed = WorkspaceMeta {
             id: "doomed".into(),
@@ -612,52 +721,76 @@ mod tests {
             safety: None,
             assistant_queries: None,
         };
+        let other = TaskDef {
+            id: "pf2".into(),
+            ..def.clone()
+        };
         state
             .config
             .update(|config| {
                 config.put_workspace(doomed);
-                config.put_connection("doomed", profile.clone())
+                config.put_task("doomed", other.clone())?;
+                config.put_connection("doomed", using("life", Some("pf2")))
             })
             .unwrap();
-        start().await.unwrap();
+        hold(&state, "life", &other).await;
         crate::commands::workspaces::delete_workspace(&state, "doomed".into())
             .await
             .unwrap();
-        assert!(!state.tasks.is_active(&id), "deleting its workspace stops it");
+        assert!(!state.tasks.is_active("pf2"), "deleting its workspace stops it");
+        assert_eq!(state.tasks.held_by("life"), None);
     }
 
-    /// The whole path against the dev Postgres: the tunnel command only waits (the port is already open), so this
-    /// checks start → ready (port) → connect → reuse → disconnect → stopped, and the temporary tunnel of a test.
+    #[tokio::test]
+    async fn deleting_a_command_clears_it_from_its_connections() {
+        let _store = memory_store(&[]);
+        let (def, _) = testing::long_running("pf");
+        let profiles = [using("a", Some("pf")), using("b", Some("pf"))];
+        let state = state_with("command-delete", crate::Capabilities::desktop(), &def, &profiles);
+        hold(&state, "a", &def).await;
+        let config = crate::commands::tasks::delete_task(&state, "pf".into()).unwrap();
+        assert!(config.all_tasks().next().is_none());
+        assert_eq!(config.connection("a").unwrap().command, None);
+        assert_eq!(config.connection("b").unwrap().command, None);
+        state.tasks.wait_until_stopped("pf").await.unwrap();
+        disconnect(&state, "a".into()).await.unwrap();
+    }
+
+    /// The whole path against the dev Postgres: the command only waits (the port is already open), so this checks
+    /// test (temporary) → start → ready (port) → connect → shared by a second connection → stopped with the last one.
     #[tokio::test]
     #[ignore = "needs the dev Postgres on 127.0.0.1:5432 (dev/compose)"]
-    async fn live_a_tunnel_command_runs_while_postgres_is_connected() {
+    async fn live_a_command_runs_while_postgres_connections_use_it() {
         let _store = memory_store(&[]);
-        let command = crate::tunnel::TunnelConfig {
-            ready_pattern: None,
-            ..crate::tunnel::testing::long_running(None).0
-        };
-        let profile = tunnelled("live", command);
-        let state = state_with("tunnel-live", crate::Capabilities::desktop(), &profile);
-        let id = tunnel::task_id("live");
+        let (def, _) = testing::long_running("pf");
+        let profiles = [using("live-a", Some("pf")), using("live-b", Some("pf"))];
+        let state = state_with("command-live", crate::Capabilities::desktop(), &def, &profiles);
 
-        let info = test_connection(&state, profile.clone(), Some("studio-root".into()), None)
+        let info = test_connection(&state, profiles[0].clone(), Some("studio-root".into()), None)
             .await
             .unwrap();
         assert_eq!(info.engine, "postgres");
-        assert!(!state.tasks.is_active(&id), "a test runs a temporary tunnel, not the connection's");
+        assert!(!state.tasks.is_active("pf"), "a test stops the command it started");
 
-        connect(&state, "live".into(), Some("studio-root".into())).await.unwrap();
-        let status = state.tasks.status(&id);
-        assert_eq!(status.state, crate::tasks::TaskState::Running);
-        assert!(state.engines.handle("live").is_ok());
-        assert!(state.tasks.logs(&id).first().is_some_and(|line| line.starts_with('▶')));
+        connect(&state, "live-a".into(), Some("studio-root".into())).await.unwrap();
+        let status = state.tasks.status("pf");
+        assert_eq!(status.state, TaskState::Running);
+        assert!(status.for_connections);
+        assert!(state.engines.handle("live-a").is_ok());
+        assert!(state.tasks.logs("pf").first().is_some_and(|line| line.starts_with('▶')));
 
-        connect(&state, "live".into(), Some("studio-root".into())).await.unwrap();
-        assert_eq!(state.tasks.status(&id).pid, status.pid, "a second connect reuses the tunnel");
+        connect(&state, "live-b".into(), Some("studio-root".into())).await.unwrap();
+        assert_eq!(state.tasks.status("pf").pid, status.pid, "the second connection shares the command");
+        test_connection(&state, profiles[1].clone(), Some("studio-root".into()), None)
+            .await
+            .unwrap();
+        assert!(state.tasks.is_active("pf"), "a test keeps a command in use running");
 
-        disconnect(&state, "live".into()).await.unwrap();
-        assert!(!state.tasks.is_active(&id));
-        assert_eq!(state.tasks.status(&id).state, crate::tasks::TaskState::Stopped);
-        assert!(state.engines.handle("live").is_err());
+        disconnect(&state, "live-a".into()).await.unwrap();
+        assert!(state.tasks.is_active("pf"), "live-b still uses it");
+        disconnect(&state, "live-b".into()).await.unwrap();
+        assert!(!state.tasks.is_active("pf"));
+        assert_eq!(state.tasks.status("pf").state, TaskState::Stopped);
+        assert!(state.engines.handle("live-b").is_err());
     }
 }

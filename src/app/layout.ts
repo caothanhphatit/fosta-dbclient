@@ -1,4 +1,5 @@
 /** Builds the shell's DOM: toolbar, sidebar, workspace area with its splitters, status bar. */
+import { showMenuBelow } from "../core/contextMenu";
 import { errorPanelBadge, errorPanelElement } from "../core/errorPanel";
 import { bigButton, clamp, h, iconButton, separator, spacer } from "../core/dom";
 import { makeSplitter } from "../core/splitter";
@@ -33,6 +34,27 @@ export interface LayoutParts {
   newDiagram(): void;
   configureEmbedding(): void;
   toggleAssistant(): void;
+  toggleSidebar(): void;
+}
+
+export const SIDEBAR_STORAGE_KEY = "db-studio.sidebar";
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** Hides or shows the sidebar (connections and commands; the workspace rail stays), remembered in this browser. */
+export function toggleSidebar(area: HTMLElement): void {
+  const collapsed = area.classList.toggle("sidebar-collapsed");
+  try {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, collapsed ? "collapsed" : "open");
+  } catch {
+    // Not remembered: private window or blocked storage.
+  }
 }
 
 /** Marks an element as needing a capability; `hideUnsupported` hides it when the edition lacks it. */
@@ -44,18 +66,17 @@ function withRequirement<T extends HTMLElement>(element: T, capability: keyof Ca
 /** Appends the shell to the page and returns the workspace area (the element that toggles the assistant column). */
 export function buildLayout(parts: LayoutParts): HTMLElement {
   const { workspaceHeader, statusText, statusContext, safetyStatus, taskSummary, tree, tasksPanel, tabs, assistant, rail } = parts;
+  const commands = bigButton("task", "Commands", () => showMenuBelow(commands, tasksPanel.menuItems()), "Commands of this workspace");
   const toolbar = h(
     "header",
     { class: "app-toolbar" },
+    iconButton("panel", "Show or hide the sidebar (Ctrl+B)", parts.toggleSidebar),
     bigButton("plug", "Connection", parts.newConnection, "New connection (Ctrl+N)"),
     bigButton("query", "Query", parts.newQuery, "New query (Ctrl+T)"),
     bigButton("diagram", "Diagram", parts.newDiagram, "ER diagram of the selected database"),
     bigButton("refresh", "Refresh", () => tree.refreshSelected(), "Reload the selected database"),
     separator(),
-    withRequirement(
-      bigButton("task", "Task", () => void tasksPanel.edit(null), "New startup task"),
-      "tasks",
-    ),
+    withRequirement(commands, "tasks"),
     bigButton("vector", "Embedding", parts.configureEmbedding, "Embedding API for vector search"),
     spacer(),
     bigButton("sparkle", "Assistant", parts.toggleAssistant, "Chat with your database (Ctrl+Shift+A)"),
@@ -68,7 +89,7 @@ export function buildLayout(parts: LayoutParts): HTMLElement {
     tree.element,
     withRequirement(tasksPanel.element, "tasks"),
   );
-  const sidebarSplitter = h("div", { class: "splitter-x" });
+  const sidebarSplitter = h("div", { class: "splitter-x sidebar-splitter" });
   const assistantSplitter = h("div", { class: "splitter-x assistant-splitter" });
   const area = h("main", { class: "workspace" }, sidebar, sidebarSplitter, tabs.element, assistantSplitter, assistant.element);
 
@@ -89,6 +110,7 @@ export function buildLayout(parts: LayoutParts): HTMLElement {
     // Fall through: closed by default.
   }
   area.classList.toggle("with-assistant", remembered === "open");
+  area.classList.toggle("sidebar-collapsed", readStored(SIDEBAR_STORAGE_KEY) === "collapsed");
   const version = h("span", { class: "status-version", title: "Fosta Studio version" }, `v${__APP_VERSION__}`);
   const statusBar = h(
     "footer",

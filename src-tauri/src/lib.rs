@@ -14,6 +14,7 @@ mod architecture_tests;
 pub mod audit;
 pub mod commands;
 pub mod config;
+pub mod connection_command;
 pub mod contract;
 pub mod embedding;
 pub mod engines;
@@ -32,7 +33,6 @@ mod perf_tests;
 pub mod runtime;
 pub mod secrets;
 pub mod tasks;
-pub mod tunnel;
 pub mod update;
 
 use std::sync::Arc;
@@ -95,7 +95,7 @@ impl AppState {
 pub struct Capabilities {
     /// `"desktop"` or `"web"`.
     pub edition: &'static str,
-    /// Startup tasks (child processes) can run.
+    /// Workspace commands (child processes) can run.
     pub tasks: bool,
     /// "Show in folder" after an export.
     pub reveal_file: bool,

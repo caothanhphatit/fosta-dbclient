@@ -13,6 +13,7 @@ export interface ShortcutHost {
   newConnection(): void;
   newQuery(): void;
   toggleAssistant(): void;
+  toggleSidebar(): void;
 }
 
 export function installShortcuts(host: ShortcutHost): void {
@@ -21,7 +22,7 @@ export function installShortcuts(host: ShortcutHost): void {
     const key = event.key.toLowerCase();
     // Shortcuts would act behind an open dialog (or stack a second one); keep the browser's own meaning off too.
     if (isModalOpen()) {
-      if (/^[1-9nt]$/.test(key) && !event.shiftKey) event.preventDefault();
+      if (/^[1-9ntb]$/.test(key) && !event.shiftKey) event.preventDefault();
       return;
     }
     if (key >= "1" && key <= "9" && !event.shiftKey) {
@@ -36,6 +37,9 @@ export function installShortcuts(host: ShortcutHost): void {
     } else if (key === "t" && !event.shiftKey) {
       event.preventDefault();
       host.newQuery();
+    } else if (key === "b" && !event.shiftKey) {
+      event.preventDefault();
+      host.toggleSidebar();
     } else if (key === "a" && event.shiftKey) {
       event.preventDefault();
       host.toggleAssistant();

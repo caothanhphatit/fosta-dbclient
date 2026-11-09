@@ -37,17 +37,8 @@ export interface ConnectionProfile {
   ssh?: SshConfig;
   /** Safety rules for this connection only (replacing the workspace's); not edited by the dialog yet. */
   safety?: SafetySettings | null;
-  /** A command started before connecting and stopped on disconnect (e.g. `kubectl port-forward`). */
-  tunnel?: TunnelConfig | null;
-}
-
-/** A connection's tunnel command. Runs as the task `tunnel:<connection id>` (see `tunnelTaskId`). */
-export interface TunnelConfig {
-  program: string;
-  args: string[];
-  /** Ready when the output contains this; without it, when the connection's host:port accepts connections. */
-  readyPattern?: string | null;
-  readyTimeoutSecs: number;
+  /** The id of a command of the same workspace that runs while this connection is connected (e.g. `kubectl port-forward`). */
+  commandId?: string | null;
 }
 
 /** Safety presets of a workspace (see the statement gateway in ARCHITECTURE.md). */
@@ -126,6 +117,7 @@ export interface TransactionState {
 
 export type TransactionOp = "begin" | "commit" | "rollback" | "autoCommitOn" | "autoCommitOff" | "status";
 
+/** A workspace command ("task" in the config file): started with the workspace (`autoStart`) or when a connection needs it. */
 export interface TaskDef {
   id: string;
   name: string;
@@ -133,7 +125,10 @@ export interface TaskDef {
   args: string[];
   autoStart: boolean;
   autoRestart: boolean;
+  /** Ready when the output contains this; without it, when the connection's host:port accepts connections. */
   readyPattern: string | null;
+  /** How long a connection waits for it to become ready (default 30). */
+  readyTimeoutSecs?: number;
 }
 
 export type EmbeddingAuth = "bearer" | "api-key" | "none";
@@ -161,7 +156,7 @@ export interface WorkspaceMeta {
 /** A workspace's choice for the assistant's read-only queries: follow the setting, or always / never allow them. */
 export type AssistantQueries = "default" | "allow" | "deny";
 
-/** A workspace groups the connections and startup tasks of one environment. */
+/** A workspace groups the connections and commands of one environment. */
 export interface Workspace extends WorkspaceMeta {
   connections: ConnectionProfile[];
   tasks: TaskDef[];
@@ -208,7 +203,7 @@ export interface Diagnostics {
 /** What the running edition supports (Rust `Capabilities`); the UI hides the rest. */
 export interface Capabilities {
   edition: "desktop" | "web";
-  /** Startup tasks (child processes) can run. */
+  /** Workspace commands (child processes) can run. */
   tasks: boolean;
   /** "Show in folder" after an export. */
   revealFile: boolean;
@@ -319,6 +314,8 @@ export interface TaskStatus {
   pid: number | null;
   restarts: number;
   message: string | null;
+  /** Started because a connection needed it: stops again with the last connection using it. */
+  forConnections?: boolean;
 }
 
 export interface TaskLogEvent {

@@ -2,9 +2,8 @@
  * The connection dialog, rendered from the engine's descriptor (`EngineDescriptor.connection`, see `connectionForm.ts`
  * for the mapping): an engine picker (planned engines only with the developer setting), host/port/user/database/file
  * and the extra fields per section, auth methods with their secrets, a Connection URL tab parsed by the backend
- * (`parse_connection_string`), the TLS and SSH sections (`tlsSection.ts`, `sshSection.ts`) and the tunnel command
- * (`tunnelSection.ts`). Shared UI: no engine
- * ids here.
+ * (`parse_connection_string`), the TLS and SSH sections (`tlsSection.ts`, `sshSection.ts`) and the workspace command
+ * it uses (`commandPicker.ts`). Shared UI: no engine ids here.
  *
  * Secrets never enter the profile: the password goes to `save_connection`'s `password`, other slots to `secrets`.
  * Test connection reports the server (`ConnectInfo.server.label`); when the backend asks for the password
@@ -17,7 +16,7 @@ import { checkbox, field, openModal, promptPassword, textInput, toast } from "..
 import { h, icon, iconOrDefault } from "../../core/dom";
 import { describeServer, engineInfo, visibleEngines, type EngineInfo } from "../../core/engines";
 import { renderError } from "../../core/errorPanel";
-import type { AppConfig, ConnectionProfile } from "../../core/types";
+import type { AppConfig, ConnectionProfile, TaskDef } from "../../core/types";
 import { recoverConnectError } from "../../core/views";
 import {
   applySpec,
@@ -31,15 +30,15 @@ import {
   profileFromForm,
   sameTarget,
   switchEngine,
-  withTunnel,
+  withCommand,
   type ConnectionForm,
 } from "./connectionForm";
 import { withRelaxPrompt } from "../safety/confirmationDialog";
+import { endpointForCommand, type TemplateTarget } from "../tasks/commandForm";
+import { renderCommandPicker } from "./commandPicker";
 import "./connectionDialog.css";
 import { renderSshSection, type SshSection } from "./sshSection";
 import { renderTlsSection, type TlsSection } from "./tlsSection";
-import { endpointForTemplate, portForwardTemplate } from "./tunnelForm";
-import { renderTunnelSection } from "./tunnelSection";
 
 /** SQL Server's untrusted (self-signed) certificate error names the TLS option that fixes it. */
 const UNTRUSTED_CERTIFICATE = /trust server certificate|accept invalid certificates/i;
@@ -48,7 +47,17 @@ function invalid(message: string): AppError {
   return { code: "INVALID_INPUT", message };
 }
 
-export function connectionDialog(existing: ConnectionProfile | null): Promise<AppConfig | null> {
+/** The commands of the connection's workspace, and how to create one from the dialog. */
+export interface ConnectionCommands {
+  commands: TaskDef[];
+  /** Opens the command dialog filled for `target`; the created command, or null when cancelled. */
+  create(target: TemplateTarget): Promise<TaskDef | null>;
+}
+
+export function connectionDialog(
+  existing: ConnectionProfile | null,
+  commands: ConnectionCommands = { commands: [], create: async () => null },
+): Promise<AppConfig | null> {
   return new Promise((resolve) => {
     let saved: AppConfig | null = null;
     const id = existing?.id ?? crypto.randomUUID();
@@ -59,16 +68,28 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
     let tls: TlsSection = renderTlsSection(existing, descriptor);
     let ssh: SshSection = renderSshSection(existing, descriptor);
     // Not engine-specific: kept when the engine or the URL changes (a parsed URL never sets it).
-    const tunnel = renderTunnelSection(existing, {
-      template: () => portForwardTemplate(descriptor.id, descriptor.connection.defaultPort),
-      filled: (values) => {
-        const endpoint = formLayout(descriptor).host ? endpointForTemplate(form.host, values) : null;
+    const command = renderCommandPicker(
+      existing?.commandId,
+      {
+        commands: commands.commands,
+        create: () =>
+          commands.create({
+            engineId: descriptor.id,
+            engineLabel: descriptor.label,
+            defaultPort: descriptor.connection.defaultPort,
+            host: form.host,
+            port: Number(form.port) || null,
+          }),
+      },
+      (task) => {
+        // Point the connection at the new command's local port (unless it goes to a remote host).
+        const endpoint = formLayout(descriptor).host ? endpointForCommand(form.host, task) : null;
         if (!endpoint) return;
         form.host = endpoint.host;
         form.port = String(endpoint.port);
         renderAll();
       },
-    });
+    );
     // A profile whose string carries the connection (replica sets, SRV) opens on the URL tab.
     let mode: "params" | "url" = existing?.url && formLayout(descriptor).urlTab && !hasUrlField(descriptor) ? "url" : "params";
 
@@ -261,7 +282,7 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
       advanced.hidden = fields.length === 0;
     };
 
-    const renderSections = () => sectionsHost.replaceChildren(advanced, tls.element, ssh.element, tunnel.element);
+    const renderSections = () => sectionsHost.replaceChildren(advanced, tls.element, ssh.element);
 
     const renderMode = () => {
       const layout = formLayout(descriptor);
@@ -372,7 +393,7 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
         showFeedback(errorHost, invalid(`Fill in: ${missing.join(", ")}.`), context);
         return null;
       }
-      const profile = withTunnel(profileFromForm(id, form, descriptor, tls.read(), ssh.read(), existing), tunnel.read());
+      const profile = withCommand(profileFromForm(id, form, descriptor, tls.read(), ssh.read(), existing), command.read());
       const secrets = formSecrets(form, descriptor, Boolean(existing?.savePassword), { ...tls.secrets(), ...ssh.secrets() });
       return { profile, ...secrets };
     };
@@ -416,7 +437,7 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
         const result = await withRelaxPrompt((relax) => api.saveConnection(draft.profile, draft.password, null, secrets, relax));
         if (result === null) return false;
         saved = result;
-        // The backend never keeps saved secrets for another server, tunnel or TLS setting: they must be typed again.
+        // The backend never keeps saved secrets for another server, command or TLS setting: they must be typed again.
         if (existing?.savePassword && draft.profile.savePassword && !sameTarget(existing, draft.profile))
           toast("The server settings changed, so saved passwords you did not enter again were cleared. You will be asked for them.", "info");
       } catch (error) {
@@ -437,6 +458,7 @@ export function connectionDialog(existing: ConnectionProfile | null): Promise<Ap
       urlSection,
       authHost,
       hostNote,
+      command.element,
       sectionsHost,
       errorHost,
     );

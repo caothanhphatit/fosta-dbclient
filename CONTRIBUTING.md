@@ -28,7 +28,7 @@ src-tauri/src/           Rust backend
   gateway/               statement gateway: classification, safety rules, confirmations
   ai/                    assistant: prompt, tools, Anthropic and OpenAI wire formats
   config.rs secrets.rs   fosta-studio.json, Credential Manager / encrypted secret file
-  tasks.rs job.rs        startup tasks and their child processes
+  tasks.rs job.rs        workspace commands and their child processes (connection_command.rs: a connection's command)
   engines/               engine adapters; engines/mysql is MariaDB/MySQL with its vector tools, engines/mssql SQL Server,
                          engines/mongo MongoDB
 dev/                     docker-compose.yml and seed data for the test databases

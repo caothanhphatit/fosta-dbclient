@@ -22,16 +22,20 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     sets, streams), a console with completion and a server view. Redis Cluster and Sentinel are not supported yet.
   - **Elasticsearch and OpenSearch**: indices, data streams and aliases, a document grid typed by the mapping, a Dev Tools console,
     ES|QL and SQL tabs, `search_after` paging past 10,000 documents, Mapping as the design view.
-- **Workspaces**: each workspace (project, customer, environment) has its own connections, startup tasks and tabs. Switch from the rail on
-  the left or with `Ctrl+1…9`; tabs of other workspaces stay open.
-- **Startup tasks**: background commands (e.g. `kubectl port-forward`) with restart and backoff, live logs, and child processes killed when
-  the app exits. Auto-start tasks run when their workspace opens.
-- **Tunnel commands**: a command bound to one connection (Edit connection → Tunnel command, with a `kubectl port-forward` template).
-  Connect starts it, or reuses the running one, and waits until it is ready: its output contains the ready text, or else the
-  connection's host and port accept connections (timeout 30 s by default). If it exits or times out, connect fails with
-  `TUNNEL_FAILED` and the last log lines. It restarts with backoff while connected, and stops on disconnect, delete, a changed command,
-  workspace delete and app exit. Test connection runs a temporary one. Right-click the connection → Tunnel log. In the web edition it
-  needs `FOSTA_STUDIO_TASKS=on`, like startup tasks.
+- **Workspaces**: each workspace (project, customer, environment) has its own connections, commands and tabs. Switch from the rail on
+  the left or with `Ctrl+1…9`; tabs of other workspaces stay open. `Ctrl+B` (or the sidebar button) hides the connections and
+  commands; the rail stays.
+- **Commands**: background programs of a workspace (e.g. `kubectl port-forward`) with restart and backoff, live logs, and child
+  processes killed when the app exits. Each starts *with the workspace* or *when a connection needs it*. The Commands panel and the
+  toolbar's Commands menu start, stop, restart and open the log of each; the panel shows which connections use a command.
+- **A connection's command**: Edit connection → Command picks one of the workspace's commands, or *New command…* (a
+  `kubectl port-forward` template on the connection's port). Connect reuses the command when it runs, else starts it and waits until
+  it is ready: its output contains the ready text, or else the connection's host and port accept connections (timeout 30 s by
+  default). If it exits or times out, connect fails with `COMMAND_FAILED` and the last log lines. Connections share a command; one
+  started for them stops when the last of them disconnects (or is deleted, or picks another command), one started with the workspace
+  or by hand keeps running. Test connection uses the running command or starts it just for the test. Deleting a command clears it
+  from its connections; moving a connection to another workspace clears its command. Right-click the connection → Command log. In
+  the web edition commands need `FOSTA_STUDIO_TASKS=on`.
 - **Connections**: saved profiles, parameters or a connection string; passwords live in Windows Credential Manager (an encrypted file in the web edition), never in the config file.
 - **SSH tunnel and TLS**: password, key file or agent authentication, one jump host, host key checks (accept new, strict or off),
   keepalives and automatic reconnect. TLS modes run from `disable` to `verifyFull`, with your own CA, a client certificate, a server

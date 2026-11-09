@@ -25,7 +25,11 @@ use crate::{
 };
 
 pub const TASKS_DISABLED: &str =
-    "Startup tasks are turned off in this web edition. Set FOSTA_STUDIO_TASKS=on to run programs inside the container.";
+    "Commands are turned off in this web edition. Set FOSTA_STUDIO_TASKS=on to run programs inside the container.";
+
+/// How long a connection waits for a command to become ready when its definition does not say.
+pub const DEFAULT_READY_TIMEOUT_SECS: u64 = 30;
+const MAX_READY_TIMEOUT_SECS: u64 = 600;
 
 const LOG_CAPACITY: usize = 2000;
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
@@ -40,6 +44,8 @@ const PORT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// A workspace command ("startup task" in 0.1.0 files): a background process such as `kubectl port-forward`, started
+/// with the workspace (`auto_start`), by hand, or when a connection that uses it connects (`crate::connection_command`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDef {
@@ -54,10 +60,28 @@ pub struct TaskDef {
     pub auto_restart: bool,
     #[serde(default)]
     pub ready_pattern: Option<String>,
+    /// How long a connection waits for it to become ready.
+    #[serde(default = "default_ready_timeout")]
+    pub ready_timeout_secs: u64,
 }
 
 fn enabled() -> bool {
     true
+}
+
+fn default_ready_timeout() -> u64 {
+    DEFAULT_READY_TIMEOUT_SECS
+}
+
+impl TaskDef {
+    /// How long a connection waits for it: `ready_timeout_secs`, 0 meaning the default, at most 10 minutes.
+    pub fn ready_timeout(&self) -> Duration {
+        let secs = match self.ready_timeout_secs {
+            0 => DEFAULT_READY_TIMEOUT_SECS,
+            secs => secs.min(MAX_READY_TIMEOUT_SECS),
+        };
+        Duration::from_secs(secs)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -78,6 +102,9 @@ pub struct TaskStatus {
     pub pid: Option<u32>,
     pub restarts: u32,
     pub message: Option<String>,
+    /// Started because a connection needed it (not with the workspace or by hand): it stops again when the last
+    /// connection using it disconnects.
+    pub for_connections: bool,
 }
 
 impl TaskStatus {
@@ -88,6 +115,7 @@ impl TaskStatus {
             pid: None,
             restarts: 0,
             message: None,
+            for_connections: false,
         }
     }
 }
@@ -140,6 +168,9 @@ pub struct TaskManager {
     /// Off in the web edition unless the operator allows running programs inside the container.
     enabled: bool,
     runtimes: Mutex<HashMap<String, TaskRuntime>>,
+    /// Who uses which command: holder (a connection id, or a "Test connection" probe) → task id.
+    /// Lock order: `holders` before `runtimes`.
+    holders: Mutex<HashMap<String, String>>,
 }
 
 impl TaskManager {
@@ -149,18 +180,77 @@ impl TaskManager {
             events,
             enabled,
             runtimes: Mutex::default(),
+            holders: Mutex::default(),
         }
     }
 
-    /// Starts every auto-start task that is not already running.
+    /// Starts every auto-start task that is not already running. One already running for connections now belongs to
+    /// the workspace: it no longer stops with its last connection.
     pub fn start_auto(self: &Arc<Self>, defs: &[TaskDef]) {
         if !self.enabled {
             return;
         }
-        for def in defs.iter().filter(|def| def.auto_start && !self.is_active(&def.id)) {
-            if let Err(error) = self.start(def.clone()) {
+        for def in defs.iter().filter(|def| def.auto_start) {
+            if self.is_active(&def.id) {
+                self.set_for_connections(&def.id, false);
+            } else if let Err(error) = self.start(def.clone()) {
                 self.push_log(&def.id, &format!("✖ {error}"));
             }
+        }
+    }
+
+    fn set_for_connections(&self, id: &str, value: bool) {
+        let changed = lock(&self.runtimes)
+            .get(id)
+            .is_some_and(|runtime| runtime.status.for_connections != value);
+        if changed {
+            self.update_runtime(id, |runtime| runtime.status.for_connections = value);
+        }
+    }
+
+    /// Starts `def` for connections unless it is already running (started any way). Returns whether it was started.
+    pub fn start_for_connections(self: &Arc<Self>, def: TaskDef, ready: ReadyCheck) -> AppResult<bool> {
+        self.launch(def, ready, true, true)
+    }
+
+    /// Records that `holder` uses the command `id`; returns the other command it held before, if any.
+    pub fn hold(&self, holder: &str, id: &str) -> Option<String> {
+        lock(&self.holders)
+            .insert(holder.to_owned(), id.to_owned())
+            .filter(|previous| previous != id)
+    }
+
+    /// The command `holder` uses, if any.
+    pub fn held_by(&self, holder: &str) -> Option<String> {
+        lock(&self.holders).get(holder).cloned()
+    }
+
+    /// Forgets that `holder` uses a command; returns that command.
+    pub fn unhold(&self, holder: &str) -> Option<String> {
+        lock(&self.holders).remove(holder)
+    }
+
+    /// How many holders use the command `id`.
+    pub fn holder_count(&self, id: &str) -> usize {
+        lock(&self.holders).values().filter(|held| *held == id).count()
+    }
+
+    /// Asks the command `id` to stop when it was started for connections and no holder uses it any more.
+    /// Returns whether it was asked to stop.
+    pub fn stop_if_unused(&self, id: &str) -> bool {
+        let holders = lock(&self.holders);
+        if holders.values().any(|held| held == id) {
+            return false;
+        }
+        let runtimes = lock(&self.runtimes);
+        match runtimes.get(id) {
+            Some(TaskRuntime {
+                stop: Some(stop), status, ..
+            }) if status.for_connections => {
+                let _ = stop.send(true);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -186,17 +276,22 @@ impl TaskManager {
         self.enabled
     }
 
+    /// Starts `def` with the workspace or by hand.
     pub fn start(self: &Arc<Self>, def: TaskDef) -> AppResult<()> {
-        self.start_with(def, ReadyCheck::Spawned)
+        self.launch(def, ReadyCheck::Spawned, false, false).map(|_| ())
     }
 
-    /// Starts `def`; `ready` decides when it counts as running if it has no ready pattern.
-    pub fn start_with(self: &Arc<Self>, def: TaskDef, ready: ReadyCheck) -> AppResult<()> {
+    /// Starts `def`; `ready` decides when it counts as running if it has no ready pattern. An already running one is
+    /// an error, or with `reuse` left as it is (returns false).
+    fn launch(self: &Arc<Self>, def: TaskDef, ready: ReadyCheck, for_connections: bool, reuse: bool) -> AppResult<bool> {
         if !self.enabled {
             return Err(AppError::new(TASKS_DISABLED));
         }
         let stop_rx = self.with_runtime(&def.id, |runtime| {
             if runtime.stop.is_some() {
+                if reuse {
+                    return Ok(None);
+                }
                 return Err(AppError::new(format!("'{}' is already running", def.name)));
             }
             let (stop_tx, stop_rx) = watch::channel(false);
@@ -205,11 +300,15 @@ impl TaskManager {
             runtime.status.state = TaskState::Starting;
             runtime.status.restarts = 0;
             runtime.status.message = None;
-            Ok(stop_rx)
+            runtime.status.for_connections = for_connections;
+            Ok(Some(stop_rx))
         })?;
+        let Some(stop_rx) = stop_rx else {
+            return Ok(false);
+        };
         self.push_log(&def.id, &format!("▶ {} {}", def.program, def.args.join(" ")));
         self.executor.spawn(Arc::clone(self).supervise(def, ready, stop_rx));
-        Ok(())
+        Ok(true)
     }
 
     /// The status of one process, known or not.
@@ -224,14 +323,6 @@ impl TaskManager {
         lock(&self.runtimes).get(id).and_then(|runtime| runtime.running.clone())
     }
 
-    /// Drops the status and log of a process that is not running (a temporary one).
-    pub fn forget(&self, id: &str) {
-        let mut runtimes = lock(&self.runtimes);
-        if runtimes.get(id).is_some_and(|runtime| runtime.stop.is_none()) {
-            runtimes.remove(id);
-        }
-    }
-
     pub fn stop(&self, id: &str) {
         if let Some(stop) = lock(&self.runtimes).get(id).and_then(|runtime| runtime.stop.as_ref()) {
             let _ = stop.send(true);
@@ -244,17 +335,19 @@ impl TaskManager {
         }
     }
 
+    /// Restarts `def`; one started for connections stays so.
     pub async fn restart(self: &Arc<Self>, def: TaskDef) -> AppResult<()> {
+        let for_connections = self.is_active(&def.id) && self.status(&def.id).for_connections;
         self.stop(&def.id);
         self.wait_until_stopped(&def.id).await?;
-        self.start(def)
+        self.launch(def, ReadyCheck::Spawned, for_connections, false).map(|_| ())
     }
 
     pub(crate) async fn wait_until_stopped(&self, id: &str) -> AppResult<()> {
         let deadline = Instant::now() + STOP_TIMEOUT;
         while self.is_active(id) {
             if Instant::now() >= deadline {
-                return Err(AppError::new("The task did not stop in time"));
+                return Err(AppError::new("The command did not stop in time"));
             }
             tokio::time::sleep(STOP_POLL).await;
         }
@@ -298,6 +391,7 @@ impl TaskManager {
             runtime.status.state = final_state;
             runtime.status.pid = None;
             runtime.status.message = message;
+            runtime.status.for_connections = false;
         });
     }
 

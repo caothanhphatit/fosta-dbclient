@@ -132,9 +132,6 @@ export const api = {
     invoke<void>("create_database", { connectionId, name, firstCollection, confirmation }),
   taskStatuses: () => invoke<TaskStatus[]>("task_statuses"),
   taskLogs: (id: string) => invoke<string[]>("task_logs", { id }),
-  /** A connection's tunnel command; its status `id` is `tunnel:<connection id>`, as in `task-status` / `task-log` events. */
-  tunnelStatus: (connectionId: string) => invoke<TaskStatus>("tunnel_status", { connectionId }),
-  tunnelLogs: (connectionId: string) => invoke<string[]>("tunnel_logs", { connectionId }),
   startTask: (id: string) => invoke<void>("start_task", { id }),
   stopTask: (id: string) => invoke<void>("stop_task", { id }),
   restartTask: (id: string) => invoke<void>("restart_task", { id }),

@@ -1,14 +1,15 @@
-//! Workspaces: named sets of connections and startup tasks, each with its safety rules.
+//! Workspaces: named sets of connections and commands, each with its safety rules.
 
 use crate::{
     audit::{AuditEntry, Outcome},
     config::{AppConfig, Workspace, WorkspaceMeta},
+    connection_command,
     error::{AppError, AppResult},
     gateway::{
         classify::Category,
         rules::{relaxations, Preset, SafetySettings, PRODUCTION_ICON},
     },
-    secrets, tunnel, AppState,
+    secrets, AppState,
 };
 
 pub const RELAX_CONFIRMATION_REQUIRED: &str = "RELAX_CONFIRMATION_REQUIRED";
@@ -158,7 +159,7 @@ pub async fn delete_workspace(state: &AppState, id: String) -> AppResult<AppConf
     }
     for profile in &doomed.connections {
         state.engines.disconnect(&profile.id).await;
-        tunnel::stop(&state.tasks, &tunnel::task_id(&profile.id)).await;
+        connection_command::release(&state.tasks, &profile.id).await;
         secrets::delete_connection(&profile.id)?;
     }
     state.config.update(|config| config.remove_workspace(&id).map(|_| ()))

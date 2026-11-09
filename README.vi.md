@@ -13,11 +13,11 @@ Elasticsearch, OpenSearch, ClickHouse và Oracle. Có bản desktop cho Windows 
 
 - **11 engine, một giao diện**: cây database, lưới dữ liệu có kiểu và sửa trực tiếp, tab query, design view và sơ đồ ER, cùng các
   màn hình riêng cho từng engine (duyệt key Redis, Dev Tools và ES|QL cho Elasticsearch, mutation của ClickHouse, PL/SQL của Oracle).
-- **Workspace** theo dự án hoặc môi trường, mỗi workspace có connection, tab và **startup task** riêng (ví dụ `kubectl port-forward`,
+- **Workspace** theo dự án hoặc môi trường, mỗi workspace có connection, tab và **command** riêng (ví dụ `kubectl port-forward`,
   tự chạy lại khi bị rớt).
 - **SSH tunnel và TLS** cho mọi engine qua mạng: key, mật khẩu hoặc agent, jump host, kiểm tra host key, CA riêng, client
   certificate hoặc ghim chứng chỉ.
-- **Lệnh tunnel** gắn với từng connection (ví dụ `kubectl port-forward`): tự chạy khi kết nối, tự dừng khi ngắt kết nối.
+- **Command cho connection**: connection có thể dùng một command của workspace, chạy cùng workspace hoặc khi kết nối.
 - **An toàn mặc định**: mọi câu lệnh được kiểm tra theo quy tắc của workspace (Open, Guarded, Read-only hoặc Custom). Workspace
   Production mặc định chỉ đọc, được chặn cả ở phía database, và lưu dữ liệu không bao giờ ghi đè dòng người khác vừa sửa.
 - **Trình soạn query** gợi ý theo cột, format SQL, kết quả trả về dần với nút Stop dừng thật trên server, transaction và lịch sử

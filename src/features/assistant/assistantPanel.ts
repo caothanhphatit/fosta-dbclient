@@ -26,7 +26,7 @@ export interface AssistantContext {
   /** Text of the active query editor (selection or all). */
   editorText?: () => string;
   lastError?: () => string | null;
-  /** Free-form extra context, e.g. "Startup task kubectl … Last log lines: …". */
+  /** Free-form extra context, e.g. "Command kubectl … Last log lines: …". */
   extra?: () => string;
 }
 
@@ -338,7 +338,7 @@ export class AssistantPanel {
             label: "Why does it fail?",
             icon: "health",
             mode: "send",
-            prompt: () => "This startup task is not working. Read the log, explain what is wrong and how to fix it.",
+            prompt: () => "This command is not working. Read the log, explain what is wrong and how to fix it.",
           },
           { label: "Explain the log", icon: "logs", mode: "send", prompt: () => "Explain what this log says, briefly." },
         ];

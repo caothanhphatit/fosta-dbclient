@@ -23,7 +23,7 @@ export function profiles(): ConnectionProfile[] {
 
 /**
  * Like the backend's `save_connection`: replaces the profile where it is, or adds it to the workspace. A profile that
- * points at another server, tunnel or TLS setting loses its saved password unless one is typed. Making the rules of a
+ * points at another server, command or TLS setting loses its saved password unless one is typed. Making the rules of a
  * Production workspace's connection looser (an override, or a move out) needs the workspace name.
  */
 export function saveConnection(

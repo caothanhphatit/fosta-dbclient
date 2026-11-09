@@ -1,26 +1,31 @@
+/**
+ * The workspace's Commands panel ("tasks" in the config file): each command with its state, who uses it, start/stop,
+ * logs. A command starts with the workspace, by hand, or when a connection that uses it connects ("for connections";
+ * it stops again with the last of them).
+ */
 import { showError } from "../../core/errorPanel";
 import { api, onTaskLog, onTaskStatus } from "../../core/api";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { confirmDialog } from "../../core/dialogs";
 import { h, icon, iconButton, spacer, toolButton } from "../../core/dom";
-import { taskDialog } from "./taskDialog";
+import { taskDialog, type CommandDialogOptions, type SavedCommand } from "./taskDialog";
+import { commandUsers } from "./commandForm";
 import { formatArgs } from "../../core/shell";
 import type { TabContent } from "../../core/tabs";
-import type { AppConfig, TaskDef, TaskState, TaskStatus } from "../../core/types";
-import { isTunnelTaskId } from "../connections/tunnelForm";
+import type { AppConfig, ConnectionProfile, TaskDef, TaskState, TaskStatus } from "../../core/types";
 
 export interface TasksHost {
   openLogs(task: TaskDef): void;
   configChanged(config: AppConfig): void;
   summaryChanged(text: string): void;
   workspaceName(): string;
-  /** Fired whenever any task (in any workspace) changes state. */
+  /** Fired whenever any command (in any workspace) changes state. */
   activityChanged?(): void;
-  /** Opens the assistant on a task's log. */
+  /** Opens the assistant on a command's log. */
   askAssistant?(task: TaskDef, logLines: string[]): void;
 }
 
-/** What a log tab exposes so the assistant can read the task's output. */
+/** What a log tab exposes so the assistant can read the command's output. */
 export interface LogTabContent extends TabContent {
   task: TaskDef;
   logLines(): string[];
@@ -36,6 +41,7 @@ export class TasksPanel {
   private readonly statuses = new Map<string, TaskStatus>();
   private readonly logListeners = new Map<string, Set<LogListener>>();
   private tasks: TaskDef[] = [];
+  private connections: ConnectionProfile[] = [];
 
   constructor(host: TasksHost) {
     this.host = host;
@@ -43,10 +49,10 @@ export class TasksPanel {
       "div",
       { class: "panel-header collapsible" },
       icon("chevronDown", "panel-chevron"),
-      h("span", {}, "Startup tasks"),
+      h("span", {}, "Commands"),
       this.badge,
       spacer(),
-      iconButton("plus", "New startup task", () => void this.edit(null)),
+      iconButton("plus", "New command", () => void this.edit(null)),
     );
     header.addEventListener("click", () => this.element.classList.toggle("collapsed"));
     this.element = h("section", { class: "tasks-panel" }, header, this.list);
@@ -61,8 +67,10 @@ export class TasksPanel {
     await this.refreshStatuses();
   }
 
-  setTasks(tasks: TaskDef[]): void {
+  /** The active workspace's commands, and its connections (to show who uses which command). */
+  setTasks(tasks: TaskDef[], connections: ConnectionProfile[] = []): void {
     this.tasks = tasks;
+    this.connections = connections;
     this.render();
   }
 
@@ -71,13 +79,17 @@ export class TasksPanel {
       for (const status of await api.taskStatuses()) this.statuses.set(status.id, status);
       this.render();
     } catch (error) {
-      showError(error, "Read task statuses");
+      showError(error, "Read command statuses");
     }
   }
 
-  /** Ids of every startup task (in any workspace) that is starting, running or restarting; tunnel commands left out. */
+  /** Ids of every command (in any workspace) that is starting, running or restarting. */
   runningIds(): Set<string> {
-    return new Set([...this.statuses.values()].filter((status) => isActive(status.state) && !isTunnelTaskId(status.id)).map((status) => status.id));
+    return new Set([...this.statuses.values()].filter((status) => isActive(status.state)).map((status) => status.id));
+  }
+
+  stateOf(id: string): TaskState | undefined {
+    return this.statuses.get(id)?.state;
   }
 
   subscribeLogs(id: string, listener: LogListener): () => void {
@@ -87,9 +99,11 @@ export class TasksPanel {
     return () => void listeners.delete(listener);
   }
 
-  async edit(existing: TaskDef | null): Promise<void> {
-    const config = await taskDialog(existing, this.host.workspaceName());
-    if (config) this.host.configChanged(config);
+  /** Opens the command dialog; returns the saved command. */
+  async edit(existing: TaskDef | null, options: CommandDialogOptions = {}): Promise<SavedCommand | null> {
+    const saved = await taskDialog(existing, this.host.workspaceName(), options);
+    if (saved) this.host.configChanged(saved.config);
+    return saved;
   }
 
   canAsk(): boolean {
@@ -100,12 +114,37 @@ export class TasksPanel {
     this.host.askAssistant?.(task, logLines);
   }
 
+  /** The toolbar's Commands menu: each command with its state and actions, then "New command…". */
+  menuItems(): MenuItem[] {
+    const items: MenuItem[] = this.tasks.map((task) => {
+      const status = this.statuses.get(task.id);
+      const state = status?.state ?? "stopped";
+      const active = isActive(state);
+      return {
+        label: task.name,
+        dot: state,
+        detail: describeStatus(state, status),
+        run: () => this.host.openLogs(task),
+        actions: [
+          active
+            ? { icon: "stop", title: "Stop", run: () => void this.toggle(task, true) }
+            : { icon: "play", title: "Start", run: () => void this.toggle(task, false) },
+          { icon: "refresh", title: "Restart", run: () => void attempt(() => api.restartTask(task.id)) },
+          { icon: "logs", title: "Show log", run: () => this.host.openLogs(task) },
+        ],
+      };
+    });
+    if (items.length) items.push("separator");
+    items.push({ label: "New command…", icon: "plus", run: () => void this.edit(null) });
+    return items;
+  }
+
   private render(): void {
     const rows = this.tasks.map((task) => this.renderTask(task));
-    this.list.replaceChildren(...(rows.length ? rows : [h("div", { class: "empty-hint" }, "No startup tasks in this workspace")]));
+    this.list.replaceChildren(...(rows.length ? rows : [h("div", { class: "empty-hint" }, "No commands in this workspace")]));
     const running = this.tasks.filter((task) => this.statuses.get(task.id)?.state === "running").length;
     this.badge.textContent = this.tasks.length ? `${running}/${this.tasks.length}` : "";
-    this.host.summaryChanged(this.tasks.length ? `Tasks ${running}/${this.tasks.length} running` : "");
+    this.host.summaryChanged(this.tasks.length ? `Commands ${running}/${this.tasks.length} running` : "");
     this.host.activityChanged?.();
   }
 
@@ -113,11 +152,20 @@ export class TasksPanel {
     const status = this.statuses.get(task.id);
     const state = status?.state ?? "stopped";
     const active = isActive(state);
+    const users = commandUsers(task.id, this.connections);
+    const usedBy = users.length
+      ? h("span", { class: "task-users", title: `Used by: ${users.map((profile) => profile.name).join(", ")}` }, `used by ${users.length}`)
+      : null;
     const row = h(
       "div",
       { class: `task-row state-${state}`, title: `${task.program} ${formatArgs(task.args)}` },
       h("span", { class: "status-dot" }),
-      h("div", { class: "task-text" }, h("div", { class: "task-name" }, task.name), h("div", { class: "task-state" }, describeStatus(state, status))),
+      h(
+        "div",
+        { class: "task-text" },
+        h("div", { class: "task-name" }, h("span", {}, task.name), usedBy),
+        h("div", { class: "task-state" }, describeStatus(state, status)),
+      ),
       h(
         "div",
         { class: "task-actions" },
@@ -148,19 +196,14 @@ export class TasksPanel {
   }
 
   private async remove(task: TaskDef): Promise<void> {
-    if (!(await confirmDialog(`Delete startup task "${task.name}"?`, "Delete"))) return;
+    const users = commandUsers(task.id, this.connections).map((profile) => profile.name);
+    const message = users.length ? `Delete command "${task.name}"?\nUsed by: ${users.join(", ")}` : `Delete command "${task.name}"?`;
+    if (!(await confirmDialog(message, "Delete"))) return;
     await attempt(async () => this.host.configChanged(await api.deleteTask(task.id)));
   }
 }
 
-/** Where a log tab reads its lines and what its Restart button does (none: no button). */
-export interface LogSource {
-  load(): Promise<string[]>;
-  restart: (() => Promise<unknown>) | null;
-}
-
-export function createLogView(task: TaskDef, panel: TasksPanel, source: LogSource | null = null): LogTabContent {
-  const { load, restart } = source ?? { load: () => api.taskLogs(task.id), restart: () => api.restartTask(task.id) };
+export function createLogView(task: TaskDef, panel: TasksPanel): LogTabContent {
   const output = h("pre", { class: "log-output" });
   const logLines = () => output.textContent?.split("\n").filter(Boolean) ?? [];
   const append = (line: string) => {
@@ -169,7 +212,8 @@ export function createLogView(task: TaskDef, panel: TasksPanel, source: LogSourc
     if (following) output.scrollTop = output.scrollHeight;
   };
   const unsubscribe = panel.subscribeLogs(task.id, append);
-  load()
+  api
+    .taskLogs(task.id)
     .then((lines) => {
       output.textContent = lines.map((line) => `${line}\n`).join("");
       output.scrollTop = output.scrollHeight;
@@ -182,7 +226,7 @@ export function createLogView(task: TaskDef, panel: TasksPanel, source: LogSourc
     h("span", { class: "toolbar-title mono" }, `${task.program} ${formatArgs(task.args)}`),
     spacer(),
     panel.canAsk() ? toolButton("sparkle", "Ask assistant", () => panel.ask(task, logLines()), "Explain this log with the assistant") : null,
-    restart ? toolButton("refresh", "Restart", () => void attempt(restart)) : null,
+    toolButton("refresh", "Restart", () => void attempt(() => api.restartTask(task.id))),
     toolButton("x", "Clear view", () => output.replaceChildren()),
   );
   return { element: h("div", { class: "view log-view" }, toolbar, output), dispose: unsubscribe, task, logLines };
@@ -192,7 +236,7 @@ async function attempt(action: () => Promise<unknown>): Promise<void> {
   try {
     await action();
   } catch (error) {
-    showError(error, "Startup task");
+    showError(error, "Command");
   }
 }
 
@@ -203,5 +247,6 @@ function isActive(state: TaskState): boolean {
 function describeStatus(state: TaskState, status: TaskStatus | undefined): string {
   if (status?.message && state !== "running") return `${state} · ${status.message}`;
   const restarts = status && status.restarts > 0 ? ` · ${status.restarts} restart(s)` : "";
-  return `${state}${restarts}`;
+  const forConnections = status?.forConnections && isActive(state) ? " · for connections" : "";
+  return `${state}${forConnections}${restarts}`;
 }

@@ -1,7 +1,7 @@
 /**
  * What the running edition supports (the `capabilities` command). The desktop app does everything; the
  * web edition (Docker) has no "Show in folder", downloads through the browser, keeps secrets in an encrypted
- * file on the server, and runs startup tasks only when the operator turned them on.
+ * file on the server, and runs workspace commands only when the operator turned them on.
  *
  * Until `loadCapabilities()` answers, the defaults follow the transport, so text built early is right.
  */
