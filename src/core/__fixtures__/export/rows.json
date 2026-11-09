@@ -1,0 +1,350 @@
+{
+  "columns": [
+    {
+      "name": "id",
+      "typeName": "int",
+      "kind": {
+        "kind": "int"
+      },
+      "nullable": false,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {
+        "primary": true
+      }
+    },
+    {
+      "name": "1",
+      "typeName": "text",
+      "kind": {
+        "kind": "text"
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {}
+    },
+    {
+      "name": "amount",
+      "typeName": "float8",
+      "kind": {
+        "kind": "float"
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {}
+    },
+    {
+      "name": "price",
+      "typeName": "numeric",
+      "kind": {
+        "kind": "decimal"
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {}
+    },
+    {
+      "name": "embedding",
+      "typeName": "vector(3)",
+      "kind": {
+        "kind": "other"
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {
+        "vectorDims": 3
+      }
+    },
+    {
+      "name": "note; \"x\"",
+      "typeName": "text",
+      "kind": {
+        "kind": "text"
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {}
+    },
+    {
+      "name": "misc",
+      "typeName": "any",
+      "kind": {
+        "kind": "other"
+      },
+      "nullable": true,
+      "default": null,
+      "comment": null,
+      "identity": null,
+      "generated": null,
+      "hints": {}
+    }
+  ],
+  "rows": [
+    [
+      {
+        "t": "int",
+        "v": 1
+      },
+      {
+        "t": "text",
+        "v": "plain"
+      },
+      {
+        "t": "float",
+        "v": 1
+      },
+      {
+        "t": "decimal",
+        "v": "12.50"
+      },
+      {
+        "t": "other",
+        "type": "vector",
+        "v": "[3 dims]"
+      },
+      {
+        "t": "text",
+        "v": "a,b; \"quoted\"\nnext line"
+      },
+      {
+        "t": "json",
+        "v": "{\"b\":1,\"2\":2,\"a\":[1.0,2.5e-7,{}],\"b\":3}"
+      }
+    ],
+    [
+      {
+        "t": "int",
+        "v": -42
+      },
+      {
+        "t": "null",
+        "v": null
+      },
+      {
+        "t": "float",
+        "v": 1e+21
+      },
+      {
+        "t": "null",
+        "v": null
+      },
+      {
+        "t": "null",
+        "v": null
+      },
+      {
+        "t": "text",
+        "v": ""
+      },
+      {
+        "t": "doc",
+        "v": [
+          [
+            "z",
+            {
+              "t": "int",
+              "v": 1
+            }
+          ],
+          [
+            "7",
+            {
+              "t": "bool",
+              "v": false
+            }
+          ],
+          [
+            "a",
+            {
+              "t": "array",
+              "v": [
+                {
+                  "t": "text",
+                  "v": "x"
+                },
+                {
+                  "t": "null",
+                  "v": null
+                }
+              ]
+            }
+          ],
+          [
+            "id",
+            {
+              "t": "objectId",
+              "v": "65a1b2c3d4e5f60718293a4b"
+            }
+          ]
+        ]
+      }
+    ],
+    [
+      {
+        "t": "int",
+        "v": 3
+      },
+      {
+        "t": "uuid",
+        "v": "0b9f6c1e-2f4a-4c55-9d1e-3a7b8c9d0e1f"
+      },
+      {
+        "t": "float",
+        "v": "NaN"
+      },
+      {
+        "t": "decimal",
+        "v": "-0.000100"
+      },
+      {
+        "t": "null",
+        "v": null
+      },
+      {
+        "t": "date",
+        "v": "2026-01-02"
+      },
+      {
+        "t": "array",
+        "v": [
+          {
+            "t": "int",
+            "v": 1
+          },
+          {
+            "t": "null",
+            "v": null
+          },
+          {
+            "t": "text",
+            "v": "a\"b"
+          },
+          {
+            "t": "date",
+            "v": "2026-01-02"
+          },
+          {
+            "t": "float",
+            "v": 2.5
+          },
+          {
+            "t": "bool",
+            "v": true
+          }
+        ]
+      }
+    ],
+    [
+      {
+        "t": "int",
+        "v": 4
+      },
+      {
+        "t": "timestamp",
+        "v": "2026-01-02 03:04:05.123"
+      },
+      {
+        "t": "float",
+        "v": 1.5e-7
+      },
+      {
+        "t": "decimal",
+        "v": "99999999999999999999.99"
+      },
+      {
+        "t": "null",
+        "v": null
+      },
+      {
+        "t": "timestamptz",
+        "v": "2026-01-02 03:04:05+07:00"
+      },
+      {
+        "t": "other",
+        "type": "inet",
+        "v": "10.0.0.1/32"
+      }
+    ],
+    [
+      {
+        "t": "int",
+        "v": 5
+      },
+      {
+        "t": "bytes",
+        "v": "0x00ff10"
+      },
+      {
+        "t": "float",
+        "v": 0
+      },
+      {
+        "t": "decimal",
+        "v": "0"
+      },
+      {
+        "t": "null",
+        "v": null
+      },
+      {
+        "t": "interval",
+        "v": "1 day 02:00:00"
+      },
+      {
+        "t": "json",
+        "v": "not json"
+      }
+    ],
+    [
+      {
+        "t": "int",
+        "v": 6
+      },
+      {
+        "t": "objectId",
+        "v": "65a1b2c3d4e5f60718293a4c"
+      },
+      {
+        "t": "float",
+        "v": 123456.789
+      },
+      {
+        "t": "decimal",
+        "v": "1e5"
+      },
+      {
+        "t": "null",
+        "v": null
+      },
+      {
+        "t": "time",
+        "v": "23:59:58.500"
+      },
+      {
+        "t": "json",
+        "v": "[\"\\u0001tab\\t\", true, null, -1.25E+3]"
+      }
+    ]
+  ],
+  "csv": "id,1,amount,price,\"note; \"\"x\"\"\",misc\r\n1,plain,1,12.50,\"a,b; \"\"quoted\"\"\nnext line\",\"{\"\"b\"\":1,\"\"2\"\":2,\"\"a\"\":[1.0,2.5e-7,{}],\"\"b\"\":3}\"\r\n-42,,1000000000000000000000,,,\"{\"\"7\"\":false,\"\"z\"\":1,\"\"a\"\":[\"\"x\"\",null],\"\"id\"\":{\"\"$oid\"\":\"\"65a1b2c3d4e5f60718293a4b\"\"}}\"\r\n3,0b9f6c1e-2f4a-4c55-9d1e-3a7b8c9d0e1f,NaN,-0.000100,2026-01-02,\"[1, null, \"\"a\\\"\"b\"\", \"\"2026-01-02\"\", 2.5, true]\"\r\n4,2026-01-02 03:04:05.123,0.00000015,99999999999999999999.99,2026-01-02 03:04:05+07:00,10.0.0.1/32\r\n5,0x00ff10,0,0,1 day 02:00:00,not json\r\n6,65a1b2c3d4e5f60718293a4c,123456.789,1e5,23:59:58.500,\"[\"\"\\u0001tab\\t\"\", true, null, -1.25E+3]\"",
+  "excel": "﻿id;1;amount;price;\"note; \"\"x\"\"\";misc\r\n1;plain;1;12.50;\"a,b; \"\"quoted\"\"\nnext line\";\"{\"\"b\"\":1,\"\"2\"\":2,\"\"a\"\":[1.0,2.5e-7,{}],\"\"b\"\":3}\"\r\n-42;;1000000000000000000000;;;\"{\"\"7\"\":false,\"\"z\"\":1,\"\"a\"\":[\"\"x\"\",null],\"\"id\"\":{\"\"$oid\"\":\"\"65a1b2c3d4e5f60718293a4b\"\"}}\"\r\n3;0b9f6c1e-2f4a-4c55-9d1e-3a7b8c9d0e1f;NaN;-0.000100;2026-01-02;\"[1, null, \"\"a\\\"\"b\"\", \"\"2026-01-02\"\", 2.5, true]\"\r\n4;2026-01-02 03:04:05.123;0.00000015;99999999999999999999.99;2026-01-02 03:04:05+07:00;10.0.0.1/32\r\n5;0x00ff10;0;0;1 day 02:00:00;not json\r\n6;65a1b2c3d4e5f60718293a4c;123456.789;1e5;23:59:58.500;\"[\"\"\\u0001tab\\t\"\", true, null, -1.25E+3]\"",
+  "json": "[\n  {\n    \"1\": \"plain\",\n    \"id\": 1,\n    \"amount\": 1,\n    \"price\": \"12.50\",\n    \"note; \\\"x\\\"\": \"a,b; \\\"quoted\\\"\\nnext line\",\n    \"misc\": {\n      \"2\": 2,\n      \"b\": 3,\n      \"a\": [\n        1,\n        2.5e-7,\n        {}\n      ]\n    }\n  },\n  {\n    \"1\": null,\n    \"id\": -42,\n    \"amount\": 1e+21,\n    \"price\": null,\n    \"note; \\\"x\\\"\": \"\",\n    \"misc\": {\n      \"7\": false,\n      \"z\": 1,\n      \"a\": [\n        \"x\",\n        null\n      ],\n      \"id\": {\n        \"$oid\": \"65a1b2c3d4e5f60718293a4b\"\n      }\n    }\n  },\n  {\n    \"1\": \"0b9f6c1e-2f4a-4c55-9d1e-3a7b8c9d0e1f\",\n    \"id\": 3,\n    \"amount\": \"NaN\",\n    \"price\": \"-0.000100\",\n    \"note; \\\"x\\\"\": \"2026-01-02\",\n    \"misc\": [\n      1,\n      null,\n      \"a\\\"b\",\n      \"2026-01-02\",\n      2.5,\n      true\n    ]\n  },\n  {\n    \"1\": \"2026-01-02 03:04:05.123\",\n    \"id\": 4,\n    \"amount\": 1.5e-7,\n    \"price\": \"99999999999999999999.99\",\n    \"note; \\\"x\\\"\": \"2026-01-02 03:04:05+07:00\",\n    \"misc\": \"10.0.0.1/32\"\n  },\n  {\n    \"1\": \"0x00ff10\",\n    \"id\": 5,\n    \"amount\": 0,\n    \"price\": \"0\",\n    \"note; \\\"x\\\"\": \"1 day 02:00:00\",\n    \"misc\": \"not json\"\n  },\n  {\n    \"1\": {\n      \"$oid\": \"65a1b2c3d4e5f60718293a4c\"\n    },\n    \"id\": 6,\n    \"amount\": 123456.789,\n    \"price\": \"1e5\",\n    \"note; \\\"x\\\"\": \"23:59:58.500\",\n    \"misc\": [\n      \"\\u0001tab\\t\",\n      true,\n      null,\n      -1250\n    ]\n  }\n]",
+  "jsonEmpty": "[]"
+}

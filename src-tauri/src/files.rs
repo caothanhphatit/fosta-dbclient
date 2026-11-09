@@ -27,6 +27,16 @@ pub fn save_download(name: &str, bytes: &[u8]) -> AppResult<String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Creates `name` in Downloads (adding " (2)", " (3)", … when taken) for an export written in chunks.
+pub fn create_download(name: &str) -> AppResult<(fs::File, PathBuf)> {
+    let directory = downloads_dir()?;
+    fs::create_dir_all(&directory)?;
+    let path = unique_path(&directory, &sanitize(name));
+    let file = fs::File::create(&path)?;
+    remember_written(&path);
+    Ok((file, path))
+}
+
 fn remember_written(path: &Path) {
     lock(&WRITTEN).insert(path.to_path_buf());
 }

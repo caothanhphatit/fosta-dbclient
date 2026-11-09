@@ -37,8 +37,8 @@ use crate::{
     audit::{AuditEntry, AuditLog, Outcome},
     config::AppConfig,
     contract::{
-        require, unsupported_capability, ApplyResult, BrowseRequest, CallContext, Capability, ClassifyInput, Filter, Limits, Page,
-        ResultSink, RowChangeSet, RunRequest, RunSummary, TransactionOp, TransactionState,
+        require, unsupported_capability, ApplyResult, BrowseRequest, CallContext, CancellationToken, Capability, ClassifyInput, Filter,
+        Limits, Page, ResultSink, RowChangeSet, RunRequest, RunSummary, TransactionOp, TransactionState,
     },
     error::{AppError, AppResult},
     lock::lock,
@@ -523,10 +523,21 @@ pub async fn browse_cancellable(
     request: &BrowseRequest,
     request_id: Option<&str>,
 ) -> AppResult<Page> {
+    let (cancel, _registered) = mgr.requests.register(request_id);
+    browse_until(mgr, context, connection_id, request, &cancel).await
+}
+
+/// [`browse`] that `cancel` stops (see [`browse_cancellable`]); an export reads all its pages under one signal.
+pub async fn browse_until(
+    mgr: &ConnectionManager,
+    context: &Context,
+    connection_id: &str,
+    request: &BrowseRequest,
+    cancel: &CancellationToken,
+) -> AppResult<Page> {
     let handle = mgr.handle(connection_id)?;
     require(handle.conn.capabilities(), Capability::BrowseRows)?;
     check_browse_filter(mgr, context, &handle, &request.filter)?;
-    let (cancel, _registered) = mgr.requests.register(request_id);
     let limits = context.limits();
     let timeout = (limits.timeout_secs == 0).then_some(BROWSE_TIMEOUT);
     let (request, ctx) = (request.clone(), CallContext::new(limits).with_cancel(cancel.clone()));

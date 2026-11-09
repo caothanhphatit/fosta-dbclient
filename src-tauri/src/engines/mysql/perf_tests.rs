@@ -248,3 +248,105 @@ async fn perf_mariadb_last_page_reads_from_the_end() {
 
     run(&handle, &session, "DROP TABLE perf_last").await.unwrap();
 }
+
+/// Keeps the streamed text, and the largest chunk seen.
+#[derive(Default)]
+struct Collect {
+    text: Vec<u8>,
+    largest: usize,
+}
+
+#[async_trait::async_trait]
+impl crate::export::ChunkSink for Collect {
+    async fn write(&mut self, chunk: Vec<u8>) -> AppResult<()> {
+        self.largest = self.largest.max(chunk.len());
+        self.text.extend_from_slice(&chunk);
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mariadb.yml"]
+async fn perf_mariadb_export_streams_every_row() {
+    use crate::export::{export, ExportFormat, ExportRequest};
+    let (manager, handle) = shop().await;
+    let session = session(&handle).await;
+    let object = big_table(&handle, &session, "perf_export", 1_000_000).await;
+    let context = open_workspace();
+
+    // The old way, minus the page: 1,000-row pages, each serialized for the webview.
+    let started = Instant::now();
+    let mut request = BrowseRequest::new(object.clone(), 1000);
+    let mut pages_bytes = 0usize;
+    loop {
+        let page = gateway::browse(&manager, &context, "perf", &request).await.unwrap();
+        pages_bytes += serde_json::to_string(&page).unwrap().len();
+        if !page.has_more {
+            break;
+        }
+        request.after = page.next_keyset;
+    }
+    println!(
+        "1M rows as 1,000-row pages over IPC (backend side only): {:?}, {pages_bytes} bytes of JSON",
+        started.elapsed()
+    );
+
+    for format in [ExportFormat::Csv, ExportFormat::Json] {
+        let request = ExportRequest {
+            browse: BrowseRequest::new(object.clone(), 1),
+            format,
+            separator: None,
+            file_name: "perf.csv".into(),
+            request_id: None,
+        };
+        let mut sink = Collect::default();
+        let mut pages = 0;
+        let started = Instant::now();
+        let rows = export(&manager, &context, "perf", &request, &Default::default(), &mut sink, &mut |_| {
+            pages += 1
+        })
+        .await
+        .unwrap();
+        println!(
+            "{format:?} export of 1M rows: {:?}, {} bytes, largest chunk {} bytes, {pages} pages",
+            started.elapsed(),
+            sink.text.len(),
+            sink.largest
+        );
+        assert_eq!(rows, 1_000_000);
+        let text = String::from_utf8(sink.text).unwrap();
+        match format {
+            ExportFormat::Json => {
+                let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+                assert_eq!(parsed.len(), 1_000_000);
+                assert_eq!(parsed[999_999]["id"], 1_000_000);
+                assert_eq!(parsed[0]["label"], "row 1");
+            }
+            _ => {
+                let lines: Vec<&str> = text.split("\r\n").collect();
+                assert_eq!(lines.len(), 1_000_001);
+                assert_eq!(lines[0], "id,amount,label");
+                assert_eq!(lines[1], "1,79.19,row 1");
+                assert_eq!(lines[1_000_000], "1000000,0.00,row 1000000");
+            }
+        }
+        assert!(sink.largest < 1 << 20, "chunks stay at about a page");
+    }
+
+    // Cancelling stops the export.
+    let cancel = crate::contract::CancellationToken::new();
+    cancel.cancel();
+    let request = ExportRequest {
+        browse: BrowseRequest::new(object, 1),
+        format: ExportFormat::Csv,
+        separator: None,
+        file_name: "perf.csv".into(),
+        request_id: None,
+    };
+    let error = export(&manager, &context, "perf", &request, &cancel, &mut Collect::default(), &mut |_| ())
+        .await
+        .expect_err("cancelled");
+    assert_eq!(error.code(), Some(CANCELLED));
+
+    run(&handle, &session, "DROP TABLE perf_export").await.unwrap();
+}

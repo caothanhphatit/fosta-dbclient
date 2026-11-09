@@ -181,6 +181,9 @@ pub async fn invoke(State(server): State<Arc<Server>>, Path(command): Path<Strin
             Err(error) => return InvokeError::Arguments(format!("Invalid JSON: {error}")).into_response(),
         }
     };
+    if command == "export_prepare" {
+        return crate::export::prepare(args);
+    }
     if command == "ai_chat" {
         return ai_chat(Arc::clone(&server.state), args);
     }
@@ -336,7 +339,7 @@ mod tests {
 
     #[test]
     fn every_ui_command_is_routed() {
-        // Commands `src/core/api.ts` calls, except the desktop-only file commands and the streamed ai_chat.
+        // Commands `src/core/api.ts` calls, except the desktop-only file commands, the streamed ai_chat and export_prepare.
         let source = include_str!("../../../src/core/api.ts");
         let mut missing = Vec::new();
         for piece in source.split("invoke<").skip(1) {
@@ -344,7 +347,7 @@ mod tests {
             if !COMMANDS.contains(&name)
                 && !matches!(
                     name,
-                    "save_download" | "reveal_file" | "open_log_folder" | "open_release_page" | "ai_chat"
+                    "save_download" | "reveal_file" | "open_log_folder" | "open_release_page" | "ai_chat" | "export_prepare"
                 )
             {
                 missing.push(name.to_owned());

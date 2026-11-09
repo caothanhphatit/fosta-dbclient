@@ -60,7 +60,7 @@ macro_rules! desktop_commands {
         $(tauri_command!([$kind] $name ($($arg : $type),*) -> $output $(=> $event)? = $function);)*
 
         fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
-            tauri::generate_handler![$($name,)* ai_chat, save_download, reveal_file, open_log_folder, open_release_page]
+            tauri::generate_handler![$($name,)* ai_chat, export_rows, save_download, reveal_file, open_log_folder, open_release_page]
         }
     };
 }
@@ -74,6 +74,24 @@ async fn ai_chat(state: State<'_, AppState>, request: ChatRequest, on_event: Cha
         let _ = on_event.send(event);
     };
     commands::ai::ai_chat(&state, request, &sink).await
+}
+
+/// Exports every row matching a grid into Downloads, page by page, with progress on `on_event`.
+#[tauri::command]
+async fn export_rows(
+    state: State<'_, AppState>,
+    connection_id: String,
+    request: fosta_studio::export::ExportRequest,
+    on_event: Channel<fosta_studio::export::ExportProgress>,
+) -> AppResult<commands::files::ExportDone> {
+    let progress = move |event| {
+        let _ = on_event.send(event);
+    };
+    fosta_studio::logging::command(
+        "export_rows",
+        commands::files::export_rows(&state, connection_id, request, progress),
+    )
+    .await
 }
 
 /// Saves an export into Downloads; `base64` is for binary content such as PNG.

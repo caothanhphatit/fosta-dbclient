@@ -385,6 +385,10 @@ export class TableView implements TabContent {
           estimateTotal: false,
           exactTotal: false,
         }),
+      stream: {
+        connectionId: this.connection.connectionId,
+        request: { ...this.request(filter, { offset: 0, after: null }, this.sort), estimateTotal: false, exactTotal: false },
+      },
     });
   }
 

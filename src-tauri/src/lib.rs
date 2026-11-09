@@ -20,6 +20,7 @@ pub mod embedding;
 pub mod engines;
 pub mod error;
 pub mod events;
+pub mod export;
 pub mod files;
 pub mod gateway;
 pub mod history;

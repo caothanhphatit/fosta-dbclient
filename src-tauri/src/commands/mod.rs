@@ -32,7 +32,7 @@ use crate::{
 };
 
 /// The gateway context (workspace, connection, rules) of a saved connection.
-pub(crate) fn gateway_context(state: &AppState, connection_id: &str) -> AppResult<Context> {
+pub fn gateway_context(state: &AppState, connection_id: &str) -> AppResult<Context> {
     state.config.read(|config| Context::for_connection(config, connection_id))
 }
 

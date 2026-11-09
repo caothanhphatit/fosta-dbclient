@@ -23,6 +23,22 @@ import type {
 } from "./contract";
 import { errorCode as codeOf, errorText as textOf } from "./errors";
 import { downloadInBrowser, invoke, invokeStreaming, isTauri, listen, type UnlistenFn } from "./transport";
+
+/** An export the backend streams: every row matching `browse` (its paging fields are ignored). */
+export interface ExportRequest {
+  browse: ObjectBrowseRequest;
+  format: "csv" | "excel" | "json";
+  /** The Excel flavour's list separator. */
+  separator: string | null;
+  fileName: string;
+  /** `cancelRequest(requestId)` stops the export. */
+  requestId: string | null;
+}
+
+export interface ExportDone {
+  path: string;
+  rows: number;
+}
 import type {
   AiConnection,
   AiSettings,
@@ -174,6 +190,11 @@ export const api = {
     isTauri() ? invoke<string>("save_download", { name, text, base64 }) : Promise.resolve(downloadInBrowser(name, text, base64)),
   /** Desktop only (`capabilities().revealFile`). */
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),
+  /** Desktop only: writes the export into Downloads page by page (`onProgress` after each page). */
+  exportRows: (connectionId: string, request: ExportRequest, onProgress: (progress: { rows: number }) => void) =>
+    invokeStreaming<ExportDone, { rows: number }>("export_rows", { connectionId, request }, "onEvent", onProgress),
+  /** Web only: a one-time ticket; navigating a download to `/api/export/<ticket>` streams the file. */
+  exportPrepare: (connectionId: string, request: ExportRequest) => invoke<string>("export_prepare", { connectionId, request }),
   /** What this edition supports; see `core/capabilities.ts`. */
   capabilities: () => invoke<Capabilities>("capabilities"),
   /** Streams the reply through `onEvent`; resolves with the full text. */
