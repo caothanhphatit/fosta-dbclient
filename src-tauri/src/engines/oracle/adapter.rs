@@ -14,14 +14,14 @@ use super::{
     connect, describe_sync, descriptor, graph, nodes,
     run::{OraCanceller, OraContractSession},
     tabular::{self, app},
-    OraEngine, OraOptions,
+    vector, OraEngine, OraOptions,
 };
 use crate::{
     contract::{
-        classify_common, require, tabular::ApplyResult, BrowseRequest, CallContext, Canceller, Capability, CapabilitySet, Category,
-        Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, Engine, EngineDescriptor, NodeKind, ObjectDescription,
-        ObjectRef, OpenedSession, Page, ParsedConnection, RowChangeSet, SchemaGraph, SchemaGraphSource, ServerInfo, SessionOptions,
-        StatementInfo, TabularData, TlsMode, TreeChildren, TreeRequest,
+        classify_common, require, tabular::ApplyResult, vector::OPERATIONS as VECTOR_OPERATIONS, BrowseRequest, CallContext, Canceller,
+        Capability, CapabilitySet, Category, Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, Engine,
+        EngineDescriptor, NodeKind, ObjectDescription, ObjectRef, OpenedSession, Page, ParsedConnection, RowChangeSet, SchemaGraph,
+        SchemaGraphSource, ServerInfo, SessionOptions, StatementInfo, TabularData, TlsMode, TreeChildren, TreeRequest,
     },
     engines::common::{
         adapt::{description_to_contract, tls_to_contract},
@@ -96,6 +96,10 @@ impl Engine for OracleAdapter {
                 StatementInfo::new(Category::Unknown, language, text)
                     .with_reason(&format!("Oracle sessions do not run the '{language}' language.")),
             ),
+            // The vector operations only read (searches run in a read-only transaction).
+            ClassifyInput::Capability { name, .. } if VECTOR_OPERATIONS.contains(name) => {
+                Classification::single(StatementInfo::new(Category::Read, name, name))
+            }
             ClassifyInput::Capability { name, .. } => Classification::single(StatementInfo::refused(name, name, "unknown operation")),
             _ => Classification::default(),
         }
@@ -164,9 +168,13 @@ impl Engine for OracleAdapter {
         let options = connect::build_options(&request)?;
         connect::ensure_client(request.spec.option(connect::CLIENT_DIR)).await?;
         let engine = OraEngine::connect(options).await.map_err(connect::connect_error)?;
+        let mut capabilities = self.descriptor().capabilities;
+        if !vector::vector_ready(engine.server_version()) {
+            capabilities = capabilities.without(Capability::Vector);
+        }
         Ok(Arc::new(OracleConnection {
             info: connect::server_info(engine.server_version()),
-            capabilities: self.descriptor().capabilities,
+            capabilities,
             engine: Arc::new(engine),
         }))
     }
@@ -247,6 +255,14 @@ impl Connection for OracleConnection {
             session: Arc::new(session),
             canceller: Some(canceller),
         })
+    }
+
+    async fn invoke(&self, name: &str, args: serde_json::Value, _ctx: &CallContext) -> AppResult<serde_json::Value> {
+        if !VECTOR_OPERATIONS.contains(&name) {
+            return Err(crate::contract::unsupported_capability(name));
+        }
+        require(self.capabilities, Capability::Vector)?;
+        vector::invoke(self.engine.clone(), self.login(), name, args).await
     }
 
     fn tabular(&self) -> Option<&dyn TabularData> {
@@ -377,13 +393,18 @@ mod tests {
     }
 
     #[test]
-    fn every_capability_name_is_refused() {
+    fn unknown_operations_are_refused_and_vector_operations_read() {
         let args = serde_json::Value::Null;
         let classification = ORACLE.classify(&ClassifyInput::Capability {
             name: "oracle.awr",
             args: &args,
         });
         assert_eq!(classification.refusal(), Some("unknown operation"));
+        for name in VECTOR_OPERATIONS {
+            let vector = ORACLE.classify(&ClassifyInput::Capability { name, args: &args });
+            assert_eq!(vector.worst(), Some(Category::Read), "{name}");
+            assert!(vector.refusal().is_none());
+        }
     }
 
     #[test]

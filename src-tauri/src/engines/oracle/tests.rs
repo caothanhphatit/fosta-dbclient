@@ -171,6 +171,34 @@ async fn live_engine_oracle_browse_filters_and_keyset() {
     assert!(e.browse(&req).await.unwrap().rows.is_empty());
 }
 
+/// A VECTOR column (PRODUCTS.EMBEDDING) does not break browsing or a query editor SELECT, although the crate has no
+/// VECTOR type: the cell is read as text through FROM_VECTOR.
+#[tokio::test]
+#[ignore]
+async fn live_engine_oracle_vector_columns_browse_and_select() {
+    let Some(e) = engine().await else { return };
+    let page = e.browse(&BrowseRequest::new(t("PRODUCTS"), 5)).await.unwrap();
+    assert_eq!(page.rows.len(), 5);
+    let at = page.columns.iter().position(|c| c.name == "EMBEDDING").expect("EMBEDDING column");
+    assert!(
+        matches!(&page.rows[0][at], Value::Text(text) if text.starts_with('[')),
+        "{:?}",
+        page.rows[0][at]
+    );
+    let s = e.open_session().await.unwrap();
+    let mut sink = CollectSink::default();
+    s.run(
+        "SELECT id, embedding FROM products ORDER BY id FETCH FIRST 2 ROWS ONLY",
+        &RunOptions::default(),
+        &mut sink,
+    )
+    .await
+    .unwrap();
+    assert_eq!(sink.sets[0].rows.len(), 2);
+    let cell = &sink.sets[0].rows[0][1];
+    assert!(matches!(cell, Value::Text(text) if text.starts_with('[')), "{cell:?}");
+}
+
 #[tokio::test]
 #[ignore]
 async fn live_engine_oracle_typed_values_round_trip() {

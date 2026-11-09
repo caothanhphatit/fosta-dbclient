@@ -17,7 +17,7 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
   - **ClickHouse** (HTTP interface): streaming queries with `KILL QUERY`, edits as asynchronous mutations on MergeTree tables, a
     Parts and mutations view and a Server view with running queries and the query log.
   - **Oracle**: schemas, packages, procedures and PL/SQL source with compile errors, `OCIBreak` to stop a statement, edits by key or
-    `ROWID`. Needs Oracle Instant Client; see the note below.
+    `ROWID`; vector tools on 23ai. Needs Oracle Instant Client; see the note below.
   - **Redis** (and Valkey): key browser with `SCAN`, TTL and memory, an editor for each data type (strings, hashes, lists, sets, sorted
     sets, streams), a console with completion and a server view. Redis Cluster and Sentinel are not supported yet.
   - **Elasticsearch and OpenSearch**: indices, data streams and aliases, a document grid typed by the mapping, a Dev Tools console,
@@ -60,7 +60,7 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     search; Insert or open an entry in a new tab. History stays on this machine, in `fosta-studio-history.jsonl` next to the `.exe` (newest
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
-- **Vector tools** (MariaDB 11.7+, PostgreSQL with pgvector): embedding search, column/index health checks, ANN recall versus exact
+- **Vector tools** (MariaDB 11.7+, PostgreSQL with pgvector, Oracle 23ai): embedding search, column/index health checks, ANN recall versus exact
   search (seeded, so a run can be repeated).
 - **Safety rules per workspace**: a statement gateway on every engine. Every statement the app runs (query tabs, grid filters and
   edits, imports, console requests, new databases) is parsed and classified as read, write, DDL, destructive or administrative, then checked against the workspace's rules: _Open_ (everything runs;
