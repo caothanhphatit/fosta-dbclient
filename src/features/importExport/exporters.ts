@@ -57,6 +57,7 @@ export function excelSeparator(locale?: string): string {
  * RFC 4180 text with any separator: a header line, then one record per row.
  * Values holding the separator, a quote or a line break are quoted, so a cell
  * may span lines. NULL becomes an empty field. Vector columns are left out.
+ * A cell a spreadsheet would run as a formula is neutralised (`neutraliseFormula`).
  */
 export function exportDelimited(columns: ColumnInfo[], rows: Value[][], separator: string): string {
   const exportable = exportableColumns(columns);
@@ -67,11 +68,25 @@ export function exportDelimited(columns: ColumnInfo[], rows: Value[][], separato
   );
 }
 
+/** Spreadsheets (Excel, LibreOffice, Numbers) run a cell that starts with one of these as a formula: OWASP "CSV injection". */
+const FORMULA_START = /^[=+\-@\t\r]/;
+/** A plain number such as `-5` or `-1.5e-7`: harmless, and kept as it is so the sheet still reads a number. */
+const PLAIN_NUMBER = /^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$/;
+
+/**
+ * A cell that a spreadsheet would evaluate gets a leading single quote, which spreadsheets take as "text follows";
+ * the backend's `neutralise_formula` does the same. The caller also quotes such a field.
+ */
+export function neutraliseFormula(text: string): string {
+  return FORMULA_START.test(text) && !PLAIN_NUMBER.test(text) ? `'${text}` : text;
+}
+
 function delimitedText(names: string[], rows: Value[][], separator: string): string {
   const field = (text: string | null): string => {
     if (text === null) return "";
-    const needsQuotes = text.includes(separator) || /["\r\n]/.test(text);
-    return needsQuotes ? `"${text.replace(/"/g, '""')}"` : text;
+    const safe = neutraliseFormula(text);
+    const needsQuotes = safe !== text || safe.includes(separator) || /["\r\n]/.test(safe);
+    return needsQuotes ? `"${safe.replace(/"/g, '""')}"` : safe;
   };
   return [names.map(field), ...rows.map((row) => row.map((value) => field(displayValue(value))))].map((values) => values.join(separator)).join("\r\n");
 }

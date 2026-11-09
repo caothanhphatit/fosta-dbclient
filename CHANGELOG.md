@@ -88,6 +88,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   that pooled connection (another tab's page or grid save failed with "Query execution was interrupted").
 - **Data files**: the open tabs file, the configuration, the query history and the audit log are written readable by their owner
   only (mode 0600 on Linux, the web edition's volume); files from earlier versions are restricted on the next start.
+- **CSV exports**: a cell that a spreadsheet would run as a formula (starting with `=`, `+`, `-`, `@`, a tab or a carriage return) is
+  written with a leading single quote and quoted, in the page exporters and the streamed export alike; plain numbers such as
+  `-5` are unchanged.
 
 ## [0.1.0] - 2026-11-08
 
