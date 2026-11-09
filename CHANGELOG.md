@@ -91,6 +91,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **CSV exports**: a cell that a spreadsheet would run as a formula (starting with `=`, `+`, `-`, `@`, a tab or a carriage return) is
   written with a leading single quote and quoted, in the page exporters and the streamed export alike; plain numbers such as
   `-5` are unchanged.
+- **Web edition**: wrong MCP tokens at `/mcp` are limited per client in a bucket of their own, so an MCP client with a stale token
+  can no longer lock every browser out of sign-in for 15 minutes.
 
 ## [0.1.0] - 2026-11-08
 

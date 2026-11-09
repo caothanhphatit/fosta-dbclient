@@ -88,8 +88,8 @@ pub fn router(server: Server) -> Router {
     // With authentication off the endpoint refuses everything.
     let (allow_server, failed_server) = (Arc::clone(&server), Arc::clone(&server));
     let mcp_gate = fosta_studio::mcp::http::WebGate {
-        allow: Arc::new(move |client| !allow_server.auth.is_off() && allow_server.auth.may_attempt(client)),
-        failed: Arc::new(move |client| failed_server.auth.record_failure(client)),
+        allow: Arc::new(move |client| !allow_server.auth.is_off() && allow_server.auth.mcp_may_attempt(client)),
+        failed: Arc::new(move |client| failed_server.auth.record_mcp_failure(client)),
     };
     let app = Router::new()
         .nest("/api", api)
@@ -756,6 +756,34 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(status_body["enabled"], false);
+        }
+
+        /// Wrong MCP tokens are limited in a bucket of their own: they lock that client out of `/mcp`, never anyone
+        /// out of sign-in (F5 of the 0.2.0 audit).
+        #[tokio::test(flavor = "multi_thread")]
+        async fn wrong_mcp_tokens_do_not_lock_the_sign_in() {
+            let _serial = SERIAL.lock().await;
+            let server = start(false).await;
+            let access = server.access.clone().unwrap();
+            let mcp = server.state.mcp.token().unwrap();
+            for _ in 0..crate::auth::MAX_FAILURES_PER_CLIENT {
+                assert_eq!(status(server.ping("not-the-mcp-token")).await, 401);
+            }
+            // This client is now refused at /mcp, right token or not…
+            assert_eq!(status(server.ping(&mcp)).await, 401);
+            // …but still signs in with the access token, by form and by URL.
+            let login = server
+                .client
+                .post(format!("{}/api/login", server.base))
+                .form(&[("token", access.as_str())])
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(login.headers()[header::LOCATION], "/");
+            assert!(login.headers().contains_key(header::SET_COOKIE));
+            let by_url = server.client.get(format!("{}/?token={access}", server.base)).send().await.unwrap();
+            assert_eq!(by_url.status().as_u16(), 303);
+            assert!(by_url.headers().contains_key(header::SET_COOKIE));
         }
 
         #[tokio::test(flavor = "multi_thread")]

@@ -32,7 +32,7 @@ const SESSION_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const MIN_TOKEN_LEN: usize = 16;
 
 /// Failed sign-ins allowed per client address within [`FAILURE_WINDOW`], and in total.
-const MAX_FAILURES_PER_CLIENT: u32 = 10;
+pub(crate) const MAX_FAILURES_PER_CLIENT: u32 = 10;
 const MAX_FAILURES_TOTAL: u32 = 100;
 const FAILURE_WINDOW: Duration = Duration::from_secs(15 * 60);
 
@@ -127,7 +127,11 @@ pub struct Auth {
     /// `None` when authentication is off.
     live: Option<Live>,
     secure_cookie: bool,
+    /// Failed sign-ins (`/api/login`, `/?token=`), per client and overall.
     limiter: Mutex<Limiter>,
+    /// Wrong MCP tokens at `/mcp`, per client only: the MCP token is 32 random bytes, so an overall cap buys nothing,
+    /// and a bucket of its own keeps a misconfigured or hostile MCP client from locking every browser out of sign-in.
+    mcp_limiter: Mutex<Limiter>,
 }
 
 /// Where the keys come from, and the keys as last read.
@@ -179,7 +183,8 @@ impl Auth {
         Self {
             live: None,
             secure_cookie: false,
-            limiter: Mutex::default(),
+            limiter: Mutex::new(Limiter::new(Some(MAX_FAILURES_TOTAL))),
+            mcp_limiter: Mutex::new(Limiter::new(None)),
         }
     }
 
@@ -196,7 +201,8 @@ impl Auth {
                 keys: RwLock::new(keys),
             }),
             secure_cookie,
-            limiter: Mutex::default(),
+            limiter: Mutex::new(Limiter::new(Some(MAX_FAILURES_TOTAL))),
+            mcp_limiter: Mutex::new(Limiter::new(None)),
         };
         Ok((auth, token, generated))
     }
@@ -227,14 +233,24 @@ impl Auth {
         self.live.is_none()
     }
 
-    /// Counts a failed attempt from `client` that was checked elsewhere (a wrong MCP token).
+    /// Counts a failed sign-in from `client` that was checked elsewhere (the MCP token offered as the access token).
     pub fn record_failure(&self, client: IpAddr) {
         self.limiter().fail(client, Instant::now());
     }
 
-    /// Whether `client` may try again; `false` after too many recent failures.
+    /// Whether `client` may try to sign in again; `false` after too many recent failures.
     pub fn may_attempt(&self, client: IpAddr) -> bool {
         self.limiter().allows(client, Instant::now())
+    }
+
+    /// Counts a wrong MCP token from `client` at `/mcp`; never affects sign-in.
+    pub fn record_mcp_failure(&self, client: IpAddr) {
+        self.mcp_limiter().fail(client, Instant::now());
+    }
+
+    /// Whether `client` may present an MCP token again; `false` after too many wrong ones from that client.
+    pub fn mcp_may_attempt(&self, client: IpAddr) -> bool {
+        self.mcp_limiter().allows(client, Instant::now())
     }
 
     /// Checks a token typed or passed in the URL, recording failures for the rate limit.
@@ -303,6 +319,10 @@ impl Auth {
     fn limiter(&self) -> std::sync::MutexGuard<'_, Limiter> {
         self.limiter.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+
+    fn mcp_limiter(&self) -> std::sync::MutexGuard<'_, Limiter> {
+        self.mcp_limiter.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 fn sign(key: &[u8; 32], issued: u64) -> String {
@@ -339,23 +359,35 @@ pub fn cookie_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
         .map(|(_, value)| value)
 }
 
-/// Counts failed sign-ins in a sliding window, per client address and overall.
-#[derive(Default)]
+/// Counts failures in a sliding window, per client address and (when capped) overall.
 struct Limiter {
     clients: HashMap<IpAddr, Vec<Instant>>,
     total: Vec<Instant>,
+    /// The overall cap; `None` limits per client only.
+    max_total: Option<usize>,
 }
 
 impl Limiter {
+    fn new(max_total: Option<u32>) -> Self {
+        Self {
+            clients: HashMap::new(),
+            total: Vec::new(),
+            max_total: max_total.map(|cap| cap as usize),
+        }
+    }
+
     fn allows(&mut self, client: IpAddr, now: Instant) -> bool {
         self.forget_old(now);
-        self.total.len() < MAX_FAILURES_TOTAL as usize && self.clients.get(&client).map_or(0, Vec::len) < MAX_FAILURES_PER_CLIENT as usize
+        self.max_total.is_none_or(|cap| self.total.len() < cap)
+            && self.clients.get(&client).map_or(0, Vec::len) < MAX_FAILURES_PER_CLIENT as usize
     }
 
     fn fail(&mut self, client: IpAddr, now: Instant) {
         self.forget_old(now);
         self.clients.entry(client).or_default().push(now);
-        self.total.push(now);
+        if self.max_total.is_some() {
+            self.total.push(now);
+        }
     }
 
     fn forget_old(&mut self, now: Instant) {
@@ -481,6 +513,34 @@ mod tests {
         }
         assert!(!auth.may_attempt(CLIENT));
         assert!(auth.may_attempt(IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 2))));
+    }
+
+    #[test]
+    fn wrong_mcp_tokens_are_limited_apart_from_sign_ins() {
+        let dir = TempDir::new("mcp-limit");
+        let (auth, token, _) = Auth::open(&dir.0, None, false).unwrap();
+        // A hundred wrong MCP tokens from different addresses: no overall cap, so a fresh client still may try.
+        for n in 0..MAX_FAILURES_TOTAL {
+            let client = IpAddr::V4(std::net::Ipv4Addr::new(10, 1, (n / 256) as u8, (n % 256) as u8));
+            assert!(auth.mcp_may_attempt(client));
+            auth.record_mcp_failure(client);
+        }
+        assert!(auth.mcp_may_attempt(IpAddr::V4(std::net::Ipv4Addr::new(10, 2, 0, 1))));
+        // Too many from one address lock that address out of `/mcp` only; it still signs in with the access token.
+        for _ in 0..MAX_FAILURES_PER_CLIENT {
+            assert!(auth.mcp_may_attempt(CLIENT));
+            auth.record_mcp_failure(CLIENT);
+        }
+        assert!(!auth.mcp_may_attempt(CLIENT));
+        assert!(auth.may_attempt(CLIENT));
+        assert!(auth.check_token(CLIENT, &token));
+        // Failed sign-ins do not count against the MCP client either.
+        let other = IpAddr::V4(std::net::Ipv4Addr::new(10, 3, 0, 1));
+        for _ in 0..MAX_FAILURES_PER_CLIENT {
+            assert!(!auth.check_token(other, "wrong"));
+        }
+        assert!(!auth.may_attempt(other));
+        assert!(auth.mcp_may_attempt(other));
     }
 
     #[test]
