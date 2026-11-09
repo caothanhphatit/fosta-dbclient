@@ -6,6 +6,9 @@
   position: fixed;
   z-index: 50;
   min-width: 200px;
+  max-height: calc(100vh - 8px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 5px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -36,12 +39,14 @@
   color: var(--fg-3);
 }
 
-.menu-item:hover:not(.disabled) {
+.menu-item:hover:not(.disabled),
+.menu-item.focused {
   background: var(--accent);
   color: var(--accent-fg);
 }
 
-.menu-item:hover:not(.disabled) .icon {
+.menu-item:hover:not(.disabled) .icon,
+.menu-item.focused .icon {
   color: var(--accent-fg);
 }
 

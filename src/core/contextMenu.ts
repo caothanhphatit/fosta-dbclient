@@ -1,4 +1,5 @@
 import { h, icon, type IconName } from "./dom";
+import { nextFocusable, placeInViewport } from "./placement";
 
 /** A small button at the end of a menu entry. */
 export interface MenuAction {
@@ -23,10 +24,13 @@ export type MenuItem =
   | "separator";
 
 let activeMenu: HTMLElement | null = null;
+/** The entry the arrow keys moved to (-1: none yet). */
+let focusedIndex = -1;
 
 export function closeContextMenu(): void {
   activeMenu?.remove();
   activeMenu = null;
+  focusedIndex = -1;
 }
 
 export function showContextMenu(event: MouseEvent, items: MenuItem[]): void {
@@ -80,16 +84,50 @@ function menuEntry(item: Exclude<MenuItem, "separator">): HTMLElement {
   return entry;
 }
 
+/** Measured untransformed (the opening animation scales the menu), capped to the window height (it scrolls). */
 function placeWithinViewport(menu: HTMLElement, x: number, y: number): void {
-  const bounds = menu.getBoundingClientRect();
-  menu.style.left = `${Math.max(4, Math.min(x, window.innerWidth - bounds.width - 4))}px`;
-  menu.style.top = `${Math.max(4, Math.min(y, window.innerHeight - bounds.height - 4))}px`;
+  const placed = placeInViewport(x, y, menu.offsetWidth, menu.offsetHeight, window.innerWidth, window.innerHeight);
+  menu.style.maxHeight = `${placed.maxHeight}px`;
+  menu.style.left = `${placed.left}px`;
+  menu.style.top = `${placed.top}px`;
 }
+
+function menuEntries(menu: HTMLElement): HTMLElement[] {
+  return Array.from(menu.querySelectorAll<HTMLElement>(":scope > .menu-item"));
+}
+
+/** Arrow keys, Home and End move between entries (kept in view when the menu scrolls); Enter runs the focused one. */
+function moveFocus(menu: HTMLElement, step: 1 | -1 | "first" | "last"): void {
+  const entries = menuEntries(menu);
+  const next = nextFocusable(focusedIndex, step, entries.length, (index) => !entries[index].classList.contains("disabled"));
+  entries.forEach((entry, index) => entry.classList.toggle("focused", index === next));
+  focusedIndex = next;
+  entries[next]?.scrollIntoView({ block: "nearest" });
+}
+
+const MOVES: Partial<Record<string, 1 | -1 | "first" | "last">> = { ArrowDown: 1, ArrowUp: -1, Home: "first", End: "last" };
 
 document.addEventListener("mousedown", (event) => {
   if (activeMenu && !activeMenu.contains(event.target as Node)) closeContextMenu();
 });
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeContextMenu();
-});
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (!activeMenu) return;
+    const move = MOVES[event.key];
+    if (event.key === "Escape") {
+      closeContextMenu();
+    } else if (move !== undefined) {
+      moveFocus(activeMenu, move);
+    } else if (event.key === "Enter" && focusedIndex >= 0) {
+      menuEntries(activeMenu)[focusedIndex]?.click();
+    } else {
+      return;
+    }
+    // The grid, the tree and the editor underneath must not act on the same key.
+    event.preventDefault();
+    event.stopPropagation();
+  },
+  true,
+);
 window.addEventListener("blur", closeContextMenu);
