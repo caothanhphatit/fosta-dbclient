@@ -690,6 +690,32 @@ kbd {
   display: none;
 }
 
+/* The download panel is opened by "Download for Windows" and stays hidden without JavaScript. */
+.download-panel {
+  display: none;
+}
+
+.js-docker .download-panel.is-open {
+  display: block;
+}
+
+.download-panel-body {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px 12px;
+  color: #d5dbe5;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.download-panel-body p {
+  margin: 0;
+}
+
+.download-panel-body a {
+  color: #7ea6f4;
+}
+
 .docker-panel.is-open {
   animation: docker-in 0.18s ease-out;
 }

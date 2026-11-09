@@ -260,7 +260,7 @@
           <h1 id="hero-title">Fosta Studio</h1>
           <p class="lede" data-i18n="hero.lede">A Rust-built database client with an AI agent and MCP: isolated workspaces, SSH tunnels and port-forwards that start on connect. Free and open source. Supports 11 databases, from MariaDB and PostgreSQL to MongoDB, Redis and Oracle.</p>
           <div class="cta-row">
-            <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/releases/latest">
+            <a class="btn btn-primary" href="{installer-url}" data-download-toggle aria-controls="download" aria-expanded="false">
               <svg class="icon icon-brand" aria-hidden="true"><use href="#i-windows" /></svg><span data-i18n="hero.download">Download for Windows</span>
             </a>
             <a class="btn btn-secondary" href="#docker" data-docker-toggle="mac" aria-controls="docker" aria-expanded="false">
@@ -273,8 +273,29 @@
               <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span data-i18n="hero.github">View on GitHub</span>
             </a>
           </div>
-          <p class="cta-note" data-i18n="hero.note">Version {version} · Windows installer or portable .exe · macOS and Linux through the Docker web edition</p>
-          <p class="cta-note cta-fineprint" data-i18n="hero.smartscreen">Windows may show a SmartScreen warning because the app is not code-signed yet: choose <b>More info</b> → <b>Run anyway</b>.</p>
+          <div class="docker-panel download-panel" id="download">
+            <div class="docker-panel-head">
+              <span class="docker-panel-title"
+                ><svg class="icon" aria-hidden="true"><use href="#i-windows" /></svg><span data-i18n="hero.dlTitle">Fosta Studio for Windows</span></span
+              >
+            </div>
+            <div class="download-panel-body">
+              <p>
+                <span data-i18n="hero.dlStart">Your download should start in a moment.</span>
+                <a href="{installer-url}" data-i18n="hero.dlRetry">If it did not, click here.</a>
+              </p>
+              <p>
+                <span data-i18n="hero.dlVersion">Version {version}</span> ·
+                <a href="{portable-url}" data-i18n="hero.dlPortable">Portable .exe (no install)</a> ·
+                <a href="https://github.com/caothanhphatit/fosta-dbclient/releases/tag/v{version}" data-i18n="hero.dlNotes">Release notes</a>
+              </p>
+              <p>
+                <span data-i18n="hero.dlOther">On macOS or Linux, use the web edition:</span>
+                <a href="#docker" data-docker-toggle aria-controls="docker" aria-expanded="false" data-i18n="hero.dlDocker">Run with Docker</a>
+              </p>
+            </div>
+            <p class="docker-panel-note" data-i18n="hero.smartscreen">Windows may show a SmartScreen warning because the app is not code-signed yet: choose <b>More info</b> → <b>Run anyway</b>.</p>
+          </div>
           <div class="docker-panel" id="docker">
             <div class="docker-panel-head">
               <span class="docker-panel-title"

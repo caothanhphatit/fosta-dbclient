@@ -19,6 +19,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // time, so the page always names the version the release workflow builds.
 const APP_VERSION = JSON.parse(fs.readFileSync(path.join(HERE, "..", "package.json"), "utf8")).version;
 const ORIGIN = "https://dbcl.fosta.app";
+// Direct download links for the Windows build. The release workflow publishes assets named after the version, and GitHub
+// turns the spaces of the installer's name into dots. A release only needs the version bump in package.json:
+// "{installer-url}" and "{portable-url}" in the templates become these at build time.
+const RELEASE_BASE = `https://github.com/caothanhphatit/fosta-dbclient/releases/download/v${APP_VERSION}`;
+const INSTALLER_URL = `${RELEASE_BASE}/Fosta.Studio_${APP_VERSION}_x64-setup.exe`;
+const PORTABLE_URL = `${RELEASE_BASE}/Fosta-Studio_${APP_VERSION}_x64_portable.exe`;
 
 // The first locale is the default: served at the root, and the x-default alternate.
 export const LOCALES = [
@@ -425,7 +431,7 @@ export function renderPage(html, loc, dicts, page = PAGES[0]) {
   );
 
   // 7. The app version.
-  out = out.replaceAll("{version}", APP_VERSION);
+  out = out.replaceAll("{version}", APP_VERSION).replaceAll("{installer-url}", INSTALLER_URL).replaceAll("{portable-url}", PORTABLE_URL);
 
   return out;
 }

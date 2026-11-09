@@ -198,5 +198,8 @@ Server layout (installed once; kept next to the other sites without touching the
 - Engine logos in the home page chip strip are Simple Icons marks (CC0, v16.35.0), inlined as `i-db-*` symbols; Oracle and SQL
   Server are not in Simple Icons and use the app's own glyphs. They sit on a light tile in both themes. Keep the trademark
   line in the footer (`footer.trademarks`).
-- When the first release ships, update the hero note and the "Build from source" card (in every language), and consider
-  linking the Download button to `releases/latest`.
+- "Download for Windows" links straight to the installer: `build.mjs` builds the asset URLs from the version in
+  `package.json` (`INSTALLER_URL`, `PORTABLE_URL`; `{installer-url}` / `{portable-url}` in the templates), so a release
+  only needs the version bump, and the site is deployed after the release is published (the URLs 404 before that). The
+  click also opens a panel with the portable build, release notes and the SmartScreen tip.
+- When the first release ships, update the "Build from source" card (in every language).

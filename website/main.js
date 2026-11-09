@@ -39,23 +39,31 @@
 
   // "Run with Docker" and "Download for macOS" open the command panel under the hero buttons; the macOS button also
   // shows the note for Mac users. A second click on the same button closes it. Without JavaScript the panel and the
-  // note are always shown.
+  // note are always shown. "Download for Windows" is a plain link to the installer: the click is left alone, so the
+  // download starts, and opens the download panel; only one panel is open at a time, and the download panel stays open
+  // on a second click (it starts the download again). Without JavaScript the panel stays hidden.
   function initDocker() {
-    var toggles = document.querySelectorAll("[data-docker-toggle]");
+    var toggles = document.querySelectorAll("[data-docker-toggle], [data-download-toggle]");
+    var panels = document.querySelectorAll("#docker, #download");
     var panel = document.getElementById("docker");
     if (!toggles.length || !panel) return;
     root.classList.add("js-docker");
     var current = null;
     function set(toggle) {
       current = toggle;
-      panel.classList.toggle("is-open", !!toggle);
+      var target = toggle && toggle.getAttribute("aria-controls");
+      Array.prototype.forEach.call(panels, function (p) {
+        p.classList.toggle("is-open", p.id === target);
+      });
       panel.classList.toggle("is-mac", !!toggle && toggle.getAttribute("data-docker-toggle") === "mac");
       Array.prototype.forEach.call(toggles, function (t) {
         t.setAttribute("aria-expanded", t === toggle ? "true" : "false");
       });
     }
     Array.prototype.forEach.call(toggles, function (toggle) {
+      var isDownload = toggle.hasAttribute("data-download-toggle");
       toggle.addEventListener("click", function (event) {
+        if (isDownload) return set(toggle);
         event.preventDefault();
         set(current === toggle ? null : toggle);
       });
