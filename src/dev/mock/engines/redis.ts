@@ -667,9 +667,9 @@ export function classify(source: string): StatementInfo[] {
     const category: StatementInfo["category"] =
       key === "FLUSHALL" || key === "FLUSHDB"
         ? "destructive"
-        : key in DANGEROUS || key === "KEYS *"
+        : key in DANGEROUS || key === "KEYS *" || key === "CONFIG GET"
           ? "admin"
-          : READ.has(name) || key === "CONFIG GET" || name === "KEYS"
+          : READ.has(name) || name === "KEYS"
             ? "read"
             : WRITE.has(name)
               ? "write"
