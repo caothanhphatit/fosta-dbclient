@@ -8,7 +8,8 @@
 //! keep OCI autocommit off; query sessions commit after each statement unless a transaction was begun (see `session.rs`).
 //!
 //! The contract side lives in `adapter.rs` (engine and connection), `connect.rs` (options, Instant Client), `nodes.rs` (tree),
-//! `tabular.rs` (browse and guarded edits), `run.rs` (query sessions) and `graph.rs` (ER diagram).
+//! `tabular.rs` (browse and guarded edits), `run.rs` (query sessions), `graph.rs` (ER diagram) and `vector.rs` (AI Vector
+//! Search on 23ai).
 
 pub mod adapter;
 pub mod connect;
@@ -24,6 +25,7 @@ mod tabular;
 #[cfg(test)]
 mod tests;
 pub mod types;
+mod vector;
 
 pub use adapter::{OracleAdapter, ORACLE};
 pub use session::OraSession;
@@ -261,6 +263,8 @@ impl SqlDialect for OraDialect {
         match col.type_name.as_str() {
             "JSON" => format!("JSON_SERIALIZE({q}) AS {q}"),
             "XMLTYPE" => format!("XMLSERIALIZE(CONTENT {q}) AS {q}"),
+            // The `oracle` crate has no VECTOR type: vectors are read as text (`[1.0E+000,2.0E+000]`).
+            t if t == "VECTOR" || t.starts_with("VECTOR(") => format!("FROM_VECTOR({q} RETURNING CLOB) AS {q}"),
             _ => q,
         }
     }
@@ -647,6 +651,7 @@ fn describe_relation(c: &Connection, d: &mut ObjectDescription, owner: &str) -> 
             generated: if virt { default } else { None },
         });
     }
+    vector::describe_columns(c, owner, &name, &mut d.columns);
     if let Some(r) = one(
         c,
         "SELECT comments FROM all_tab_comments WHERE owner = :1 AND table_name = :2",

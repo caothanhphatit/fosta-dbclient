@@ -48,3 +48,24 @@ GO
 INSERT INTO contract_loose ("name", "qty", "doc") SELECT 'loose ' || LEVEL, LEVEL, TO_CLOB('text ' || LEVEL) FROM dual CONNECT BY LEVEL <= 3
 GO
 COMMIT
+GO
+-- The vector suite (Oracle 23ai): VECTOR(4, FLOAT32) and an IVF index (HNSW needs VECTOR_MEMORY_SIZE, 0 on the Free image).
+DROP TABLE IF EXISTS contract_vectors PURGE
+GO
+CREATE TABLE contract_vectors (
+  "id" NUMBER(10) NOT NULL PRIMARY KEY,
+  "label" VARCHAR2(50) NOT NULL,
+  "embedding" VECTOR(4, FLOAT32) NOT NULL
+)
+GO
+INSERT INTO contract_vectors ("id", "label", "embedding")
+SELECT LEVEL,
+       'vector ' || LEVEL,
+       TO_VECTOR('[' || (MOD(LEVEL, 10) + 1) / 10 || ',' || (MOD(LEVEL * 3, 11) + 1) / 11 || ','
+                 || (MOD(LEVEL * 7, 13) + 1) / 13 || ',' || (MOD(LEVEL * 9, 17) + 1) / 17 || ']', 4, FLOAT32)
+FROM dual CONNECT BY LEVEL <= 300
+GO
+COMMIT
+GO
+CREATE VECTOR INDEX contract_vectors_embedding_idx ON contract_vectors ("embedding")
+  ORGANIZATION NEIGHBOR PARTITIONS DISTANCE COSINE WITH TARGET ACCURACY 95

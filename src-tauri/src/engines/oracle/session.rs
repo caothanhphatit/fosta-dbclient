@@ -263,16 +263,26 @@ fn stream_rows(
     Ok((batcher.kept, truncated))
 }
 
-/// Whether opening a result set failed on a native JSON column, which the `oracle` crate cannot fetch.
+/// The `oracle` crate's error for a VECTOR column (Oracle type number 2033), which it cannot fetch.
+const VECTOR_FETCH_ERROR: &str = "unknown Oracle type number 2033";
+
+/// Whether opening a result set failed on a native JSON or VECTOR column, which the `oracle` crate cannot fetch.
 fn is_json_fetch_error(e: &oracle::Error) -> bool {
-    e.to_string().contains("unsupported Oracle type JSON")
+    let text = e.to_string();
+    text.contains("unsupported Oracle type JSON") || text.contains(VECTOR_FETCH_ERROR)
 }
 
-/// [`map_err`] for opening a result set, with a way out for native JSON columns.
+/// [`map_err`] for opening a result set, with a way out for native JSON and VECTOR columns.
 fn query_err(e: oracle::Error) -> EngineError {
+    let vector = e.to_string().contains(VECTOR_FETCH_ERROR);
     let json = is_json_fetch_error(&e);
     let mut err = map_err(e);
-    if json {
+    if vector {
+        err.kind = ErrorKind::Input;
+        err.message = "This result has a VECTOR column, which Fosta Studio cannot read directly. Select it as text with \
+                       FROM_VECTOR(column), e.g. SELECT FROM_VECTOR(embedding) AS embedding FROM ..."
+            .into();
+    } else if json {
         err.kind = ErrorKind::Input;
         err.message = "This result has a JSON column, which Fosta Studio cannot read directly yet. Select it as text with \
                        JSON_SERIALIZE(column), e.g. SELECT JSON_SERIALIZE(doc PRETTY) AS doc FROM ..."
@@ -283,10 +293,13 @@ fn query_err(e: oracle::Error) -> EngineError {
 
 /// `DBMS_SQL.DESCRIBE_COLUMNS2` type code of the native JSON type.
 const JSON_TYPE_CODE: &str = "119";
+/// `DBMS_SQL.DESCRIBE_COLUMNS2` type code of the VECTOR type.
+const VECTOR_TYPE_CODE: &str = "127";
 
-/// The query rewritten so native JSON columns arrive as text: `SELECT q."A", JSON_SERIALIZE(q."DOC" RETURNING CLOB) AS
-/// "DOC" FROM (<query>) q`, with the indexes of those columns. The columns are described with DBMS_SQL (parsing a query
-/// does not run it). `None` when there is no JSON column or two columns share a name (they could not be selected by name).
+/// The query rewritten so native JSON and VECTOR columns arrive as text: `SELECT q."A", JSON_SERIALIZE(q."DOC" RETURNING
+/// CLOB) AS "DOC", FROM_VECTOR(q."V" RETURNING CLOB) AS "V" FROM (<query>) q`, with the indexes of the JSON columns. The
+/// columns are described with DBMS_SQL (parsing a query does not run it). `None` when there is no such column or two
+/// columns share a name (they could not be selected by name).
 fn json_rewrite(conn: &Connection, sql: &str) -> Result<Option<(String, Vec<usize>)>> {
     let mut stmt = conn
         .statement(
@@ -313,17 +326,18 @@ fn json_rewrite(conn: &Connection, sql: &str) -> Result<Option<(String, Vec<usiz
     let mut names: Vec<&str> = columns.iter().map(|(_, n)| n.as_str()).collect();
     names.sort_unstable();
     names.dedup();
-    if json.is_empty() || names.len() != columns.len() {
+    let vectors = columns.iter().any(|(t, _)| t == VECTOR_TYPE_CODE);
+    if (json.is_empty() && !vectors) || names.len() != columns.len() {
         return Ok(None);
     }
     let list: Vec<String> = columns
         .iter()
         .map(|(t, name)| {
             let quoted = format!("\"{}\"", name.replace('"', "\"\""));
-            if t == JSON_TYPE_CODE {
-                format!("JSON_SERIALIZE(\"q\".{quoted} RETURNING CLOB) AS {quoted}")
-            } else {
-                format!("\"q\".{quoted}")
+            match t.as_str() {
+                JSON_TYPE_CODE => format!("JSON_SERIALIZE(\"q\".{quoted} RETURNING CLOB) AS {quoted}"),
+                VECTOR_TYPE_CODE => format!("FROM_VECTOR(\"q\".{quoted} RETURNING CLOB) AS {quoted}"),
+                _ => format!("\"q\".{quoted}"),
             }
         })
         .collect();

@@ -11,9 +11,11 @@ use std::sync::Arc;
 use super::ROWID;
 use crate::{
     contract::{
-        errors::CONFLICT, testing::suites::*, BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Field,
-        Filter, NodeKind, ObjectRef, RawFilterLang, RowChange, RowChangeSet, RunOptions, RunRequest, Session, SessionOptions,
-        TransactionOp, TreeRequest, Value, ValueKind,
+        errors::CONFLICT,
+        testing::{suites::*, vector::*},
+        BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Field, Filter, NodeKind, ObjectRef,
+        RawFilterLang, RowChange, RowChangeSet, RunOptions, RunRequest, Session, SessionOptions, TransactionOp, TreeRequest, Value,
+        ValueKind,
     },
     runtime::Handle,
 };
@@ -382,4 +384,43 @@ async fn contract_oracle_plsql_tree_definitions_and_diagram() {
         "{:?}",
         graph.relations
     );
+}
+
+/// The shared vector suite on `SHOP.CONTRACT_VECTORS` (`VECTOR(4, FLOAT32)`, IVF cosine index), plus Oracle specifics.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/oracle.yml and Oracle Instant Client"]
+async fn contract_oracle_vector() {
+    let vectors = VectorFixture {
+        database: "SHOP",
+        table: "CONTRACT_VECTORS",
+        column: "embedding",
+        dims: 4,
+        key_column: "id",
+        key: 1,
+        indexed: true,
+    };
+    let run = suite_vector(&fixture(), &vectors).await.expect("Oracle 23ai has vectors");
+    assert_eq!(run.info["columns"][0]["typeName"], "VECTOR(4, FLOAT32)");
+    let index = &run.info["indexes"][0];
+    assert_eq!(index["name"], "CONTRACT_VECTORS_EMBEDDING_IDX");
+    assert_eq!(
+        (index["kind"].as_str(), index["metric"].as_str()),
+        (Some("ivf"), Some("cosine")),
+        "{index}"
+    );
+    assert_eq!(run.info["metrics"], serde_json::json!(["cosine", "euclidean", "dot"]));
+    let search = &run.search;
+    let sql = search["sql"].as_str().unwrap();
+    assert!(sql.contains("VECTOR_DISTANCE(\"embedding\", TO_VECTOR(:q), COSINE)"), "{search}");
+    assert!(sql.contains("FETCH APPROX FIRST 5 ROWS ONLY"), "{search}");
+    assert!(search["runnableSql"].as_str().unwrap().contains("TO_VECTOR('["), "{search}");
+    assert_eq!(search["indexUsed"], "CONTRACT_VECTORS_EMBEDDING_IDX", "{search}");
+    assert_eq!(search["plan"]["columns"][0]["name"], "PLAN_TABLE_OUTPUT");
+    let columns = search["result"]["columns"].as_array().unwrap();
+    assert!(
+        columns.iter().all(|column| column["name"] != "embedding"),
+        "vector columns are not selected"
+    );
+    let id = columns.iter().position(|column| column["name"] == "id").unwrap();
+    assert_eq!(search["result"]["rows"][0][id]["t"], "int");
 }

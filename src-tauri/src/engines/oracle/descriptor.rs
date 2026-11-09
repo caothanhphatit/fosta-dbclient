@@ -37,6 +37,8 @@ pub fn descriptor() -> EngineDescriptor {
             Capability::StreamingResults,
             Capability::SchemaGraph,
             Capability::Explain,
+            // Only on 23ai and newer (checked on connect).
+            Capability::Vector,
         ]),
         objects_label: "tables".into(),
         connection: ConnectionForm {
