@@ -5,7 +5,7 @@
 //! | `Read`        | Reads data or metadata                                     | GET, HGETALL, SCAN, ZRANGE, XRANGE, INFO, JSON.GET, FT.SEARCH |
 //! | `Write`       | Changes data of the keys it names                          | SET, HSET, LPUSH, ZADD, XADD, EXPIRE, DEL/UNLINK of keys    |
 //! | `Destructive` | Can drop data beyond the keys it names, or cannot be checked | FLUSHALL, FLUSHDB, SWAPDB, EVAL/EVALSHA/FCALL (scripts can delete by pattern), FUNCTION FLUSH, FT.DROPINDEX DD |
-//! | `Admin`       | Changes server state, not data, or blocks the server       | CONFIG SET, SHUTDOWN, DEBUG, KEYS *, SCRIPT FLUSH, ACL SETUSER, CLIENT KILL, REPLICAOF, CLUSTER ... |
+//! | `Admin`       | Changes server state, not data, or blocks the server; reads that expose secrets or other clients (CONFIG GET, ACL LIST/USERS/GETUSER/LOG, CLIENT LIST/INFO, SLOWLOG GET, LATENCY) | CONFIG SET, SHUTDOWN, DEBUG, KEYS *, SCRIPT FLUSH, ACL SETUSER, CLIENT KILL, REPLICAOF, CLUSTER ... |
 //! | `Session`     | Changes only this connection                               | SELECT, MULTI/EXEC/DISCARD, WATCH, CLIENT SETNAME, HELLO, AUTH |
 //! | `Unsupported` | Needs a streaming channel (deferred)                       | SUBSCRIBE, PSUBSCRIBE, SSUBSCRIBE, MONITOR, SYNC, PSYNC     |
 //! | `Unknown`     | Not in the table (module commands etc.); treat like `Write` and ask | |
@@ -418,21 +418,17 @@ const UNSUPPORTED: &[&str] = &[
 /// Container commands whose class depends on the subcommand: (command, read-only subcommands, admin subcommands,
 /// destructive subcommands). Anything else under them is `Admin`.
 const CONTAINERS: &[(&str, &[&str], &[&str])] = &[
-    ("CONFIG", &["GET"], &[]),
+    ("CONFIG", &[], &[]),
     (
         "CLIENT",
-        &["LIST", "INFO", "GETNAME", "ID", "GETREDIR", "TRACKINGINFO", "NO-EVICT", "NO-TOUCH"],
+        &["GETNAME", "ID", "GETREDIR", "TRACKINGINFO", "NO-EVICT", "NO-TOUCH"],
         &[],
     ),
     ("SCRIPT", &["EXISTS"], &["FLUSH"]),
     ("FUNCTION", &["LIST", "DUMP", "STATS"], &["FLUSH", "DELETE", "RESTORE"]),
     ("OBJECT", &["ENCODING", "FREQ", "IDLETIME", "REFCOUNT", "HELP"], &[]),
     ("MEMORY", &["USAGE", "STATS", "DOCTOR", "MALLOC-STATS", "HELP"], &[]),
-    (
-        "ACL",
-        &["WHOAMI", "LIST", "USERS", "CAT", "GETUSER", "LOG", "GENPASS", "DRYRUN", "HELP"],
-        &[],
-    ),
+    ("ACL", &["WHOAMI", "CAT", "GENPASS", "DRYRUN", "HELP"], &[]),
     (
         "CLUSTER",
         &[
@@ -451,13 +447,13 @@ const CONTAINERS: &[(&str, &[&str], &[&str])] = &[
     ),
     ("XINFO", &["STREAM", "GROUPS", "CONSUMERS", "HELP"], &[]),
     ("XGROUP", &[], &[]),
-    ("SLOWLOG", &["GET", "LEN", "HELP"], &[]),
+    ("SLOWLOG", &["LEN", "HELP"], &[]),
     (
         "COMMAND",
         &["COUNT", "DOCS", "GETKEYS", "GETKEYSANDFLAGS", "INFO", "LIST", "HELP"],
         &[],
     ),
-    ("LATENCY", &["DOCTOR", "GRAPH", "HISTOGRAM", "HISTORY", "LATEST", "HELP"], &[]),
+    ("LATENCY", &["HELP"], &[]),
     ("MODULE", &["LIST", "HELP"], &[]),
     (
         "PUBSUB",
@@ -479,6 +475,21 @@ const CONTAINERS: &[(&str, &[&str], &[&str])] = &[
         &[],
     ),
 ];
+
+/// Container reads that expose secrets or other clients' traffic (password hashes, client addresses and last commands,
+/// logged command arguments). They are `Admin` so neither the assistant nor a Read-only workspace runs them.
+const SENSITIVE_READS: &[&str] = &[
+    "CLIENT LIST",
+    "CLIENT INFO",
+    "ACL LIST",
+    "ACL USERS",
+    "ACL GETUSER",
+    "ACL LOG",
+    "SLOWLOG GET",
+];
+const CONFIG_GET_REASON: &str = "Shows the server configuration, which includes secrets such as requirepass and masterauth.";
+const SENSITIVE_READ_REASON: &str =
+    "Shows users, password hashes, other clients or logged commands with their arguments; treated as administration.";
 
 /// Client-side commands that only touch this connection, under CLIENT.
 const CLIENT_SESSION: &[&str] = &["SETNAME", "SETINFO", "REPLY", "TRACKING", "CACHING", "NO-EVICT", "NO-TOUCH"];
@@ -536,7 +547,14 @@ pub fn classify(args: &[Vec<u8>]) -> Classification {
             "CLIENT" if CLIENT_SESSION.contains(&sub.as_str()) => result(CommandClass::Session, full, None),
             "XGROUP" => result(CommandClass::Write, full, None),
             "OBJECT" | "MEMORY" | "XINFO" | "COMMAND" => result(CommandClass::Read, full, None),
+            "CONFIG" if sub == "GET" => result(CommandClass::Admin, full, Some(CONFIG_GET_REASON)),
             "CONFIG" => result(CommandClass::Admin, full, Some("Changes the server configuration.")),
+            "LATENCY" if sub != "RESET" => result(
+                CommandClass::Admin,
+                full,
+                Some("Shows server internals (latency events); treated as administration."),
+            ),
+            _ if SENSITIVE_READS.contains(&full.as_str()) => result(CommandClass::Admin, full, Some(SENSITIVE_READ_REASON)),
             _ => result(CommandClass::Admin, full, Some("Changes server state.")),
         };
     }
@@ -597,7 +615,21 @@ mod tests {
             ("keys *", Admin),
             ("KEYS **", Admin),
             ("keys", Admin),
-            ("config get maxmemory", Read),
+            ("config get maxmemory", Admin),
+            ("config get requirepass", Admin),
+            ("acl list", Admin),
+            ("acl users", Admin),
+            ("acl getuser default", Admin),
+            ("acl log", Admin),
+            ("acl cat", Read),
+            ("client info", Admin),
+            ("client getname", Read),
+            ("slowlog get 10", Admin),
+            ("slowlog len", Read),
+            ("latency latest", Admin),
+            ("latency doctor", Admin),
+            ("latency history command", Admin),
+            ("debug object k", Admin),
             ("config set maxmemory 1", Admin),
             ("script flush", Admin),
             ("script exists abc", Read),
@@ -606,11 +638,12 @@ mod tests {
             ("acl setuser bob on", Admin),
             ("acl whoami", Read),
             ("client kill id 5", Admin),
-            ("client list", Read),
+            ("client list", Admin),
             ("client setname x", Session),
             ("select 2", Session),
             ("multi", Session),
             ("subscribe ch", Unsupported),
+            // MONITOR streams every command of every client: refused outright, which is stricter than Admin.
             ("monitor", Unsupported),
             ("xinfo stream s", Read),
             ("xgroup create s g $", Write),

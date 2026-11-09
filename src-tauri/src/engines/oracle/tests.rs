@@ -384,6 +384,64 @@ async fn live_engine_oracle_streaming_limit_cancel_timeout() {
     assert_eq!(OraEngine::classify("BEGIN NULL; END;").kind, StatementKind::Write);
 }
 
+/// A read-only run puts every statement in `SET TRANSACTION READ ONLY` (the session layer does not classify, so an UPDATE
+/// reaches the server to show Oracle refusing it) and never rolls back the tab's own uncommitted changes.
+#[tokio::test]
+#[ignore]
+async fn live_engine_oracle_read_only_runs() {
+    let Some(e) = engine().await else { return };
+    let s = e.open_session().await.unwrap();
+    s.set_auto_commit(true);
+    let read_only = RunOptions {
+        read_only: true,
+        ..RunOptions::default()
+    };
+    let mut sink = CollectSink::default();
+    s.run("SELECT COUNT(*) FROM orders;\nSELECT 1 FROM dual", &read_only, &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(sink.sets[0].rows[0][0], Value::Int(4000));
+    assert_eq!(sink.sets[1].rows[0][0], Value::Int(1));
+    let err = s
+        .run(
+            "SELECT 1 FROM dual;\nUPDATE orders SET note = 'x' WHERE id = 1",
+            &read_only,
+            &mut CollectSink::default(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code.as_deref(), Some("ORA-01456"), "{err}");
+    let err = s
+        .run(
+            "SELECT id FROM orders WHERE id = 1 FOR UPDATE",
+            &read_only,
+            &mut CollectSink::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.code.is_some(), "{err}");
+    assert_eq!(s.transaction_state().await, TxState::Idle);
+    // The tab's own uncommitted change: the read-only run is refused instead of rolling it back.
+    s.set_auto_commit(false);
+    s.run(
+        "UPDATE orders SET note = note WHERE id = 1",
+        &RunOptions::default(),
+        &mut CollectSink::default(),
+    )
+    .await
+    .unwrap();
+    let err = s
+        .run("SELECT 1 FROM dual", &read_only, &mut CollectSink::default())
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("uncommitted changes"), "{err}");
+    assert_eq!(s.transaction_state().await, TxState::Active);
+    s.rollback().await.unwrap();
+    let mut sink = CollectSink::default();
+    s.run("SELECT 1 FROM dual", &read_only, &mut sink).await.unwrap();
+    assert_eq!(sink.sets[0].rows[0][0], Value::Int(1));
+}
+
 #[tokio::test]
 #[ignore]
 async fn live_engine_oracle_transaction_state() {

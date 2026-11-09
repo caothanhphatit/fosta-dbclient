@@ -425,15 +425,18 @@ mod tests {
         ] {
             assert_eq!(console(write).worst(), Some(Category::Write), "{write}");
         }
-        for read in [
-            "GET k",
-            "KEYS user:*",
-            "SCAN 0 MATCH user:*",
-            "HGETALL h",
-            "TTL k",
-            "CONFIG GET maxmemory",
-        ] {
+        for read in ["GET k", "KEYS user:*", "SCAN 0 MATCH user:*", "HGETALL h", "TTL k"] {
             assert_eq!(console(read).worst(), Some(Category::Read), "{read}");
+        }
+        // Reads that expose secrets or other clients' traffic are administration.
+        for admin in [
+            "CONFIG GET requirepass",
+            "ACL LIST",
+            "ACL GETUSER default",
+            "CLIENT LIST",
+            "SLOWLOG GET 10",
+        ] {
+            assert_eq!(console(admin).worst(), Some(Category::Admin), "{admin}");
         }
     }
 

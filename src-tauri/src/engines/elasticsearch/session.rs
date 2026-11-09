@@ -33,7 +33,10 @@ use super::{
     values,
 };
 use crate::{
-    contract::{Batcher, Canceller, ColumnInfo, Flow, ResultSink, RunOptions, RunRequest, Session, StreamEvent, Value, ValueKind},
+    contract::{
+        classify::Category, Batcher, Canceller, ColumnInfo, Flow, ResultSink, RunOptions, RunRequest, Session, StreamEvent, Value,
+        ValueKind,
+    },
     error::{AppError, AppResult, ErrorPosition},
 };
 
@@ -166,6 +169,18 @@ impl EsSession {
         })?;
         if requests.is_empty() {
             return Err(AppError::new("Write a request such as GET /_cluster/health."));
+        }
+        if options.read_only {
+            // Elasticsearch has no read-only session: the gateway's classification is the control, checked again here.
+            // (ES|QL and SQL only read.)
+            let classification = super::adapter::classify_console(&request.text);
+            let worst = classification.worst();
+            if classification.refusal().is_some() || worst.is_some_and(|category| category > Category::Transaction) {
+                return Err(AppError::new(format!(
+                    "Refused: this session is read-only and the request is classified as {}.",
+                    worst.map(Category::label).unwrap_or("a change")
+                )));
+            }
         }
         let mut cancel = self.state.subscribe();
         let timeout = options.timeout.unwrap_or(CONSOLE_TIMEOUT);

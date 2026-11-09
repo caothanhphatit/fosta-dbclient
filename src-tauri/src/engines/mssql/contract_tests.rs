@@ -449,6 +449,61 @@ async fn contract_mssql_transactions() {
     tab.close().await;
 }
 
+/// A read-only run is rolled back afterwards (the session layer does not classify, so a write gets through to show it);
+/// inside the tab's own transaction only the run's part is undone (savepoint).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mssql.yml"]
+async fn contract_mssql_read_only_runs_are_rolled_back() {
+    let (_manager, handle) = erp().await;
+    let tab = session(&handle).await;
+    let options = RunOptions::default();
+    let read_only = RunOptions {
+        read_only: true,
+        ..RunOptions::default()
+    };
+    let count = |tab: Arc<dyn Session>| {
+        let handle = handle.clone();
+        async move {
+            let sink = run(&handle, &tab, "SELECT COUNT(*) FROM #fosta_ro", "ERP", RunOptions::default())
+                .await
+                .unwrap();
+            sink.sets[0].rows[0][0].clone()
+        }
+    };
+    run(&handle, &tab, "CREATE TABLE #fosta_ro (id INT)", "ERP", options.clone())
+        .await
+        .unwrap();
+    run(&handle, &tab, "INSERT INTO #fosta_ro VALUES (1)", "ERP", read_only.clone())
+        .await
+        .unwrap();
+    assert_eq!(count(Arc::clone(&tab)).await, Value::Int(0));
+    assert!(!tab.transaction_state().await.open, "the wrapper is closed");
+    // A failing read-only batch is rolled back too, and the tab stays usable.
+    run(
+        &handle,
+        &tab,
+        "INSERT INTO #fosta_ro VALUES (2); SELECT 1/0",
+        "ERP",
+        read_only.clone(),
+    )
+    .await
+    .expect_err("division by zero");
+    assert_eq!(count(Arc::clone(&tab)).await, Value::Int(0));
+    // Inside the user's own transaction: the user's row survives, the read-only run's row does not.
+    tab.transaction(TransactionOp::Begin, &options).await.unwrap();
+    run(&handle, &tab, "INSERT INTO #fosta_ro VALUES (3)", "ERP", options.clone())
+        .await
+        .unwrap();
+    run(&handle, &tab, "INSERT INTO #fosta_ro VALUES (4)", "ERP", read_only.clone())
+        .await
+        .unwrap();
+    assert!(tab.transaction_state().await.open, "the user's transaction is still open");
+    assert_eq!(count(Arc::clone(&tab)).await, Value::Int(1));
+    tab.transaction(TransactionOp::Commit, &options).await.unwrap();
+    assert_eq!(count(Arc::clone(&tab)).await, Value::Int(1));
+    tab.close().await;
+}
+
 /// The statement timeout stops a long batch and the tab works again afterwards.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs dev/compose/mssql.yml"]

@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// MongoDB database command names by category; anything else is [`Category::Unknown`].
-const MONGO_READ: [&str; 31] = [
+const MONGO_READ: [&str; 27] = [
     "find",
     "aggregate",
     "count",
@@ -29,18 +29,23 @@ const MONGO_READ: [&str; 31] = [
     "ping",
     "serverStatus",
     "connectionStatus",
-    "hostInfo",
     "validate",
     "getParameter",
-    "currentOp",
     "listCommands",
     "replSetGetStatus",
-    "getLog",
     "top",
     "whatsmyuri",
-    "usersInfo",
     "rolesInfo",
 ];
+/// Commands that only read but expose users, credentials, other sessions' operations (with their literal values), server
+/// logs or the host and command line: administration, so neither the assistant nor a Read-only workspace runs them.
+const MONGO_SENSITIVE_READ: [&str; 5] = ["usersInfo", "getLog", "currentOp", "hostInfo", "getCmdLineOpts"];
+/// Collections holding users, roles and keys (credential hashes); reading them is administration.
+const SYSTEM_SECRET_COLLECTIONS: [&str; 3] = ["system.users", "system.roles", "system.keys"];
+/// Aggregation stages that read server or session internals.
+const SENSITIVE_STAGES: [&str; 3] = ["$currentOp", "$listSessions", "$listLocalSessions"];
+const SENSITIVE_READ_REASON: &str =
+    "Shows users, credentials, other sessions' operations, server logs or the host; treated as administration";
 const MONGO_WRITE: [&str; 5] = ["insert", "update", "delete", "findAndModify", "bulkWrite"];
 const MONGO_DESTRUCTIVE: [&str; 5] = ["drop", "dropDatabase", "renameCollection", "dropIndexes", "convertToCapped"];
 const MONGO_DDL: [&str; 5] = ["create", "createIndexes", "collMod", "dropSearchIndex", "createSearchIndexes"];
@@ -83,7 +88,37 @@ pub fn classify_mongo(text: &str) -> Classification {
     })
 }
 
+/// A flag such as `showPrivileges` that is set: anything but absent, false, 0 or null.
+fn flag_set(command: &serde_json::Value, key: &str) -> bool {
+    match command.get(key) {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(on)) => *on,
+        Some(serde_json::Value::Number(number)) => number.as_f64() != Some(0.0),
+        Some(_) => true,
+    }
+}
+
+/// Whether any string in the command names a credential collection (a `find` target, a `$lookup` / `$unionWith` source)
+/// or any key is a stage that reads other sessions.
+fn touches_secrets(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(text) => SYSTEM_SECRET_COLLECTIONS
+            .iter()
+            .any(|collection| text == collection || text.ends_with(&format!(".{collection}"))),
+        serde_json::Value::Array(items) => items.iter().any(touches_secrets),
+        serde_json::Value::Object(object) => object
+            .iter()
+            .any(|(key, item)| SENSITIVE_STAGES.contains(&key.as_str()) || touches_secrets(item)),
+        _ => false,
+    }
+}
+
 fn mongo_category(name: &str, command: &serde_json::Value) -> (Category, Option<String>) {
+    let shows_privileges =
+        matches!(name, "rolesInfo" | "connectionStatus") && (flag_set(command, "showPrivileges") || flag_set(command, "showCredentials"));
+    if MONGO_SENSITIVE_READ.contains(&name) || shows_privileges || touches_secrets(command) {
+        return (Category::Admin, Some(SENSITIVE_READ_REASON.to_owned()));
+    }
     if name == "aggregate" {
         let writes = command
             .get("pipeline")
@@ -213,5 +248,36 @@ mod tests {
         assert_eq!(category(r#"{ "frobnicate": 1 }"#), Category::Unknown);
         assert_eq!(category("not json"), Category::Unknown);
         assert_eq!(classify_mongo(r#"{ "drop": "events" }"#).statements[0].tables, ["events"]);
+    }
+
+    #[test]
+    fn reads_that_expose_secrets_are_admin() {
+        let category = |text: &str| classify_mongo(text).statements[0].category;
+        for admin in [
+            r#"{ "usersInfo": 1 }"#,
+            r#"{ "usersInfo": { "user": "app", "db": "admin" }, "showCredentials": true }"#,
+            r#"{ "rolesInfo": 1, "showPrivileges": true }"#,
+            r#"{ "rolesInfo": "readWrite", "showPrivileges": 1 }"#,
+            r#"{ "connectionStatus": 1, "showPrivileges": true }"#,
+            r#"{ "getLog": "global" }"#,
+            r#"{ "currentOp": 1 }"#,
+            r#"{ "hostInfo": 1 }"#,
+            r#"{ "getCmdLineOpts": 1 }"#,
+            r#"{ "aggregate": 1, "pipeline": [ { "$currentOp": {} } ], "cursor": {} }"#,
+            r#"{ "find": "system.users" }"#,
+            r#"{ "count": "system.keys" }"#,
+            r#"{ "aggregate": "orders", "pipeline": [ { "$lookup": { "from": "system.users", "as": "u", "pipeline": [] } } ], "cursor": {} }"#,
+        ] {
+            assert_eq!(category(admin), Category::Admin, "{admin}");
+        }
+        for read in [
+            r#"{ "rolesInfo": 1 }"#,
+            r#"{ "rolesInfo": 1, "showPrivileges": false }"#,
+            r#"{ "connectionStatus": 1 }"#,
+            r#"{ "serverStatus": 1 }"#,
+            r#"{ "find": "users" }"#,
+        ] {
+            assert_eq!(category(read), Category::Read, "{read}");
+        }
     }
 }
