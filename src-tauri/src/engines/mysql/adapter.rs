@@ -183,7 +183,7 @@ impl Connection for MySqlConnection {
         }
         let (session, thread_id) = MySqlSession::open(self.opts.clone(), self.server.mariadb, options.database.as_deref()).await?;
         let canceller: Arc<dyn Canceller> = Arc::new(MySqlCanceller {
-            pool: self.pool.clone(),
+            opts: self.opts.clone(),
             thread_id,
         });
         Ok(OpenedSession {

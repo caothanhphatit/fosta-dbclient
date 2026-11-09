@@ -1,6 +1,7 @@
 //! Query-tab sessions: one dedicated connection each, so `BEGIN … COMMIT` spans runs. A run sends the whole script with
 //! `query_iter` (the server splits it) and streams every result as `Statement` / `Columns` / `Rows` / `Done` events.
-//! Stop sends `KILL QUERY` on a pooled connection, without the session's lock.
+//! Stop sends `KILL QUERY` from a connection of its own (the pool may be busy), without the session's lock. A read that
+//! reaches the row cap as the script's last statement is stopped the same way instead of being read to its end.
 
 use std::{
     sync::{
@@ -12,7 +13,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
-use mysql_async::{prelude::*, Conn, Opts, Pool};
+use mysql_async::{prelude::*, Conn, Opts};
 use tokio::sync::Mutex;
 
 use super::{
@@ -22,10 +23,48 @@ use super::{
 };
 use crate::{
     contract::{
-        Batcher, Canceller, ColumnInfo, Flow, ResultSink, RunOptions, RunRequest, Session, StreamEvent, TransactionOp, TransactionState,
+        Batcher, Canceller, Category, ColumnInfo, Flow, ResultSink, RunOptions, RunRequest, Session, SqlDialectId, StreamEvent,
+        TransactionOp, TransactionState,
     },
+    engines::common::sqlclassify::classify_sql,
     error::{AppError, AppResult},
 };
+
+/// How long opening the side connection for `KILL QUERY` may take.
+const KILL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `KILL QUERY <thread>` from a connection of its own: the pool may be exhausted by the very query being stopped.
+pub(super) async fn kill_query(opts: &Opts, thread_id: u32) -> AppResult<()> {
+    let mut conn = within(KILL_TIMEOUT, "Opening a connection to stop the query", Conn::new(opts.clone())).await?;
+    let killed = conn.query_drop(format!("KILL QUERY {thread_id}")).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), conn.disconnect()).await;
+    Ok(killed?)
+}
+
+/// A statement that only reads, so stopping it at the row cap loses nothing: SELECT / WITH / VALUES / TABLE / SHOW that
+/// the classifier calls a read (not `INSERT … RETURNING`, `CALL` or `SELECT … INTO`).
+fn stoppable(mariadb: bool, statement: &str) -> bool {
+    let first = first_word(statement).to_ascii_uppercase();
+    let dialect = if mariadb { SqlDialectId::MariaDb } else { SqlDialectId::MySql };
+    matches!(first.as_str(), "SELECT" | "WITH" | "VALUES" | "TABLE" | "SHOW") && classify_sql(dialect, statement).worst() == Some(Category::Read)
+}
+
+/// The first word of a statement after comments, white space and opening parentheses.
+fn first_word(statement: &str) -> &str {
+    let mut rest = statement;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_whitespace() || c == '(');
+        if let Some(after) = rest.strip_prefix("/*") {
+            rest = after.split_once("*/").map_or("", |(_, tail)| tail);
+        } else if rest.starts_with('#') || rest.starts_with("--") {
+            rest = rest.split_once('\n').map_or("", |(_, tail)| tail);
+        } else {
+            break;
+        }
+    }
+    let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(rest.len());
+    &rest[..end]
+}
 
 const SESSION_REOPENED: &str = "The connection of this tab was lost and has been reopened; the server rolled back the open transaction.";
 
@@ -261,6 +300,7 @@ impl Session for MySqlSession {
                 _ => texts.get(index).cloned().unwrap_or_default(),
             }
         };
+        let thread_id = conn.id();
         let mut index = 0;
         let mut started = Instant::now();
         let mut result = conn
@@ -280,8 +320,12 @@ impl Session for MySqlSession {
                 return Ok(());
             }
             let affected = result.affected_rows();
+            // Only the script's last statement is stopped at the cap: KILL QUERY would also end the statements after
+            // it, so earlier ones are read to their end.
+            let stop_at_cap = index + 1 >= texts.len() && stoppable(self.mariadb, &label(index));
             let mut rows = 0;
             let mut truncated = false;
+            let mut killed = false;
             let outcome: mysql_async::Result<()> = async {
                 if columns.is_empty() {
                     // An OK packet: reading it moves to the next result.
@@ -294,23 +338,35 @@ impl Session for MySqlSession {
                     columns: infos.clone(),
                 });
                 let mut batcher = Batcher::new(index, options);
-                while let Some(row) = result.next().await? {
-                    if batcher.wants_more() {
-                        let values = row
-                            .unwrap()
-                            .into_iter()
-                            .zip(&infos)
-                            .map(|(value, column)| to_value(value, column))
-                            .collect();
-                        batcher.push(values, sink);
-                    } else {
-                        // Rows past the limit are read and dropped so the connection stays usable.
-                        truncated = true;
+                let read: mysql_async::Result<()> = async {
+                    while let Some(row) = result.next().await? {
+                        if batcher.wants_more() {
+                            let values = row
+                                .unwrap()
+                                .into_iter()
+                                .zip(&infos)
+                                .map(|(value, column)| to_value(value, column))
+                                .collect();
+                            batcher.push(values, sink);
+                        } else {
+                            truncated = true;
+                            if stop_at_cap && !killed {
+                                // The server stops computing and sending; rows already on the way are dropped.
+                                killed = kill_query(&self.opts, thread_id).await.is_ok();
+                            }
+                            // Otherwise rows past the limit are read and dropped so the connection stays usable.
+                        }
                     }
+                    Ok(())
                 }
+                .await;
                 batcher.flush(sink);
                 rows = batcher.kept;
-                Ok(())
+                match read {
+                    // The stop this run sent itself ends the statement as truncated.
+                    Err(mysql_async::Error::Server(error)) if killed && error.code == 1317 => Ok(()),
+                    other => other,
+                }
             }
             .await;
             let elapsed_ms = millis(started);
@@ -380,20 +436,16 @@ impl Session for MySqlSession {
     }
 }
 
-/// `KILL QUERY <thread id>` on a pooled connection.
+/// Stop: `KILL QUERY <thread id>` from a connection of its own.
 pub struct MySqlCanceller {
-    pub pool: Pool,
+    pub opts: Opts,
     pub thread_id: Arc<AtomicU32>,
 }
 
 impl Canceller for MySqlCanceller {
     fn cancel(&self) -> BoxFuture<'static, AppResult<()>> {
-        let (pool, thread_id) = (self.pool.clone(), self.thread_id.load(Ordering::Relaxed));
-        Box::pin(async move {
-            let mut conn = within(CHECKOUT_TIMEOUT, "Opening a connection to stop the query", pool.get_conn()).await?;
-            conn.query_drop(format!("KILL QUERY {thread_id}")).await?;
-            Ok(())
-        })
+        let (opts, thread_id) = (self.opts.clone(), self.thread_id.load(Ordering::Relaxed));
+        Box::pin(async move { kill_query(&opts, thread_id).await })
     }
 }
 
@@ -435,5 +487,17 @@ mod tests {
         assert_eq!(map_error(server(1317)).code(), Some("CANCELLED"));
         assert_eq!(map_error(server(1969)).code(), Some("TIMEOUT"));
         assert_eq!(map_error(server(1064)).code(), Some("ENGINE_ERROR"));
+    }
+
+    #[test]
+    fn only_reads_stop_at_the_row_cap() {
+        assert!(stoppable(true, "SELECT * FROM t"));
+        assert!(stoppable(true, "-- note\n/* x */ (SELECT 1) UNION (SELECT 2)"));
+        assert!(stoppable(false, "WITH x AS (SELECT 1) SELECT * FROM x"));
+        assert!(stoppable(true, "SHOW PROCESSLIST"));
+        assert!(!stoppable(true, "INSERT INTO t SELECT * FROM u RETURNING id"));
+        assert!(!stoppable(true, "CALL p()"));
+        assert!(!stoppable(true, "DELETE FROM t RETURNING *"));
+        assert_eq!(first_word("  # c\n  select 1"), "select");
     }
 }

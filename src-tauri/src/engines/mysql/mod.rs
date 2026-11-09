@@ -8,6 +8,8 @@ mod catalog;
 mod connect;
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod perf_tests;
 pub mod descriptor;
 mod session;
 mod tabular;
