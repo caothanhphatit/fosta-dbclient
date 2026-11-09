@@ -18,6 +18,8 @@ mod openai;
 mod prompt;
 mod tools;
 
+pub(crate) use tools::{framed, metadata_tool};
+
 use std::{collections::HashMap, sync::Mutex};
 
 use serde::{Deserialize, Serialize};

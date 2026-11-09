@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 /// Layers that must stay engine-neutral.
-const NEUTRAL_LAYERS: [&str; 3] = ["commands", "gateway", "ai"];
+const NEUTRAL_LAYERS: [&str; 4] = ["commands", "gateway", "ai", "mcp"];
 /// Shared engine code these layers may use.
 const ALLOWED_ENGINE_MODULES: [&str; 1] = ["common"];
 

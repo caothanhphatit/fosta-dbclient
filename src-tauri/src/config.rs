@@ -17,6 +17,7 @@ use crate::{
     error::{AppError, AppResult},
     gateway::{assistant::AssistantQueries, rules::SafetySettings},
     lock::lock,
+    mcp::{McpAccess, McpSettings},
     secrets::LEGACY_AI_CONNECTION,
     tasks::TaskDef,
 };
@@ -221,6 +222,9 @@ pub struct WorkspaceMeta {
     /// Whether the assistant may run read-only queries here; `None` keeps the current choice.
     #[serde(default)]
     pub assistant_queries: Option<AssistantQueries>,
+    /// What MCP clients may do here; `None` keeps the current choice (Off for a new workspace).
+    #[serde(default)]
+    pub mcp: Option<McpAccess>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -239,6 +243,9 @@ pub struct Workspace {
     /// Overrides the global "Allow the assistant to run read-only queries" setting for this workspace.
     #[serde(default)]
     pub assistant_queries: AssistantQueries,
+    /// What MCP clients may do with this workspace's connections (off unless chosen; see `crate::mcp`).
+    #[serde(default)]
+    pub mcp: McpAccess,
     #[serde(default)]
     pub connections: Vec<ConnectionProfile>,
     #[serde(default)]
@@ -255,6 +262,7 @@ impl Workspace {
             icon: meta.icon,
             safety: Some(safety),
             assistant_queries: meta.assistant_queries.unwrap_or_default(),
+            mcp: meta.mcp.unwrap_or_default(),
             connections: Vec::new(),
             tasks: Vec::new(),
         }
@@ -269,6 +277,9 @@ impl Workspace {
         }
         if let Some(choice) = meta.assistant_queries {
             self.assistant_queries = choice;
+        }
+        if let Some(choice) = meta.mcp {
+            self.mcp = choice;
         }
     }
 
@@ -297,6 +308,8 @@ pub struct AppConfig {
     pub assistant_read_queries: bool,
     /// Settings → "Check for updates", plus what the last check found (`update.rs`).
     pub update_check: crate::update::UpdateCheckSettings,
+    /// Settings → MCP server (off unless turned on).
+    pub mcp: McpSettings,
     /// Shown once by the UI after startup (a corrupt config file was set aside). Never written to disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup_notice: Option<String>,
@@ -329,6 +342,8 @@ struct StoredConfig {
     assistant_read_queries: Option<bool>,
     #[serde(default)]
     update_check: crate::update::UpdateCheckSettings,
+    #[serde(default)]
+    mcp: McpSettings,
     /// Legacy single assistant setting, migrated into one connection.
     #[serde(default)]
     ai: Option<AiSettings>,
@@ -355,6 +370,7 @@ impl From<StoredConfig> for AppConfig {
                 icon: DEFAULT_WORKSPACE_ICON.into(),
                 safety: None,
                 assistant_queries: AssistantQueries::Default,
+                mcp: McpAccess::Off,
                 connections: stored.connections,
                 tasks: stored.tasks,
             }),
@@ -393,6 +409,7 @@ impl From<StoredConfig> for AppConfig {
             debug_logging: stored.debug_logging,
             assistant_read_queries: stored.assistant_read_queries.unwrap_or(true),
             update_check: stored.update_check,
+            mcp: stored.mcp,
             startup_notice: None,
         };
         config.repair_ai_active();
@@ -701,6 +718,16 @@ pub fn upsert<T>(items: &mut Vec<T>, item: T, id_of: impl Fn(&T) -> &str) {
 
 fn config_path() -> AppResult<PathBuf> {
     data_path_renamed(CONFIG_FILE, LEGACY_CONFIG_FILE)
+}
+
+/// The saved settings, read without creating, migrating or repairing the file (the MCP stdio bridge runs beside the app).
+pub fn read_saved() -> AppResult<AppConfig> {
+    let path = data_path(CONFIG_FILE)?;
+    if !path.exists() {
+        return Ok(AppConfig::default());
+    }
+    let stored: StoredConfig = serde_json::from_slice(&fs::read(path)?)?;
+    Ok(stored.into())
 }
 
 /// A file in the data directory, where `fosta-studio.json` lives.
@@ -1183,6 +1210,7 @@ mod tests {
             icon: icon.into(),
             safety: None,
             assistant_queries: None,
+            mcp: None,
         };
         config.put_workspace(meta("n", "cloud"));
         assert_eq!(
@@ -1284,6 +1312,7 @@ mod tests {
                 icon: "box".into(),
                 safety: None,
                 assistant_queries: None,
+                mcp: None,
             });
             config.put_task(id, port_forward(&format!("pf-{id}"))).unwrap();
         }

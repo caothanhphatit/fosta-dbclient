@@ -13,7 +13,8 @@ default-run = "fosta-studio"
 # (`web`). Build the server alone with `cargo build --release --no-default-features --features web`.
 [features]
 default = ["desktop", "engines-all"]
-desktop = ["dep:tauri", "dep:tauri-build", "dep:keyring", "dep:tauri-plugin-updater", "dep:tauri-plugin-process"]
+# The MCP server (mcp/) runs on axum in both editions.
+desktop = ["dep:tauri", "dep:tauri-build", "dep:keyring", "dep:tauri-plugin-updater", "dep:tauri-plugin-process", "dep:axum"]
 web = [
     "dep:axum",
     "dep:tower-http",
@@ -73,7 +74,7 @@ tauri-build = { version = "2", features = [], optional = true }
 tauri = { version = "2", features = [], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 async-trait = "0.1"
 futures-util = "0.3"

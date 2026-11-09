@@ -404,6 +404,7 @@ mod tests {
             icon: icon.into(),
             safety: Some(SafetySettings::preset(preset)),
             assistant_queries: None,
+            mcp: None,
         });
         config.workspace(id).unwrap().clone()
     }
@@ -663,6 +664,7 @@ mod tests {
                     icon: "box".into(),
                     safety: None,
                     assistant_queries: None,
+                    mcp: None,
                 });
                 Ok(())
             })
@@ -720,6 +722,7 @@ mod tests {
             icon: "box".into(),
             safety: None,
             assistant_queries: None,
+            mcp: None,
         };
         let other = TaskDef {
             id: "pf2".into(),

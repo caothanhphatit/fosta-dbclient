@@ -69,7 +69,7 @@ pub fn rotate_token(data_dir: &Path, configured: Option<&str>) -> Result<String,
     Ok(token)
 }
 
-fn read_saved_token(data_dir: &Path) -> Result<Option<String>, String> {
+pub fn read_saved_token(data_dir: &Path) -> Result<Option<String>, String> {
     let path = data_dir.join(TOKEN_FILE);
     if !path.exists() {
         return Ok(None);
@@ -220,6 +220,11 @@ impl Auth {
                 Some(cached)
             }
         }
+    }
+
+    /// Authentication is off (`FOSTA_STUDIO_AUTH=off`): the MCP endpoint then refuses every request.
+    pub fn is_off(&self) -> bool {
+        self.live.is_none()
     }
 
     /// Whether `client` may try again; `false` after too many recent failures.

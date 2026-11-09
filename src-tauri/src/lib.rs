@@ -27,6 +27,7 @@ mod job;
 pub mod lang;
 mod lock;
 pub mod logging;
+pub mod mcp;
 pub mod net;
 #[cfg(test)]
 mod perf_tests;
@@ -48,6 +49,8 @@ pub struct AppState {
     pub ai: ai::AiRuns,
     pub history: Arc<history::HistoryStore>,
     pub capabilities: Capabilities,
+    /// The MCP server (`mcp`); `attach` it once the state is in an `Arc`.
+    pub mcp: mcp::McpState,
 }
 
 impl AppState {
@@ -56,6 +59,7 @@ impl AppState {
     pub fn new(capabilities: Capabilities, executor: tokio::runtime::Handle, events: Arc<dyn EventEmitter>) -> AppResult<Self> {
         // In a container 127.0.0.1 is the container itself, so a first start there seeds no connection.
         let config = config::ConfigStore::load(!capabilities.in_container)?;
+        let mcp = mcp::McpState::new(Arc::clone(&events), executor.clone());
         let tasks = Arc::new(tasks::TaskManager::new(executor, events, capabilities.tasks));
         tasks.start_auto(&config.snapshot().active().tasks);
         if config.snapshot().debug_logging {
@@ -68,6 +72,7 @@ impl AppState {
             ai: ai::AiRuns::default(),
             history: Arc::new(history::HistoryStore::open_default()?),
             capabilities,
+            mcp,
         })
     }
 
@@ -85,6 +90,7 @@ impl AppState {
             ai: ai::AiRuns::default(),
             history: Arc::new(history::HistoryStore::new(directory.join("history.jsonl"), 100)),
             capabilities,
+            mcp: mcp::McpState::new(Arc::new(events::NoEvents), tokio::runtime::Handle::current()),
         }
     }
 }

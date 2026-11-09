@@ -86,6 +86,7 @@ pub fn check(gateway: &Gateway, engine: &dyn Engine, context: &Context, language
         classification: &classification,
         confirmation: None,
         reusable: false,
+        client: None,
     };
     if classification.statements.is_empty() {
         return Err(AppError::new("Nothing to run: pass one statement in `query`."));
@@ -111,11 +112,11 @@ pub struct ReadResult {
     pub elapsed_ms: u64,
 }
 
-/// Keeps the first result set; later ones (and notices) are not part of the answer.
-#[derive(Default)]
+//// Keeps the first result set, at most `max_rows` rows; later ones (and notices) are not part of the answer.
 struct Collect {
     result: ReadResult,
     sets: usize,
+    max_rows: usize,
 }
 
 impl ResultSink for Collect {
@@ -128,7 +129,7 @@ impl ResultSink for Collect {
                 }
             }
             StreamEvent::Rows { rows, .. } if self.sets <= 1 => {
-                let room = MAX_ROWS.saturating_sub(self.result.rows.len());
+                let room = self.max_rows.saturating_sub(self.result.rows.len());
                 if rows.len() > room {
                     self.result.truncated = true;
                 }
@@ -180,27 +181,44 @@ impl Drop for OwnSession {
     }
 }
 
-/// Runs one read-only statement for the assistant on `context`'s connection (see the module docs). The run is audited
-/// with its row count; refusals are audited by the check.
-pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, database: Option<&str>) -> AppResult<ReadResult> {
-    let handle = mgr.handle(&context.connection_id)?;
-    require(handle.conn.capabilities(), Capability::Query)?;
-    let language = handle
-        .engine
+/// How a run in a session of its own is capped.
+pub(super) struct OwnRun {
+    pub(super) max_rows: usize,
+    pub(super) timeout: Duration,
+    /// Open the session read-only and run the statement read-only (the assistant and `run_read_query`).
+    pub(super) read_only: bool,
+    /// Who asked, for the application log.
+    pub(super) who: &'static str,
+}
+
+/// The engine's default query language (the one the assistant and MCP clients write in).
+pub(super) fn default_language(engine: &dyn Engine) -> AppResult<String> {
+    engine
         .descriptor()
         .default_language()
         .map(|language| language.id.clone())
-        .ok_or_else(|| unsupported_capability("queries"))?;
-    check(&mgr.gateway, handle.engine, context, &language, text)?;
+        .ok_or_else(|| unsupported_capability("queries"))
+}
+
+/// Runs one already authorized statement in a session opened for it alone, within `run`'s caps (and the rules' own
+/// row limit and timeout when they are lower). Nothing is audited here.
+pub(super) async fn run_own_session(
+    handle: &crate::runtime::Handle,
+    context: &Context,
+    language: &str,
+    text: &str,
+    database: Option<&str>,
+    run: &OwnRun,
+) -> AppResult<ReadResult> {
     let mut limits = context.limits();
-    limits.read_only = true;
+    limits.read_only |= run.read_only;
     let options = SessionOptions {
-        language: Some(language.clone()),
+        language: Some(language.to_owned()),
         database: database.map(str::to_owned),
     };
     let ctx = CallContext::new(limits.clone());
     let opened = handle
-        .call("opened a session for the assistant", move |conn| async move {
+        .call("opened a session of its own", move |conn| async move {
             conn.open_session(&options, &ctx).await
         })
         .await?;
@@ -211,9 +229,9 @@ pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, databa
     };
     let rule_timeout = (limits.timeout_secs > 0).then(|| Duration::from_secs(u64::from(limits.timeout_secs)));
     let run_options = RunOptions {
-        row_limit: MAX_ROWS.min(limits.max_rows.max(1)),
-        timeout: Some(rule_timeout.map_or(TIMEOUT, |timeout| timeout.min(TIMEOUT))),
-        read_only: true,
+        row_limit: run.max_rows.min(limits.max_rows.max(1)),
+        timeout: Some(rule_timeout.map_or(run.timeout, |timeout| timeout.min(run.timeout))),
+        read_only: limits.read_only,
         ..RunOptions::default()
     };
     let request = RunRequest {
@@ -222,10 +240,17 @@ pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, databa
         offset: 0,
     };
     let started = Instant::now();
-    let mut sink = Collect::default();
-    let outcome = tokio::time::timeout(TIMEOUT, handle.run(Arc::clone(&opened.session), request, run_options, &mut sink)).await;
+    let mut sink = Collect {
+        result: ReadResult::default(),
+        sets: 0,
+        max_rows: run.max_rows,
+    };
+    let outcome = tokio::time::timeout(
+        run.timeout,
+        handle.run(Arc::clone(&opened.session), request, run_options, &mut sink),
+    )
+    .await;
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    let excerpt = crate::logging::statement_excerpt(text);
     let outcome = match outcome {
         Ok(outcome) => {
             session.close().await;
@@ -237,16 +262,51 @@ pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, databa
             Err(AppError::new(format!(
                 "The query did not finish within {} seconds and was cancelled. Narrow it down (a WHERE, a LIMIT) or ask \
                  the user to run it.",
-                TIMEOUT.as_secs()
+                run.timeout.as_secs()
             )))
         }
     };
     let mut result = sink.result;
     result.elapsed_ms = elapsed_ms;
-    let detail = match &outcome {
-        Ok(()) => format!("{} row(s){}", result.rows.len(), if result.truncated { ", truncated" } else { "" }),
+    tracing::info!(
+        connection = %context.connection_id,
+        engine = handle.engine.id(),
+        statement = %crate::logging::statement_excerpt(text),
+        rows = result.rows.len(),
+        truncated = result.truncated,
+        ms = elapsed_ms,
+        ok = outcome.is_ok(),
+        "{} ran a query",
+        run.who
+    );
+    outcome.map(|()| result)
+}
+
+/// The audit detail of a run: its row count, or why it failed.
+pub(super) fn run_detail(outcome: &AppResult<ReadResult>) -> String {
+    match outcome {
+        Ok(result) => match result.affected {
+            Some(affected) if result.columns.is_empty() => format!("{affected} row(s) affected"),
+            _ => format!("{} row(s){}", result.rows.len(), if result.truncated { ", truncated" } else { "" }),
+        },
         Err(error) => format!("failed: {error}"),
+    }
+}
+
+/// Runs one read-only statement for the assistant on `context`'s connection (see the module docs). The run is audited
+/// with its row count; refusals are audited by the check.
+pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, database: Option<&str>) -> AppResult<ReadResult> {
+    let handle = mgr.handle(&context.connection_id)?;
+    require(handle.conn.capabilities(), Capability::Query)?;
+    let language = default_language(handle.engine)?;
+    check(&mgr.gateway, handle.engine, context, &language, text)?;
+    let run = OwnRun {
+        max_rows: MAX_ROWS,
+        timeout: TIMEOUT,
+        read_only: true,
+        who: "the assistant",
     };
+    let outcome = run_own_session(&handle, context, &language, text, database, &run).await;
     let classification = handle.engine.classify(&ClassifyInput::Statement { language: &language, text });
     mgr.gateway.audit(audit_entry(
         &Request {
@@ -258,21 +318,12 @@ pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, databa
             classification: &classification,
             confirmation: None,
             reusable: false,
+            client: None,
         },
         Outcome::Ran,
-        &detail,
+        &run_detail(&outcome),
     ));
-    tracing::info!(
-        connection = %context.connection_id,
-        engine = handle.engine.id(),
-        statement = %excerpt,
-        rows = result.rows.len(),
-        truncated = result.truncated,
-        ms = elapsed_ms,
-        ok = outcome.is_ok(),
-        "assistant ran a read-only query"
-    );
-    outcome.map(|()| result)
+    outcome
 }
 
 /// Whether `error` is the gateway refusing the statement (the model should hand it to the user).

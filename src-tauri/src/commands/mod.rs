@@ -13,6 +13,7 @@ pub mod engines;
 pub mod files;
 pub mod history;
 pub mod lang;
+pub mod mcp;
 pub mod objects;
 pub mod query;
 pub mod tasks;
@@ -169,6 +170,14 @@ macro_rules! for_each_command {
             [sync] install_kind() -> String = $crate::commands::update::install_kind;
             [sync] set_update_check(enabled: bool) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::update::set_update_check;
             [sync] whats_new() -> $crate::error::AppResult<Option<String>> = $crate::commands::update::whats_new;
+
+            [sync] mcp_status() -> $crate::mcp::McpStatus = $crate::commands::mcp::mcp_status;
+            [sync] set_mcp_settings(enabled: bool, port: Option<u16>)
+                -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::mcp::set_mcp_settings;
+            [sync] mcp_token() -> $crate::error::AppResult<String> = $crate::commands::mcp::mcp_token;
+            [sync] rotate_mcp_token() -> $crate::error::AppResult<String> = $crate::commands::mcp::rotate_mcp_token;
+            [sync] mcp_answer(id: String, approve: bool, typed: Option<String>)
+                -> $crate::error::AppResult<()> = $crate::commands::mcp::mcp_answer;
         }
     };
 }
@@ -203,7 +212,8 @@ infallible_output!(
     Vec<TaskStatus>,
     TaskStatus,
     diagnostics::Diagnostics,
-    Vec<crate::contract::EngineDescriptor>
+    Vec<crate::contract::EngineDescriptor>,
+    crate::mcp::McpStatus
 );
 
 /// Rejects a command the current front-end does not offer.

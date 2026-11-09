@@ -168,12 +168,13 @@ fn main() -> ExitCode {
         Some("healthcheck") => web::healthcheck(settings.listen),
         Some("token") => print_login(&settings),
         Some("rotate-token") => rotate_token(&settings),
+        Some("mcp") => mcp_bridge(&settings),
         Some("--version" | "version") => {
             println!("fosta-studio-server {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Some(other) => Err(format!(
-            "unknown command '{other}'. Usage: fosta-studio-server [serve | token | rotate-token | healthcheck | version]"
+            "unknown command '{other}'. Usage: fosta-studio-server [serve | token | rotate-token | mcp | healthcheck | version]"
         )),
     };
     match result {
@@ -210,6 +211,33 @@ fn rotate_token(settings: &Settings) -> Result<(), String> {
     println!("New access token saved; every browser is signed out. Sign in again at:");
     println!("{}/?token={token}", settings.login_base());
     Ok(())
+}
+
+/// `fosta-studio-server mcp`: the stdio bridge for MCP clients, relaying to this server's `/mcp` with the access token
+/// (e.g. `docker exec -i <container> /app/fosta-studio-server mcp`).
+fn mcp_bridge(settings: &Settings) -> Result<(), String> {
+    if settings.auth_off {
+        return Err(String::from(
+            "authentication is off (FOSTA_STUDIO_AUTH=off), so the MCP endpoint is off too",
+        ));
+    }
+    let token = match settings.token.clone() {
+        Some(token) => token,
+        None => auth::read_saved_token(&settings.data_dir)?
+            .ok_or_else(|| format!("no access token in {}: start the server once first", settings.data_dir.display()))?,
+    };
+    let mut address = settings.listen;
+    if address.ip().is_unspecified() {
+        address.set_ip(if address.is_ipv4() {
+            std::net::Ipv4Addr::LOCALHOST.into()
+        } else {
+            std::net::Ipv6Addr::LOCALHOST.into()
+        });
+    }
+    match fosta_studio::mcp::bridge::run(format!("http://{address}/mcp"), token) {
+        0 => Ok(()),
+        _ => Err(String::from("the MCP bridge stopped")),
+    }
 }
 
 fn serve(settings: Settings) -> Result<(), String> {
@@ -258,6 +286,7 @@ async fn run(settings: Settings) -> Result<(), String> {
     let capabilities = Capabilities::web(settings.tasks, in_container());
     let state = AppState::new(capabilities, tokio::runtime::Handle::current(), events).map_err(|error| error.to_string())?;
     let state = Arc::new(state);
+    state.mcp.attach(&state);
 
     if !settings.ui_dir.join("index.html").exists() {
         eprintln!(

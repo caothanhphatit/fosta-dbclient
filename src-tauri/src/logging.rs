@@ -244,7 +244,8 @@ infallible_outcome!(
     Vec<crate::tasks::TaskStatus>,
     crate::tasks::TaskStatus,
     crate::commands::diagnostics::Diagnostics,
-    Vec<crate::contract::EngineDescriptor>
+    Vec<crate::contract::EngineDescriptor>,
+    crate::mcp::McpStatus
 );
 
 fn log_command<T: Outcome>(name: &str, started: Instant, output: &T) {

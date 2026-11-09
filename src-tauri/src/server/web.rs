@@ -82,11 +82,18 @@ pub fn router(server: Server) -> Router {
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         ));
+    // MCP clients authenticate with the access token as a bearer token, never with the session cookie, so a web page
+    // cannot ride on a signed-in browser. With authentication off the endpoint refuses everything.
+    let mcp_server = Arc::clone(&server);
+    let mcp_check: fosta_studio::mcp::http::TokenCheck = Arc::new(move |client, token| {
+        !mcp_server.auth.is_off() && mcp_server.auth.may_attempt(client) && mcp_server.auth.check_token(client, token)
+    });
     let app = Router::new()
         .nest("/api", api)
         .fallback_service(ui)
         .layer(middleware::from_fn_with_state(Arc::clone(&server), require_session_for_pages))
-        .route("/healthz", get(|| async { "ok" }));
+        .route("/healthz", get(|| async { "ok" }))
+        .route("/mcp", fosta_studio::mcp::http::web_route(Arc::downgrade(&server.state), mcp_check));
     app.layer(middleware::from_fn_with_state(Arc::clone(&server), check_host))
         .layer(SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
