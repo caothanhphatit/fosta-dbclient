@@ -51,6 +51,13 @@ export function errorCode(error: unknown): string | null {
   return null;
 }
 
+/** Whether an error says the statement was cancelled (code `CANCELLED`, or an engine error of kind `cancelled`). */
+export function isCancelError(error: unknown): boolean {
+  if (errorCode(error) === "CANCELLED") return true;
+  const kind = (toAppError(error) as { kind?: unknown }).kind;
+  return kind === "cancelled";
+}
+
 /** The message of any thrown value. */
 export function errorText(error: unknown): string {
   if (typeof error === "string") return error;

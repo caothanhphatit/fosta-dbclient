@@ -64,3 +64,33 @@
 .tx-indicator.failed {
   color: var(--danger);
 }
+
+.result-count:empty {
+  display: none;
+}
+
+/* Over the tab limit: one list of the result sets (a click opens one). */
+.result-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.result-list > .grid {
+  flex: 1;
+  min-height: 0;
+}
+
+.result-list-hint {
+  flex: none;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.result-list tbody tr {
+  cursor: pointer;
+}

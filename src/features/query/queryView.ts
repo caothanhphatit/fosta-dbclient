@@ -28,6 +28,7 @@ import { confirmDialog, toast } from "../../core/dialogs";
 import { clamp, formatNumber, h, icon, iconOrDefault, secondaryTool, separator, spacer, toolButton } from "../../core/dom";
 import { defaultLanguage, hasCapability } from "../../core/engines";
 import { renderError, showError } from "../../core/errorPanel";
+import { isCancelError } from "../../core/errors";
 import { statementAt, type LanguageSupport } from "../../core/language";
 import { currentStatement, formatInEditor } from "../../lang/editor";
 import { makeSplitter } from "../../core/splitter";
@@ -35,12 +36,13 @@ import { dialectOf } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
 import type { HistoryEntry } from "../../core/types";
 import { openColumnsPopover } from "../grid/columnsPopover";
-import { DataGrid, gridSetup } from "../grid/grid";
+
 import { withConfirmation } from "../safety/confirmationDialog";
 import { commitsOpenTransaction, IDLE_TRANSACTION_MINUTES, idleReminderDue, transactionButtons, transactionLabel } from "../safety/safety";
 import { AttemptTimer } from "./attemptTimer";
 import { HistoryPanel } from "./historyPanel";
-import { describeResult, editorOffset, RunResults, statementExcerpt, type StatementResult } from "./runResults";
+import { ResultArea, type Message } from "./resultArea";
+import { editorOffset, RunResults } from "./runResults";
 import { createSqlEditor, selectedOrAllText, setEditorLanguage } from "./sqlEditor";
 import "./query-run.css";
 
@@ -69,23 +71,6 @@ const HISTORY_PANEL_KEY = "db-studio.queryHistoryPanel";
 /** Reported once per session so a read-only disk does not flood the user with toasts. */
 let historyFailureReported = false;
 
-interface Message {
-  text: string;
-  kind: "info" | "error" | "muted" | "notice";
-}
-
-interface ResultPanel {
-  title: string;
-  count: string;
-  element: HTMLElement;
-  /** The grid of a result set; the Columns and Cell editor buttons act on it. */
-  grid?: DataGrid;
-  entry?: StatementResult;
-  /** Rows loaded into the grid, and when. */
-  loadedRows: number;
-  loadedAt: number;
-}
-
 /** The text a run sends and where it starts in the editor (`RunRequest.offset`). */
 interface RunTarget {
   text: string;
@@ -95,8 +80,6 @@ interface RunTarget {
 const MIN_EDITOR_HEIGHT = 80;
 const IDLE_CHECK_MS = 30_000;
 const MIN_RESULTS_HEIGHT = 120;
-/** While rows stream in, a grid is reloaded at most this often (its count label updates every frame). */
-const GRID_RELOAD_MS = 1000;
 
 /** Live state a query tab reports to the status bar (read from what the tab already shows). */
 export interface QueryStatus {
@@ -131,9 +114,8 @@ export class QueryView implements TabContent {
   private readonly editor: EditorView;
   private readonly databaseSelect = h("select", { class: "input database-select", title: "Database used by this query" });
   private readonly languageSelect = h("select", { class: "input language-select", title: "Query language of this tab" });
-  private readonly resultTabs = h("div", { class: "result-tabs" });
   private readonly runStatus = h("span", { class: "run-status", role: "status" });
-  private readonly resultBody = h("div", { class: "result-body" });
+  private readonly resultArea = new ResultArea(() => dialectOf(this.dialect()));
   private readonly runButton: HTMLButtonElement;
   private readonly statementButton: HTMLButtonElement;
   private readonly stopButton: HTMLButtonElement;
@@ -142,12 +124,7 @@ export class QueryView implements TabContent {
   private readonly cellButton: HTMLButtonElement;
   private readonly historyButton: HTMLButtonElement;
   private readonly history: HistoryPanel;
-  private panels: ResultPanel[] = [];
-  private activePanel: ResultPanel | null = null;
-  private messagesPanel: ResultPanel | null = null;
   private renderFrame: number | null = null;
-  /** Whether this run already brought a result tab forward. */
-  private resultShown = false;
   private running = false;
   private cancelRequested = false;
   private disposed = false;
@@ -192,12 +169,20 @@ export class QueryView implements TabContent {
       toolButton(
         "columns",
         "Columns",
-        () => this.activePanel?.grid && openColumnsPopover(this.activePanel.grid, this.columnsButton),
+        () => {
+          const grid = this.resultArea.activeGrid();
+          if (grid) openColumnsPopover(grid, this.columnsButton);
+        },
         "Show or hide columns of this result",
       ),
     );
     this.cellButton = secondaryTool(
-      toolButton("expand", "Cell editor", () => this.activePanel?.grid?.openSelectedInEditor(), "Open the selected cell in a larger viewer (Shift+Enter)"),
+      toolButton(
+        "expand",
+        "Cell editor",
+        () => this.resultArea.activeGrid()?.openSelectedInEditor(),
+        "Open the selected cell in a larger viewer (Shift+Enter)",
+      ),
     );
     this.historyButton = secondaryTool(toolButton("history", "History", () => this.toggleHistory(), "Show or hide the query history"));
     this.transactionButtons = [
@@ -253,11 +238,12 @@ export class QueryView implements TabContent {
           { class: "query-main" },
           this.editorHost,
           splitter,
-          h("div", { class: "results" }, h("div", { class: "result-bar" }, this.resultTabs, this.runStatus), this.resultBody),
+          h("div", { class: "results" }, h("div", { class: "result-bar" }, this.resultArea.tabs, this.runStatus), this.resultArea.body),
         ),
         this.history.element,
       ),
     );
+    this.resultArea.onActiveChange = () => this.syncResultTools();
     this.showHint();
     this.toggleHistory(readHistoryPanelOpen(), false);
     this.showTransactionControls(this.transactionsSupported);
@@ -315,7 +301,7 @@ export class QueryView implements TabContent {
     window.clearInterval(this.idleTimer);
     if (this.renderFrame !== null) cancelAnimationFrame(this.renderFrame);
     this.editor.destroy();
-    this.disposePanels();
+    this.resultArea.dispose();
     this.closeSession();
   }
 
@@ -327,7 +313,7 @@ export class QueryView implements TabContent {
   }
 
   private showHint(): void {
-    this.showMessages([{ text: this.language.hint || "Ctrl+Enter runs the query.", kind: "muted" }]);
+    this.resultArea.showMessages([{ text: this.language.hint || "Ctrl+Enter runs the query.", kind: "muted" }]);
     this.runStatus.textContent = "";
   }
 
@@ -613,7 +599,7 @@ export class QueryView implements TabContent {
         );
       });
       if (summary === null) {
-        this.showMessages([{ text: "Cancelled; nothing ran.", kind: "muted" }]);
+        this.resultArea.showMessages([{ text: "Cancelled; nothing ran.", kind: "muted" }]);
         this.runStatus.textContent = "Cancelled";
         return;
       }
@@ -622,6 +608,14 @@ export class QueryView implements TabContent {
       if (this.transactionsSupported) this.showTransaction(summary.transaction);
       this.record({ sql: text, database, startedAt, durationMs: summary.elapsedMs, results: results.history(), error: null });
     } catch (error) {
+      if (this.cancelRequested || isCancelError(error)) {
+        // Stopped by the user: not an error. The rows received so far stay in front.
+        this.lastError = null;
+        this.finishResults(results, null, null, timer.elapsed(), true);
+        this.record({ sql: text, database, startedAt, durationMs: timer.elapsed(), results: results.history(), error: errorText(error) });
+        void this.refreshTransaction();
+        return;
+      }
       this.lastError = errorText(error);
       const block = renderError(error, { onJump: (position) => this.jumpTo(text, offset, position) });
       this.finishResults(results, null, block, timer.elapsed());
@@ -692,132 +686,54 @@ export class QueryView implements TabContent {
     const results = new RunResults();
     if (this.renderFrame !== null) cancelAnimationFrame(this.renderFrame);
     this.renderFrame = null;
-    this.resultShown = false;
-    this.showMessages([{ text: "Running…", kind: "muted" }]);
+    this.resultArea.start(results);
     this.runStatus.textContent = "Running…";
     return results;
-  }
-
-  /** Only the Messages tab, with `lines`. */
-  private showMessages(lines: Message[]): void {
-    const panel = this.messages(lines);
-    this.showPanels([panel], panel);
   }
 
   private scheduleRender(results: RunResults): void {
     if (this.renderFrame !== null) return;
     this.renderFrame = requestAnimationFrame(() => {
       this.renderFrame = null;
-      if (!this.disposed && this.running) this.renderResults(results, false);
+      if (this.disposed || !this.running) return;
+      this.resultArea.update(results, false);
+      this.runStatus.textContent = `Running… ${formatNumber(results.rowCount())} row(s)`;
     });
   }
 
-  /** Brings the result tabs up to date: a tab per result set (with its live row count), then Messages. */
-  private renderResults(results: RunResults, final: boolean, unfinished = "running…"): void {
-    const now = performance.now();
-    const existing = new Map(this.panels.flatMap((panel) => (panel.entry ? [[panel.entry, panel] as const] : [])));
-    const sets = results.resultSets();
-    const resultPanels = sets.map((entry, index) => {
-      const panel = existing.get(entry) ?? this.resultPanel(entry);
-      panel.title = sets.length > 1 ? `Result ${index + 1}` : "Result";
-      const rows = entry.done?.rows ?? entry.rows.length;
-      panel.count = `${formatNumber(rows)}${entry.done?.truncated ? "+" : ""}`;
-      const stale = entry.rows.length !== panel.loadedRows;
-      if (panel.grid && stale && (final || entry.done !== null || panel.loadedRows === 0 || now - panel.loadedAt > GRID_RELOAD_MS)) {
-        panel.grid.load({ ...gridSetup(entry.columns ?? [], entry.rows.slice(), dialectOf(this.dialect())), clientFilter: true });
-        panel.loadedRows = entry.rows.length;
-        panel.loadedAt = now;
-      }
-      return panel;
-    });
-    const messages = this.messagesPanel ?? this.messages([]);
-    const lines = runMessages(results, unfinished);
-    messages.element.replaceChildren(...messageLines(lines.length > 0 || final ? lines : [{ text: "Running…", kind: "muted" }]));
-    // The first result set takes the stage when it arrives; later ones wait behind their tabs, and a tab the user picked stays.
-    let active = this.activePanel && (this.activePanel === messages || resultPanels.includes(this.activePanel)) ? this.activePanel : messages;
-    if (!this.resultShown && resultPanels.length > 0) {
-      active = resultPanels[0];
-      this.resultShown = true;
-    }
-    this.showPanels([...resultPanels, messages], active);
-    if (!final) this.runStatus.textContent = `Running… ${formatNumber(results.rowCount())} row(s)`;
-  }
-
-  /** The end of a run: the last rows, the summary line, and the error block when it failed. */
-  private finishResults(results: RunResults, summary: RunSummary | null, error: HTMLElement | null, elapsed: number): void {
+  /**
+   * The end of a run: the last rows, the summary line, and the error block when it failed. `stopped`: the user stopped
+   * it (Stop, or a stopped summary), which is not an error: the rows received so far stay in front.
+   */
+  private finishResults(results: RunResults, summary: RunSummary | null, error: HTMLElement | null, elapsed: number, stopped = false): void {
     if (this.renderFrame !== null) {
       cancelAnimationFrame(this.renderFrame);
       this.renderFrame = null;
     }
-    this.renderResults(results, true, summary?.stopped ? "stopped" : this.cancelRequested ? "cancelled" : "failed");
-    const messages = this.messagesPanel;
+    const halted = stopped || summary?.stopped === true;
+    this.resultArea.update(results, true, halted ? "stopped" : "failed");
     const ms = Math.round(summary?.elapsedMs ?? elapsed);
     const statements = summary?.statements ?? results.entries.length;
-    const end: Message = summary?.stopped
-      ? { text: `Stopped after ${formatNumber(ms)} ms`, kind: "muted" }
+    const rows = results.rowCount();
+    const end: Message = halted
+      ? { text: `Stopped after ${formatNumber(ms)} ms · ${formatNumber(rows)} row(s) received`, kind: "info" }
       : summary
         ? { text: `Finished in ${formatNumber(ms)} ms · ${formatNumber(statements)} statement(s)`, kind: "muted" }
-        : this.cancelRequested
-          ? { text: `Cancelled after ${formatNumber(ms)} ms`, kind: "muted" }
-          : { text: `Failed after ${formatNumber(ms)} ms`, kind: "error" };
-    if (messages) {
-      messages.element.append(...messageLines([end]));
-      if (error) messages.element.append(error);
-    }
-    const rows = results.rowCount();
-    this.runStatus.textContent = summary?.stopped
+        : { text: `Failed after ${formatNumber(ms)} ms`, kind: "error" };
+    // A failure shows Messages (the error and how far the script got); the result sets that arrived stay in their tabs.
+    this.resultArea.finish(end, error, error !== null);
+    this.runStatus.textContent = halted
       ? "Stopped"
       : summary
         ? `${formatNumber(statements)} statement(s) · ${formatNumber(rows)} row(s) · ${formatNumber(ms)} ms`
-        : this.cancelRequested
-          ? "Cancelled"
-          : "Failed";
-    // A failure shows Messages (the error and how far the script got); the result sets that arrived stay in their tabs.
-    if (error && messages) this.activate(messages);
+        : "Failed";
   }
 
-  private resultPanel(entry: StatementResult): ResultPanel {
-    const grid = new DataGrid();
-    return { title: "Result", count: "", element: grid.element, grid, entry, loadedRows: 0, loadedAt: 0 };
-  }
-
-  private messages(lines: Message[]): ResultPanel {
-    const panel: ResultPanel = { title: "Messages", count: "", element: h("div", { class: "messages" }, ...messageLines(lines)), loadedRows: 0, loadedAt: 0 };
-    this.messagesPanel = panel;
-    return panel;
-  }
-
-  private showPanels(panels: ResultPanel[], active: ResultPanel): void {
-    // Grids of panels that are gone stop observing their size.
-    for (const panel of this.panels) if (!panels.includes(panel)) panel.grid?.dispose();
-    this.panels = panels;
-    this.resultTabs.replaceChildren(
-      ...panels.map((panel) => {
-        const button = h(
-          "button",
-          { class: "result-tab", type: "button", title: panel.entry ? statementExcerpt(panel.entry.sql, 200) : undefined },
-          panel.title,
-          panel.count ? h("span", { class: "result-count" }, panel.count) : null,
-        );
-        button.addEventListener("click", () => this.activate(panel));
-        return button;
-      }),
-    );
-    this.activate(active);
-  }
-
-  private activate(panel: ResultPanel): void {
-    const index = this.panels.indexOf(panel);
-    Array.from(this.resultTabs.children).forEach((button, position) => button.classList.toggle("active", position === index));
-    if (this.activePanel !== panel || this.resultBody.firstChild !== panel.element) this.resultBody.replaceChildren(panel.element);
-    this.activePanel = panel;
-    this.columnsButton.disabled = !panel.grid;
-    this.cellButton.disabled = !panel.grid;
-  }
-
-  private disposePanels(): void {
-    for (const panel of this.panels) panel.grid?.dispose();
-    this.panels = [];
+  /** The Columns and Cell editor buttons act on the grid of the active result tab. */
+  private syncResultTools(): void {
+    const grid = this.resultArea.activeGrid();
+    this.columnsButton.disabled = !grid;
+    this.cellButton.disabled = !grid;
   }
 
   private toggleHistory(open = this.history.element.hidden, remember = true): void {
@@ -833,20 +749,6 @@ export class QueryView implements TabContent {
     const height = clamp(this.editorHost.offsetHeight + delta, MIN_EDITOR_HEIGHT, maximum);
     this.editorHost.style.height = `${height}px`;
   }
-}
-
-/** The Messages panel lines of a run so far: each statement's outcome and its notices. */
-function runMessages(results: RunResults, unfinished: string): Message[] {
-  const lines: Message[] = [];
-  results.entries.forEach((entry, position) => {
-    lines.push({ text: describeResult(entry, position, unfinished), kind: "info" });
-    for (const notice of entry.notices) lines.push({ text: notice, kind: "notice" });
-  });
-  return lines;
-}
-
-function messageLines(messages: Message[]): HTMLElement[] {
-  return messages.map((message) => h("div", { class: `message ${message.kind}` }, message.text));
 }
 
 /** A language for an engine whose descriptor lists none (an unknown engine id): plain text. */

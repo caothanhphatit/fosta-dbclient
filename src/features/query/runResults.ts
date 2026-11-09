@@ -16,6 +16,8 @@ export interface StatementDone {
 export interface StatementResult {
   /** `StreamEvent.index`: the statement (or, for a SQL Server batch, the result) it belongs to. */
   index: number;
+  /** Where the entry is in `RunResults.entries` (the "#n" of the Messages lines is `position + 1`). */
+  position: number;
   sql: string;
   /** Null for a statement without a result set (writes, DDL, USE). */
   columns: ColumnInfo[] | null;
@@ -24,13 +26,38 @@ export interface StatementResult {
   done: StatementDone | null;
 }
 
+/** Above this many result sets a run shows one list of them instead of a tab (and a grid) per result set. */
+export const RESULT_TABS_MAX = 50;
+
+/** How the result area shows `count` result sets: a tab each, or one list where a click opens a result. */
+export function resultLayout(count: number, max = RESULT_TABS_MAX): "tabs" | "list" {
+  return count > max ? "list" : "tabs";
+}
+
 export class RunResults {
   readonly entries: StatementResult[] = [];
   /** The latest entry for each index: rows, `done` and notices go there. */
   private readonly latest = new Map<number, StatementResult>();
+  /** Entries with a result set, in order (kept as they arrive, so a frame never scans every entry). */
+  private readonly sets: StatementResult[] = [];
+  /** Entries changed since the last `takeChanged`, in the order they first changed. */
+  private changed = new Set<StatementResult>();
 
   /** Adds one event; returns the entry it changed. */
   apply(event: StreamEvent): StatementResult {
+    const entry = this.applyEvent(event);
+    this.changed.add(entry);
+    return entry;
+  }
+
+  /** The entries changed since the last call (new ones included), so a view updates only those. */
+  takeChanged(): StatementResult[] {
+    const changed = [...this.changed];
+    this.changed = new Set();
+    return changed;
+  }
+
+  private applyEvent(event: StreamEvent): StatementResult {
     switch (event.event) {
       case "statement":
         return this.start(event.index, event.sql);
@@ -39,6 +66,7 @@ export class RunResults {
         const current = this.latest.get(event.index);
         const entry = current && current.columns === null && current.done === null ? current : this.start(event.index, current?.sql ?? "");
         entry.columns = event.columns;
+        this.sets.push(entry);
         return entry;
       }
       case "rows": {
@@ -60,8 +88,8 @@ export class RunResults {
   }
 
   /** Entries with a result set, in order. */
-  resultSets(): StatementResult[] {
-    return this.entries.filter((entry) => entry.columns !== null);
+  resultSets(): readonly StatementResult[] {
+    return this.sets;
   }
 
   /** Rows received so far, over every result set. */
@@ -80,7 +108,7 @@ export class RunResults {
   }
 
   private start(index: number, sql: string): StatementResult {
-    const entry: StatementResult = { index, sql, columns: null, rows: [], notices: [], done: null };
+    const entry: StatementResult = { index, position: this.entries.length, sql, columns: null, rows: [], notices: [], done: null };
     this.entries.push(entry);
     this.latest.set(index, entry);
     return entry;

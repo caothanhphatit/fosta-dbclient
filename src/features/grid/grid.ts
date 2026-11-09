@@ -19,6 +19,7 @@ import { clamp, copyText, h, icon } from "../../core/dom";
 import { EXPORT_LABELS, exportRows, type ExportFormat } from "../importExport/exporters";
 import { density, onDensityChange } from "../../core/density";
 import { displayValue, isNumericKind, valuesEqual } from "../../core/values";
+import { sortIndexes } from "../../core/valueOrder";
 import {
   EXPORT_FORMATS,
   MOVES,
@@ -33,10 +34,16 @@ import {
   type GridRow,
   type GridSetup,
   type Position,
+  type SortState,
 } from "./gridModel";
 export { gridSetup, type GridSetup, type SortState } from "./gridModel";
 import "./grid-virtual.css";
 import "./grid-tools.css";
+
+/** Whether two column lists have the same names in the same order (a streaming reload of the same result set). */
+function sameColumnNames(a: ColumnInfo[], b: ColumnInfo[]): boolean {
+  return a.length === b.length && a.every((column, index) => column.name === b[index].name);
+}
 
 const TOOLTIP_THRESHOLD = 60;
 /** Rows rendered beyond the viewport on each side. */
@@ -61,6 +68,8 @@ export class DataGrid {
   private selection: Position | null = null;
   private editing = false;
   private filters: ColumnFilters = {};
+  /** The header sort of a `clientSort` grid (kept across `load` while the column exists). */
+  private clientSort: SortState | null = null;
   private hidden: string[] = [];
   /** Indexes of the columns that are drawn, in order (hidden columns left out). */
   private displayed: number[] = [];
@@ -97,8 +106,11 @@ export class DataGrid {
   }
 
   load(setup: GridSetup): void {
+    const sameColumns = sameColumnNames(this.setup.columns, setup.columns);
     this.setup = setup;
-    this.filters = { ...setup.columnFilters };
+    // Rows streaming into a result grid reload it: the filters typed and the sort picked there stay.
+    if (!(setup.clientFilter && sameColumns)) this.filters = { ...setup.columnFilters };
+    if (!setup.clientSort || !setup.columns.some((column) => column.name === this.clientSort?.column)) this.clientSort = null;
     this.applyHidden(setup.hiddenColumns);
     this.rows = setup.rows.map((row, index) => ({
       original: row,
@@ -213,11 +225,34 @@ export class DataGrid {
 
   private computeVisible(): number[] {
     const indexes = this.rows.flatMap((row, index) => (row.removed ? [] : [index]));
-    if (!this.setup.clientFilter) return indexes;
+    if (!this.setup.clientFilter) return this.sortedRows(indexes);
     const active = this.setup.columns
       .map((column, index) => ({ column, index, text: this.filters[column.name] ?? "" }))
       .filter(({ text }) => text.trim() !== "");
-    return indexes.filter((rowIndex) => active.every(({ column, index, text }) => matchesFilter(this.rows[rowIndex].current[index] ?? NULL, column, text)));
+    return this.sortedRows(
+      indexes.filter((rowIndex) => active.every(({ column, index, text }) => matchesFilter(this.rows[rowIndex].current[index] ?? NULL, column, text))),
+    );
+  }
+
+  /** The loaded rows in the order of the header sort (`clientSort` grids); otherwise unchanged. */
+  private sortedRows(indexes: number[]): number[] {
+    const sort = this.clientSort;
+    const column = sort ? this.setup.columns.findIndex((item) => item.name === sort.column) : -1;
+    if (!sort || column < 0) return indexes;
+    return sortIndexes(indexes, (index) => this.rows[index].current[column], sort.descending);
+  }
+
+  /** Header click on a `clientSort` grid: ascending, then descending, then the order the rows came in. */
+  private toggleClientSort(column: string): void {
+    const current = this.clientSort?.column === column ? this.clientSort : null;
+    this.setClientSort(current === null ? { column, descending: false } : current.descending ? null : { column, descending: true });
+  }
+
+  private setClientSort(sort: SortState | null): void {
+    this.clientSort = sort;
+    this.selection = null;
+    this.render();
+    this.selectFirstVisible();
   }
 
   discard(): void {
@@ -476,9 +511,10 @@ export class DataGrid {
   }
 
   private headerCell(column: ColumnInfo, index: number): HTMLElement {
-    const sort = this.setup.sort?.column === column.name ? (this.setup.sort.descending ? "▼" : "▲") : "";
+    const state = this.setup.clientSort ? this.clientSort : this.setup.sort;
+    const sort = state?.column === column.name ? (state.descending ? "▼" : "▲") : "";
     const isKey = Boolean(column.hints.primary) || this.setup.keyColumns.includes(column.name);
-    const onSort = this.setup.onSort;
+    const onSort = this.setup.clientSort ? (name: string) => this.toggleClientSort(name) : this.setup.onSort;
     const kind = typeKind(column);
     const typeName = column.hints.vectorDims != null && !column.typeName ? `vector(${column.hints.vectorDims})` : column.typeName;
     const cell = h(
@@ -609,7 +645,17 @@ export class DataGrid {
   private headerMenuItems(column: number, event: MouseEvent): MenuItem[] {
     const name = this.setup.columns[column]?.name ?? "";
     const anchor = { x: event.clientX, y: event.clientY };
+    const sorted = this.clientSort?.column === name ? this.clientSort : null;
+    const sortItems: MenuItem[] = this.setup.clientSort
+      ? [
+          { label: "Sort ascending", disabled: sorted?.descending === false, run: () => this.setClientSort({ column: name, descending: false }) },
+          { label: "Sort descending", disabled: sorted?.descending === true, run: () => this.setClientSort({ column: name, descending: true }) },
+          { label: "Clear sort", disabled: this.clientSort === null, run: () => this.setClientSort(null) },
+          "separator",
+        ]
+      : [];
     return [
+      ...sortItems,
       { label: `Hide column "${name}"`, icon: "minus", disabled: this.displayed.length <= 1, run: () => this.hideColumn(column) },
       { label: "Show all columns", disabled: this.hidden.length === 0, run: () => this.setHiddenColumns([]) },
       { label: "Columns…", icon: "columns", run: () => openColumnsPopover(this, anchor) },
