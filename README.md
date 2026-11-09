@@ -27,6 +27,8 @@ OpenSearch, ClickHouse and Oracle. A desktop app for Windows, or a web edition i
 - **Import and export**: CSV, TSV and JSON in; CSV, CSV for Excel, JSON, SQL `INSERT` and Markdown out.
 - **AI agent** (`Ctrl+Shift+A`) with your own provider and key (Fosta, OpenAI, Gemini, Claude, Ollama…). It knows your schema,
   writes and fixes queries, and reads sample rows only if you allow it.
+- **MCP server** for Claude Code, Claude Desktop, Cursor, VS Code and Zed: they use your saved connections without seeing passwords,
+  only in the workspaces you allow, and every write waits for your approval. Off by default; see [docs/mcp.md](docs/mcp.md).
 - Light and dark themes, settings in one portable JSON file, passwords in Windows Credential Manager.
 
 All the details: [docs/features.md](docs/features.md).
@@ -80,6 +82,7 @@ Building, tests and test databases: [CONTRIBUTING.md](CONTRIBUTING.md).
 ## More
 
 - [Security and privacy](docs/security.md): what is stored where, what is sent, how read-only works.
+- [MCP server](docs/mcp.md): set up AI clients and what they can see and do.
 - [ROADMAP.md](ROADMAP.md): what comes next.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how it is built.
 - [docs/engines](docs/engines): notes per engine, SSH and TLS.

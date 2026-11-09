@@ -14,6 +14,9 @@ Fosta Studio has no account and no telemetry. It connects only to:
   their signature matches the key built into the app.
 - **download.oracle.com**, only if you ask the app to download Oracle Instant Client; the file must match a pinned SHA-256.
 
+The optional MCP server listens only on `127.0.0.1` and sends nothing on its own; what an MCP client reads goes wherever that client
+sends it. See [MCP clients](#mcp-clients).
+
 ## What is stored, and where
 
 Everything lives next to the executable (the portable app), in the app's data folder (the installed app), or in the `/data` volume
@@ -25,7 +28,8 @@ Everything lives next to the executable (the portable app), in the app's data fo
 | Windows Credential Manager (desktop) | Saved database passwords, SSH passphrases, AI and embedding keys | Yes, protected by Windows |
 | `fosta-studio-secrets.enc` + `fosta-studio-secret.key` (web edition) | The same secrets, encrypted with XChaCha20-Poly1305 | Yes; set `FOSTA_STUDIO_SECRET_KEY` to keep the key out of the volume |
 | `fosta-studio-history.jsonl` | Query history (text, time, duration, row count) | Statement text as you typed it; turn history off or clear it under *Settings* |
-| `fosta-studio-audit.jsonl` | Blocked, confirmed and relaxed operations | Statement excerpts |
+| Windows Credential Manager, `app:mcp-token` (desktop) | The MCP server's bearer token | Yes |
+| `fosta-studio-audit.jsonl` | Blocked, confirmed and relaxed operations, assistant runs and every MCP call | Statement excerpts |
 | Log folder | Application log | No passwords; statements are truncated |
 
 A saved password is tied to its server. If you change a connection's host, port, user, SSH route, TLS settings or command without
@@ -58,6 +62,35 @@ The model sees table and column names, the editor text, errors and task logs you
 under the workspace's rules. The optional read-only query tool lets the assistant read up to 50 rows per query (10 seconds, one
 statement); those rows go to your provider. It is off for Production and Read-only workspaces unless you allow it, and every run is
 shown in the chat and written to the audit log. Database content is passed to the model as untrusted data.
+
+## MCP clients
+
+The MCP server ([mcp.md](mcp.md)) lets AI clients such as Claude Code, Claude Desktop or Cursor use saved connections. It is off
+until you turn it on in *Settings → MCP server*, and each workspace is invisible to clients until *Edit workspace → MCP clients*
+allows it.
+
+What a client **can see**: the connections of those workspaces (id, name, engine, workspace), their databases, tables, columns and
+relations, and the rows its read-only queries return (100 by default, 500 at most). It never sees passwords, SSH or TLS secrets,
+hosts, users, or the confirmation token.
+
+What a client **can do**:
+
+- **Read-only** workspaces: read the schema and run one read-only statement at a time, in a read-only session, for 30 seconds at most.
+  Anything the engine does not classify as a read is refused.
+- **Ask before writes** workspaces: also ask to run a statement that changes data. You see the statement, its category and the
+  client's name in a dialog and approve it, typing the table or workspace name where the rules ask for that; denying, closing or 120
+  seconds without an answer runs nothing. What the rules block stays blocked.
+- **Production and Read-only** workspaces allow at most read-only access.
+
+How it is protected: the desktop server binds `127.0.0.1` only, refuses non-loopback peers, foreign `Host` names and foreign
+`Origin` headers, and needs a random 256-bit bearer token kept in Credential Manager (rotate it in Settings). Results that contain
+database content are marked as untrusted data for the client's model. Every call, approval, denial and timeout is written to the
+audit log with caller `mcp` and the name the client reported; that name is self-reported, so approve what a statement does, not
+who asks.
+
+On the **web edition**, `/mcp` takes the server's access token as a bearer token and never the session cookie, and is off when
+authentication is off. That token also signs into the UI, so a client holding it could open the app and approve its own requests:
+give MCP access on the web edition only to clients you would trust with the token.
 
 ## Network security
 

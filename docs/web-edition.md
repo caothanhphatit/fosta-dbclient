@@ -46,6 +46,15 @@ commands are off unless `FOSTA_STUDIO_TASKS=on`, saved passwords are in the encr
 assistant requests go from the server to the provider. There is one access token per server, not separate user accounts.
 For access over a network, put the server behind HTTPS (a reverse proxy) and set `FOSTA_STUDIO_SECURE_COOKIE=on`.
 
+## MCP clients
+
+Turn on *Settings → MCP server* and the server answers MCP clients at `/mcp`, with the access token as the bearer token (`claude
+mcp add --transport http fosta https://<host>/mcp --header "Authorization: Bearer <token>"`). Stdio clients run
+`docker exec -i fosta-studio /app/fosta-studio-server mcp`. Workspaces stay invisible until *Edit workspace → MCP clients* allows
+them, and `run_query` approvals appear in every open browser session (denied after 120 seconds when nobody answers). Workspace
+commands that a connection needs start on demand like in the UI, so they need `FOSTA_STUDIO_TASKS=on`. With
+`FOSTA_STUDIO_AUTH=off` the endpoint is off. See [mcp.md](mcp.md).
+
 ## Updating
 
 The app checks GitHub for a new release once a day (Settings → Check for updates) and shows *Update X.Y.Z* in the status bar. It
