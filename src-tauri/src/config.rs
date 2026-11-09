@@ -830,7 +830,11 @@ fn write_config(path: &Path, config: &AppConfig) -> AppResult<()> {
         object.remove("startupNotice");
     }
     let temporary = sibling(path, ".tmp");
-    let mut file = fs::File::create(&temporary)?;
+    let mut file = crate::data_files::private_options()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&temporary)?;
     file.write_all(serde_json::to_string_pretty(&value)?.as_bytes())?;
     file.sync_all()?;
     drop(file);

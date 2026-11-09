@@ -6,7 +6,7 @@
 //! The history never leaves this machine and never holds passwords: only the text the user ran.
 
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Mutex,
@@ -15,7 +15,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{config, error::AppResult, lock::lock};
+use crate::{
+    config,
+    data_files::{private_options, restrict_to_owner, write_private},
+    error::AppResult,
+    lock::lock,
+};
 
 pub const HISTORY_FILE: &str = "fosta-studio-history.jsonl";
 /// The history file's name before the rename to Fosta Studio; moved on first use.
@@ -97,6 +102,10 @@ pub struct HistoryStore {
 
 impl HistoryStore {
     pub fn new(path: PathBuf, cap: usize) -> Self {
+        // A file written by an earlier version keeps its permissions until it is rewritten; close it now.
+        if let Err(error) = restrict_to_owner(&path) {
+            tracing::warn!(path = %path.display(), %error, "could not restrict the history file to its owner");
+        }
         Self {
             path,
             cap: cap.max(1),
@@ -125,7 +134,7 @@ impl HistoryStore {
             // A previous write was cut off; start a fresh line so this entry stays readable.
             line.insert(0, '\n');
         }
-        OpenOptions::new()
+        private_options()
             .create(true)
             .append(true)
             .open(&self.path)?
@@ -213,15 +222,12 @@ impl HistoryStore {
     }
 
     fn write_all(&self, entries: &[HistoryEntry]) -> AppResult<()> {
-        let temporary = self.path.with_extension("jsonl.tmp");
         let mut text = String::new();
         for entry in entries {
             text.push_str(&serde_json::to_string(entry)?);
             text.push('\n');
         }
-        fs::write(&temporary, text)?;
-        fs::rename(&temporary, &self.path)?;
-        Ok(())
+        write_private(&self.path, text.as_bytes())
     }
 }
 

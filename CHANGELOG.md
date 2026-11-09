@@ -86,6 +86,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   (RUSTSEC-2026-0459), reachable through a crafted database file.
 - **MariaDB/MySQL**: a page read cancelled just as it finished no longer leaves a `KILL QUERY` behind for the next statement on
   that pooled connection (another tab's page or grid save failed with "Query execution was interrupted").
+- **Data files**: the open tabs file, the configuration, the query history and the audit log are written readable by their owner
+  only (mode 0600 on Linux, the web edition's volume); files from earlier versions are restricted on the next start.
 
 ## [0.1.0] - 2026-11-08
 

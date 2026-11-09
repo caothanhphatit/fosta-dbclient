@@ -34,6 +34,10 @@ Everything lives next to the executable (the portable app), in the app's data fo
 | `fosta-studio-audit.jsonl`                                                                          | Blocked, confirmed and relaxed operations, assistant runs and every MCP call              | Statement excerpts                                                                |
 | Log folder                                                                                          | Application log                                                                           | No passwords; statements are truncated                                            |
 
+On Linux (the web edition's `/data` volume) the app writes these files readable by their owner only (mode `0600`), the
+key files included; files written by an earlier version are restricted on the next start. On Windows a file takes the
+permissions of its folder: the installed app keeps its data under your user profile, the portable app next to the executable.
+
 A saved password is tied to its server. If you change a connection's host, port, user, SSH route, TLS settings or command without
 typing the password again, the saved one is deleted instead of being sent to the new target.
 

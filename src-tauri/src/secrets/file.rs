@@ -8,7 +8,6 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -161,23 +160,7 @@ pub fn random<const N: usize>() -> AppResult<[u8; N]> {
     Ok(bytes)
 }
 
-/// Writes through a temporary file and a rename, readable by the owner only (on Unix).
-pub fn write_private(path: &Path, bytes: &[u8]) -> AppResult<()> {
-    let temporary = path.with_extension("tmp");
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    fs::rename(&temporary, path)?;
-    Ok(())
-}
+pub use crate::data_files::write_private;
 
 pub fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()

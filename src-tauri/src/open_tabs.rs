@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{
+    data_files::private_options,
     error::{AppError, AppResult},
     lock::lock,
 };
@@ -200,7 +201,8 @@ fn write(path: &Path, stored: &StoredTabs) -> AppResult<()> {
     name.push(format!(".{}-{}.tmp", std::process::id(), WRITES.fetch_add(1, Ordering::Relaxed)));
     let temporary = PathBuf::from(name);
     let written = (|| -> io::Result<()> {
-        let mut file = fs::File::create(&temporary)?;
+        // Query text as typed: readable by the owner only, like the other data files.
+        let mut file = private_options().write(true).create(true).truncate(true).open(&temporary)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);

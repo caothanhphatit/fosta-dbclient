@@ -16,6 +16,7 @@ pub mod commands;
 pub mod config;
 pub mod connection_command;
 pub mod contract;
+pub mod data_files;
 pub mod embedding;
 pub mod engines;
 pub mod error;

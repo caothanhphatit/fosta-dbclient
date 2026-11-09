@@ -6,7 +6,7 @@
 //! never leaves this machine; it holds statement excerpts, never passwords.
 
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::File,
     io::{BufRead, BufReader, Write},
     path::PathBuf,
     sync::Mutex,
@@ -15,7 +15,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{config, error::AppResult, lock::lock};
+use crate::{
+    config,
+    data_files::{private_options, restrict_to_owner, write_private},
+    error::AppResult,
+    lock::lock,
+};
 
 pub const AUDIT_FILE: &str = "fosta-studio-audit.jsonl";
 const DEFAULT_CAP: usize = 20_000;
@@ -69,6 +74,10 @@ pub struct AuditLog {
 
 impl AuditLog {
     pub fn new(path: PathBuf, cap: usize) -> Self {
+        // A file written by an earlier version keeps its permissions until it is rewritten; close it now.
+        if let Err(error) = restrict_to_owner(&path) {
+            tracing::warn!(path = %path.display(), %error, "could not restrict the audit log to its owner");
+        }
         Self {
             path,
             cap: cap.max(1),
@@ -90,7 +99,7 @@ impl AuditLog {
         }
         let mut line = serde_json::to_string(&entry)?;
         line.push('\n');
-        OpenOptions::new()
+        private_options()
             .create(true)
             .append(true)
             .open(&self.path)?
@@ -104,14 +113,12 @@ impl AuditLog {
             let mut entries = self.read_all()?;
             let excess = entries.len().saturating_sub(self.cap);
             entries.drain(..excess);
-            let temporary = self.path.with_extension("jsonl.tmp");
             let mut text = String::new();
             for entry in &entries {
                 text.push_str(&serde_json::to_string(entry)?);
                 text.push('\n');
             }
-            fs::write(&temporary, text)?;
-            fs::rename(&temporary, &self.path)?;
+            write_private(&self.path, text.as_bytes())?;
             *count = Some(entries.len());
         }
         Ok(())
@@ -148,7 +155,7 @@ mod tests {
     #[test]
     fn appends_and_compacts() {
         let path = std::env::temp_dir().join(format!("fosta-audit-{}.jsonl", std::process::id()));
-        let _ = fs::remove_file(&path);
+        let _ = std::fs::remove_file(&path);
         let log = AuditLog::new(path.clone(), 10);
         for index in 0..15 {
             log.append(AuditEntry {
@@ -164,6 +171,6 @@ mod tests {
         assert!(entries.len() <= 11, "{} entries", entries.len());
         assert!(entries.last().unwrap().statement.ends_with("= 14"));
         assert!(entries[0].time > 0);
-        fs::remove_file(path).unwrap();
+        std::fs::remove_file(path).unwrap();
     }
 }
