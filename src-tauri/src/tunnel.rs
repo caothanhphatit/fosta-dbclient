@@ -237,7 +237,8 @@ pub(crate) mod testing {
     /// A process that prints one line and keeps running (no grandchild, so stopping it ends it), and that line.
     pub(crate) fn long_running(pattern: Option<&str>) -> (TunnelConfig, &'static str) {
         if cfg!(windows) {
-            (tunnel("ping", &["-n", "30", "127.0.0.1"], pattern, 10), "Pinging 127.0.0.1")
+            // ping's text is localized; the address is in every language.
+            (tunnel("ping", &["-n", "30", "127.0.0.1"], pattern, 10), "127.0.0.1")
         } else {
             (
                 tunnel("sh", &["-c", "echo Forwarding from 127.0.0.1; exec sleep 30"], pattern, 10),
