@@ -149,8 +149,12 @@ fn unparsed_category(engine: SqlDialectId, text: &str) -> (Category, Option<Stri
     }
     for (index, (word, next)) in words.iter().enumerate() {
         let upper = word.to_uppercase();
+        // `EXEC @proc_name` runs whatever procedure the variable names; `EXEC @rc = proc` only keeps its return code.
+        let return_code = words
+            .get(index + 1)
+            .is_some_and(|(variable, after)| variable == next && after == "=");
         let dynamic = upper == "SP_EXECUTESQL"
-            || (matches!(upper.as_str(), "EXEC" | "EXECUTE") && (next == "(" || next.starts_with('@')))
+            || (matches!(upper.as_str(), "EXEC" | "EXECUTE") && (next == "(" || (next.starts_with('@') && !return_code)))
             || (upper == "EXECUTE" && next.eq_ignore_ascii_case("IMMEDIATE"))
             || (upper == "PREPARE" && index == 0);
         if dynamic {
@@ -827,6 +831,9 @@ mod tests {
             &[
                 ("EXEC sp_who", Write),
                 ("EXEC dbo.usp_archive @days = 30", Write),
+                // Not parsed by sqlparser, so Unknown (treated like a write), but not dynamic SQL.
+                ("EXEC @rc = dbo.usp_archive @days = 30", Unknown),
+                ("DECLARE @rc INT; EXEC @rc = dbo.usp_archive; SELECT @rc", Unknown),
                 ("EXEC ('DROP TABLE t')", Destructive),
                 ("EXEC (@sql)", Destructive),
                 ("EXECUTE ('DELETE FROM t')", Destructive),

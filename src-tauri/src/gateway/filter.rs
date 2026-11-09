@@ -331,6 +331,9 @@ mod tests {
             ok(engine, "path = 'C:\\\\temp'");
             rejected(engine, "name = 'a\\' OR 1=1; DROP TABLE t; -- '");
             rejected(engine, "name = 'a\\' OR sleep(5) = 0 OR name = '");
+            // What the grid builds for MySQL (src/core/sql.ts: quotes doubled, backslashes doubled) reads the same both ways.
+            ok(engine, "`name` = 'O''Brien\\\\x' AND `note` LIKE '%a\\\\''b%'");
+            ok(engine, "`path` = 'ends with\\\\'");
         }
         ok(SqlDialectId::MsSql, "path = 'C:\\temp\\'");
     }

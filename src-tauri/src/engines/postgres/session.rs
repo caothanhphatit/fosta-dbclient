@@ -135,6 +135,14 @@ impl PgSession {
                 start: 0,
             })
         };
+        // A failed transaction block rejects the read-only SET, so nothing would be re-asserted before what follows a
+        // ROLLBACK in the same script: a read-only run there may only roll back.
+        if opts.read_only && self.transaction_state() == TxState::Failed && !is_lone_rollback(sql) {
+            return Err(before(EngineError::new(
+                ErrorKind::Input,
+                "The transaction failed. Roll it back on its own before running anything else.",
+            )));
+        }
         self.apply_limits(opts).await.map_err(before)?;
         let mut result = Ok(());
         for (index, st) in split::split(Dialect::Postgres, sql).into_iter().enumerate() {
@@ -324,6 +332,18 @@ fn result_columns(cols: &[tokio_postgres::Column]) -> Vec<ColumnInfo> {
     cols.iter()
         .map(|c| ColumnInfo::result(c.name(), c.type_().name(), types::kind_of(c.type_())))
         .collect()
+}
+
+/// One `ROLLBACK`/`ABORT` (also `ROLLBACK TO SAVEPOINT`) and nothing else.
+fn is_lone_rollback(sql: &str) -> bool {
+    let statements = split::split(Dialect::Postgres, sql);
+    let [only] = statements.as_slice() else {
+        return false;
+    };
+    matches!(
+        split::words(Dialect::Postgres, &only.text).first().map(String::as_str),
+        Some("ROLLBACK" | "ABORT")
+    )
 }
 
 /// A read-only query a cursor can run: SELECT/WITH/VALUES/TABLE that the classifier calls Read (so no data-modifying CTE and

@@ -526,6 +526,14 @@ async fn live_engine_postgres_read_only_backstop_is_reasserted() {
     s.rollback().await.unwrap();
     s.run("SELECT 1", &ro, &mut CollectSink::default()).await.unwrap();
 
+    // In a failed transaction (where the SET cannot run) a read-only run may only roll back.
+    assert!(s.run("BEGIN; SELECT 1/0", &rw, &mut CollectSink::default()).await.is_err());
+    assert_eq!(s.transaction_state(), TxState::Failed);
+    let err = s.run("ROLLBACK; SELECT 1", &ro, &mut CollectSink::default()).await.unwrap_err();
+    assert!(err.message.contains("Roll it back on its own"), "{err}");
+    s.run("ROLLBACK", &ro, &mut CollectSink::default()).await.unwrap();
+    assert_eq!(s.transaction_state(), TxState::Idle);
+
     // A read-only transaction is fine, and read-write runs still work afterwards.
     s.run("BEGIN", &ro, &mut CollectSink::default()).await.unwrap();
     s.run("SELECT 1", &ro, &mut CollectSink::default()).await.unwrap();
