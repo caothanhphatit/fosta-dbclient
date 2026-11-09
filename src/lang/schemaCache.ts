@@ -7,6 +7,9 @@ export type SchemaLoader = () => Promise<CompletionSchema>;
 export class SchemaCache {
   private schema: CompletionSchema;
   private loading: Promise<CompletionSchema> | null = null;
+  /** What the request in flight loads (a database name); a request for something else starts its own. */
+  private loadingKey: string | null = null;
+  private sequence = 0;
   private readonly listeners = new Set<(schema: CompletionSchema) => void>();
 
   constructor(initial: CompletionSchema = EMPTY_SCHEMA) {
@@ -22,20 +25,28 @@ export class SchemaCache {
     for (const listener of this.listeners) listener(schema);
   }
 
-  /** Loads through `loader`; concurrent calls share one request. A failed load keeps the previous schema. */
-  async load(loader: SchemaLoader): Promise<CompletionSchema> {
-    if (!this.loading) {
-      this.loading = loader()
-        .then((schema) => {
-          this.set(schema);
-          return schema;
-        })
-        .catch(() => this.schema)
-        .finally(() => {
-          this.loading = null;
-        });
-    }
-    return this.loading;
+  /**
+   * Loads through `loader`; concurrent calls for the same `key` share one request, and the latest request wins (a
+   * switch to another database, or a refresh after DDL, is never overwritten by an older answer). A failed load keeps
+   * the previous schema.
+   */
+  async load(loader: SchemaLoader, key = ""): Promise<CompletionSchema> {
+    if (this.loading && this.loadingKey === key) return this.loading;
+    const ticket = ++this.sequence;
+    this.loadingKey = key;
+    const loading = loader()
+      .then((schema) => {
+        if (ticket === this.sequence) this.set(schema);
+        return schema;
+      })
+      .catch(() => this.schema)
+      .finally(() => {
+        if (ticket !== this.sequence) return;
+        this.loading = null;
+        this.loadingKey = null;
+      });
+    this.loading = loading;
+    return loading;
   }
 
   onChange(listener: (schema: CompletionSchema) => void): () => void {

@@ -41,6 +41,7 @@ import { withConfirmation } from "../safety/confirmationDialog";
 import { commitsOpenTransaction, IDLE_TRANSACTION_MINUTES, idleReminderDue, transactionButtons, transactionLabel } from "../safety/safety";
 import { AttemptTimer } from "./attemptTimer";
 import { HistoryPanel } from "./historyPanel";
+import { changesSchema, defaultDatabase, hasUnsavedText } from "./queryRules";
 import { ResultArea, type Message } from "./resultArea";
 import { editorOffset, RunResults } from "./runResults";
 import { createSqlEditor, selectedOrAllText, setEditorLanguage } from "./sqlEditor";
@@ -62,6 +63,10 @@ export interface QueryViewOptions {
   info: ConnectInfo | null;
   database: string | null;
   text: string;
+  /** Text that counts as saved (a restored tab: what had run there); default `text`, so a generated SELECT is not "unsaved". */
+  baseline?: string;
+  /** The language to start in (a restored tab); default: the connection's default language. */
+  languageId?: string | null;
   host: QueryHost;
   /** The editor support for one of the connection's languages (`src/engines/index.ts` `languageSupport`). */
   languageSupport(languageId: string): Promise<LanguageSupport>;
@@ -98,6 +103,8 @@ export class QueryView implements TabContent {
   lastError: string | null = null;
   /** Called when the database selection or the run outcome changes. */
   onChanged: (() => void) | null = null;
+  /** Called when the editor text changes (the open tabs are saved, debounced). */
+  onEdited: (() => void) | null = null;
   private readonly connection: ConnectionApi;
   private readonly engine: EngineDescriptor;
   private readonly host: QueryHost;
@@ -106,6 +113,9 @@ export class QueryView implements TabContent {
   private language: LanguageSpec;
   private support: LanguageSupport | null = null;
   private languageGeneration = 0;
+  /** The text as it last ran (or as the tab opened); closing with other text asks first. */
+  private baseline: string;
+  private readonly multipleDatabases: boolean;
   private extensionGeneration = 0;
   private sessionId = crypto.randomUUID();
   private session: SessionInfo | null = null;
@@ -123,6 +133,7 @@ export class QueryView implements TabContent {
   private readonly columnsButton: HTMLButtonElement;
   private readonly cellButton: HTMLButtonElement;
   private readonly historyButton: HTMLButtonElement;
+  private readonly refreshNamesButton: HTMLButtonElement;
   private readonly history: HistoryPanel;
   private renderFrame: number | null = null;
   private running = false;
@@ -148,14 +159,17 @@ export class QueryView implements TabContent {
     this.loadSupport = options.languageSupport;
     const source = options.info && options.info.languages.length > 0 ? options.info : options.engine;
     this.languages = source.languages.length > 0 ? source.languages : [fallbackLanguage(options.engine)];
-    this.language = defaultLanguage(source) ?? this.languages[0];
+    this.language = this.languages.find((spec) => spec.id === options.languageId) ?? defaultLanguage(source) ?? this.languages[0];
     const capabilities = options.info ?? options.engine;
     this.transactionsSupported = hasCapability(capabilities, "transactions");
+    this.multipleDatabases = hasCapability(capabilities, "multipleDatabases");
+    this.baseline = options.baseline ?? options.text;
 
     this.editor = createSqlEditor(this.editorHost, options.text, {
       run: () => void this.run("selection"),
       runStatement: () => void this.run("statement"),
       format: () => void this.format(),
+      changed: () => this.onEdited?.(),
     });
     this.runButton = toolButton("play", "Run", () => void this.run("selection"), "Run the selection, or everything when nothing is selected (Ctrl+Enter)");
     this.statementButton = secondaryTool(
@@ -185,6 +199,9 @@ export class QueryView implements TabContent {
       ),
     );
     this.historyButton = secondaryTool(toolButton("history", "History", () => this.toggleHistory(), "Show or hide the query history"));
+    this.refreshNamesButton = secondaryTool(
+      toolButton("refresh", "Refresh names", () => this.refreshNames(), "Load the table and column names for completion again"),
+    );
     this.transactionButtons = [
       toolButton("bolt", "Begin", () => void this.transactionControl("begin"), "Start a transaction in this tab"),
       toolButton("check", "Commit", () => void this.transactionControl("commit"), "Commit the open transaction"),
@@ -228,7 +245,7 @@ export class QueryView implements TabContent {
         ...this.transactionButtons,
         this.transactionIndicator,
         spacer(),
-        h("div", { class: "toolbar-group toolbar-end" }, this.columnsButton, this.cellButton, separator(), this.historyButton),
+        h("div", { class: "toolbar-group toolbar-end" }, this.columnsButton, this.cellButton, separator(), this.refreshNamesButton, this.historyButton),
       ),
       h(
         "div",
@@ -257,9 +274,43 @@ export class QueryView implements TabContent {
     return this.transaction?.open === true;
   }
 
+  /** Text typed (or edited) since it last ran: closing the tab asks first. */
+  hasUnsavedText(): boolean {
+    return hasUnsavedText(this.editor.state.doc.toString(), this.baseline);
+  }
+
   canClose(): boolean | Promise<boolean> {
-    if (!this.hasOpenTransaction()) return true;
-    return confirmDialog("This tab has an open transaction. Closing the tab rolls it back, so uncommitted changes are lost. Close anyway?", "Close tab");
+    const open = this.hasOpenTransaction();
+    const unsaved = this.hasUnsavedText();
+    if (!open && !unsaved) return true;
+    const reasons = [
+      open ? "This tab has an open transaction. Closing the tab rolls it back, so uncommitted changes are lost." : "",
+      unsaved ? "Its query text was edited and not run since; closing the tab discards it." : "",
+    ];
+    return confirmDialog(`${reasons.filter(Boolean).join(" ")} Close anyway?`, "Close tab");
+  }
+
+  /** Everything in the editor (what a restored tab gets back). */
+  editorText(): string {
+    return this.editor.state.doc.toString();
+  }
+
+  /** The text that counts as saved (see `hasUnsavedText`). */
+  savedText(): string {
+    return this.baseline;
+  }
+
+  languageId(): string {
+    return this.language.id;
+  }
+
+  /**
+   * Loads the completion names again (the toolbar's "Refresh names", a tree Refresh of the connection, DDL run here).
+   * `database`: only when the tab works in that database (null: any).
+   */
+  refreshNames(database: string | null = null): void {
+    if (database !== null && database !== this.currentDatabase()) return;
+    void this.applyEditorLanguage(true);
   }
 
   onActivate(): void {
@@ -331,13 +382,13 @@ export class QueryView implements TabContent {
   }
 
   /** Asks the language for its editor extensions for the current database (completion names) and installs them. */
-  private async applyEditorLanguage(): Promise<void> {
+  private async applyEditorLanguage(reload = false): Promise<void> {
     const support = this.support;
     if (!support) return;
     const generation = ++this.extensionGeneration;
     let extensions: Extension[];
     try {
-      extensions = await support.editorExtensions({ language: this.language, connection: this.connection, database: this.currentDatabase() });
+      extensions = await support.editorExtensions({ language: this.language, connection: this.connection, database: this.currentDatabase(), reload });
     } catch (error) {
       showError(error, "Load names for completion");
       extensions = await support.editorExtensions({ language: this.language }).catch(() => []);
@@ -389,11 +440,13 @@ export class QueryView implements TabContent {
 
   private async loadDatabases(preferred: string | null): Promise<void> {
     try {
-      const databases = (await databaseNodes(this.connection)).map(databaseName);
-      if (preferred && !databases.includes(preferred)) databases.unshift(preferred);
+      const listed = (await databaseNodes(this.connection)).map(databaseName);
+      // SQLite opens in `main`, a server with one database in that one.
+      const choice = defaultDatabase(preferred, listed, this.multipleDatabases);
+      const databases = choice && !listed.includes(choice) ? [choice, ...listed] : listed;
       this.databaseSelect.replaceChildren(
         h("option", { value: "" }, "(no database)"),
-        ...databases.map((name) => h("option", { value: name, selected: name === preferred }, name)),
+        ...databases.map((name) => h("option", { value: name, selected: name === choice }, name)),
       );
       this.onChanged?.();
       await this.applyEditorLanguage();
@@ -571,6 +624,9 @@ export class QueryView implements TabContent {
     }
     const database = this.currentDatabase();
     const request: RunRequest = { text, database, offset };
+    // What ran no longer counts as unsaved.
+    this.baseline = this.editor.state.doc.toString();
+    this.onEdited?.();
     const startedAt = Date.now();
     // Time spent in the confirmation dialog is not query time, and Stop is only usable while a statement runs.
     const timer = new AttemptTimer();
@@ -625,6 +681,8 @@ export class QueryView implements TabContent {
     } finally {
       this.setRunning(false);
       this.onChanged?.();
+      // New or changed tables and columns complete right away.
+      if (changesSchema(text) && results.entries.length > 0) this.refreshNames();
     }
   }
 

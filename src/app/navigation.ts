@@ -122,6 +122,14 @@ export class AppNavigation implements Navigator {
     return this.host.writesBlocked(connectionId);
   }
 
+  /** Query tabs on `connectionId` (working in `database`; null: all of them) load their completion names again. */
+  refreshQueryNames(connectionId: string, database: string | null): void {
+    for (const content of this.tabs.contents()) {
+      const view = asQueryView(content);
+      if (view && view.connectionId === connectionId) view.refreshNames(database);
+    }
+  }
+
   closeConnectionTabs(connectionId: string): void {
     this.tabs.closeWhere((key) => key.split("|")[1] === connectionId);
   }

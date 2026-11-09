@@ -96,6 +96,8 @@ export interface TreeHost {
   status(message: string): void;
   /** Fired whenever a connection changes state (connected, error, …). */
   stateChanged?(): void;
+  /** A Refresh reloaded part of a connection's tree (`database`: the one it was in; null: the whole connection). */
+  refreshed?(connectionId: string, database: string | null): void;
 }
 
 export class ConnectionTree {
@@ -309,15 +311,18 @@ export class ConnectionTree {
 
   /** Reloads `parentId` and, below it, every expanded node that was loaded (parents first, so vanished nodes are skipped). */
   private async refresh(conn: ConnectionNode, parentId: string): Promise<void> {
+    const database = parentId === ROOT ? null : (conn.model.node(parentId)?.object?.database ?? null);
     const targets = conn.model.reloadTargets(parentId);
     if (targets.length === 0) {
       await this.loadChildren(conn, parentId, "first");
-      return;
+    } else {
+      for (const id of targets) {
+        if (id !== ROOT && !conn.model.node(id)) continue;
+        await this.loadChildren(conn, id, "refresh");
+      }
     }
-    for (const id of targets) {
-      if (id !== ROOT && !conn.model.node(id)) continue;
-      await this.loadChildren(conn, id, "refresh");
-    }
+    // Query tabs on this connection load their completion names again.
+    this.host.refreshed?.(conn.profile.id, database);
   }
 
   /** The list a refresh of `node` reloads: its own children when it has some, else its parent's. */

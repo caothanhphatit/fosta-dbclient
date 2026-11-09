@@ -125,6 +125,7 @@ const tree = new ConnectionTree({
   },
   commandState: (commandId) => tasksPanel.stateOf(commandId),
   connectionClosed: (connectionId) => navigation.closeConnectionTabs(connectionId),
+  refreshed: (connectionId, database) => navigation.refreshQueryNames(connectionId, database),
   configChanged: applyConfig,
   status: setStatus,
   stateChanged: () => {

@@ -42,6 +42,8 @@ export interface EditorCommands {
   runStatement(): void;
   /** Shift+Alt+F. */
   format(): void;
+  /** The text changed (typing, paste, format, an insert from the history). */
+  changed?(): void;
 }
 
 export function createSqlEditor(parent: HTMLElement, doc: string, commands: EditorCommands): EditorView {
@@ -65,6 +67,9 @@ export function createSqlEditor(parent: HTMLElement, doc: string, commands: Edit
       language.of([]),
       syntaxHighlighting(highlightStyle),
       editorTheme,
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) commands.changed?.();
+      }),
     ],
   });
 }
