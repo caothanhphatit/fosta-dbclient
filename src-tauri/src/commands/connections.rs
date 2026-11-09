@@ -12,7 +12,7 @@ use crate::{
     net,
     runtime::{manager, ConnectionManager},
     secrets::{self, SecretKey},
-    AppState,
+    tunnel, AppState,
 };
 
 /// Saves `profile` (normalised to the version-2 shape) with its secrets: `password` (kept for older callers)
@@ -32,7 +32,13 @@ pub fn save_connection(
     secrets: Option<HashMap<SecretSlot, String>>,
     relax_confirmation: Option<String>,
 ) -> AppResult<AppConfig> {
+    let mut profile = profile;
+    profile.normalize();
+    if profile.tunnel.is_some() && !state.capabilities.tasks {
+        return Err(AppError::new(tunnel::TUNNELS_DISABLED));
+    }
     let config = state.config.snapshot();
+    let tunnel_changed = config.connection(&profile.id).is_some_and(|saved| saved.tunnel_changed(&profile));
     let workspace_id = workspace_id.unwrap_or_else(|| match config.connection_scope(&profile.id) {
         Some((workspace, _)) => workspace.id.clone(),
         None => config.active_workspace.clone(),
@@ -56,6 +62,10 @@ pub fn save_connection(
     let connection_name = profile.name.clone();
     let engine = profile.engine.clone();
     let saved = state.config.update(|config| config.put_connection(&workspace_id, profile))?;
+    if tunnel_changed {
+        // The next connect starts the new command.
+        state.tasks.stop(&tunnel::task_id(&connection_id));
+    }
     if let Some(change) = change {
         state.engines.gateway.audit(AuditEntry {
             caller: "settings".to_owned(),
@@ -134,6 +144,7 @@ fn rule_change(config: &AppConfig, workspace_id: &str, profile: &ConnectionProfi
 
 pub async fn delete_connection(state: &AppState, id: String) -> AppResult<AppConfig> {
     state.engines.disconnect(&id).await;
+    tunnel::stop(&state.tasks, &tunnel::task_id(&id)).await;
     secrets::delete_connection(&id)?;
     state.config.update(|config| {
         config.remove_connection(&id);
@@ -165,16 +176,45 @@ pub async fn test_connection(
             secrets.values.insert(slot, value);
         }
     }
-    ConnectionManager::probe(profile.spec(), secrets).await
+    let probe_tunnel = match &profile.tunnel {
+        Some(command) => Some(
+            tunnel::start_probe(
+                &state.tasks,
+                &profile.id,
+                &profile.name,
+                command,
+                tunnel::ready_check(&profile.host, profile.port),
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let probed = ConnectionManager::probe(profile.spec(), secrets).await;
+    if let Some(probe_tunnel) = probe_tunnel {
+        probe_tunnel.finish(&state.tasks).await;
+    }
+    probed
 }
 
+/// Connects a saved connection, after starting its tunnel command (or reusing the running one) when it has one.
 pub async fn connect(state: &AppState, id: String, password: Option<String>) -> AppResult<ConnectInfo> {
     let profile = state.config.connection(&id)?;
     let secrets = match password {
         Some(password) => with_password(Some(&profile), password)?,
         None => saved_secrets(&profile)?,
     };
-    state.engines.connect(&id, profile.spec(), secrets).await
+    let started = match &profile.tunnel {
+        Some(command) => {
+            let ready = tunnel::ready_check(&profile.host, profile.port);
+            tunnel::ensure(&state.tasks, &tunnel::task_id(&id), &profile.name, command, ready).await?
+        }
+        None => false,
+    };
+    let connected = state.engines.connect(&id, profile.spec(), secrets).await;
+    if connected.is_err() && started {
+        tunnel::stop(&state.tasks, &tunnel::task_id(&id)).await;
+    }
+    connected
 }
 
 /// Records an SSH server's host key in the app's known_hosts file, after the user accepted the fingerprint an
@@ -185,6 +225,7 @@ pub fn trust_host_key(_state: &AppState, host: String, port: u16, public_key: St
 
 pub async fn disconnect(state: &AppState, id: String) -> AppResult<()> {
     state.engines.disconnect(&id).await;
+    tunnel::stop(&state.tasks, &tunnel::task_id(&id)).await;
     Ok(())
 }
 
@@ -466,5 +507,157 @@ mod tests {
             extra_slots(&profile),
             [SecretSlot::SshPassword, SecretSlot::TlsKeyPassphrase, SecretSlot::Token]
         );
+    }
+
+    fn tunnelled(id: &str, command: crate::tunnel::TunnelConfig) -> ConnectionProfile {
+        ConnectionProfile {
+            id: id.into(),
+            name: "Shop".into(),
+            engine: "postgres".into(),
+            host: "127.0.0.1".into(),
+            port: 5432,
+            user: "postgres".into(),
+            database: Some("shop".into()),
+            tunnel: Some(command),
+            ..Default::default()
+        }
+    }
+
+    /// A state holding `profile` in its only workspace.
+    fn state_with(name: &str, capabilities: crate::Capabilities, profile: &ConnectionProfile) -> AppState {
+        let state = AppState::for_test(name, capabilities, AppConfig::default());
+        let workspace = state.config.snapshot().workspaces[0].id.clone();
+        state
+            .config
+            .update(|config| config.put_connection(&workspace, profile.clone()))
+            .unwrap();
+        state
+    }
+
+    #[tokio::test]
+    async fn tunnels_are_refused_where_tasks_are_off() {
+        let _store = memory_store(&[]);
+        let profile = tunnelled("off", crate::tunnel::testing::long_running(None).0);
+        let state = state_with("tunnel-off", crate::Capabilities::web(false, true), &profile);
+        let error = save_connection(&state, profile.clone(), None, None, None, None).unwrap_err();
+        assert_eq!(error.to_string(), tunnel::TUNNELS_DISABLED);
+        let error = connect(&state, profile.id.clone(), Some("pw".into())).await.unwrap_err();
+        assert_eq!(error.to_string(), tunnel::TUNNELS_DISABLED);
+        // A profile without a tunnel (or with an empty one) still saves.
+        let mut plain = profile;
+        plain.tunnel.as_mut().unwrap().program = " ".into();
+        save_connection(&state, plain, None, None, None, None).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_parsed_connection_string_never_sets_a_tunnel() {
+        let state = AppState::for_test("tunnel-parse", crate::Capabilities::desktop(), AppConfig::default());
+        for (engine, text) in [
+            ("postgres", "postgres://app:pw@127.0.0.1:13306/shop?sslmode=disable"),
+            ("mariadb", "mysql://root:pw@127.0.0.1:13306/shop"),
+            ("mongodb", "mongodb://root:pw@127.0.0.1:27017/?authSource=admin"),
+        ] {
+            let parsed = crate::commands::engines::parse_connection_string(&state, engine.into(), text.into()).unwrap();
+            let json = serde_json::to_value(&parsed).unwrap();
+            assert!(json["spec"].get("tunnel").is_none(), "{engine}: {json}");
+            assert!(json.get("tunnel").is_none(), "{engine}: {json}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tunnel_that_exits_fails_the_connect_with_its_log() {
+        let _store = memory_store(&[]);
+        let profile = tunnelled("early", crate::tunnel::testing::exits_early());
+        let state = state_with("tunnel-early", crate::Capabilities::desktop(), &profile);
+        let error = connect(&state, profile.id.clone(), Some("pw".into())).await.unwrap_err();
+        assert_eq!(error.field("code").and_then(|code| code.as_str()), Some(tunnel::TUNNEL_FAILED));
+        assert!(error.to_string().contains("boom: port is in use"), "{error}");
+        assert!(!state.tasks.is_active(&tunnel::task_id("early")));
+    }
+
+    #[tokio::test]
+    async fn the_tunnel_stops_on_disconnect_delete_edit_and_workspace_delete() {
+        let _store = memory_store(&[]);
+        let command = crate::tunnel::testing::long_running(None).0;
+        let profile = tunnelled("life", command.clone());
+        let state = state_with("tunnel-life", crate::Capabilities::desktop(), &profile);
+        let id = tunnel::task_id("life");
+        // What `connect` does before the database connects.
+        let start = || tunnel::ensure(&state.tasks, &id, "Shop", &command, crate::tasks::ReadyCheck::Spawned);
+
+        start().await.unwrap();
+        disconnect(&state, "life".into()).await.unwrap();
+        assert!(!state.tasks.is_active(&id), "disconnect stops it");
+
+        start().await.unwrap();
+        let mut renamed = profile.clone();
+        renamed.name = "Shop (k8s)".into();
+        save_connection(&state, renamed, None, None, None, None).unwrap();
+        assert!(state.tasks.is_active(&id), "an edit that keeps the command keeps it running");
+        let mut edited = profile.clone();
+        edited.tunnel.as_mut().unwrap().args.push("-4".into());
+        save_connection(&state, edited, None, None, None, None).unwrap();
+        state.tasks.wait_until_stopped(&id).await.unwrap();
+        assert!(!state.tasks.is_active(&id), "a changed command stops it");
+
+        start().await.unwrap();
+        delete_connection(&state, "life".into()).await.unwrap();
+        assert!(!state.tasks.is_active(&id), "delete stops it");
+
+        let doomed = WorkspaceMeta {
+            id: "doomed".into(),
+            name: "Doomed".into(),
+            color: "red".into(),
+            icon: "box".into(),
+            safety: None,
+            assistant_queries: None,
+        };
+        state
+            .config
+            .update(|config| {
+                config.put_workspace(doomed);
+                config.put_connection("doomed", profile.clone())
+            })
+            .unwrap();
+        start().await.unwrap();
+        crate::commands::workspaces::delete_workspace(&state, "doomed".into())
+            .await
+            .unwrap();
+        assert!(!state.tasks.is_active(&id), "deleting its workspace stops it");
+    }
+
+    /// The whole path against the dev Postgres: the tunnel command only waits (the port is already open), so this
+    /// checks start → ready (port) → connect → reuse → disconnect → stopped, and the temporary tunnel of a test.
+    #[tokio::test]
+    #[ignore = "needs the dev Postgres on 127.0.0.1:5432 (dev/compose)"]
+    async fn live_a_tunnel_command_runs_while_postgres_is_connected() {
+        let _store = memory_store(&[]);
+        let command = crate::tunnel::TunnelConfig {
+            ready_pattern: None,
+            ..crate::tunnel::testing::long_running(None).0
+        };
+        let profile = tunnelled("live", command);
+        let state = state_with("tunnel-live", crate::Capabilities::desktop(), &profile);
+        let id = tunnel::task_id("live");
+
+        let info = test_connection(&state, profile.clone(), Some("studio-root".into()), None)
+            .await
+            .unwrap();
+        assert_eq!(info.engine, "postgres");
+        assert!(!state.tasks.is_active(&id), "a test runs a temporary tunnel, not the connection's");
+
+        connect(&state, "live".into(), Some("studio-root".into())).await.unwrap();
+        let status = state.tasks.status(&id);
+        assert_eq!(status.state, crate::tasks::TaskState::Running);
+        assert!(state.engines.handle("live").is_ok());
+        assert!(state.tasks.logs(&id).first().is_some_and(|line| line.starts_with('▶')));
+
+        connect(&state, "live".into(), Some("studio-root".into())).await.unwrap();
+        assert_eq!(state.tasks.status(&id).pid, status.pid, "a second connect reuses the tunnel");
+
+        disconnect(&state, "live".into()).await.unwrap();
+        assert!(!state.tasks.is_active(&id));
+        assert_eq!(state.tasks.status(&id).state, crate::tasks::TaskState::Stopped);
+        assert!(state.engines.handle("live").is_err());
     }
 }

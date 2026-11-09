@@ -7,6 +7,7 @@ import { taskDialog } from "./taskDialog";
 import { formatArgs } from "../../core/shell";
 import type { TabContent } from "../../core/tabs";
 import type { AppConfig, TaskDef, TaskState, TaskStatus } from "../../core/types";
+import { isTunnelTaskId } from "../connections/tunnelForm";
 
 export interface TasksHost {
   openLogs(task: TaskDef): void;
@@ -74,9 +75,9 @@ export class TasksPanel {
     }
   }
 
-  /** Ids of every task (in any workspace) that is starting, running or restarting. */
+  /** Ids of every startup task (in any workspace) that is starting, running or restarting; tunnel commands left out. */
   runningIds(): Set<string> {
-    return new Set([...this.statuses.values()].filter((status) => isActive(status.state)).map((status) => status.id));
+    return new Set([...this.statuses.values()].filter((status) => isActive(status.state) && !isTunnelTaskId(status.id)).map((status) => status.id));
   }
 
   subscribeLogs(id: string, listener: LogListener): () => void {
@@ -152,7 +153,14 @@ export class TasksPanel {
   }
 }
 
-export function createLogView(task: TaskDef, panel: TasksPanel): LogTabContent {
+/** Where a log tab reads its lines and what its Restart button does (none: no button). */
+export interface LogSource {
+  load(): Promise<string[]>;
+  restart: (() => Promise<unknown>) | null;
+}
+
+export function createLogView(task: TaskDef, panel: TasksPanel, source: LogSource | null = null): LogTabContent {
+  const { load, restart } = source ?? { load: () => api.taskLogs(task.id), restart: () => api.restartTask(task.id) };
   const output = h("pre", { class: "log-output" });
   const logLines = () => output.textContent?.split("\n").filter(Boolean) ?? [];
   const append = (line: string) => {
@@ -161,8 +169,7 @@ export function createLogView(task: TaskDef, panel: TasksPanel): LogTabContent {
     if (following) output.scrollTop = output.scrollHeight;
   };
   const unsubscribe = panel.subscribeLogs(task.id, append);
-  api
-    .taskLogs(task.id)
+  load()
     .then((lines) => {
       output.textContent = lines.map((line) => `${line}\n`).join("");
       output.scrollTop = output.scrollHeight;
@@ -175,7 +182,7 @@ export function createLogView(task: TaskDef, panel: TasksPanel): LogTabContent {
     h("span", { class: "toolbar-title mono" }, `${task.program} ${formatArgs(task.args)}`),
     spacer(),
     panel.canAsk() ? toolButton("sparkle", "Ask assistant", () => panel.ask(task, logLines()), "Explain this log with the assistant") : null,
-    toolButton("refresh", "Restart", () => void attempt(() => api.restartTask(task.id))),
+    restart ? toolButton("refresh", "Restart", () => void attempt(restart)) : null,
     toolButton("x", "Clear view", () => output.replaceChildren()),
   );
   return { element: h("div", { class: "view log-view" }, toolbar, output), dispose: unsubscribe, task, logLines };

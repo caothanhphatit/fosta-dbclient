@@ -17,6 +17,7 @@ Elasticsearch, OpenSearch, ClickHouse và Oracle. Có bản desktop cho Windows 
   tự chạy lại khi bị rớt).
 - **SSH tunnel và TLS** cho mọi engine qua mạng: key, mật khẩu hoặc agent, jump host, kiểm tra host key, CA riêng, client
   certificate hoặc ghim chứng chỉ.
+- **Lệnh tunnel** gắn với từng connection (ví dụ `kubectl port-forward`): tự chạy khi kết nối, tự dừng khi ngắt kết nối.
 - **An toàn mặc định**: mọi câu lệnh được kiểm tra theo quy tắc của workspace (Open, Guarded, Read-only hoặc Custom). Workspace
   Production mặc định chỉ đọc, được chặn cả ở phía database, và lưu dữ liệu không bao giờ ghi đè dòng người khác vừa sửa.
 - **Trình soạn query** gợi ý theo cột, format SQL, kết quả trả về dần với nút Stop dừng thật trên server, transaction và lịch sử

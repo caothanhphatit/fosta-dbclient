@@ -117,6 +117,7 @@ const tree = new ConnectionTree({
   openDiagram: (profile, database) => navigation.openDiagram(profile, database),
   editConnection: (profile) => void editConnection(profile),
   deleteConnection: (profile) => void deleteConnection(profile),
+  openTunnelLog: (profile) => navigation.openTunnelLog(profile),
   connectionClosed: (connectionId) => navigation.closeConnectionTabs(connectionId),
   configChanged: applyConfig,
   status: setStatus,

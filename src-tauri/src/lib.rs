@@ -32,6 +32,7 @@ mod perf_tests;
 pub mod runtime;
 pub mod secrets;
 pub mod tasks;
+pub mod tunnel;
 
 use std::sync::Arc;
 
@@ -67,6 +68,23 @@ impl AppState {
             history: Arc::new(history::HistoryStore::open_default()?),
             capabilities,
         })
+    }
+
+    /// A state whose config and history live in a fresh temporary folder (tests).
+    #[cfg(test)]
+    pub(crate) fn for_test(name: &str, capabilities: Capabilities, config: config::AppConfig) -> Self {
+        let directory = std::env::temp_dir().join(format!("fosta-state-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("temporary folder");
+        let tasks = tasks::TaskManager::new(tokio::runtime::Handle::current(), Arc::new(events::NoEvents), capabilities.tasks);
+        Self {
+            config: config::ConfigStore::at(directory.join("fosta-studio.json"), config),
+            engines: runtime::ConnectionManager::default(),
+            tasks: Arc::new(tasks),
+            ai: ai::AiRuns::default(),
+            history: Arc::new(history::HistoryStore::new(directory.join("history.jsonl"), 100)),
+            capabilities,
+        }
     }
 }
 

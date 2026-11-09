@@ -4,7 +4,8 @@
  * entries all come from the engine's `ObjectNode`s and `NodeAction`s; the tree itself knows no engine.
  */
 import "./tree.css";
-import { api, errorCode, errorText, PASSWORD_REQUIRED } from "../../core/api";
+import { api, errorCode, errorText, onTaskStatus, PASSWORD_REQUIRED } from "../../core/api";
+import { capabilities } from "../../core/capabilities";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import type { BuiltinAction, NodeAction, ObjectNode } from "../../core/contract";
 import { promptPassword, toast } from "../../core/dialogs";
@@ -13,7 +14,8 @@ import { capabilityOf, connectInfo, describeServer, engineOf, hasCapability, set
 import { showError } from "../../core/errorPanel";
 import { dialectOf } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
-import type { AppConfig, ConnectionProfile } from "../../core/types";
+import type { AppConfig, ConnectionProfile, TaskState } from "../../core/types";
+import { tunnelTaskId } from "./tunnelForm";
 import { loadEngineUi, nodeIcon, recoverConnectError, type ViewRole } from "../../core/views";
 import { withConfirmation } from "../safety/confirmationDialog";
 import { databaseDialog } from "./databaseDialog";
@@ -86,6 +88,8 @@ export interface TreeHost {
   openDiagram(profile: ConnectionProfile, database: string): void;
   editConnection(profile: ConnectionProfile): void;
   deleteConnection(profile: ConnectionProfile): void;
+  /** Opens the log of the connection's tunnel command. */
+  openTunnelLog?(profile: ConnectionProfile): void;
   connectionClosed(connectionId: string): void;
   configChanged(config: AppConfig): void;
   status(message: string): void;
@@ -103,6 +107,8 @@ export class ConnectionTree {
   private readonly cache = new Map<string, ConnectionNode>();
   private rows = new Map<string, RowSpec>();
   private selectedKey: string | null = null;
+  /** The last known state of each connection's tunnel command, from `task-status` events. */
+  private readonly tunnelStates = new Map<string, TaskState>();
 
   constructor(host: TreeHost) {
     this.host = host;
@@ -119,6 +125,12 @@ export class ConnectionTree {
     });
     this.body.addEventListener("keydown", (event) => this.handleKey(event));
     this.element = h("div", { class: "tree" }, h("div", { class: "search-box" }, icon("search"), this.search), this.body);
+    onTaskStatus((status) => {
+      const node = this.nodes.find((item) => tunnelTaskId(item.profile.id) === status.id);
+      if (!node) return;
+      this.tunnelStates.set(node.profile.id, status.state);
+      if (node.state === "connecting") this.render();
+    }).catch(() => undefined);
   }
 
   setConnections(profiles: ConnectionProfile[]): void {
@@ -197,6 +209,8 @@ export class ConnectionTree {
   private async connect(conn: ConnectionNode, password: string | null = null): Promise<void> {
     conn.state = "connecting";
     conn.message = null;
+    // A tunnel that is not running yet is started (and waited for) before the database connects.
+    if (conn.profile.tunnel && this.tunnelStates.get(conn.profile.id) !== "running") this.tunnelStates.set(conn.profile.id, "starting");
     this.render();
     try {
       const info = await api.connect(conn.profile.id, password);
@@ -438,6 +452,10 @@ export class ConnectionTree {
     }
   }
 
+  private startingTunnel(conn: ConnectionNode): boolean {
+    return Boolean(conn.profile.tunnel) && this.tunnelStates.get(conn.profile.id) !== "running";
+  }
+
   private connectionMenu(conn: ConnectionNode): MenuItem[] {
     const connected = conn.state === "connected";
     const id = conn.profile.id;
@@ -455,6 +473,8 @@ export class ConnectionTree {
       ? (connectInfo(id)?.connectionActions ?? []).filter((action) => action.target.kind !== "builtin" || !CONNECTION_BUILTINS.has(action.target.name))
       : [];
     if (extra.length) items.push("separator", ...this.actionItems(conn, null, extra, false));
+    if (conn.profile.tunnel && capabilities().tasks && this.host.openTunnelLog)
+      items.push("separator", { label: "Tunnel log", icon: "logs", run: () => this.host.openTunnelLog?.(conn.profile) });
     items.push(
       "separator",
       { label: "Edit connection…", icon: "edit", run: () => this.host.editConnection(conn.profile) },
@@ -515,7 +535,7 @@ export class ConnectionTree {
       depth: 0,
       iconName: nodeIcon(engine.icon, "database"),
       label: conn.profile.name,
-      meta: conn.state === "connecting" ? "connecting…" : undefined,
+      meta: conn.state === "connecting" ? (this.startingTunnel(conn) ? "starting tunnel…" : "connecting…") : undefined,
       tag: engine.label,
       title: conn.message ?? `${engine.label} · ${endpoint(conn.profile, engine)}`,
       className: `connection driver-${engine.id} state-${conn.state}`,

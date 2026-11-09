@@ -37,6 +37,17 @@ export interface ConnectionProfile {
   ssh?: SshConfig;
   /** Safety rules for this connection only (replacing the workspace's); not edited by the dialog yet. */
   safety?: SafetySettings | null;
+  /** A command started before connecting and stopped on disconnect (e.g. `kubectl port-forward`). */
+  tunnel?: TunnelConfig | null;
+}
+
+/** A connection's tunnel command. Runs as the task `tunnel:<connection id>` (see `tunnelTaskId`). */
+export interface TunnelConfig {
+  program: string;
+  args: string[];
+  /** Ready when the output contains this; without it, when the connection's host:port accepts connections. */
+  readyPattern?: string | null;
+  readyTimeoutSecs: number;
 }
 
 /** Safety presets of a workspace (see the statement gateway in ARCHITECTURE.md). */

@@ -19,6 +19,7 @@ use crate::{
     lock::lock,
     secrets::LEGACY_AI_CONNECTION,
     tasks::TaskDef,
+    tunnel::TunnelConfig,
 };
 
 const CONFIG_FILE: &str = "fosta-studio.json";
@@ -70,6 +71,9 @@ pub struct ConnectionProfile {
     /// Safety rules for this connection only, replacing the workspace's (see `crate::gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub safety: Option<SafetySettings>,
+    /// A command started before connecting and stopped on disconnect (e.g. `kubectl port-forward`; see `crate::tunnel`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tunnel: Option<TunnelConfig>,
 }
 
 fn default_engine() -> String {
@@ -99,6 +103,7 @@ impl ConnectionProfile {
     /// mongodb: `options.uri` → `url`. mssql: `options.encrypt` / `options.trustServerCertificate` → `tls`.
     /// Options present win over the typed fields, since the connection dialog still writes them.
     pub fn normalize(&mut self) {
+        self.tunnel = self.tunnel.as_ref().and_then(TunnelConfig::normalized);
         match self.engine.as_str() {
             "mongodb" => {
                 if let Some(uri) = self.options.remove("uri") {
@@ -125,10 +130,10 @@ impl ConnectionProfile {
         }
     }
 
-    /// Whether `other` points at the same server, through the same SSH route and with the same TLS checks, as this
+    /// Whether `other` points at the same server, through the same SSH route, tunnel command and TLS checks, as this
     /// saved profile, so this profile's saved secrets may be sent there. Name, database, options and safety rules do
     /// not matter; any change to the SSH or TLS settings does (a new bastion or a weaker certificate check could
-    /// harvest the saved passwords).
+    /// harvest the saved passwords), and so does another tunnel command (`svc/a` → `svc/b` keeps 127.0.0.1:13306).
     pub fn same_target(&self, other: &ConnectionProfile) -> bool {
         let (mut saved, mut draft) = (self.clone(), other.clone());
         saved.normalize();
@@ -141,7 +146,22 @@ impl ConnectionProfile {
             && blank(&saved.file) == blank(&draft.file)
             && ssh_route(saved.ssh.as_ref()) == ssh_route(draft.ssh.as_ref())
             && tls_checks(saved.tls.as_ref()) == tls_checks(draft.tls.as_ref())
+            && tunnel_command(saved.tunnel.as_ref()) == tunnel_command(draft.tunnel.as_ref())
     }
+
+    /// Whether saving `other` over this profile changes the command its tunnel runs (so the running one must stop).
+    pub fn tunnel_changed(&self, other: &ConnectionProfile) -> bool {
+        let normalized = |profile: &ConnectionProfile| profile.tunnel.as_ref().and_then(TunnelConfig::normalized);
+        match (normalized(self), normalized(other)) {
+            (Some(before), Some(after)) => !before.same_command(&after),
+            (before, after) => before.is_some() != after.is_some(),
+        }
+    }
+}
+
+/// The program and arguments of a tunnel command: where it sends the connection.
+fn tunnel_command(tunnel: Option<&TunnelConfig>) -> Option<(&str, &[String])> {
+    tunnel.map(|tunnel| (tunnel.program.as_str(), tunnel.args.as_slice()))
 }
 
 /// A trimmed, non-empty string, else `None`.
@@ -599,6 +619,15 @@ impl ConfigStore {
             path,
             current: Mutex::new(current),
         })
+    }
+
+    /// A store that writes `config` to `path` (tests).
+    #[cfg(test)]
+    pub(crate) fn at(path: PathBuf, config: AppConfig) -> Self {
+        Self {
+            path,
+            current: Mutex::new(config),
+        }
     }
 
     pub fn snapshot(&self) -> AppConfig {
@@ -1213,5 +1242,74 @@ mod tests {
             ..connection
         });
         assert_eq!(config.ai_active.as_ref().unwrap().model, "gpt");
+    }
+
+    fn port_forward() -> TunnelConfig {
+        TunnelConfig {
+            program: "kubectl".into(),
+            args: ["port-forward", "-n", "shop", "svc/mariadb", "13306:3306"]
+                .map(String::from)
+                .to_vec(),
+            ready_pattern: Some("Forwarding from".into()),
+            ready_timeout_secs: 45,
+        }
+    }
+
+    #[test]
+    fn a_tunnel_command_round_trips_in_camel_case() {
+        let profile = ConnectionProfile {
+            id: "k".into(),
+            host: "127.0.0.1".into(),
+            port: 13306,
+            tunnel: Some(port_forward()),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&profile).unwrap();
+        assert_eq!(json["tunnel"]["program"], "kubectl");
+        assert_eq!(json["tunnel"]["readyPattern"], "Forwarding from");
+        assert_eq!(json["tunnel"]["readyTimeoutSecs"], 45);
+        let parsed: ConnectionProfile = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.tunnel, Some(port_forward()));
+        // Absent stays absent, and an older file without it still loads.
+        let plain = serde_json::to_value(ConnectionProfile::default()).unwrap();
+        assert!(plain.get("tunnel").is_none());
+        let old: ConnectionProfile = serde_json::from_str(r#"{"id":"o","name":"Old","driver":"mysql"}"#).unwrap();
+        assert!(old.tunnel.is_none());
+    }
+
+    #[test]
+    fn saving_drops_an_empty_tunnel_and_notices_a_changed_one() {
+        let mut config = AppConfig::default();
+        let workspace = config.workspaces[0].id.clone();
+        let mut profile = ConnectionProfile {
+            id: "k".into(),
+            tunnel: Some(TunnelConfig {
+                program: "  ".into(),
+                ..port_forward()
+            }),
+            ..Default::default()
+        };
+        config.put_connection(&workspace, profile.clone()).unwrap();
+        assert!(config.connection("k").unwrap().tunnel.is_none());
+
+        profile.tunnel = Some(port_forward());
+        let saved = config.connection("k").unwrap().clone();
+        assert!(saved.tunnel_changed(&profile));
+        assert!(!saved.same_target(&profile), "another tunnel command may reach another server");
+        config.put_connection(&workspace, profile.clone()).unwrap();
+        let saved = config.connection("k").unwrap().clone();
+        assert!(!saved.tunnel_changed(&profile));
+        assert!(saved.same_target(&profile));
+        let mut other = profile.clone();
+        other.tunnel.as_mut().unwrap().args[3] = "svc/postgres".into();
+        assert!(saved.tunnel_changed(&other));
+        assert!(!saved.same_target(&other));
+        let mut slower = profile.clone();
+        slower.tunnel.as_mut().unwrap().ready_timeout_secs = 90;
+        assert!(!saved.tunnel_changed(&slower), "the running command stays as it is");
+        assert!(saved.same_target(&slower), "the timeout does not change where the connection goes");
+        let mut removed = profile;
+        removed.tunnel = None;
+        assert!(saved.tunnel_changed(&removed));
     }
 }

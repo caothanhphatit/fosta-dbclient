@@ -4,7 +4,7 @@ use crate::{
     config::AppConfig,
     error::AppResult,
     tasks::{TaskDef, TaskStatus},
-    AppState,
+    tunnel, AppState,
 };
 
 pub fn task_statuses(state: &AppState) -> Vec<TaskStatus> {
@@ -15,6 +15,15 @@ pub fn task_statuses(state: &AppState) -> Vec<TaskStatus> {
 
 pub fn task_logs(state: &AppState, id: String) -> Vec<String> {
     state.tasks.logs(&id)
+}
+
+/// The status of a connection's tunnel command; its `id` is the one `task-status` and `task-log` events carry.
+pub fn tunnel_status(state: &AppState, connection_id: String) -> TaskStatus {
+    state.tasks.status(&tunnel::task_id(&connection_id))
+}
+
+pub fn tunnel_logs(state: &AppState, connection_id: String) -> Vec<String> {
+    state.tasks.logs(&tunnel::task_id(&connection_id))
 }
 
 pub fn start_task(state: &AppState, id: String) -> AppResult<()> {

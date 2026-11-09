@@ -8,7 +8,7 @@
  * `options.<name>` (password-kind fields are secrets with their slot), auth methods per `auth`. No engine id appears.
  */
 import type { AuthMethodId, ConnectionSpec, EngineDescriptor, FieldSpec, SecretSlot, SshConfig, TlsConfig } from "../../core/contract";
-import type { ConnectionProfile } from "../../core/types";
+import type { ConnectionProfile, TunnelConfig } from "../../core/types";
 
 /** The values the dialog edits. Numbers stay text while typed; `password` and `secrets` are never stored in the profile. */
 export interface ConnectionForm {
@@ -336,8 +336,9 @@ function tlsChecks(tls: TlsConfig | null | undefined): string {
 }
 
 /**
- * Whether `draft` still points at the `saved` profile's server, SSH route and TLS checks, like the backend's
- * `ConnectionProfile::same_target`. When it does not, saving without typing the password again forgets the saved secrets.
+ * Whether `draft` still points at the `saved` profile's server, SSH route, tunnel command and TLS checks, like the
+ * backend's `ConnectionProfile::same_target`. When it does not, saving without typing the password again forgets the
+ * saved secrets.
  */
 export function sameTarget(saved: ConnectionProfile, draft: ConnectionProfile): boolean {
   return (
@@ -348,6 +349,20 @@ export function sameTarget(saved: ConnectionProfile, draft: ConnectionProfile): 
     trimmed(saved.url) === trimmed(draft.url) &&
     trimmed(saved.file) === trimmed(draft.file) &&
     sshRoute(saved.ssh) === sshRoute(draft.ssh) &&
-    tlsChecks(saved.tls) === tlsChecks(draft.tls)
+    tlsChecks(saved.tls) === tlsChecks(draft.tls) &&
+    tunnelCommand(saved.tunnel) === tunnelCommand(draft.tunnel)
   );
+}
+
+/** The program and arguments of a tunnel command, as a comparable string; "" without one. */
+function tunnelCommand(tunnel: TunnelConfig | null | undefined): string {
+  const program = tunnel?.program.trim() ?? "";
+  return program ? JSON.stringify([program, tunnel?.args ?? []]) : "";
+}
+
+/** `profile` with the dialog's tunnel command (none removes it). */
+export function withTunnel(profile: ConnectionProfile, tunnel: TunnelConfig | null): ConnectionProfile {
+  const next = { ...profile };
+  delete next.tunnel;
+  return tunnel ? { ...next, tunnel } : next;
 }

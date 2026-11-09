@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, BufReader},
+    net::TcpStream,
     process::{Child, Command},
     sync::watch,
+    task::JoinHandle,
 };
 
 use tokio::runtime::Handle;
@@ -31,10 +33,14 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const STABLE_RUN: Duration = Duration::from_secs(60);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const STOP_POLL: Duration = Duration::from_millis(100);
+/// How long an exited process's remaining output may take to reach the log (a grandchild can keep the pipe open).
+const DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
+const PORT_PROBE_INTERVAL: Duration = Duration::from_millis(200);
+const PORT_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDef {
     pub id: String,
@@ -96,6 +102,8 @@ struct TaskRuntime {
     status: TaskStatus,
     logs: VecDeque<String>,
     stop: Option<watch::Sender<bool>>,
+    /// The definition the supervisor runs, while it runs.
+    running: Option<TaskDef>,
 }
 
 impl TaskRuntime {
@@ -104,8 +112,19 @@ impl TaskRuntime {
             status: TaskStatus::idle(id),
             logs: VecDeque::new(),
             stop: None,
+            running: None,
         }
     }
+}
+
+/// When a started process counts as ready (state `running`) if its definition has no ready pattern.
+#[derive(Clone, Debug, Default)]
+pub enum ReadyCheck {
+    /// As soon as it is spawned.
+    #[default]
+    Spawned,
+    /// When `host:port` accepts a TCP connection.
+    Port { host: String, port: u16 },
 }
 
 enum RunOutcome {
@@ -163,7 +182,16 @@ impl TaskManager {
             .unwrap_or_default()
     }
 
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
     pub fn start(self: &Arc<Self>, def: TaskDef) -> AppResult<()> {
+        self.start_with(def, ReadyCheck::Spawned)
+    }
+
+    /// Starts `def`; `ready` decides when it counts as running if it has no ready pattern.
+    pub fn start_with(self: &Arc<Self>, def: TaskDef, ready: ReadyCheck) -> AppResult<()> {
         if !self.enabled {
             return Err(AppError::new(TASKS_DISABLED));
         }
@@ -173,12 +201,35 @@ impl TaskManager {
             }
             let (stop_tx, stop_rx) = watch::channel(false);
             runtime.stop = Some(stop_tx);
+            runtime.running = Some(def.clone());
+            runtime.status.state = TaskState::Starting;
             runtime.status.restarts = 0;
+            runtime.status.message = None;
             Ok(stop_rx)
         })?;
         self.push_log(&def.id, &format!("▶ {} {}", def.program, def.args.join(" ")));
-        self.executor.spawn(Arc::clone(self).supervise(def, stop_rx));
+        self.executor.spawn(Arc::clone(self).supervise(def, ready, stop_rx));
         Ok(())
+    }
+
+    /// The status of one process, known or not.
+    pub fn status(&self, id: &str) -> TaskStatus {
+        lock(&self.runtimes)
+            .get(id)
+            .map_or_else(|| TaskStatus::idle(id), |runtime| runtime.status.clone())
+    }
+
+    /// The definition a process was started with, while its supervisor runs.
+    pub fn running_def(&self, id: &str) -> Option<TaskDef> {
+        lock(&self.runtimes).get(id).and_then(|runtime| runtime.running.clone())
+    }
+
+    /// Drops the status and log of a process that is not running (a temporary one).
+    pub fn forget(&self, id: &str) {
+        let mut runtimes = lock(&self.runtimes);
+        if runtimes.get(id).is_some_and(|runtime| runtime.stop.is_none()) {
+            runtimes.remove(id);
+        }
     }
 
     pub fn stop(&self, id: &str) {
@@ -199,7 +250,7 @@ impl TaskManager {
         self.start(def)
     }
 
-    async fn wait_until_stopped(&self, id: &str) -> AppResult<()> {
+    pub(crate) async fn wait_until_stopped(&self, id: &str) -> AppResult<()> {
         let deadline = Instant::now() + STOP_TIMEOUT;
         while self.is_active(id) {
             if Instant::now() >= deadline {
@@ -210,15 +261,15 @@ impl TaskManager {
         Ok(())
     }
 
-    fn is_active(&self, id: &str) -> bool {
+    pub(crate) fn is_active(&self, id: &str) -> bool {
         lock(&self.runtimes).get(id).is_some_and(|runtime| runtime.stop.is_some())
     }
 
-    async fn supervise(self: Arc<Self>, def: TaskDef, mut stop_rx: watch::Receiver<bool>) {
+    async fn supervise(self: Arc<Self>, def: TaskDef, ready: ReadyCheck, mut stop_rx: watch::Receiver<bool>) {
         let mut backoff = MIN_BACKOFF;
         let (final_state, message) = loop {
             let started = Instant::now();
-            let reason = match self.run_once(&def, &mut stop_rx).await {
+            let reason = match self.run_once(&def, &ready, &mut stop_rx).await {
                 RunOutcome::Stopped => break (TaskState::Stopped, None),
                 RunOutcome::Ended(reason) => reason,
             };
@@ -243,13 +294,14 @@ impl TaskManager {
         };
         self.update_runtime(&def.id, |runtime| {
             runtime.stop = None;
+            runtime.running = None;
             runtime.status.state = final_state;
             runtime.status.pid = None;
             runtime.status.message = message;
         });
     }
 
-    async fn run_once(self: &Arc<Self>, def: &TaskDef, stop_rx: &mut watch::Receiver<bool>) -> RunOutcome {
+    async fn run_once(self: &Arc<Self>, def: &TaskDef, ready: &ReadyCheck, stop_rx: &mut watch::Receiver<bool>) -> RunOutcome {
         let mut child = match spawn_process(def) {
             Ok(child) => child,
             Err(error) => {
@@ -261,7 +313,11 @@ impl TaskManager {
         job::bind_to_app_lifetime(&child);
         let ready_pattern = def.ready_pattern.clone().filter(|pattern| !pattern.is_empty());
         let pid = child.id();
-        let initial_state = if ready_pattern.is_some() {
+        let probe = match ready {
+            ReadyCheck::Port { host, port } if ready_pattern.is_none() => Some((host.clone(), *port)),
+            _ => None,
+        };
+        let initial_state = if ready_pattern.is_some() || probe.is_some() {
             TaskState::Starting
         } else {
             TaskState::Running
@@ -271,11 +327,15 @@ impl TaskManager {
             runtime.status.pid = pid;
             runtime.status.message = None;
         });
+        let mut pumps = Vec::new();
         if let Some(stdout) = child.stdout.take() {
-            self.pump_output(&def.id, ready_pattern.clone(), stdout);
+            pumps.push(self.pump_output(&def.id, ready_pattern.clone(), stdout));
         }
         if let Some(stderr) = child.stderr.take() {
-            self.pump_output(&def.id, ready_pattern, stderr);
+            pumps.push(self.pump_output(&def.id, ready_pattern, stderr));
+        }
+        if let Some((host, port)) = probe {
+            self.probe_port(&def.id, pid, host, port);
         }
         let exit = tokio::select! {
             exit = child.wait() => Some(exit),
@@ -286,6 +346,13 @@ impl TaskManager {
             self.push_log(&def.id, "■ stopped");
             return RunOutcome::Stopped;
         };
+        // The last lines usually explain the exit: let them reach the log first.
+        let _ = tokio::time::timeout(DRAIN_TIMEOUT, async {
+            for pump in pumps {
+                let _ = pump.await;
+            }
+        })
+        .await;
         let reason = match exit {
             Ok(status) => format!("process exited ({status})"),
             Err(error) => format!("process failed: {error}"),
@@ -294,7 +361,7 @@ impl TaskManager {
         RunOutcome::Ended(reason)
     }
 
-    fn pump_output<R>(self: &Arc<Self>, id: &str, ready_pattern: Option<String>, reader: R)
+    fn pump_output<R>(self: &Arc<Self>, id: &str, ready_pattern: Option<String>, reader: R) -> JoinHandle<()>
     where
         R: AsyncRead + Unpin + Send + 'static,
     {
@@ -310,6 +377,28 @@ impl TaskManager {
                     manager.mark_ready(&id);
                 }
                 manager.push_log(&id, &line);
+            }
+        })
+    }
+
+    /// Marks the run with `pid` ready once `host:port` accepts a connection; gives up when that run is over.
+    fn probe_port(self: &Arc<Self>, id: &str, pid: Option<u32>, host: String, port: u16) {
+        let manager = Arc::clone(self);
+        let id = id.to_owned();
+        self.executor.spawn(async move {
+            loop {
+                let waiting = lock(&manager.runtimes)
+                    .get(&id)
+                    .is_some_and(|runtime| runtime.status.pid == pid && runtime.status.state == TaskState::Starting);
+                if !waiting {
+                    return;
+                }
+                let attempt = tokio::time::timeout(PORT_PROBE_TIMEOUT, TcpStream::connect((host.as_str(), port))).await;
+                if matches!(attempt, Ok(Ok(_))) {
+                    manager.mark_ready(&id);
+                    return;
+                }
+                tokio::time::sleep(PORT_PROBE_INTERVAL).await;
             }
         });
     }
