@@ -9,6 +9,8 @@ mod catalog;
 pub mod connect;
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod perf_tests;
 pub mod descriptor;
 mod explain;
 mod graph;

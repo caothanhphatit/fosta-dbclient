@@ -34,7 +34,7 @@ fn key_filter(key: i64) -> Filter {
     }
 }
 
-fn spec() -> ConnectionSpec {
+pub(super) fn spec() -> ConnectionSpec {
     ConnectionSpec {
         engine: "postgres".into(),
         host: env("HOST", "127.0.0.1"),
@@ -45,7 +45,7 @@ fn spec() -> ConnectionSpec {
     }
 }
 
-fn secrets() -> ConnectSecrets {
+pub(super) fn secrets() -> ConnectSecrets {
     ConnectSecrets::password(&env("PASSWORD", "studio-root"))
 }
 
