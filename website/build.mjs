@@ -419,7 +419,12 @@ export function renderPage(html, loc, dicts, page = PAGES[0]) {
   // pairs a new page with an old styles.css or main.js (that mix left the carousel slides stacked on phones).
   out = out.replace(/(\s(?:href|src)="(?:\.\.\/)*)(styles\.css|main\.js)"/g, (_, a, name) => `${a}${name}?v=${assetVersion(name)}"`);
 
-  // 6. The app version.
+  // 6. Links to other sites (GitHub, docs) open in a new tab, so the visitor keeps this page.
+  out = out.replace(/<a\s[^>]*href="https:\/\/[^"]*"[^>]*>/g, (tag) =>
+    /\starget=/.test(tag) || /href="https:\/\/dbcl\.fosta\.app[/"]/.test(tag) ? tag : tag.replace(/>$/, ' target="_blank" rel="noopener">'),
+  );
+
+  // 7. The app version.
   out = out.replaceAll("{version}", APP_VERSION);
 
   return out;
