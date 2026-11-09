@@ -132,6 +132,7 @@ fn build(flavor: Flavor) -> EngineDescriptor {
             Capability::Search,
             Capability::Console,
             Capability::ServerOverview,
+            Capability::Vector,
         ]),
         objects_label: "indices".into(),
         connection: ConnectionForm {

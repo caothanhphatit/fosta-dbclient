@@ -67,13 +67,17 @@ pub struct RowSet {
     pub rows: Vec<Vec<Value>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VectorColumn {
     pub name: String,
     pub dims: u32,
     /// The column type as the engine writes it (`VECTOR(4)`, `vector(4)`, `halfvec(768)`).
     pub type_name: String,
+    /// The distances this column can be searched with, for engines whose metric is fixed per column (a search index
+    /// built for one similarity). Empty: the profile's metrics ([`VectorInfo::metrics`]).
+    #[serde(default)]
+    pub metrics: Vec<Metric>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -388,13 +392,29 @@ pub async fn find_column<S: VectorStore + ?Sized>(store: &mut S, table: &TableRe
         .ok_or_else(|| AppError::new(format!("{name} is not a vector column")))
 }
 
+/// Refuses a metric the engine does not have, or one outside the column's own list ([`VectorColumn::metrics`]).
+pub fn check_metric(profile: &VectorProfile, column: &VectorColumn, metric: Metric) -> AppResult<()> {
+    if metric == Metric::Auto {
+        return Ok(());
+    }
+    if !profile.metrics.contains(&metric) {
+        return Err(AppError::new(format!("This engine has no {} distance", metric.label())));
+    }
+    if !column.metrics.is_empty() && !column.metrics.contains(&metric) {
+        let allowed = column.metrics.iter().map(|metric| metric.label()).collect::<Vec<_>>().join(" or ");
+        return Err(AppError::new(format!(
+            "{} is searched with {allowed} distance only (its similarity is fixed); pick {allowed} or auto",
+            column.name
+        )));
+    }
+    Ok(())
+}
+
 pub async fn search<S: VectorStore + ?Sized>(store: &mut S, request: &SearchArgs) -> AppResult<VectorSearchResult> {
     let profile = store.profile();
-    if request.metric != Metric::Auto && !profile.metrics.contains(&request.metric) {
-        return Err(AppError::new(format!("This engine has no {} distance", request.metric.label())));
-    }
     let table = TableRef::parse(&request.database, &request.table, profile.schemas);
     let column = find_column(store, &table, &request.column).await?;
+    check_metric(profile, &column, request.metric)?;
     let query = match &request.query {
         SearchQuery::Row { key } => store.fetch(&table, &column.name, key).await?,
         SearchQuery::Literal { text } => parse_vector(text)?,
@@ -530,5 +550,43 @@ mod tests {
         assert_eq!(Metric::Euclidean.resolve(Some(&index), Metric::Cosine), Metric::Euclidean);
         assert_eq!(Metric::of_name("L2"), Some(Metric::Euclidean));
         assert_eq!(Metric::of_name("l1"), None);
+    }
+
+    #[test]
+    fn a_column_with_fixed_metrics_refuses_the_others() {
+        static PROFILE: VectorProfile = VectorProfile {
+            metrics: &[Metric::Cosine, Metric::Euclidean, Metric::Dot],
+            schemas: false,
+            index_usage: "",
+            add_index: "",
+            euclidean_advice: "",
+        };
+        let column = |metrics: Vec<Metric>| VectorColumn {
+            name: "embedding".into(),
+            dims: 4,
+            type_name: "dense_vector(4)".into(),
+            metrics,
+        };
+        let open = column(Vec::new());
+        for metric in [Metric::Auto, Metric::Cosine, Metric::Euclidean, Metric::Dot] {
+            assert!(check_metric(&PROFILE, &open, metric).is_ok(), "{metric:?}");
+        }
+        let fixed = column(vec![Metric::Cosine]);
+        assert!(check_metric(&PROFILE, &fixed, Metric::Auto).is_ok());
+        assert!(check_metric(&PROFILE, &fixed, Metric::Cosine).is_ok());
+        let refused = check_metric(&PROFILE, &fixed, Metric::Euclidean).unwrap_err().to_string();
+        assert!(refused.contains("embedding is searched with cosine distance only"), "{refused}");
+        let narrow = VectorProfile {
+            metrics: &[Metric::Cosine],
+            ..PROFILE
+        };
+        assert!(check_metric(&narrow, &open, Metric::Dot)
+            .unwrap_err()
+            .to_string()
+            .contains("no inner product"));
+        // The list travels as `metrics`; a column without one leaves it empty (the profile's metrics apply).
+        let sent: VectorColumn = serde_json::from_value(serde_json::json!({ "name": "v", "dims": 2, "typeName": "vector(2)" })).unwrap();
+        assert!(sent.metrics.is_empty());
+        assert_eq!(serde_json::to_value(&fixed).unwrap()["metrics"], serde_json::json!(["cosine"]));
     }
 }

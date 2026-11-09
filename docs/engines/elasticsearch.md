@@ -111,6 +111,27 @@ the `reason` as the message, the `caused_by` chain, the root causes and the firs
 `parsing_exception` positions point into the request body in the editor; ES|QL and SQL `line N:M` positions point into the query.
 Timeouts are `TIMEOUT`, unreachable nodes and TLS failures `CONNECTION_ERROR`.
 
+## Vectors
+
+The vector tools (search, health checks, index recall) appear on Elasticsearch 8.0+ and on OpenSearch with the k-NN plugin
+(`opensearch-knn` in `_cat/plugins`). Every operation is a read (`_mapping`, `_settings`, `_search`, `_count`).
+
+- **Fields**: `dense_vector` (Elasticsearch) and `knn_vector` (OpenSearch), top level or inside objects (not `nested`). Bit and
+  binary vectors are left out.
+- **Metric per field**: a field with a search graph has one fixed similarity, so the distance picker offers only that metric
+  (`cosine`; `l2_norm` / `l2` is euclidean; `dot_product`, `max_inner_product` and `innerproduct` are inner product). The graph is
+  shown as the field's index with its type (`hnsw`, `int8_hnsw`, `flat`, the OpenSearch method and engine) and options. A field
+  without one (`"index": false`, or an OpenSearch index without `index.knn: true`) is searched exactly with any metric.
+- **Search**: ANN through the top-level `knn` section on Elasticsearch 8.4+ (`num_candidates` = max(100, 2k), at most 10,000)
+  or the `knn` query clause on OpenSearch; exact search is `script_score` over the documents with a vector (Painless
+  `cosineSimilarity` / `l2norm` / `dotProduct`, or the plugin's `knn_score`). The filter is Query DSL: inside `knn` on
+  Elasticsearch and for the lucene and faiss engines, a `bool` filter after the search otherwise. *Copy* gives the console request.
+- **Distances** are computed from the vectors the hits return in `_source` (`1 - cosine`, L2, negative inner product), since
+  scores differ by flavor, similarity and engine and quantized graphs score approximately.
+- **Keys and samples**: rows are identified like in the grid (the declared key, else `_id`). Seeded recall reads the first
+  documents in key order: by the declared key field, or by `_doc` (index order) when the key is `_id`, which Elasticsearch cannot
+  sort. Health samples read at most 10,000 documents.
+
 ## OpenSearch differences
 
 No ES|QL, no API keys, no Cloud ID; SQL goes to `_plugins/_sql` (JDBC format), point in time to `_search/point_in_time`,
@@ -120,7 +141,8 @@ lifecycle policies are ISM. With the security plugin enabled the cluster needs b
 ## Engine operations
 
 `invoke` names for engine views: `es.clusterHealth`, `es.indexDetails`, `es.cat`, `es.document`, `es.names` (index, alias and data
-stream names), `es.fields` (fields of an index) are reads; `es.documentOp` is a write and `es.byQuery` is destructive.
+stream names), `es.fields` (fields of an index) are reads; `es.documentOp` is a write and `es.byQuery` is destructive. The
+vector operations (`vector.info`, `vector.fetch`, `vector.search`, `vector.health`, `vector.recall`) are reads.
 
 ## Tests
 
