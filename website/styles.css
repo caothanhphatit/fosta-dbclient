@@ -3903,3 +3903,13 @@ kbd {
     margin-top: 0;
   }
 }
+
+/* Screenshot slides in the hero carousel: a real window capture instead of the HTML mock. */
+.carousel .slide-shot {
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.carousel .slide-shot .shot-mock {
+  aspect-ratio: 16 / 10;
+}
