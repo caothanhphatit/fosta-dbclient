@@ -327,6 +327,9 @@ impl Session for MySqlSession {
             let mut rows = 0;
             let mut truncated = false;
             let mut killed = false;
+            // One attempt per statement: a failing side connection (max_user_connections, a full server) is not retried
+            // for every row past the cap.
+            let mut kill_tried = false;
             let outcome: mysql_async::Result<()> = async {
                 if columns.is_empty() {
                     // An OK packet: reading it moves to the next result.
@@ -351,7 +354,8 @@ impl Session for MySqlSession {
                             batcher.push(values, sink);
                         } else {
                             truncated = true;
-                            if stop_at_cap && !killed {
+                            if stop_at_cap && !kill_tried {
+                                kill_tried = true;
                                 // The server stops computing and sending; rows already on the way are dropped.
                                 killed = kill_query(&self.opts, thread_id).await.is_ok();
                             }
