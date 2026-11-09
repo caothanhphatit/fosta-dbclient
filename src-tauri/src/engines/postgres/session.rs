@@ -334,6 +334,7 @@ impl PgSession {
         outcome
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn finish_direct(
         &self,
         index: usize,

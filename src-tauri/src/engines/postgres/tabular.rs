@@ -136,7 +136,7 @@ impl PgEngine {
     async fn read_page(&self, client: &tokio_postgres::Client, request: &BrowseRequest, ctx: &CallContext) -> AppResult<Page> {
         let started = Instant::now();
         let object = adapt::object_to_common(&request.object)?;
-        let description = convert(catalog::describe(&client, &object).await.map_err(AppError::from)?);
+        let description = convert(catalog::describe(client, &object).await.map_err(AppError::from)?);
         let versioned = has_version(&description);
         let primary_key: Vec<String> = description.primary_key.as_ref().map(|key| key.columns.clone()).unwrap_or_default();
         let shown: Vec<ColumnInfo> = match &request.columns {
@@ -166,7 +166,7 @@ impl PgEngine {
         let built = sqlbuild::build_browse_with_raw(&EditDialect, &core, &selected, &primary_key, raw.as_deref())?;
         let params = text_params(&built.params);
         let rows = self
-            .timed(&client, ctx.limits.timeout_secs, async {
+            .timed(client, ctx.limits.timeout_secs, async {
                 client
                     .query(&built.sql, &as_sql(&params))
                     .await
@@ -176,7 +176,7 @@ impl PgEngine {
         let mut rows: Vec<Vec<Value>> = rows.iter().map(super::types::row_values).collect();
         let versions = versioned.then(|| rows.iter_mut().map(|row| row.pop().unwrap_or(Value::Null)).collect::<Vec<_>>());
         let total = if request.exact_total || request.estimate_total {
-            self.total(&client, &description, request, &built, &params, ctx.limits.timeout_secs)
+            self.total(client, &description, request, &built, &params, ctx.limits.timeout_secs)
                 .await?
         } else {
             None
