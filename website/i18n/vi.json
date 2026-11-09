@@ -52,6 +52,7 @@
   "carousel.caption4": "Tunnel và port-forward tự khởi động cùng kết nối, hiển thị trạng thái ngay cạnh các kết nối đang dùng chúng.",
   "carousel.caption5": "Một dòng lệnh, điều kiện sẵn sàng và quy tắc khởi động: cùng workspace, hoặc khi có kết nối cần đến.",
   "carousel.shotAlt4": "Fosta Studio với bảng Commands của một workspace hiển thị một tunnel SSH đang chạy và một port-forward đã dừng, cùng kết nối Staging được gắn với tunnel và đã kết nối.",
+  "carousel.spot4": "Lệnh · 1/2 đang chạy",
   "carousel.shotAlt5": "Hộp thoại Edit command của Fosta Studio với lệnh tunnel ssh -N -L, điều kiện sẵn sàng và lựa chọn khởi động cùng workspace hoặc khi có kết nối cần đến.",
   "carousel.status": "Màn hình {n}/{total}: {name}",
   "hero.mockCaption": "Hình minh hoạ bố cục của ứng dụng.",

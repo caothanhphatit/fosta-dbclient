@@ -52,6 +52,7 @@
   "carousel.caption4": "随连接自动启动的隧道和端口转发，其状态显示在使用它们的连接旁边。",
   "carousel.caption5": "一条命令行、一个就绪检查和一条启动规则：随工作区启动，或在连接需要时启动。",
   "carousel.shotAlt4": "Fosta Studio 中某个工作区的“命令”面板，显示一个正在运行的 SSH 隧道和一个已停止的端口转发，Staging 连接已绑定到该隧道并处于连接状态。",
+  "carousel.spot4": "命令 · 1/2 运行中",
   "carousel.shotAlt5": "Fosta Studio 的“编辑命令”对话框，包含一条 ssh -N -L 隧道命令、就绪检查，以及随工作区启动或在连接需要时启动的选项。",
   "carousel.status": "第 {n} 个界面，共 {total} 个：{name}",
   "hero.mockCaption": "应用布局示意图。",

@@ -52,6 +52,7 @@
   "carousel.caption4": "Tunnels and port-forwards that start with the connection, with their status next to the connections that use them.",
   "carousel.caption5": "One command line, a ready check and a start rule: with the workspace, or when a connection needs it.",
   "carousel.shotAlt4": "Fosta Studio with the Commands panel of a workspace showing a running SSH tunnel and a stopped port-forward, and the Staging connection bound to the tunnel and connected.",
+  "carousel.spot4": "Commands · 1/2 running",
   "carousel.shotAlt5": "The Edit command dialog of Fosta Studio with an ssh -N -L tunnel command, a ready check, and the choice to start with the workspace or when a connection needs it.",
   "carousel.status": "View {n} of {total}: {name}",
   "hero.mockCaption": "Illustration of the app's layout.",

@@ -36,6 +36,10 @@
   var saved = stored();
   if (saved) root.setAttribute("data-theme", saved);
   sync();
+  // Anything that sets data-theme (the toggle, devtools, another script) must swap the screenshots and the frame too.
+  if (window.MutationObserver) {
+    new MutationObserver(sync).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+  }
   if (media && media.addEventListener) media.addEventListener("change", sync);
   else if (media && media.addListener) media.addListener(sync); // Safari before 14
 
