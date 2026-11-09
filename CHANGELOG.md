@@ -7,37 +7,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-09
+
 ### Added
 
-- **Workspace commands**: startup tasks become the workspace's *Commands* (panel, and a toolbar menu to start, stop, restart or
-  open the log of each). A command starts with the workspace or when a connection needs it, and a connection can use one (Edit
-  connection → Command, or *New command…* with a `kubectl port-forward` template): connect starts it if needed and waits until it
-  is ready. Connections share a command; one started for them stops with the last of them. Failures show `COMMAND_FAILED` with the
-  log tail; the log opens from the connection's menu.
-- **Hide the sidebar** with `Ctrl+B` or its button; the tabs take the width, the workspace rail stays.
-- **Vector tools on PostgreSQL (pgvector)**: `vector` and `halfvec` columns, HNSW and IVFFlat indexes with their metric, similarity
-  search by cosine, L2 or inner product, health checks and index recall, when the extension is installed in the database. The dev
-  and CI image is now `pgvector/pgvector`.
-- **Vector tools on Elasticsearch and OpenSearch**.
-- **Vector tools on Oracle 23ai**: `VECTOR` columns, IVF and HNSW indexes, `VECTOR_DISTANCE` search, health checks and recall.
-- **Vector tools on Redis 8**: search indexes with `VECTOR` fields (FLAT or HNSW), KNN search, health checks and recall.
-- **Vector tools on ClickHouse**: `Array(Float32)` columns and `vector_similarity` indexes, search, health checks and recall.
-- **Updates**: a daily check for a new release (Settings → Check for updates, on by default; *Check for updates now* any time) and
-  an *Update X.Y.Z* item in the status bar. The installed Windows app downloads the update in the background and installs it on
-  quit or with *Restart to update*, asking first about open transactions and unsaved edits, then shows what's new once. The
-  portable app links to the release; the web edition shows the Docker commands, and `deploy/docker-compose.yml` has an optional
-  Watchtower service (`--profile autoupdate`).
-
-- **Production hint**: saving a connection whose name, host, database or URL says prod, production, prd or live, outside a Production
-  workspace, offers to move it there (read-only by default).
-- **Security and privacy** page ([docs/security.md](docs/security.md)) and [SECURITY.md](SECURITY.md); CI audits Rust and npm
-  dependencies.
+- **Workspace Commands**: startup tasks become the workspace's *Commands* (panel, and a toolbar menu to start, stop, restart or
+  open the log of each). A command starts with the workspace or when a connection needs it, and a connection can be bound to one
+  (Edit connection → Command, or *New command…* with a `kubectl port-forward` template): connect starts it if needed and waits
+  until it is ready. Connections share a command; one started for them stops with the last of them. Failures show
+  `COMMAND_FAILED` with the log tail; the log opens from the connection's menu.
 - **MCP server**: Claude Code, Claude Desktop, Cursor, VS Code and Zed can use saved connections without seeing passwords
   (Settings → MCP server, off by default). Streamable HTTP on `127.0.0.1` with a bearer token kept in Credential Manager, a stdio
   bridge (`fosta-studio mcp`, `fosta-studio-server mcp`), and `/mcp` on the web edition behind its access token. Each workspace
   opts in (*MCP clients: Off / Read-only / Ask before writes*; Production and Read-only workspaces at most Read-only). Tools:
   `list_connections`, `list_databases`, `list_tables`, `describe_table`, `schema_overview`, `run_read_query` and `run_query`, which
   the user approves statement by statement in a dialog naming the client. Every call is audited; see [docs/mcp.md](docs/mcp.md).
+- **Updates**: a daily check for a new release (Settings → Check for updates, on by default; *Check for updates now* any time) and
+  an *Update X.Y.Z* item in the status bar. The installed Windows app downloads the update in the background and installs it on
+  quit or with *Restart to update*, asking first about open transactions and unsaved edits, then shows what's new once. The
+  portable app links to the release; the web edition shows the Docker commands, and `deploy/docker-compose.yml` has an optional
+  Watchtower service (`--profile autoupdate`).
+- **Vector tools** (columns, indexes, similarity search, health checks and index recall) on more engines, in addition to MariaDB
+  from 0.1.0:
+  - **PostgreSQL (pgvector)**: `vector` and `halfvec` columns, HNSW and IVFFlat indexes with their metric, search by cosine, L2 or
+    inner product, when the extension is installed in the database. The dev and CI image is now `pgvector/pgvector`.
+  - **Oracle 23ai**: `VECTOR` columns, IVF and HNSW indexes, `VECTOR_DISTANCE` search.
+  - **Elasticsearch and OpenSearch**.
+  - **Redis 8**: search indexes with `VECTOR` fields (FLAT or HNSW), KNN search.
+  - **ClickHouse**: `Array(Float32)` columns and `vector_similarity` indexes.
 - **Tabs come back after a restart**: each workspace's open tabs (tables, query tabs with their text, language and database,
   diagrams, command logs) and the active tab are saved in `fosta-studio-tabs.json` next to the config (the data volume on the web) and
   restored on start. A restored tab connects only when it is shown; a tab whose connection is gone is dropped with a note. A file
@@ -48,6 +45,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   all tabs that would lose something; declining keeps the workspace or connection.
 - **Query results**: click a column header (or use its menu) to sort the loaded rows (numbers and decimals exactly, timestamps by
   instant); *Refresh names* reloads the completion names.
+- **New logo** (an F made of data rows) in the app icon, welcome screen, web favicon, website and README, and **engine logos** for
+  PostgreSQL, SQLite, ClickHouse, Oracle, Redis, Elasticsearch and OpenSearch.
+- **Hide the sidebar** with `Ctrl+B` or its button, and **hide the workspace rail** with its small arrow (`Ctrl+Shift+B`).
+- **Production hint**: saving a connection whose name, host, database or URL says prod, production, prd or live, outside a Production
+  workspace, offers to move it there (read-only by default).
+- **Trust**: a security and privacy page ([docs/security.md](docs/security.md)), [SECURITY.md](SECURITY.md) with how to report a
+  vulnerability, issue templates (bug report, feature request), and CI audits of Rust and npm dependencies.
+
+### Changed
+
+- **Performance**:
+  - MariaDB/MySQL query tabs stop a read at the row cap instead of reading the rest (`SELECT *` on 1M rows: 3.4 s → 0.14 s).
+  - Paging quickly no longer exhausts the connection pool: a replaced or closed page read is cancelled on the server (KILL
+    QUERY, PostgreSQL cancel); a busy MariaDB/MySQL pool says so instead of asking whether the server is reachable; page reads
+    stop after 120 s when the rules set no timeout.
+  - The last page reads from the end (reversed order, no deep OFFSET) and counts exactly, so it is right on tables larger than
+    their statistics and fast when sorted.
+  - CSV and JSON export of every row streams to the file (desktop) or the browser's download (web) instead of building it in the
+    page; the files are unchanged (except integers beyond 2^53, now exact in JSON).
+  - PostgreSQL scripts run in about one round trip per statement (a 3,750-statement script: 22.8 s → 4.5 s).
 
 ### Fixed
 
@@ -62,15 +79,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   reads; otherwise (and when an open transaction was lost) nothing runs and the tab says the session was reset, since settings such
   as `SET ROLE`, `search_path` and temporary tables are gone.
 - **Completion** names reload after a tree Refresh and after DDL runs in the tab; a new query tab on SQLite starts in `main`.
-- **MariaDB/MySQL query tabs** stop a read at the row cap instead of reading the rest (`SELECT *` on 1M rows: 3.4 s → 0.14 s).
-- **Paging quickly no longer exhausts the connection pool**: a replaced or closed page read is cancelled on the server (KILL
-  QUERY, PostgreSQL cancel); a busy MariaDB/MySQL pool says so instead of asking whether the server is reachable; page reads
-  stop after 120 s when the rules set no timeout.
-- **Last page** reads from the end (reversed order, no deep OFFSET) and counts exactly, so it is right on tables larger than
-  their statistics and fast when sorted.
-- **CSV and JSON export of every row** streams to the file (desktop) or the browser's download (web) instead of building it in
-  the page; the files are unchanged (except integers beyond 2^53, now exact in JSON).
-- **PostgreSQL scripts** run in about one round trip per statement (a 3,750-statement script: 22.8 s → 4.5 s).
 - **Vector index recall**: a row as close as the exact k-th result now counts as a hit, so tables with duplicate vectors no longer
   report a recall near 0.
 - **Oracle in the web edition**: the Docker image now includes `libaio`, and the server puts its Instant Client download folder on
@@ -174,5 +182,6 @@ First public release for Windows, plus a web edition for Docker.
 - **Design view** with columns and DDL, and an interactive **ER diagram** per database.
 - Light, dark and system themes. Settings are stored in `fosta-studio.json` next to the executable.
 
-[Unreleased]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/caothanhphatit/fosta-dbclient/releases/tag/v0.1.0
