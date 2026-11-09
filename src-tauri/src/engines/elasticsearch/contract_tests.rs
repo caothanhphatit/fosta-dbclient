@@ -500,11 +500,11 @@ async fn contract_opensearch_alias_edits() {
     alias_checks(opensearch_fixture()).await;
 }
 
-/// An Elasticsearch profile on the OpenSearch server is refused (and the reverse), and ES|QL and SQL sessions stream
-/// typed tables.
+/// An Elasticsearch profile on the OpenSearch server is refused, and the reverse. It needs both servers, so its name
+/// matches neither CI job's filter (each job starts one server); `cargo test contract_ -- --ignored` runs it locally.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs dev/compose/elasticsearch.yml and dev/compose/opensearch.yml"]
-async fn contract_elasticsearch_flavors_and_languages() {
+async fn contract_search_flavor_mismatch_is_refused() {
     let wrong = ConnectionSpec {
         engine: "elasticsearch".into(),
         ..opensearch_spec()
@@ -521,7 +521,12 @@ async fn contract_elasticsearch_flavors_and_languages() {
         .await
         .expect_err("Elasticsearch refused");
     assert!(error.message().contains("Elasticsearch engine"), "{error}");
+}
 
+/// ES|QL and SQL sessions stream typed tables.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/elasticsearch.yml"]
+async fn contract_elasticsearch_languages() {
     let f = fixture();
     let (manager, handle) = connect(&f).await;
     let info = manager.connect_info(CONNECTION).unwrap();
@@ -545,7 +550,12 @@ async fn contract_elasticsearch_flavors_and_languages() {
         .await
         .expect("sql");
     assert_eq!(sink.sets[0].rows.len(), 3);
+}
 
+/// OpenSearch has SQL but no ES|QL.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/opensearch.yml"]
+async fn contract_opensearch_languages() {
     let (os_manager, os_handle) = connect(&opensearch_fixture()).await;
     let info = os_manager.connect_info(CONNECTION).unwrap();
     assert!(!info.languages.iter().any(|language| language.id == "esql"));

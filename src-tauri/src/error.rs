@@ -281,6 +281,10 @@ impl From<tiberius::error::Error> for AppError {
                 out
             }
             tiberius::error::Error::Tls(detail) => Self::coded("CONNECTION_ERROR", tls_message(&detail)),
+            // With rustls (Linux, macOS, the web edition) a rejected certificate arrives as an I/O error.
+            tiberius::error::Error::Io { .. } if error.to_string().contains("invalid peer certificate") => {
+                Self::coded("CONNECTION_ERROR", tls_message(&error.to_string()))
+            }
             tiberius::error::Error::Io { .. } => Self::coded("CONNECTION_ERROR", error.to_string()).retryable(true),
             other => Self::new(other.to_string()),
         }
@@ -297,6 +301,7 @@ fn tls_message(detail: &str) -> String {
         "self signed",
         "self-signed",
         "certificate chain",
+        "invalid peer certificate",
         "-2146762487",
     ]
     .iter()
@@ -442,5 +447,12 @@ mod tests {
         assert!(error.to_string().contains("Trust server certificate"), "{error}");
         let other = AppError::from(tiberius::error::Error::Tls("handshake eof".into()));
         assert!(!other.to_string().contains("Trust server certificate"));
+        // rustls reports the rejected certificate (here SQL Server's version-1 self-signed one) as an I/O error.
+        let rustls = AppError::from(tiberius::error::Error::Io {
+            kind: std::io::ErrorKind::InvalidData,
+            message: "invalid peer certificate: Other(UnsupportedCertVersion)".into(),
+        });
+        assert!(rustls.to_string().contains("Trust server certificate"), "{rustls}");
+        assert_eq!(rustls.code(), Some("CONNECTION_ERROR"));
     }
 }

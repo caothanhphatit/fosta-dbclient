@@ -71,6 +71,12 @@ jobs:
           cargo test --no-default-features --features web,engines-all "${{ matrix.filter }}" -- --ignored --test-threads=1 2>&1 | tee "$RUNNER_TEMP/test.log"
           # A filter that matches nothing must not pass silently.
           grep -Eq "test result: ok\. [1-9]" "$RUNNER_TEMP/test.log"
+      - name: Service logs
+        if: failure()
+        run: |
+          export "${{ matrix.versionEnv }}=${{ matrix.version }}"
+          docker compose -f "${{ matrix.compose }}" ps -a
+          docker compose -f "${{ matrix.compose }}" logs --no-color --tail 200
       - name: Stop
         if: always()
         run: |

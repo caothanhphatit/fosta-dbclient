@@ -414,6 +414,8 @@ pub fn initialize_at(configured: Option<&Path>, env: &SearchEnv, install_root: O
         let found = resolve(configured, env, install_root.unwrap_or(Path::new("")));
         let mut params = oracle::InitParams::new();
         if let Some(r) = &found {
+            #[cfg(target_os = "linux")]
+            preload_dependencies(&r.dir);
             params
                 .oracle_client_lib_dir(&r.dir)
                 .map_err(|e| ClientError::new(ClientErrorKind::Load, e.to_string()))?;
@@ -438,6 +440,33 @@ pub fn initialize_at(configured: Option<&Path>, env: &SearchEnv, install_root: O
         }
     }
     Ok(status_at(configured, env, install_root))
+}
+
+/// On Linux the loader does not look next to `libclntsh.so` for the libraries it needs (`libclntshcore`, `libnnz`):
+/// Instant Client has no RPATH, so loading it from a folder that is not on `LD_LIBRARY_PATH` fails with
+/// "libnnz.so: cannot open shared object file". Loading those libraries first, by full path and with global symbols,
+/// lets the loader reuse them by their SONAME when ODPI-C loads `libclntsh.so`. Failures are left to that load to report.
+#[cfg(target_os = "linux")]
+fn preload_dependencies(dir: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut names: Vec<OsString> = entries.filter_map(|entry| Some(entry.ok()?.file_name())).collect();
+    names.sort();
+    for prefix in ["libclntshcore.so", "libnnz"] {
+        for name in names.iter().filter(|name| {
+            let name = name.to_string_lossy();
+            name.starts_with(prefix) && name.contains(".so")
+        }) {
+            let Ok(path) = std::ffi::CString::new(dir.join(name).as_os_str().as_bytes()) else {
+                continue;
+            };
+            // SAFETY: `path` is a valid NUL-terminated string; the handle is kept for the life of the process (the
+            // client stays loaded once ODPI-C has it), so it is never closed.
+            unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
