@@ -112,6 +112,45 @@ fn in_container() -> bool {
     Path::new("/.dockerenv").exists() || Path::new("/run/.containerenv").exists()
 }
 
+/// Oracle Instant Client on Linux finds its own libraries (`libnnz.so` has no SONAME) only through `LD_LIBRARY_PATH`, which the
+/// loader reads when the process starts. So before serving, the folder the app downloads the client to is created and put on
+/// `LD_LIBRARY_PATH`, and the server restarts itself once with it; a client downloaded later then loads without a restart.
+#[cfg(all(target_os = "linux", feature = "engine-oracle"))]
+fn oracle_library_path() {
+    use fosta_studio::engines::oracle::instant_client;
+    use std::os::unix::process::CommandExt;
+    const MARKER: &str = "FOSTA_STUDIO_ORACLE_PATH_SET";
+    if std::env::var_os(MARKER).is_some() {
+        return;
+    }
+    let (Ok(root), Ok(package)) = (instant_client::default_install_root(), instant_client::current_package()) else {
+        return;
+    };
+    let dir = root.join(package.dir_name());
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let current = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+    if std::env::split_paths(&current).any(|path| path == dir) {
+        return;
+    }
+    let Ok(joined) = std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&current))) else {
+        return;
+    };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let error = std::process::Command::new(exe)
+        .args(std::env::args_os().skip(1))
+        .env("LD_LIBRARY_PATH", joined)
+        .env(MARKER, "1")
+        .exec();
+    eprintln!("fosta-studio-server: could not restart with the Oracle client folder on LD_LIBRARY_PATH: {error}");
+}
+
+#[cfg(not(all(target_os = "linux", feature = "engine-oracle")))]
+fn oracle_library_path() {}
+
 fn main() -> ExitCode {
     let command = std::env::args().nth(1);
     let settings = match Settings::from_env() {
@@ -121,6 +160,9 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if matches!(command.as_deref(), None | Some("serve")) {
+        oracle_library_path();
+    }
     let result = match command.as_deref() {
         None | Some("serve") => serve(settings),
         Some("healthcheck") => web::healthcheck(settings.listen),

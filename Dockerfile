@@ -38,18 +38,22 @@ COPY src-tauri/src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     find src -name '*.rs' -exec touch {} + \
     && cargo build --release --locked --no-default-features --features web --bin fosta-studio-server \
-    && mkdir -p /out/data \
+    && mkdir -p /out/data /out/lib \
     && cp target/release/fosta-studio-server /out/
+# Oracle Instant Client (downloaded into /data at first use) needs libaio, which the distroless image does not have.
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libaio1 \
+    && cp -P /usr/lib/x86_64-linux-gnu/libaio.so.1* /out/lib/
 
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="Fosta Studio" \
-      org.opencontainers.image.description="Fosta Studio web edition: a database client for MariaDB, MySQL, SQL Server and MongoDB in your browser" \
+      org.opencontainers.image.description="Fosta Studio web edition: a database client for 11 engines in your browser" \
       org.opencontainers.image.source="https://github.com/caothanhphatit/fosta-dbclient" \
       org.opencontainers.image.url="https://github.com/caothanhphatit/fosta-dbclient" \
       org.opencontainers.image.licenses="GPL-3.0-only" \
       org.opencontainers.image.version="${VERSION}"
 COPY --from=server /out/fosta-studio-server /app/fosta-studio-server
+COPY --from=server /out/lib/ /usr/lib/x86_64-linux-gnu/
 COPY --from=ui /src/dist /app/ui
 # An empty /data owned by the runtime user, so a new named volume is writable.
 COPY --from=server --chown=65532:65532 /out/data /data

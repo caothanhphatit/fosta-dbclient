@@ -296,10 +296,14 @@ pub fn resolve(configured: Option<&Path>, env: &SearchEnv, install_root: &Path) 
         });
     }
     if let Some(dir) = find_system(env) {
-        return Some(Resolved {
-            source: ClientSource::System,
-            dir,
-        });
+        // The web edition puts its download folder on LD_LIBRARY_PATH (Linux needs it there from the start), so a client
+        // found there can still be the one Fosta Studio downloaded.
+        let source = if dir.starts_with(install_root) && !install_root.as_os_str().is_empty() {
+            ClientSource::Downloaded
+        } else {
+            ClientSource::System
+        };
+        return Some(Resolved { source, dir });
     }
     find_downloaded(install_root).map(|dir| Resolved {
         source: ClientSource::Downloaded,
@@ -885,6 +889,13 @@ mod tests {
         let r = resolve(None, &SearchEnv::default(), &root).unwrap();
         assert_eq!((r.source, r.dir), (ClientSource::Downloaded, downloaded.clone()));
         assert_eq!(resolve(None, &SearchEnv::default(), &empty), None);
+        // The download folder on the library path (the web edition sets it) is still the downloaded client.
+        let env_download = SearchEnv {
+            lib_path: Some(downloaded.clone().into()),
+            oracle_home: None,
+        };
+        let r = resolve(None, &env_download, &root).unwrap();
+        assert_eq!((r.source, r.dir), (ClientSource::Downloaded, downloaded.clone()));
     }
 
     #[test]

@@ -49,7 +49,6 @@ For access over a network, put the server behind HTTPS (a reverse proxy) and set
 
 ## Oracle in the web edition
 
-Unpack Oracle Instant Client (Linux x64, Basic or Basic Light) into the data volume and enter that folder as the connection's
-*Instant Client folder*. Linux also needs `libaio`, and the folder must be on `LD_LIBRARY_PATH` when the server starts (for example
-`-e LD_LIBRARY_PATH=/data/oracle/instantclient_23_26_4_0_0` for a client the app downloaded). The current image does not include `libaio` yet, so Oracle in the web edition needs a
-derived image for now. See [engines/oracle.md](engines/oracle.md).
+The first Oracle connection offers to download Oracle Instant Client into the data volume (`/data/oracle`); it loads at once,
+because the server puts that folder on `LD_LIBRARY_PATH` when it starts, and the image includes `libaio`. To use your own client
+instead, put it on `LD_LIBRARY_PATH` (for example with `-e LD_LIBRARY_PATH=/data/my-client`) before the container starts. See [engines/oracle.md](engines/oracle.md).

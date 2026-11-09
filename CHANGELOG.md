@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Oracle in the web edition**: the Docker image now includes `libaio`, and the server puts its Instant Client download folder on
+  `LD_LIBRARY_PATH` at start, so the client downloaded from the connection dialog loads without a restart. On other Linux hosts the
+  load error names the folder to put on `LD_LIBRARY_PATH`.
+- **Redis key tree**: a page now ends where a `SCAN` call ends, so no key is skipped while the server rehashes.
+- **SQL Server on Linux and in the web edition**: an untrusted certificate shows the same "Accept invalid certificates" hint as on
+  Windows.
+
 ## [0.1.0] - 2026-11-08
 
 First public release for Windows, plus a web edition for Docker.
