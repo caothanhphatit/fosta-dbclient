@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      English template of the Support page (/donate/). Same rules as index.html: links to other pages and to shared files
+      are written relative to the site root, and the build adds "../" for each folder level. See website/README.md.
+      The QR codes are optional files in assets/donate/, listed in assets/donate/qr.json (see assets/donate/README.md).
+    -->
+    <title data-i18n="don.meta.title">Support Fosta Studio</title>
+    <meta
+      name="description"
+      data-i18n-attr="content:don.meta.description"
+      content="Fosta Studio is free and open source, built by one person. Ways to help: star it on GitHub, report bugs, share it, translate the website, or donate."
+    />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#15171b" media="(prefers-color-scheme: dark)" />
+    <link rel="canonical" href="https://dbcl.fosta.app/donate/" />
+    <!-- i18n:alternates -->
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Fosta Studio" />
+    <meta property="og:title" data-i18n-attr="content:don.meta.title" content="Support Fosta Studio" />
+    <meta
+      property="og:description"
+      data-i18n-attr="content:don.meta.description"
+      content="Fosta Studio is free and open source, built by one person. Ways to help: star it on GitHub, report bugs, share it, translate the website, or donate."
+    />
+    <meta property="og:url" content="https://dbcl.fosta.app/donate/" />
+    <!-- i18n:og-locale -->
+    <meta property="og:image" content="https://dbcl.fosta.app/assets/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      data-i18n-attr="content:meta.ogImageAlt"
+      content="Fosta Studio logo, an F made of data rows, with the text: free, open-source database client for 11 engines, built in Rust"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" data-i18n-attr="content:don.meta.title" content="Support Fosta Studio" />
+    <meta
+      name="twitter:description"
+      data-i18n-attr="content:don.meta.description"
+      content="Fosta Studio is free and open source, built by one person. Ways to help: star it on GitHub, report bugs, share it, translate the website, or donate."
+    />
+    <meta name="twitter:image" content="https://dbcl.fosta.app/assets/og-image.png" />
+
+    <link rel="stylesheet" href="styles.css" />
+    <script src="main.js"></script>
+  </head>
+  <body>
+    <!-- Icon sprite: the subset of the landing page's icons used here. -->
+    <svg xmlns="http://www.w3.org/2000/svg" class="sprite" aria-hidden="true" focusable="false">
+      <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" /></symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24">
+        <path d="M11 3l1.8 5.2L18 10l-5.2 1.8L11 17l-1.8-5.2L4 10l5.2-1.8z" />
+        <path d="M19 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" />
+      </symbol>
+      <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3" /></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24">
+        <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+        <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+      </symbol>
+      <symbol id="i-edit" viewBox="0 0 24 24">
+        <path d="M4 20h4L19 9l-4-4L4 16z" />
+        <path d="M13.5 6.5l4 4" />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" />
+        <path d="M9 12l2 2 4-4" />
+      </symbol>
+      <symbol id="i-box" viewBox="0 0 24 24">
+        <path d="M21 8l-9-5-9 5v8l9 5 9-5z" />
+        <path d="M3 8l9 5 9-5M12 13v8" />
+      </symbol>
+      <symbol id="i-grid" viewBox="0 0 24 24">
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <path d="M14 14h3v3h-3zM18 18h3v3h-3z" />
+      </symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6" /></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+      </symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 13A9 9 0 1 1 11 3a7 7 0 0 0 10 10z" /></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18" />
+        <path d="M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z" />
+      </symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
+    </svg>
+
+    <a class="skip-link" href="#main" data-i18n="a11y.skip">Skip to content</a>
+    <!-- i18n:lang-offer -->
+
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="./" data-i18n-attr="aria-label:a11y.home" aria-label="Fosta Studio home">
+          <img src="assets/logo.svg" alt="" width="28" height="28" />
+          <span>Fosta Studio</span>
+        </a>
+        <nav class="site-nav" data-i18n-attr="aria-label:nav.label" aria-label="Primary">
+          <ul>
+            <li class="nav-optional"><a href="./#features" data-i18n="nav.features">Features</a></li>
+            <li class="nav-optional nav-wide"><a href="./#privacy" data-i18n="nav.privacy">Privacy</a></li>
+            <li class="nav-optional nav-wide"><a href="./#roadmap" data-i18n="nav.roadmap">Roadmap</a></li>
+            <li class="nav-optional"><a href="databases/" data-i18n="nav.databases">Databases</a></li>
+            <li class="nav-optional"><a href="donate/" aria-current="page" data-i18n="nav.support">Support</a></li>
+            <li>
+              <a class="nav-github" href="https://github.com/caothanhphatit/fosta-dbclient">
+                <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span class="nav-github-text">GitHub</span>
+              </a>
+            </li>
+          </ul>
+        </nav>
+        <!-- i18n:lang-switch -->
+        <button
+          class="theme-toggle"
+          type="button"
+          hidden
+          data-theme-toggle
+          data-i18n-attr="aria-label:theme.toDark; data-label-dark:theme.toDark; data-label-light:theme.toLight"
+          aria-label="Switch to dark theme"
+          data-label-dark="Switch to dark theme"
+          data-label-light="Switch to light theme"
+        >
+          <svg class="icon icon-sun" aria-hidden="true"><use href="#i-sun" /></svg>
+          <svg class="icon icon-moon" aria-hidden="true"><use href="#i-moon" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- Intro -------------------------------------------------------- -->
+      <section class="section page-intro" aria-labelledby="don-title">
+        <div class="container">
+          <header class="section-head page-head">
+            <p class="kicker" data-i18n="don.kicker">Support</p>
+            <h1 id="don-title" data-i18n="don.title">Support Fosta Studio</h1>
+            <p data-i18n="don.intro">
+              Fosta Studio is free and open source under the GPL-3.0, with no account and no telemetry. It is built by one person, and every kind of help keeps
+              it going.
+            </p>
+          </header>
+          <div class="support-note">
+            <h2 data-i18n="don.money.title">Where donations go</h2>
+            <ul class="support-uses">
+              <li>
+                <svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg>
+                <p data-i18n="don.money.signing"><b>Code signing</b>, so Windows stops showing a SmartScreen warning for the installer.</p>
+              </li>
+              <li>
+                <svg class="icon" aria-hidden="true"><use href="#i-box" /></svg>
+                <p data-i18n="don.money.servers"><b>Servers</b>, such as the one behind this website.</p>
+              </li>
+              <li>
+                <svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg>
+                <p data-i18n="don.money.time"><b>Time</b> to fix bugs and work through the roadmap.</p>
+              </li>
+            </ul>
+            <p class="fineprint" data-i18n="don.money.note">Donating is optional. The app is free to use either way.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Help without money ------------------------------------------- -->
+      <section class="section section-alt section-tight" aria-labelledby="help-title">
+        <div class="container">
+          <h2 class="block-title" id="help-title" data-i18n="don.help.title">Help without money</h2>
+          <ul class="mini-grid">
+            <li class="mini-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-heart" /></svg
+              ></span>
+              <h3 data-i18n="don.help.star.title">Star it on GitHub</h3>
+              <p data-i18n="don.help.star.text">
+                A star helps other developers find the project. <a href="https://github.com/caothanhphatit/fosta-dbclient">Open the repository</a>
+              </p>
+            </li>
+            <li class="mini-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-flask" /></svg
+              ></span>
+              <h3 data-i18n="don.help.bugs.title">Report bugs</h3>
+              <p data-i18n="don.help.bugs.text">
+                Use the bug report form and paste the diagnostics the app copies for you.
+                <a href="https://github.com/caothanhphatit/fosta-dbclient/issues/new/choose">Open an issue</a>
+              </p>
+            </li>
+            <li class="mini-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-link" /></svg
+              ></span>
+              <h3 data-i18n="don.help.share.title">Share it</h3>
+              <p data-i18n="don.help.share.text">Tell a colleague, mention it in your team chat, or write about how you use it.</p>
+            </li>
+            <li class="mini-card">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-edit" /></svg
+              ></span>
+              <h3 data-i18n="don.help.translate.title">Translate</h3>
+              <p data-i18n="don.help.translate.text">
+                Improve a translation of this website, or add a language.
+                <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/website/README.md#translations">How translations work</a>
+              </p>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Donate ------------------------------------------------------- -->
+      <section class="section" id="donate" aria-labelledby="qr-title">
+        <div class="container">
+          <h2 class="block-title" id="qr-title" data-i18n="don.qr.title">Donate</h2>
+          <p class="block-intro" data-i18n="don.qr.intro">Scan a code with your banking or e-wallet app. Any amount helps.</p>
+          <ul class="qr-grid">
+            <li>
+              <figure
+                class="qr-slot"
+                data-qr="assets/donate/bank.png"
+                data-i18n-attr="data-qr-alt:don.qr.bank.alt"
+                data-qr-alt="QR code for a bank transfer (VietQR)"
+              >
+                <div class="qr-placeholder">
+                  <svg class="icon" aria-hidden="true"><use href="#i-grid" /></svg>
+                  <span data-i18n="don.qr.soon">QR code coming soon</span>
+                </div>
+                <figcaption>
+                  <h3 data-i18n="don.qr.bank.title">Bank transfer (VietQR)</h3>
+                  <p class="qr-details" data-i18n="don.qr.bank.details">Account details coming soon.</p>
+                </figcaption>
+              </figure>
+            </li>
+            <li>
+              <figure
+                class="qr-slot"
+                data-qr="assets/donate/ewallet.png"
+                data-i18n-attr="data-qr-alt:don.qr.wallet.alt"
+                data-qr-alt="QR code for an e-wallet payment"
+              >
+                <div class="qr-placeholder">
+                  <svg class="icon" aria-hidden="true"><use href="#i-grid" /></svg>
+                  <span data-i18n="don.qr.soon">QR code coming soon</span>
+                </div>
+                <figcaption>
+                  <h3 data-i18n="don.qr.wallet.title">E-wallet</h3>
+                  <p class="qr-details" data-i18n="don.qr.wallet.details">Wallet details coming soon.</p>
+                </figcaption>
+              </figure>
+            </li>
+          </ul>
+          <p class="section-more" data-i18n="don.thanks">Thank you for helping keep Fosta Studio free.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <div class="footer-brand">
+          <a class="brand" href="./" data-i18n-attr="aria-label:a11y.home" aria-label="Fosta Studio home"
+            ><img src="assets/logo.svg" alt="" width="24" height="24" /><span>Fosta Studio</span></a
+          >
+          <p data-i18n="footer.tagline">Free and open-source database client. GPL-3.0.</p>
+        </div>
+        <nav data-i18n-attr="aria-label:footer.navLabel" aria-label="Footer">
+          <ul class="footer-links">
+            <li><a href="databases/" data-i18n="footer.databases">Databases</a></li>
+            <li><a href="donate/" data-i18n="footer.support">Support the project</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient">GitHub</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/releases" data-i18n="footer.releases">Releases</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/CONTRIBUTING.md" data-i18n="footer.contributing">Contributing</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/ROADMAP.md" data-i18n="footer.roadmap">Roadmap</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/LICENSE" data-i18n="footer.license">License</a></li>
+            <li><a href="https://github.com/caothanhphatit/fosta-dbclient/issues" data-i18n="footer.issues">Issues</a></li>
+          </ul>
+        </nav>
+        <!-- i18n:lang-footer -->
+        <p class="footer-note" data-i18n="footer.trademarks">
+          MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle are trademarks of their respective
+          owners. Fosta Studio is an independent project and is not affiliated with them.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

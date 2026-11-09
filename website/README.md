@@ -2,25 +2,52 @@
 
 The marketing page for Fosta Studio, published at https://dbcl.fosta.app in English (default, at `/`), Vietnamese (`/vi/`),
 Simplified Chinese (`/zh/`) and Japanese (`/ja/`). It is a static site with no dependencies. A small Node script renders the
-four languages from one English template; nothing is translated in the browser.
+four languages from English templates; nothing is translated in the browser.
 
 ```
 website/
-  index.html            the English template (also the source of the page structure for every language)
+  index.html            the landing page's English template (/, /vi/, /zh/, /ja/)
+  databases.html        the Databases page (/databases/, /vi/databases/, …): feature matrix and one card per engine
+  donate.html           the Support page (/donate/, /vi/donate/, …): ways to help and the donation QR codes
   i18n/
-    en.json             English strings (must match the template's text)
+    en.json             English strings of all pages (must match the templates' text)
     vi.json zh.json ja.json
   build.mjs             renders every language into an output folder and runs the key check (Node 20+, no packages)
   styles.css            styles; tokens match the app (src/styles.css), light and dark via prefers-color-scheme,
                         per-language font stacks and CJK line breaking
-  main.js               progressive enhancement only: theme toggle, hero carousel, language menu and banner, screenshot slots
+  main.js               progressive enhancement only: theme toggle, hero carousel, language menu and banner, screenshot and QR slots
   deploy.sh             builds, then uploads the rendered output
   assets/
     logo.svg            app logo (same drawing as scripts/make-icons.ps1)
     favicon.svg
     og-image.png        1200×630 social preview (Open Graph / Twitter); its text is English on every language
     screenshots/        optional PNGs that replace the HTML mocks, listed in shots.json; see screenshots/README.md
+    donate/             optional donation QR codes, listed in qr.json; see donate/README.md
 ```
+
+## Pages
+
+`PAGES` in `build.mjs` lists the templates and the folder each is rendered into; every page is rendered in every language
+(`/databases/`, `/vi/databases/`, …). All templates share one set of strings per language, so the nav, footer and theme
+keys are written once; a key used by several templates must have the same English text in each.
+
+Links between pages and to `assets/`, `styles.css` and `main.js` are written in every template relative to the site root,
+as seen from `index.html` (`databases/`, `donate/`, `./#features` for a landing page section, `./` for the home page,
+`assets/logo.svg`). The build adds the `../` each page needs: shared files exist once at the site root
+(`/vi/databases/` gets `../../assets/logo.svg`), while links to pages stay in the page's language (`databases/` on
+`/vi/donate/` becomes `../databases/`, which is `/vi/databases/`). Absolute URLs and `#…` links are left alone.
+
+To add a page: copy `databases.html` (head, sprite, header and footer included), give it its own `<title>`, description,
+canonical URL and `og:url` (the build rewrites the last two per language), add it to `PAGES`, link it from the header nav
+and footer of every template, add its strings, and run the check.
+
+- **Databases** (`databases.html`): a feature matrix and a card per engine with the tested version, what works, engine
+  views, vector tools and notes. Facts come from `docs/engines/*.md`, `docs/features.md` and `CHANGELOG.md`; "Tested with"
+  is the version the CI contract suites run (`ci/engines/*.json`, `versions`; SQLite is the bundled library from
+  `docs/engines/sqlite.md`). Update the matrix and the cards when an engine gains a feature. Cards link to
+  `docs/engines/<id>.md`, or to `docs/features.md` for the engines without their own notes.
+- **Support** (`donate.html`): why donations help, ways to help without money, and two QR code slots. They show "QR code
+  coming soon" until the PNG is added; see `assets/donate/README.md`.
 
 The app itself is English only, so the HTML mocks of the app keep its English interface (buttons, labels, data). Their
 descriptions (`aria-label`, captions) and the chat text in the assistant panels are translated.
@@ -34,7 +61,7 @@ node website/build.mjs .site
 npx serve .site
 ```
 
-and open the URL it prints (`/`, `/vi/`, `/zh/`, `/ja/`). `.site/` is git-ignored. The build empties its output folder
+and open the URL it prints (`/`, `/vi/`, `/zh/`, `/ja/`, and `databases/` or `donate/` under each). `.site/` is git-ignored. The build empties its output folder
 first, so it refuses to write into a folder it did not create (pick a new or empty one).
 
 To check the strings without writing anything: `node website/build.mjs --check`.
@@ -51,8 +78,8 @@ To check the strings without writing anything: `node website/build.mjs --check`.
 - `<!-- i18n:… -->` comments are filled in by the build: `alternates` (hreflang links), `og-locale`, `lang-switch` (header
   menu), `lang-footer` (footer links) and `lang-offer` (the English page's language banner). Other comments are dropped.
 
-The build also sets `<html lang>`, the canonical URL and `og:url` per language, and rewrites `assets/…`, `styles.css` and
-`main.js` to `../…` on the pages in sub-folders.
+The build also sets `<html lang>`, the canonical URL, `og:url` and the hreflang alternates per page and language, and adds
+`../` to site-relative links on the pages in sub-folders (see [Pages](#pages)).
 
 ### Edit a string
 
@@ -63,7 +90,7 @@ The build also sets `<html lang>`, the canonical URL and `og:url` per language, 
 
 ### Add a string
 
-Mark the element in `index.html` with a new key (`section.thing`), add the key to all four JSON files, run the check. Keys
+Mark the element in the template (`index.html`, `databases.html` or `donate.html`) with a new key (`section.thing`), add the key to all four JSON files, run the check. Keys
 used in several places must carry the same English text everywhere.
 
 ### The key check
