@@ -82,18 +82,20 @@ pub fn router(server: Server) -> Router {
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         ));
-    // MCP clients authenticate with the access token as a bearer token, never with the session cookie, so a web page
-    // cannot ride on a signed-in browser. With authentication off the endpoint refuses everything.
-    let mcp_server = Arc::clone(&server);
-    let mcp_check: fosta_studio::mcp::http::TokenCheck = Arc::new(move |client, token| {
-        !mcp_server.auth.is_off() && mcp_server.auth.may_attempt(client) && mcp_server.auth.check_token(client, token)
-    });
+    // MCP clients authenticate with the MCP-only token (Settings → MCP server) as a bearer token: never the access
+    // token, never the session cookie, so neither a web page nor an MCP client can reach the UI or `/api` through it.
+    // With authentication off the endpoint refuses everything.
+    let (allow_server, failed_server) = (Arc::clone(&server), Arc::clone(&server));
+    let mcp_gate = fosta_studio::mcp::http::WebGate {
+        allow: Arc::new(move |client| !allow_server.auth.is_off() && allow_server.auth.may_attempt(client)),
+        failed: Arc::new(move |client| failed_server.auth.record_failure(client)),
+    };
     let app = Router::new()
         .nest("/api", api)
         .fallback_service(ui)
         .layer(middleware::from_fn_with_state(Arc::clone(&server), require_session_for_pages))
         .route("/healthz", get(|| async { "ok" }))
-        .route("/mcp", fosta_studio::mcp::http::web_route(Arc::downgrade(&server.state), mcp_check));
+        .route("/mcp", fosta_studio::mcp::http::web_route(Arc::downgrade(&server.state), mcp_gate));
     app.layer(middleware::from_fn_with_state(Arc::clone(&server), check_host))
         .layer(SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
@@ -217,7 +219,7 @@ async fn require_session_for_pages(State(server): State<Arc<Server>>, request: R
                 Some("Too many failed attempts. Try again in a few minutes."),
             );
         }
-        if !server.auth.check_token(client, &token) {
+        if !access_token_valid(&server, client, &token) {
             return login_page(StatusCode::UNAUTHORIZED, Some("That access token is not valid."));
         }
         return signed_in(&server.auth);
@@ -309,10 +311,19 @@ async fn login(State(server): State<Arc<Server>>, request: Request) -> Response 
     let Ok(Form(form)) = Form::<LoginForm>::from_request(request, &()).await else {
         return login_failed("missing");
     };
-    if !server.auth.check_token(client, &form.token) {
+    if !access_token_valid(&server, client, &form.token) {
         return login_failed("invalid");
     }
     signed_in(&server.auth)
+}
+
+/// The access token signs in; the MCP token never does (it is refused even if it were set as the access token).
+fn access_token_valid(server: &Server, client: IpAddr, candidate: &str) -> bool {
+    if server.state.mcp.is_token(candidate) {
+        server.auth.record_failure(client);
+        return false;
+    }
+    server.auth.check_token(client, candidate)
 }
 
 async fn api_not_found(request: Request) -> Response {
@@ -480,5 +491,227 @@ mod tests {
         let response = api_not_found(request).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+    }
+
+    /// The whole router over a real socket: the MCP token and the access token never stand in for each other.
+    mod mcp_routes {
+        use std::sync::OnceLock;
+
+        use fosta_studio::{
+            config::DATA_DIR_ENV,
+            secrets::{self, file::FileStore},
+            Capabilities,
+        };
+        use serde_json::{json, Value};
+
+        use super::super::*;
+        use crate::api::WebEvents;
+
+        /// The tests share the process-wide data directory and secret store, so they run one at a time.
+        static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+        fn data_dir() -> &'static PathBuf {
+            static DIR: OnceLock<PathBuf> = OnceLock::new();
+            DIR.get_or_init(|| {
+                let dir = std::env::temp_dir().join(format!("fosta-web-mcp-{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::env::set_var(DATA_DIR_ENV, &dir);
+                let (store, _) = FileStore::open(&dir, None).unwrap();
+                secrets::install(Box::new(store)).unwrap();
+                dir
+            })
+        }
+
+        struct Running {
+            base: String,
+            origin: String,
+            state: Arc<AppState>,
+            access: Option<String>,
+            client: reqwest::Client,
+        }
+
+        /// Serves the router on 127.0.0.1 with the MCP server on.
+        async fn start(auth_off: bool) -> Running {
+            let dir = data_dir();
+            let (sender, _) = broadcast::channel(16);
+            let state = Arc::new(
+                AppState::new(
+                    Capabilities::web(false, true),
+                    tokio::runtime::Handle::current(),
+                    Arc::new(WebEvents(sender.clone())),
+                )
+                .unwrap(),
+            );
+            state.mcp.attach(&state);
+            state
+                .config
+                .update(|config| {
+                    config.mcp.enabled = true;
+                    Ok(())
+                })
+                .unwrap();
+            state.mcp.apply().unwrap();
+            let (auth, access) = if auth_off {
+                (Auth::off(), None)
+            } else {
+                let (auth, token, _) = Auth::open(dir, None, false).unwrap();
+                (auth, Some(token))
+            };
+            let app = router(Server {
+                state: Arc::clone(&state),
+                events: sender,
+                auth,
+                allowed_origins: Vec::new(),
+                allowed_hosts: allowed_hosts(&[], auth_off),
+                ui_dir: dir.join("no-ui"),
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await;
+            });
+            Running {
+                base: format!("http://127.0.0.1:{port}"),
+                origin: format!("http://127.0.0.1:{port}"),
+                state,
+                access,
+                client: reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .unwrap(),
+            }
+        }
+
+        impl Running {
+            fn ping(&self, token: &str) -> reqwest::RequestBuilder {
+                self.client
+                    .post(format!("{}/mcp", self.base))
+                    .bearer_auth(token)
+                    .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }))
+            }
+
+            fn invoke(&self, command: &str) -> reqwest::RequestBuilder {
+                self.client
+                    .post(format!("{}/api/invoke/{command}", self.base))
+                    .header(CSRF_HEADER, "1")
+                    .json(&json!({}))
+            }
+        }
+
+        async fn status(request: reqwest::RequestBuilder) -> u16 {
+            request.send().await.unwrap().status().as_u16()
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn the_mcp_token_and_the_access_token_never_stand_in_for_each_other() {
+            let _serial = SERIAL.lock().await;
+            let server = start(false).await;
+            let access = server.access.clone().unwrap();
+
+            // The browser signs in with the access token and reads the MCP token from Settings → MCP server.
+            let login = server
+                .client
+                .post(format!("{}/api/login", server.base))
+                .form(&[("token", access.as_str())])
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(login.status().as_u16(), 303);
+            let cookie = login.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_owned();
+            let mcp: String = server
+                .invoke("mcp_token")
+                .header("cookie", &cookie)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(mcp.len(), 64);
+            assert_ne!(mcp, access);
+
+            // `/mcp` takes the MCP token only.
+            assert_eq!(status(server.ping(&mcp)).await, 200);
+            assert_eq!(status(server.ping(&access)).await, 401, "the access token is refused by /mcp");
+            assert_eq!(
+                status(server.client.post(format!("{}/mcp", server.base)).header("cookie", &cookie)).await,
+                401
+            );
+
+            // Origin must equal Host.
+            assert_eq!(status(server.ping(&mcp).header("origin", &server.origin)).await, 200);
+            assert_eq!(status(server.ping(&mcp).header("origin", "http://evil.example")).await, 403);
+            let lookalike = format!("{}.evil.example", server.origin);
+            assert_eq!(status(server.ping(&mcp).header("origin", lookalike)).await, 403);
+
+            // The MCP token never signs in and never calls /api.
+            assert_eq!(status(server.client.get(format!("{}/?token={mcp}", server.base))).await, 401);
+            let login = server
+                .client
+                .post(format!("{}/api/login", server.base))
+                .form(&[("token", mcp.as_str())])
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(login.headers()[header::LOCATION], "/?error=invalid");
+            assert!(!login.headers().contains_key(header::SET_COOKIE));
+            assert_eq!(status(server.invoke("mcp_answer").bearer_auth(&mcp)).await, 401);
+            assert_eq!(status(server.invoke("save_workspace").bearer_auth(&mcp)).await, 401);
+            let forged = format!("{}={mcp}", crate::auth::COOKIE_NAME);
+            assert_eq!(status(server.invoke("mcp_status").header("cookie", forged)).await, 401);
+
+            // The browser rotates it: the old one stops working at once.
+            let rotated: String = server
+                .invoke("rotate_mcp_token")
+                .header("cookie", &cookie)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_ne!(rotated, mcp);
+            assert_eq!(status(server.ping(&mcp)).await, 401);
+            assert_eq!(status(server.ping(&rotated)).await, 200);
+
+            // Turned off: refused.
+            let off = server
+                .invoke("set_mcp_settings")
+                .header("cookie", &cookie)
+                .json(&json!({ "enabled": false, "port": null }));
+            assert_eq!(status(off).await, 200);
+            assert_eq!(status(server.ping(&rotated)).await, 403);
+            let status_body: Value = server
+                .invoke("mcp_status")
+                .header("cookie", &cookie)
+                .send()
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_eq!(status_body["enabled"], false);
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn with_authentication_off_the_mcp_endpoint_refuses_everything() {
+            let _serial = SERIAL.lock().await;
+            let server = start(true).await;
+            let mcp = server.state.mcp.token().unwrap();
+            assert_eq!(status(server.ping(&mcp)).await, 401);
+            assert_eq!(status(server.ping("anything")).await, 401);
+            assert_eq!(
+                status(server.client.post(format!("{}/mcp", server.base)).json(&json!({}))).await,
+                401
+            );
+        }
     }
 }

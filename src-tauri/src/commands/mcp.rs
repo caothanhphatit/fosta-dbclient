@@ -56,24 +56,15 @@ pub fn set_mcp_settings(state: &AppState, enabled: bool, port: Option<u16>) -> A
     Ok(config)
 }
 
-/// The desktop server's bearer token, for the setup snippets. The web edition's clients use the server's access token,
-/// which the UI never receives.
+/// The MCP bearer token, for the setup snippets. On the web edition it is the MCP-only token, separate from the
+/// server's access token: it works for `/mcp` and nowhere else.
 pub fn mcp_token(state: &AppState) -> AppResult<String> {
-    if is_web(state) {
-        return Err(AppError::new(
-            "The web edition's MCP endpoint takes the server's access token: print it with `fosta-studio-server token`.",
-        ));
-    }
     state.mcp.token()
 }
 
-/// A new desktop token; clients set up with the old one stop working.
+/// A new MCP token; clients set up with the old one stop working, their sessions end and pending approvals are
+/// withdrawn.
 pub fn rotate_mcp_token(state: &AppState) -> AppResult<String> {
-    if is_web(state) {
-        return Err(AppError::new(
-            "The web edition uses the server's access token: rotate it with `fosta-studio-server rotate-token`.",
-        ));
-    }
     state.mcp.rotate_token()
 }
 

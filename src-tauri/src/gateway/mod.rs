@@ -322,6 +322,13 @@ impl Gateway {
                     serde_json::json!({ "code": CONFIRMATION_INVALID }),
                 ));
             }
+            // Issued for a plain confirmation, but the rules now ask for the name to be typed (they changed since).
+            if level == Action::Typed && pending.as_ref().is_some_and(|pending| pending.expected.is_none()) {
+                return Err(AppError::structured(
+                    "The rules changed since this was confirmed: it now needs a typed confirmation. Nothing was run; run it again to confirm anew.",
+                    serde_json::json!({ "code": CONFIRMATION_INVALID }),
+                ));
+            }
             if let Some(expected) = pending.and_then(|pending| pending.expected) {
                 let typed = confirmation.typed.as_deref().map(str::trim).unwrap_or_default();
                 if typed != expected {

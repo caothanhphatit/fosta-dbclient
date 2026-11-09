@@ -4,8 +4,9 @@
 //!   responses with `202 Accepted`. `initialize` opens a session (`Mcp-Session-Id`), which every later request sends;
 //!   an unknown session is `404` so the client initializes again. `DELETE /mcp` ends a session; `GET` is `405` (this
 //!   server sends no requests of its own).
-//! - Every request needs `Authorization: Bearer <token>`: the app's MCP token on the desktop, the server's access
-//!   token on the web edition. No cookies are read, so a web page cannot ride on a browser session.
+//! - Every request needs `Authorization: Bearer <token>` with the MCP token (`app:mcp-token`) in both editions. On the
+//!   web edition it is separate from the server's access token: the access token is refused here, and the MCP token
+//!   never signs into the UI or calls `/api`. No cookies are read, so a web page cannot ride on a browser session.
 //! - Desktop ([`serve_loopback`]): bound to 127.0.0.1 only; non-loopback peers, a `Host` other than a loopback name and
 //!   a non-loopback `Origin` are refused (DNS rebinding). Web: the server's host check applies, and an `Origin` must be
 //!   the server itself.
@@ -36,27 +37,32 @@ pub const SESSION_HEADER: &str = "mcp-session-id";
 pub const VERSION_HEADER: &str = "mcp-protocol-version";
 const MAX_BODY: usize = 1024 * 1024;
 
-/// Checks a bearer token from `peer` (the web server's access token, with its rate limit).
-pub type TokenCheck = Arc<dyn Fn(IpAddr, &str) -> bool + Send + Sync>;
+/// The web server's say on an `/mcp` request. The token itself is always compared with the MCP token here.
+pub struct WebGate {
+    /// Whether `peer` may try a token at all: authentication is on and the peer is not throttled.
+    pub allow: Arc<dyn Fn(IpAddr) -> bool + Send + Sync>,
+    /// `peer` sent a wrong token (counts towards the server's rate limit).
+    pub failed: Arc<dyn Fn(IpAddr) + Send + Sync>,
+}
 
 struct Endpoint {
     app: Weak<AppState>,
-    /// The desktop listener: loopback peers, hosts and origins only; the app's MCP token.
+    /// The desktop listener: loopback peers, hosts and origins only.
     loopback: bool,
-    /// `None`: the app's MCP token ([`super::McpState::token_matches`]).
-    check: Option<TokenCheck>,
+    /// The web edition's gate; `None` on the desktop.
+    gate: Option<WebGate>,
 }
 
 fn route<S: Clone + Send + Sync + 'static>(endpoint: Endpoint) -> MethodRouter<S> {
     any(endpoint_handler).with_state(Arc::new(endpoint))
 }
 
-/// The web edition's `/mcp` route, authenticated by `check` (the server's access token).
-pub fn web_route<S: Clone + Send + Sync + 'static>(app: Weak<AppState>, check: TokenCheck) -> MethodRouter<S> {
+/// The web edition's `/mcp` route: the MCP token, after `gate` allows the peer.
+pub fn web_route<S: Clone + Send + Sync + 'static>(app: Weak<AppState>, gate: WebGate) -> MethodRouter<S> {
     route(Endpoint {
         app,
         loopback: false,
-        check: Some(check),
+        gate: Some(gate),
     })
 }
 
@@ -78,7 +84,7 @@ pub fn serve_loopback(executor: &tokio::runtime::Handle, app: Weak<AppState>, po
             route(Endpoint {
                 app,
                 loopback: true,
-                check: None,
+                gate: None,
             }),
         )
         .into_make_service_with_connect_info::<SocketAddr>();
@@ -175,11 +181,14 @@ fn guard(endpoint: &Endpoint, peer: Option<IpAddr>, headers: &HeaderMap) -> Resu
             "The MCP server is off. Turn it on in Fosta Studio: Settings → MCP server.",
         ));
     }
-    let valid = bearer(headers).is_some_and(|token| match &endpoint.check {
-        Some(check) => check(peer.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), token),
-        None => app.mcp.token_matches(token),
-    });
+    let ip = peer.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let allowed = endpoint.gate.as_ref().is_none_or(|gate| (gate.allow)(ip));
+    let token = bearer(headers);
+    let valid = allowed && token.is_some_and(|token| app.mcp.token_matches(token));
     if !valid {
+        if let (true, Some(_), Some(gate)) = (allowed, token, &endpoint.gate) {
+            (gate.failed)(ip);
+        }
         let mut response = plain_error(StatusCode::UNAUTHORIZED, "Missing or wrong bearer token");
         response
             .headers_mut()

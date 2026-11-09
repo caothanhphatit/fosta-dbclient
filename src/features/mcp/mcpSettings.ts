@@ -1,4 +1,4 @@
-/** Settings → MCP server: on/off, port, token (desktop), and copy-paste setup for Claude Code, Cursor and Claude Desktop. */
+/** Settings → MCP server: on/off, port (desktop), the MCP token, and copy-paste setup for Claude Code, Cursor and Claude Desktop. */
 import { api, onMcpActivity } from "../../core/api";
 import { capabilities } from "../../core/capabilities";
 import { checkbox, confirmDialog, field, openModal, textInput, toast } from "../../core/dialogs";
@@ -52,6 +52,12 @@ function snippet(title: string, text: string): HTMLElement {
   return h("div", { class: "mcp-snippet" }, h("div", { class: "mcp-snippet-head" }, h("strong", {}, title), copy), h("pre", { class: "mono" }, text));
 }
 
+function tokenHint(web: boolean, enabled: boolean): string {
+  if (!enabled) return "Created when the server is turned on.";
+  if (web) return "MCP clients only: it never signs in to Fosta Studio. Kept in the server's encrypted secret store. Treat it like a password.";
+  return "Kept in Windows Credential Manager. Treat it like a password.";
+}
+
 export async function openMcpSettings(): Promise<void> {
   await refreshMcpStatus();
   const current = status;
@@ -63,12 +69,12 @@ export async function openMcpSettings(): Promise<void> {
   const enabled = checkbox("Run the MCP server", current.enabled);
   const port = textInput(String(current.port), { type: "number", min: "1024", max: "65535", class: "input mono" });
   let token = "";
-  if (!web && current.enabled) token = await api.mcpToken().catch(() => "");
+  if (current.enabled) token = await api.mcpToken().catch(() => "");
   const tokenInput = textInput(token, { class: "input mono", readonly: true, type: "password", "aria-label": "MCP token" });
   const snippets = h("div", { class: "mcp-snippets" });
   const url = web ? webEndpoint(window.location.origin, current.url) : current.url;
   const renderSnippets = () => {
-    const shown = token || (web ? "<access token>" : "<token>");
+    const shown = token || "<token>";
     const bridge = web ? ["docker", "exec", "-i", "<container>", "/app/fosta-studio-server", "mcp"] : current.bridgeCommand;
     snippets.replaceChildren(
       snippet("Claude Code", claudeCodeCommand(url, shown)),
@@ -109,19 +115,9 @@ export async function openMcpSettings(): Promise<void> {
     enabled.element,
     current.error ? h("p", { class: "mcp-error" }, current.error) : null,
     web
-      ? field(
-          "Endpoint",
-          textInput(url, { class: "input mono", readonly: true }),
-          "Clients authenticate with the server's access token: fosta-studio-server token.",
-        )
+      ? field("Endpoint", textInput(url, { class: "input mono", readonly: true }), "Served by this server at /mcp.")
       : field("Port", port, `Listens on 127.0.0.1 only: ${current.url}`),
-    web
-      ? null
-      : field(
-          "Token",
-          h("div", { class: "mcp-token-row" }, tokenInput, show, copy, rotate),
-          current.enabled ? "Kept in Windows Credential Manager. Treat it like a password." : "Created when the server is turned on.",
-        ),
+    field("Token", h("div", { class: "mcp-token-row" }, tokenInput, show, copy, rotate), tokenHint(web, current.enabled)),
     snippets,
   );
   openModal(
@@ -137,7 +133,7 @@ export async function openMcpSettings(): Promise<void> {
           if (!web && (!Number.isInteger(portNumber) || portNumber < 1024 || portNumber > 65535)) throw new Error("Pick a port from 1024 to 65535");
           applyConfig(await api.setMcpSettings(enabled.input.checked, web ? null : portNumber));
           await refreshMcpStatus();
-          if (enabled.input.checked && !current.enabled && !web) {
+          if (enabled.input.checked && !current.enabled) {
             // Reopen with the token now in the snippets.
             window.setTimeout(() => void openMcpSettings(), 0);
           }

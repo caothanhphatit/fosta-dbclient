@@ -663,3 +663,325 @@ async fn live_postgres_over_http() {
     assert_eq!(write["result"]["isError"], true, "{write}");
     harness.app.engines.disconnect("live-pg").await;
 }
+
+// --- Approvals that outlive a settings change ---------------------------------------------------
+
+/// Starts `run_query` on c-dev in the background and waits for its approval.
+async fn pending_write(harness: &Harness) -> (tokio::task::JoinHandle<Result<String, String>>, super::McpApproval) {
+    let app = Arc::clone(&harness.app);
+    let call = tokio::spawn(async move {
+        tools::call(
+            &app,
+            &ClientInfo::new("claude-code", "2.0"),
+            "run_query",
+            &json!({ "connection": "c-dev", "query": "UPDATE items SET name = 'x'" }),
+        )
+        .await
+    });
+    let approval = harness.pending().await;
+    (call, approval)
+}
+
+fn change(harness: &Harness, edit: impl FnOnce(&mut AppConfig)) {
+    harness
+        .app
+        .config
+        .update(|config| {
+            edit(config);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_approval_after_the_server_was_turned_off_runs_nothing() {
+    let harness = Harness::new("approve-off");
+    let (call, approval) = pending_write(&harness).await;
+    change(&harness, |config| config.mcp.enabled = false);
+    harness.app.mcp.answer(&approval.id, true, None).unwrap();
+    let refused = call.await.unwrap().unwrap_err();
+    assert!(refused.contains("turned off"), "{refused}");
+    assert_eq!(harness.runs(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_approval_after_the_rules_were_tightened_runs_nothing() {
+    let harness = Harness::new("approve-tight");
+    // Writes now blocked.
+    let (call, approval) = pending_write(&harness).await;
+    change(&harness, |config| {
+        let mut blocked = SafetySettings::preset(Preset::Custom);
+        blocked.rules.write = Action::Block;
+        config.workspaces[0].safety = Some(blocked);
+    });
+    harness.app.mcp.answer(&approval.id, true, None).unwrap();
+    let refused = call.await.unwrap().unwrap_err();
+    assert!(refused.contains("block"), "{refused}");
+
+    // Writes now need the name typed: the plain approval no longer holds.
+    change(&harness, |config| {
+        config.workspaces[0].safety = Some(SafetySettings::preset(Preset::Open))
+    });
+    let (call, approval) = pending_write(&harness).await;
+    change(&harness, |config| {
+        let mut typed = SafetySettings::preset(Preset::Custom);
+        typed.rules.write = Action::Typed;
+        config.workspaces[0].safety = Some(typed);
+    });
+    harness.app.mcp.answer(&approval.id, true, None).unwrap();
+    let refused = call.await.unwrap().unwrap_err();
+    assert!(refused.contains("rules changed"), "{refused}");
+
+    // The workspace is now read-only for MCP.
+    change(&harness, |config| {
+        config.workspaces[0].safety = Some(SafetySettings::preset(Preset::Open))
+    });
+    let (call, approval) = pending_write(&harness).await;
+    change(&harness, |config| config.workspaces[0].mcp = McpAccess::ReadOnly);
+    harness.app.mcp.answer(&approval.id, true, None).unwrap();
+    let refused = call.await.unwrap().unwrap_err();
+    assert!(refused.contains("access changed to read-only"), "{refused}");
+
+    assert_eq!(harness.runs(), 0, "nothing ran after any change");
+    let audit = harness.audit();
+    assert!(
+        audit
+            .iter()
+            .any(|entry| entry.caller == "mcp" && entry.outcome == Some(Outcome::Blocked) && entry.detail.contains("access changed")),
+        "{audit:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn turning_the_server_off_withdraws_pending_approvals_and_ends_sessions() {
+    let harness = Harness::new("withdraw");
+    harness.app.mcp.open_session(ClientInfo::new("zed", "1"), "2025-06-18").unwrap();
+    let (call, _) = pending_write(&harness).await;
+    change(&harness, |config| config.mcp.enabled = false);
+    harness.app.mcp.apply().unwrap();
+    let refused = call.await.unwrap().unwrap_err();
+    assert!(refused.contains("Withdrawn"), "{refused}");
+    assert!(harness.app.mcp.pending().is_empty());
+    assert_eq!(harness.app.mcp.session_count(), 0);
+    assert_eq!(harness.runs(), 0);
+}
+
+/// One thread, so the test secret store holds the rotated token.
+#[tokio::test]
+async fn rotating_the_token_withdraws_pending_approvals_and_ends_sessions() {
+    let store = crate::secrets::testing::memory_store(&[]);
+    let harness = Harness::new("rotate");
+    harness.app.mcp.open_session(ClientInfo::new("zed", "1"), "2025-06-18").unwrap();
+    let (call, _) = pending_write(&harness).await;
+    let token = harness.app.mcp.rotate_token().unwrap();
+    assert_ne!(token, TOKEN);
+    assert_eq!(store.accounts(), ["app:mcp-token"]);
+    assert!(call.await.unwrap().unwrap_err().contains("Withdrawn"));
+    assert_eq!(harness.app.mcp.session_count(), 0);
+    assert!(harness.app.mcp.is_token(&token) && !harness.app.mcp.is_token(TOKEN));
+}
+
+// --- Limits -------------------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn statements_longer_than_the_dialog_shows_are_refused() {
+    let harness = Harness::new("long");
+    let query = format!("UPDATE items SET name = '{}'", "x".repeat(tools::MAX_STATEMENT_CHARS));
+    for tool in ["run_query", "run_read_query"] {
+        let refused = harness
+            .call(tool, json!({ "connection": "c-dev", "query": query }))
+            .await
+            .unwrap_err();
+        assert!(refused.contains("longer than 20000 characters"), "{refused}");
+    }
+    assert!(harness.app.mcp.pending().is_empty(), "never offered for approval");
+    assert_eq!(harness.runs(), 0);
+    // At the cap it is offered, in full.
+    let statement = format!("UPDATE items SET a='{}'", "x".repeat(tools::MAX_STATEMENT_CHARS - 21));
+    assert_eq!(statement.chars().count(), tools::MAX_STATEMENT_CHARS);
+    let app = Arc::clone(&harness.app);
+    let arguments = json!({ "connection": "c-dev", "query": statement });
+    let call = tokio::spawn(async move { tools::call(&app, &ClientInfo::new("zed", "1"), "run_query", &arguments).await });
+    let approval = harness.pending().await;
+    assert_eq!(approval.statement, statement);
+    harness.app.mcp.answer(&approval.id, false, None).unwrap();
+    assert!(call.await.unwrap().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn at_most_max_pending_approvals_wait_at_once() {
+    let harness = Harness::new("max-pending");
+    let mut calls = Vec::new();
+    for _ in 0..super::MAX_PENDING {
+        let app = Arc::clone(&harness.app);
+        calls.push(tokio::spawn(async move {
+            tools::call(
+                &app,
+                &ClientInfo::new("zed", "1"),
+                "run_query",
+                &json!({ "connection": "c-dev", "query": "DELETE FROM items" }),
+            )
+            .await
+        }));
+    }
+    for _ in 0..500 {
+        if harness.app.mcp.pending().len() == super::MAX_PENDING {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(harness.app.mcp.pending().len(), super::MAX_PENDING);
+    let refused = harness
+        .call("run_query", json!({ "connection": "c-dev", "query": "DELETE FROM items" }))
+        .await
+        .unwrap_err();
+    assert!(refused.contains("too many statements"), "{refused}");
+    harness.app.mcp.withdraw_all();
+    for call in calls {
+        assert!(call.await.unwrap().is_err());
+    }
+    assert_eq!(harness.runs(), 0);
+    assert!(harness
+        .audit()
+        .iter()
+        .any(|entry| entry.outcome == Some(Outcome::Blocked) && entry.detail.contains("too many statements")));
+}
+
+#[tokio::test]
+async fn at_most_max_sessions_are_kept_and_idle_ones_expire() {
+    let harness = Harness::new("sessions");
+    let mcp = &harness.app.mcp;
+    let first = mcp.open_session(ClientInfo::new("zed", "1"), "2025-06-18").unwrap();
+    std::thread::sleep(Duration::from_millis(5));
+    let mut last = String::new();
+    for _ in 0..super::MAX_SESSIONS {
+        last = mcp.open_session(ClientInfo::new("cursor", "1"), "2025-06-18").unwrap();
+    }
+    assert_eq!(mcp.session_count(), super::MAX_SESSIONS);
+    assert!(mcp.session(&first).is_none(), "the least recently used one was dropped");
+    assert!(mcp.session(&last).is_some());
+
+    mcp.set_session_idle(Duration::from_millis(30));
+    std::thread::sleep(Duration::from_millis(60));
+    assert!(mcp.session(&last).is_none(), "an idle session expires");
+    assert_eq!(mcp.session_count(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_idle_session_answers_404_over_http() {
+    let harness = Harness::new("idle-http");
+    let server = Server::start(&harness);
+    let session = server.initialize().await;
+    harness.app.mcp.set_session_idle(Duration::from_millis(30));
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+    let (status, _, _) = Server::send(server.post(&list, Some(&session))).await;
+    assert_eq!(status, 404);
+}
+
+// --- Audit of refusals -------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_tools_call_is_audited_also_when_refused() {
+    let harness = Harness::new("audit-all");
+    let server = Server::start(&harness);
+    let session = server.initialize().await;
+    let rpc = |id: u64, params: Value| json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params });
+    for (id, params) in [
+        (2, json!({ "arguments": {} })),
+        (3, json!({ "name": "drop_everything\u{1b}[2J", "arguments": {} })),
+        (4, json!({ "name": "list_tables", "arguments": [1, 2] })),
+    ] {
+        let (_, _, body) = Server::send(server.post(&rpc(id, params), Some(&session))).await;
+        assert_eq!(body["error"]["code"], -32602, "{body}");
+    }
+    assert!(harness.call("run_read_query", json!({ "connection": "c-dev" })).await.is_err());
+    assert!(harness
+        .call(
+            "run_read_query",
+            json!({ "connection": "c-dev", "query": "SELECT 1", "max_rows": 0 })
+        )
+        .await
+        .is_err());
+    assert!(harness.call("list_tables", json!({})).await.is_err());
+
+    let audit: Vec<AuditEntry> = harness.audit().into_iter().filter(|entry| entry.caller == "mcp").collect();
+    let refused = |statement: &str, detail: &str| {
+        audit.iter().any(|entry| {
+            entry.outcome == Some(Outcome::Blocked)
+                && entry.client == "claude-code"
+                && entry.statement.starts_with(statement)
+                && entry.detail.contains(detail)
+        })
+    };
+    assert!(refused("tools/call", "needs `name`"), "{audit:?}");
+    assert!(refused("drop_everything[2J", "Unknown tool"), "the name is cleaned: {audit:?}");
+    assert!(refused("list_tables", "must be an object"), "{audit:?}");
+    assert!(refused("run_read_query", "`query` is required"), "{audit:?}");
+    assert!(refused("run_read_query", "max_rows"), "{audit:?}");
+    assert!(refused("list_tables", "`connection` is required"), "{audit:?}");
+    assert_eq!(harness.app.mcp.calls(), 6);
+}
+
+// --- Workspace commands ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_never_starts_a_workspace_command() {
+    let harness = Harness::new("command");
+    let def = crate::connection_command::testing::command("pf", "fosta-no-such-program", &[], None, 5);
+    change(&harness, |config| {
+        let mut with_command = workspace("cmd", "laptop", SafetySettings::preset(Preset::Open), McpAccess::ReadOnly, &[]);
+        with_command.tasks = vec![def.clone()];
+        with_command.connections = vec![ConnectionProfile {
+            command: Some("pf".into()),
+            ..profile("c-cmd")
+        }];
+        config.workspaces.push(with_command);
+    });
+    let refused = harness.call("list_tables", json!({ "connection": "c-cmd" })).await.unwrap_err();
+    assert!(refused.contains("is not running") && refused.contains("never start"), "{refused}");
+    assert!(!harness.app.tasks.is_active("pf"), "the command was not started");
+    assert_eq!(harness.app.tasks.held_by("c-cmd"), None);
+}
+
+// --- The stdio bridge -------------------------------------------------------------------------------
+
+#[test]
+fn the_bridge_refuses_to_run_while_the_server_is_off() {
+    let mut config = config();
+    assert!(super::bridge::require_enabled(&config).is_ok());
+    config.mcp.enabled = false;
+    let refused = super::bridge::require_enabled(&config).unwrap_err();
+    assert!(refused.contains("the MCP server is off"), "{refused}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_bridge_initializes_again_after_a_404() {
+    let harness = Harness::new("bridge");
+    let server = Server::start(&harness);
+    let relay = super::bridge::Relay::new(server.base.clone(), TOKEN.to_owned()).unwrap();
+    let (output, mut lines) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let initialize = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "claude-ai", "version": "1" } } });
+    relay.forward(initialize, &output).await;
+    let answer: Value = serde_json::from_str(&lines.recv().await.unwrap()).unwrap();
+    assert_eq!(answer["result"]["serverInfo"]["name"], "fosta-studio", "{answer}");
+    let first = relay.session().expect("a session");
+
+    // The app restarted (or the session expired): the next request gets 404 and the bridge initializes again.
+    assert!(harness.app.mcp.close_session(&first));
+    relay
+        .forward(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }), &output)
+        .await;
+    let answer: Value = serde_json::from_str(&lines.recv().await.unwrap()).unwrap();
+    assert!(answer["result"]["tools"].is_array(), "{answer}");
+    let second = relay.session().expect("a new session");
+    assert_ne!(first, second);
+    assert!(harness.app.mcp.session(&second).is_some());
+
+    // A wrong token is a clear JSON-RPC error.
+    let wrong = super::bridge::Relay::new(server.base.clone(), "wrong".to_owned()).unwrap();
+    wrong.forward(json!({ "jsonrpc": "2.0", "id": 3, "method": "ping" }), &output).await;
+    let answer: Value = serde_json::from_str(&lines.recv().await.unwrap()).unwrap();
+    assert_eq!(answer["error"]["code"], -32000, "{answer}");
+}

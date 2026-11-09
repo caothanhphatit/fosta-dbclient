@@ -1,18 +1,21 @@
 //! The MCP tools. Names and argument schemas are a public contract: keep them stable.
 //!
 //! Every call is gated per connection ([`super::connection_access`]: only workspaces that allow MCP, capped by
-//! Production and Read-only rules), connects on demand (starting the connection's workspace Command), and is audited
-//! with caller `mcp` and the client's name. Results that hold database content are framed as untrusted data.
+//! Production and Read-only rules), connects on demand (reusing a running workspace Command, never starting one), and
+//! is audited with caller `mcp` and the client's name, refusals included. Results that hold database content are
+//! framed as untrusted data.
 
 use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use super::{connection_access, Answer, ClientInfo, McpAccess, McpApproval};
+use super::{clean, connection_access, Answer, ClientInfo, McpAccess, McpApproval};
 use crate::{
     ai,
     audit::{AuditEntry, Outcome},
     commands::connections,
+    config::AppConfig,
+    connection_command::COMMAND_NOT_RUNNING,
     contract::Value as Cell,
     error::AppError,
     gateway::{self, assistant::ReadResult, mcp::McpRunLimits, Confirmation, Context},
@@ -29,6 +32,8 @@ pub const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CELL_CHARS: usize = 1_000;
 /// The whole query result.
 const MAX_RESULT_CHARS: usize = 200_000;
+/// The longest statement `run_read_query` and `run_query` accept: the approval dialog shows all of it.
+pub const MAX_STATEMENT_CHARS: usize = 20_000;
 
 const NAMES: [&str; 7] = [
     "list_connections",
@@ -170,18 +175,24 @@ fn resolve(app: &AppState, arguments: &Value) -> Result<Target, String> {
         }
         // A connection outside MCP's workspaces gets the same answer as one that does not exist.
         let profile = by_name.ok_or(UNKNOWN_CONNECTION)?;
-        let context = Context::for_connection(config, &profile.id).map_err(|error| error.to_string())?;
-        Ok(Target {
-            access: connection_access(config, &profile.id),
-            engine: profile.engine.clone(),
-            database: profile.database.clone().filter(|database| !database.is_empty()),
-            context,
-        })
+        target(config, &profile.id)
     })
 }
 
-/// Opens the connection when it is not open yet, like the app's Connect (saved secrets, workspace Command first). An
-/// open connection is reused, never replaced.
+/// The connection `id` as the settings say now (its access may be `Off`).
+fn target(config: &AppConfig, id: &str) -> Result<Target, String> {
+    let profile = config.connection(id).ok_or(UNKNOWN_CONNECTION)?;
+    let context = Context::for_connection(config, id).map_err(|error| error.to_string())?;
+    Ok(Target {
+        access: connection_access(config, id),
+        engine: profile.engine.clone(),
+        database: profile.database.clone().filter(|database| !database.is_empty()),
+        context,
+    })
+}
+
+/// Opens the connection when it is not open yet, with its saved secrets. A workspace Command it needs must already run:
+/// MCP never starts one. An open connection is reused, never replaced.
 async fn ensure_connected(app: &AppState, target: &Target) -> Result<(), String> {
     let id = &target.context.connection_id;
     if app.engines.handle(id).is_ok() {
@@ -191,7 +202,7 @@ async fn ensure_connected(app: &AppState, target: &Target) -> Result<(), String>
     if app.engines.handle(id).is_ok() {
         return Ok(());
     }
-    connections::connect(app, id.clone(), None)
+    connections::connect_for_mcp(app, id)
         .await
         .map(|_| ())
         .map_err(|error| connect_error(&error))
@@ -199,6 +210,10 @@ async fn ensure_connected(app: &AppState, target: &Target) -> Result<(), String>
 
 fn connect_error(error: &AppError) -> String {
     match error.code() {
+        Some(COMMAND_NOT_RUNNING) => format!(
+            "{error} MCP clients never start workspace commands. Ask the user to start it in Fosta Studio (or to \
+             connect once there), then try again."
+        ),
         Some("PASSWORD_REQUIRED") => "Fosta Studio has no saved password for this connection. Ask the user to connect \
              to it once in Fosta Studio with \"Save password\" on."
             .to_owned(),
@@ -209,7 +224,17 @@ fn connect_error(error: &AppError) -> String {
     }
 }
 
-/// Runs one tool for `client`; `Err` is a tool error (`isError`), worded for the client's model.
+/// A `tools/call` refused before it reached a tool (no name, an unknown tool, `arguments` not an object): counted and
+/// audited like any other call.
+pub fn refuse_call(app: &AppState, client: &ClientInfo, name: &str, detail: &str) {
+    let name = clean(name, 60);
+    let name = if name.is_empty() { "tools/call" } else { name.as_str() };
+    app.mcp.record_call(client, name);
+    audit(app, client, None, name, "", Outcome::Blocked, detail);
+}
+
+/// Runs one tool for `client`; `Err` is a tool error (`isError`), worded for the client's model. Every call writes an
+/// audit entry, refusals included.
 pub async fn call(app: &AppState, client: &ClientInfo, name: &str, arguments: &Value) -> Result<String, String> {
     app.mcp.record_call(client, name);
     if name == "list_connections" {
@@ -217,12 +242,40 @@ pub async fn call(app: &AppState, client: &ClientInfo, name: &str, arguments: &V
         audit(app, client, None, name, "", Outcome::Ran, "ok");
         return Ok(text);
     }
+    let refuse = |target: Option<&Target>, error: String| -> Result<String, String> {
+        audit(app, client, target, name, &summary(arguments), Outcome::Blocked, &error);
+        Err(error)
+    };
+    let runs_query = matches!(name, "run_read_query" | "run_query");
+    // Checked before anything connects. The approval dialog shows the whole statement, so none is longer than it shows.
+    let query = match string_arg(arguments, "query") {
+        Some(query) if runs_query && query.chars().count() > MAX_STATEMENT_CHARS => {
+            return refuse(
+                None,
+                format!(
+                    "Refused: the statement is longer than {MAX_STATEMENT_CHARS} characters, the most Fosta Studio shows \
+                     and runs. Send a shorter statement."
+                ),
+            );
+        }
+        Some(query) => query,
+        None if runs_query => return refuse(None, "`query` is required".to_owned()),
+        None => String::new(),
+    };
+    let limits = match row_limit(arguments) {
+        Ok(max_rows) => McpRunLimits {
+            max_rows,
+            timeout: QUERY_TIMEOUT,
+        },
+        Err(error) if runs_query => return refuse(None, error),
+        Err(_) => McpRunLimits {
+            max_rows: DEFAULT_ROWS,
+            timeout: QUERY_TIMEOUT,
+        },
+    };
     let target = match resolve(app, arguments) {
         Ok(target) => target,
-        Err(error) => {
-            audit(app, client, None, name, &summary(arguments), Outcome::Blocked, &error);
-            return Err(error);
-        }
+        Err(error) => return refuse(None, error),
     };
     if name == "run_query" && target.access != McpAccess::AskBeforeWrites {
         let error = format!(
@@ -230,24 +283,15 @@ pub async fn call(app: &AppState, client: &ClientInfo, name: &str, arguments: &V
              workspaces allow at most read-only access. Use run_read_query, or give the statement to the user.",
             target.access.label()
         );
-        audit(app, client, Some(&target), name, &summary(arguments), Outcome::Blocked, &error);
-        return Err(error);
+        return refuse(Some(&target), error);
     }
     if let Err(error) = ensure_connected(app, &target).await {
-        audit(app, client, Some(&target), name, &summary(arguments), Outcome::Blocked, &error);
-        return Err(error);
+        return refuse(Some(&target), error);
     }
     let database = string_arg(arguments, "database").or_else(|| target.database.clone());
     match name {
         "run_read_query" | "run_query" => {
-            let query = string_arg(arguments, "query").ok_or("`query` is required")?;
-            let limits = match row_limit(arguments) {
-                Ok(max_rows) => McpRunLimits {
-                    max_rows,
-                    timeout: QUERY_TIMEOUT,
-                },
-                Err(error) => return Err(error),
-            };
+            // The gateway audits every outcome from here on: runs, refusals and unanswered approvals.
             let outcome = if name == "run_read_query" {
                 gateway::mcp::read(&app.engines, &target.context, &client.name, &query, database.as_deref(), limits).await
             } else {
@@ -287,7 +331,30 @@ fn row_limit(arguments: &Value) -> Result<usize, String> {
     }
 }
 
-/// `run_query`: asks the user in the app, then runs the statement with their answer.
+/// Why an approved `run_query` must not run after all: the server, the connection's MCP access or the connection itself
+/// changed while the statement waited. `Ok` is the connection as the settings say now.
+fn recheck(app: &AppState, connection_id: &str) -> Result<Target, String> {
+    let current = app.config.read(|config| config.mcp.enabled.then(|| target(config, connection_id)));
+    let Some(current) = current else {
+        return Err("Refused: the MCP server was turned off while the statement waited for approval. Nothing was run.".to_owned());
+    };
+    let current =
+        current.map_err(|_| "Refused: the connection was removed while the statement waited for approval. Nothing was run.".to_owned())?;
+    if current.access != McpAccess::AskBeforeWrites {
+        return Err(format!(
+            "Refused: the connection's MCP access changed to {} while the statement waited for approval. Nothing was run.",
+            current.access.label()
+        ));
+    }
+    Ok(current)
+}
+
+fn refusal(message: String) -> AppError {
+    AppError::structured(message, json!({ "code": gateway::BLOCKED }))
+}
+
+/// `run_query`: asks the user in the app, then, once approved and only if the server, the connection's access and its
+/// rules still allow it, runs the statement with their answer.
 async fn run_query(
     app: &AppState,
     client: &ClientInfo,
@@ -311,15 +378,38 @@ async fn run_query(
         connection: context.connection_name.clone(),
         workspace: context.workspace_name.clone(),
         database: database.map(str::to_owned),
-        statement: query.chars().take(20_000).collect(),
+        statement: query.to_owned(),
         problem,
         timeout_ms: 0,
     };
     let unanswered = |detail: &str| gateway::mcp::audit_unanswered(&app.engines, context, &client.name, query, database, detail);
-    match app.mcp.request_approval(approval).await? {
+    let answer = match app.mcp.request_approval(approval).await {
+        Ok(answer) => answer,
+        Err(error) => {
+            unanswered(&error.to_string());
+            return Err(refusal(error.to_string()));
+        }
+    };
+    match answer {
         Answer::Approved { typed } => {
+            // The settings may have changed during the wait: run under the current ones, or not at all.
+            let current = match recheck(app, &context.connection_id) {
+                Ok(current) => current,
+                Err(why) => {
+                    unanswered(&why);
+                    return Err(refusal(why));
+                }
+            };
             let confirmation = Confirmation { token, typed };
-            gateway::mcp::run_confirmed(&app.engines, context, &client.name, query, database, &confirmation, limits).await
+            gateway::mcp::run_confirmed(&app.engines, &current.context, &client.name, query, database, &confirmation, limits).await
+        }
+        Answer::Withdrawn => {
+            unanswered("withdrawn: the MCP server was turned off, its settings changed or its token was rotated");
+            Err(refusal(
+                "Withdrawn: the MCP server was turned off, its settings changed or its token was rotated while the \
+                 statement waited for approval. Nothing was run."
+                    .to_owned(),
+            ))
         }
         Answer::Denied => {
             unanswered("denied by the user");

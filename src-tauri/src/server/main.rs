@@ -24,7 +24,8 @@ use fosta_studio::{
     config,
     secrets::{
         self,
-        file::{FileStore, KeySource, KEY_ENV},
+        file::{FileStore, KeySource, KEY_ENV, STORE_FILE},
+        SecretKey, SecretStore,
     },
     AppState, Capabilities,
 };
@@ -213,19 +214,18 @@ fn rotate_token(settings: &Settings) -> Result<(), String> {
     Ok(())
 }
 
-/// `fosta-studio-server mcp`: the stdio bridge for MCP clients, relaying to this server's `/mcp` with the access token
-/// (e.g. `docker exec -i <container> /app/fosta-studio-server mcp`).
+/// `fosta-studio-server mcp`: the stdio bridge for MCP clients, relaying to this server's `/mcp` with the MCP token
+/// from the secret store (e.g. `docker exec -i <container> /app/fosta-studio-server mcp`). It never sends the access
+/// token, and exits when the MCP server is off.
 fn mcp_bridge(settings: &Settings) -> Result<(), String> {
     if settings.auth_off {
         return Err(String::from(
             "authentication is off (FOSTA_STUDIO_AUTH=off), so the MCP endpoint is off too",
         ));
     }
-    let token = match settings.token.clone() {
-        Some(token) => token,
-        None => auth::read_saved_token(&settings.data_dir)?
-            .ok_or_else(|| format!("no access token in {}: start the server once first", settings.data_dir.display()))?,
-    };
+    let config = config::read_saved().map_err(|error| format!("cannot read the settings: {error}"))?;
+    fosta_studio::mcp::bridge::require_enabled(&config)?;
+    let token = saved_mcp_token(&settings.data_dir)?;
     let mut address = settings.listen;
     if address.ip().is_unspecified() {
         address.set_ip(if address.is_ipv4() {
@@ -238,6 +238,24 @@ fn mcp_bridge(settings: &Settings) -> Result<(), String> {
         0 => Ok(()),
         _ => Err(String::from("the MCP bridge stopped")),
     }
+}
+
+/// The MCP token the running server saved in the secret store (read only: the bridge never writes the store).
+fn saved_mcp_token(data_dir: &Path) -> Result<String, String> {
+    let missing = || {
+        format!(
+            "no MCP token in {}: start the server and turn on Settings → MCP server first",
+            data_dir.display()
+        )
+    };
+    if !data_dir.join(STORE_FILE).exists() {
+        return Err(missing());
+    }
+    let (store, _) = FileStore::open(data_dir, env(KEY_ENV).as_deref()).map_err(|error| format!("secret store: {error}"))?;
+    store
+        .get(&SecretKey::McpToken.account())
+        .map_err(|error| format!("secret store: {error}"))?
+        .ok_or_else(missing)
 }
 
 fn serve(settings: Settings) -> Result<(), String> {
@@ -287,6 +305,10 @@ async fn run(settings: Settings) -> Result<(), String> {
     let state = AppState::new(capabilities, tokio::runtime::Handle::current(), events).map_err(|error| error.to_string())?;
     let state = Arc::new(state);
     state.mcp.attach(&state);
+    // With the MCP server already on, its token exists before the first client calls.
+    if let Err(error) = state.mcp.apply() {
+        eprintln!("Warning: the MCP server is on but its token could not be created: {error}");
+    }
 
     if !settings.ui_dir.join("index.html").exists() {
         eprintln!(

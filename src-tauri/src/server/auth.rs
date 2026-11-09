@@ -227,6 +227,11 @@ impl Auth {
         self.live.is_none()
     }
 
+    /// Counts a failed attempt from `client` that was checked elsewhere (a wrong MCP token).
+    pub fn record_failure(&self, client: IpAddr) {
+        self.limiter().fail(client, Instant::now());
+    }
+
     /// Whether `client` may try again; `false` after too many recent failures.
     pub fn may_attempt(&self, client: IpAddr) -> bool {
         self.limiter().allows(client, Instant::now())

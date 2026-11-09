@@ -41,7 +41,7 @@ pub enum SecretKey {
     },
     AiKey(String),
     Embedding,
-    /// The bearer token MCP clients send to the desktop app's MCP server (`crate::mcp`).
+    /// The bearer token MCP clients send to the MCP server (`crate::mcp`), in both editions; never the web access token.
     McpToken,
 }
 

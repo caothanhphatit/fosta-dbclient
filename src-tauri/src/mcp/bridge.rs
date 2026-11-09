@@ -1,7 +1,8 @@
 //! The stdio bridge (`fosta-studio mcp`, `fosta-studio-server mcp`) for MCP clients that only start a command (Claude
 //! Desktop): newline-delimited JSON-RPC on stdin/stdout, relayed to the running app's HTTP endpoint with its token.
 //! The bridge itself holds no connection and runs no tool; when the app is not running, every request gets a clear
-//! JSON-RPC error. Only JSON-RPC goes to stdout; diagnostics go to stderr.
+//! JSON-RPC error. When the MCP server is off in the settings it exits at once without sending the token anywhere.
+//! Only JSON-RPC goes to stdout; diagnostics go to stderr.
 
 use std::sync::{Arc, Mutex};
 
@@ -14,10 +15,19 @@ use tokio::{
 
 use super::http::{SESSION_HEADER, VERSION_HEADER};
 use crate::{
-    config,
+    config::{self, AppConfig},
     lock::lock,
     secrets::{self, SecretKey},
 };
+
+/// Refuses to relay when the MCP server is off in the settings: the bridge then sends nothing, the token included.
+pub fn require_enabled(config: &AppConfig) -> Result<(), String> {
+    if config.mcp.enabled {
+        Ok(())
+    } else {
+        Err("the MCP server is off; turn it on in Fosta Studio (Settings → MCP server), then restart this client.".to_owned())
+    }
+}
 
 /// `fosta-studio mcp`: the desktop app's endpoint and token, from its settings and Credential Manager.
 pub fn run_desktop() -> i32 {
@@ -28,10 +38,21 @@ pub fn run_desktop() -> i32 {
             return 1;
         }
     };
-    if !config.mcp.enabled {
-        eprintln!("fosta-studio mcp: the MCP server is off; turn it on in Fosta Studio (Settings → MCP server).");
+    if let Err(error) = require_enabled(&config) {
+        eprintln!("fosta-studio mcp: {error}");
+        return 1;
     }
-    let token = secrets::get(&SecretKey::McpToken).ok().flatten().unwrap_or_default();
+    let token = match secrets::get(&SecretKey::McpToken) {
+        Ok(Some(token)) => token,
+        Ok(None) => {
+            eprintln!("fosta-studio mcp: no MCP token yet; start Fosta Studio with Settings → MCP server on.");
+            return 1;
+        }
+        Err(error) => {
+            eprintln!("fosta-studio mcp: cannot read the MCP token: {error}");
+            return 1;
+        }
+    };
     run(format!("http://127.0.0.1:{}/mcp", config.mcp.port), token)
 }
 
@@ -47,7 +68,7 @@ pub fn run(endpoint: String, token: String) -> i32 {
     runtime.block_on(relay(endpoint, token))
 }
 
-struct Relay {
+pub(super) struct Relay {
     client: reqwest::Client,
     endpoint: String,
     token: String,
@@ -58,21 +79,13 @@ struct Relay {
 }
 
 async fn relay(endpoint: String, token: String) -> i32 {
-    let client = match reqwest::Client::builder().no_proxy().build() {
-        Ok(client) => client,
+    let relay = match Relay::new(endpoint, token) {
+        Ok(relay) => Arc::new(relay),
         Err(error) => {
             eprintln!("fosta-studio mcp: {error}");
             return 1;
         }
     };
-    let relay = Arc::new(Relay {
-        client,
-        endpoint,
-        token,
-        session: Mutex::default(),
-        version: Mutex::default(),
-        initialize: Mutex::default(),
-    });
     let (output, mut lines_out) = mpsc::unbounded_channel::<String>();
     let writer = tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
@@ -109,6 +122,23 @@ async fn relay(endpoint: String, token: String) -> i32 {
 }
 
 impl Relay {
+    pub(super) fn new(endpoint: String, token: String) -> Result<Self, reqwest::Error> {
+        Ok(Self {
+            client: reqwest::Client::builder().no_proxy().build()?,
+            endpoint,
+            token,
+            session: Mutex::default(),
+            version: Mutex::default(),
+            initialize: Mutex::default(),
+        })
+    }
+
+    /// The session the app gave this bridge, if any.
+    #[cfg(test)]
+    pub(super) fn session(&self) -> Option<String> {
+        lock(&self.session).clone()
+    }
+
     async fn post(&self, message: &Value, with_session: bool) -> Result<reqwest::Response, reqwest::Error> {
         let mut request = self
             .client
@@ -128,7 +158,7 @@ impl Relay {
     }
 
     /// Sends one message and writes what comes back; failures become JSON-RPC errors for requests.
-    async fn forward(&self, message: Value, output: &mpsc::UnboundedSender<String>) {
+    pub(super) async fn forward(&self, message: Value, output: &mpsc::UnboundedSender<String>) {
         let id = message.get("id").cloned().filter(|_| message.get("method").is_some());
         let initialize = message["method"] == "initialize";
         if initialize {

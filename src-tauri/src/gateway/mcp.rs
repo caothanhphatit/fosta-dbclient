@@ -7,7 +7,8 @@
 //!   needs a confirmation (typed where the rules say so) and is blocked where the rules block it. The one-time token
 //!   stays in the app: the user answers in Fosta Studio, never the client.
 //!
-//! Every run, refusal and unanswered request is audited with caller `mcp` and the client's name.
+//! Every run, refusal and unanswered request is audited with caller `mcp` and the client's name, including statements
+//! refused before they could be classified and confirmations that no longer hold.
 
 use std::time::Duration;
 
@@ -17,10 +18,10 @@ use super::{
     assistant::{default_language, run_detail, run_own_session, OwnRun, ReadResult},
     audit_entry,
     classify::{Category, Classification},
-    Caller, Confirmation, Context, Request, CONFIRMATION_REQUIRED,
+    Caller, Confirmation, Context, Request, BLOCKED, CONFIRMATION_REQUIRED,
 };
 use crate::{
-    audit::Outcome,
+    audit::{AuditEntry, Outcome},
     contract::{require, Capability, ClassifyInput},
     error::{AppError, AppResult},
     runtime::{ConnectionManager, Handle},
@@ -82,8 +83,47 @@ impl Prepared<'_> {
     }
 }
 
-/// Classifies one statement in the engine's default language; more than one is refused (and audited).
+/// Audits a statement refused outside the rules (it could not be classified, or its confirmation no longer holds).
+fn audit_refused(mgr: &ConnectionManager, caller: Caller, context: &Context, client: &str, text: &str, detail: &str) {
+    let engine = mgr
+        .handle(&context.connection_id)
+        .map(|handle| handle.engine.id().to_owned())
+        .unwrap_or_default();
+    mgr.gateway.audit(AuditEntry {
+        caller: caller.id(),
+        workspace_id: context.workspace_id.clone(),
+        workspace: context.workspace_name.clone(),
+        connection_id: context.connection_id.clone(),
+        connection: context.connection_name.clone(),
+        engine,
+        statement: text.chars().take(200).collect(),
+        outcome: Some(Outcome::Blocked),
+        detail: detail.chars().take(500).collect(),
+        client: client.to_owned(),
+        ..AuditEntry::default()
+    });
+}
+
+/// Classifies one statement in the engine's default language; more than one is refused. Every failure is audited.
 fn prepare<'a>(
+    mgr: &ConnectionManager,
+    caller: Caller,
+    context: &Context,
+    client: &str,
+    text: &'a str,
+    database: Option<&str>,
+) -> AppResult<Prepared<'a>> {
+    let prepared = prepare_unaudited(mgr, caller, context, client, text, database);
+    if let Err(error) = &prepared {
+        // A refusal by the rules is audited where it is made.
+        if error.code() != Some(BLOCKED) {
+            audit_refused(mgr, caller, context, client, text, &error.to_string());
+        }
+    }
+    prepared
+}
+
+fn prepare_unaudited<'a>(
     mgr: &ConnectionManager,
     caller: Caller,
     context: &Context,
@@ -181,8 +221,15 @@ pub async fn run_confirmed(
     limits: McpRunLimits,
 ) -> AppResult<ReadResult> {
     let prepared = prepare(mgr, Caller::Mcp, context, client, text, database)?;
-    mgr.gateway
-        .authorize(&prepared.request(Caller::Mcp, context, client, Some(confirmation)))?;
+    if let Err(error) = mgr
+        .gateway
+        .authorize(&prepared.request(Caller::Mcp, context, client, Some(confirmation)))
+    {
+        if error.code() != Some(BLOCKED) {
+            audit_refused(mgr, Caller::Mcp, context, client, text, &error.to_string());
+        }
+        return Err(error);
+    }
     let run = OwnRun {
         max_rows: limits.max_rows,
         timeout: limits.timeout,
@@ -194,11 +241,12 @@ pub async fn run_confirmed(
 
 /// Records a `run_query` the user denied or did not answer.
 pub fn audit_unanswered(mgr: &ConnectionManager, context: &Context, client: &str, text: &str, database: Option<&str>, detail: &str) {
-    if let Ok(prepared) = prepare(mgr, Caller::Mcp, context, client, text, database) {
-        mgr.gateway.audit(audit_entry(
+    match prepare_unaudited(mgr, Caller::Mcp, context, client, text, database) {
+        Ok(prepared) => mgr.gateway.audit(audit_entry(
             &prepared.request(Caller::Mcp, context, client, None),
             Outcome::Blocked,
             detail,
-        ));
+        )),
+        Err(_) => audit_refused(mgr, Caller::Mcp, context, client, text, detail),
     }
 }

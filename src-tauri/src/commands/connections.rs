@@ -228,9 +228,37 @@ pub async fn connect(state: &AppState, id: String, password: Option<String>) -> 
         }
         None => connection_command::release(&state.tasks, &id).await,
     }
-    let connected = state.engines.connect(&id, profile.spec(), secrets).await;
-    if connected.is_err() && state.engines.handle(&id).is_err() {
-        connection_command::release(&state.tasks, &id).await;
+    connect_with(state, &id, &profile, secrets).await
+}
+
+/// Connects a saved connection with its saved secrets for an MCP client, which never starts a command: a connection
+/// whose command is not running fails with `COMMAND_NOT_RUNNING` (checked before the secrets are read).
+pub async fn connect_for_mcp(state: &AppState, id: &str) -> AppResult<ConnectInfo> {
+    let profile = state.config.connection(id)?;
+    let command = command_of(state, &profile)?;
+    if let Some(def) = &command {
+        if !state.tasks.is_active(&def.id) {
+            return Err(AppError::coded(
+                connection_command::COMMAND_NOT_RUNNING,
+                format!("The command \"{}\" this connection needs is not running.", def.name),
+            ));
+        }
+    }
+    let secrets = saved_secrets(&profile)?;
+    match command {
+        Some(def) => {
+            let ready = connection_command::ready_check(&profile.host, profile.port);
+            connection_command::acquire_running(&state.tasks, id, &def, ready).await?;
+        }
+        None => connection_command::release(&state.tasks, id).await,
+    }
+    connect_with(state, id, &profile, secrets).await
+}
+
+async fn connect_with(state: &AppState, id: &str, profile: &ConnectionProfile, secrets: ConnectSecrets) -> AppResult<ConnectInfo> {
+    let connected = state.engines.connect(id, profile.spec(), secrets).await;
+    if connected.is_err() && state.engines.handle(id).is_err() {
+        connection_command::release(&state.tasks, id).await;
     }
     connected
 }

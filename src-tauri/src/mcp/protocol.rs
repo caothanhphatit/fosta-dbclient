@@ -97,16 +97,21 @@ pub async fn handle(app: &AppState, client: &ClientInfo, id: &Value, method: &st
         "ping" => result(id, json!({})),
         "tools/list" => result(id, json!({ "tools": tools::definitions() })),
         "tools/call" => {
+            // Every call is audited, also the ones refused here.
+            let refuse = |name: &str, message: &str| {
+                tools::refuse_call(app, client, name, message);
+                error(id, INVALID_PARAMS, message)
+            };
             let Some(name) = params["name"].as_str() else {
-                return error(id, INVALID_PARAMS, "tools/call needs `name`");
+                return refuse("", "tools/call needs `name`");
             };
             if !tools::exists(name) {
-                return error(id, INVALID_PARAMS, &format!("Unknown tool: {name}"));
+                return refuse(name, "Unknown tool");
             }
             let arguments = match &params["arguments"] {
                 Value::Null => json!({}),
                 arguments @ Value::Object(_) => arguments.clone(),
-                _ => return error(id, INVALID_PARAMS, "`arguments` must be an object"),
+                _ => return refuse(name, "`arguments` must be an object"),
             };
             let outcome = tools::call(app, client, name, &arguments).await;
             let (text, is_error) = match outcome {

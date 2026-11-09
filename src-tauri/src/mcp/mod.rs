@@ -3,8 +3,9 @@
 //!
 //! - Off by default (Settings → MCP server, [`McpSettings`]), and opt-in per workspace ([`McpAccess`]): a client only
 //!   sees connections in workspaces that allow MCP; Production and Read-only workspaces allow at most read-only access.
-//! - Transport ([`http`]): Streamable HTTP on `127.0.0.1` (desktop, a random bearer token kept as a secret) or `/mcp`
-//!   on the web server (its access token). [`bridge`] relays stdio for clients that only speak stdio.
+//! - Transport ([`http`]): Streamable HTTP on `127.0.0.1` (desktop) or `/mcp` on the web server, both with a random
+//!   MCP-only bearer token kept as a secret (`app:mcp-token`; on the web it never signs into the UI). [`bridge`]
+//!   relays stdio for clients that only speak stdio.
 //! - Protocol ([`protocol`]): initialize, ping, tools/list, tools/call. Tools ([`tools`]): catalog metadata,
 //!   `run_read_query` and, where the workspace asks before writes, `run_query`, which waits for the user to approve
 //!   it in the app ([`McpState::request_approval`]).
@@ -48,10 +49,12 @@ use crate::{
 pub const DEFAULT_PORT: u16 = 3910;
 /// How long `run_query` waits for the user before it is denied.
 pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
-/// Sessions kept at once; the oldest is dropped beyond this (its client initializes again).
-const MAX_SESSIONS: usize = 64;
+/// Sessions kept at once; the least recently used is dropped beyond this (its client initializes again).
+pub(crate) const MAX_SESSIONS: usize = 64;
+/// A session unused this long expires (its client initializes again).
+pub const SESSION_IDLE: Duration = Duration::from_secs(30 * 60);
 /// Approvals waiting at once; more are refused straight away.
-const MAX_PENDING: usize = 16;
+pub(crate) const MAX_PENDING: usize = 16;
 
 /// What MCP clients may do with a workspace's connections.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -166,7 +169,7 @@ pub fn client_label(name: &str) -> String {
 struct Session {
     client: ClientInfo,
     protocol_version: String,
-    created: Instant,
+    last_used: Instant,
 }
 
 /// A `run_query` waiting for the user, as the app shows it (`mcp-approval` event, [`McpStatus::pending`]).
@@ -197,9 +200,13 @@ struct Pending {
 /// The user's answer to an approval.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {
-    Approved { typed: Option<String> },
+    Approved {
+        typed: Option<String>,
+    },
     Denied,
     TimedOut,
+    /// Withdrawn because the server was turned off, its settings changed or its token was rotated.
+    Withdrawn,
 }
 
 /// What Settings → MCP server shows.
@@ -241,6 +248,7 @@ pub struct McpState {
     listener: Mutex<Option<Listener>>,
     error: Mutex<Option<String>>,
     approval_timeout: Mutex<Duration>,
+    session_idle: Mutex<Duration>,
     /// Serializes connect-on-demand so two calls do not open the same connection twice.
     connecting: tokio::sync::Mutex<()>,
 }
@@ -258,6 +266,7 @@ impl McpState {
             listener: Mutex::default(),
             error: Mutex::default(),
             approval_timeout: Mutex::new(APPROVAL_TIMEOUT),
+            session_idle: Mutex::new(SESSION_IDLE),
             connecting: tokio::sync::Mutex::new(()),
         }
     }
@@ -277,13 +286,19 @@ impl McpState {
     }
 
     #[cfg(test)]
+    pub(crate) fn set_session_idle(&self, idle: Duration) {
+        *lock(&self.session_idle) = idle;
+    }
+
+    #[cfg(test)]
     pub(crate) fn set_token(&self, token: &str) {
         *lock(&self.token) = Some(token.to_owned());
     }
 
-    // --- Token (desktop) -----------------------------------------------------------------
+    // --- Token -----------------------------------------------------------------------------
 
-    /// The bearer token of the desktop server: the saved one, or a new one saved now.
+    /// The MCP bearer token (`app:mcp-token`, in Credential Manager on the desktop and in the encrypted secret store on
+    /// the web): the saved one, or a new one saved now. On the web it is separate from the server's access token.
     pub fn token(&self) -> AppResult<String> {
         let mut cached = lock(&self.token);
         if let Some(token) = cached.as_ref() {
@@ -301,16 +316,24 @@ impl McpState {
         Ok(token)
     }
 
-    /// A new token: clients must be set up again; their sessions end now.
+    /// A new token: clients must be set up again; their sessions end and their pending approvals are withdrawn now.
     pub fn rotate_token(&self) -> AppResult<String> {
         let token = new_token()?;
         secrets::set(&SecretKey::McpToken, &token)?;
         *lock(&self.token) = Some(token.clone());
-        lock(&self.sessions).clear();
+        self.end_all();
         Ok(token)
     }
 
-    /// Whether `candidate` is the desktop server's token (compared in constant time).
+    /// Whether `candidate` is the saved MCP token, without creating one when there is none (the web server's sign-in
+    /// uses this to refuse it).
+    pub fn is_token(&self, candidate: &str) -> bool {
+        let cached = lock(&self.token).clone();
+        let token = cached.or_else(|| secrets::get(&SecretKey::McpToken).ok().flatten());
+        token.is_some_and(|token| token.len() >= 32 && constant_time_eq(token.as_bytes(), candidate.trim().as_bytes()))
+    }
+
+    /// Whether `candidate` is the MCP token (compared in constant time).
     pub(crate) fn token_matches(&self, candidate: &str) -> bool {
         match self.token() {
             Ok(token) => constant_time_eq(token.as_bytes(), candidate.trim().as_bytes()),
@@ -323,13 +346,26 @@ impl McpState {
 
     // --- Sessions ------------------------------------------------------------------------
 
+    /// Drops the sessions unused for longer than the idle timeout.
+    fn expire_sessions(&self, sessions: &mut HashMap<String, Session>, now: Instant) {
+        let idle = *lock(&self.session_idle);
+        sessions.retain(|_, session| now.duration_since(session.last_used) < idle);
+    }
+
     pub(crate) fn open_session(&self, client: ClientInfo, protocol_version: &str) -> AppResult<String> {
         let id = new_token()?;
+        let now = Instant::now();
         let mut sessions = lock(&self.sessions);
-        if sessions.len() >= MAX_SESSIONS {
-            if let Some(oldest) = sessions.iter().min_by_key(|(_, session)| session.created).map(|(id, _)| id.clone()) {
-                sessions.remove(&oldest);
-            }
+        self.expire_sessions(&mut sessions, now);
+        while sessions.len() >= MAX_SESSIONS {
+            let Some(oldest) = sessions
+                .iter()
+                .min_by_key(|(_, session)| session.last_used)
+                .map(|(id, _)| id.clone())
+            else {
+                break;
+            };
+            sessions.remove(&oldest);
         }
         tracing::info!(client = %client.name, version = %client.version, "MCP client connected");
         sessions.insert(
@@ -337,7 +373,7 @@ impl McpState {
             Session {
                 client,
                 protocol_version: protocol_version.to_owned(),
-                created: Instant::now(),
+                last_used: now,
             },
         );
         drop(sessions);
@@ -345,10 +381,26 @@ impl McpState {
         Ok(id)
     }
 
+    /// The session's client and protocol version; using a session keeps it alive. An expired session is gone.
     pub(crate) fn session(&self, id: &str) -> Option<(ClientInfo, String)> {
-        lock(&self.sessions)
-            .get(id)
-            .map(|session| (session.client.clone(), session.protocol_version.clone()))
+        let now = Instant::now();
+        let mut sessions = lock(&self.sessions);
+        self.expire_sessions(&mut sessions, now);
+        let session = sessions.get_mut(id)?;
+        session.last_used = now;
+        Some((session.client.clone(), session.protocol_version.clone()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_count(&self) -> usize {
+        lock(&self.sessions).len()
+    }
+
+    /// Ends every session and withdraws every pending approval (server off, settings changed, token rotated).
+    fn end_all(&self) {
+        lock(&self.sessions).clear();
+        self.withdraw_all();
+        self.emit_activity(None);
     }
 
     pub(crate) fn close_session(&self, id: &str) -> bool {
@@ -384,7 +436,10 @@ impl McpState {
     }
 
     fn client_labels(&self) -> Vec<String> {
-        let mut labels: Vec<String> = lock(&self.sessions).values().map(|session| session.client.label.clone()).collect();
+        let mut sessions = lock(&self.sessions);
+        self.expire_sessions(&mut sessions, Instant::now());
+        let mut labels: Vec<String> = sessions.values().map(|session| session.client.label.clone()).collect();
+        drop(sessions);
         labels.sort();
         labels.dedup();
         labels
@@ -442,6 +497,15 @@ impl McpState {
         Ok(())
     }
 
+    /// Answers every pending approval with [`Answer::Withdrawn`] and closes its dialogs.
+    pub fn withdraw_all(&self) {
+        let drained: Vec<(String, Pending)> = lock(&self.pending).drain().collect();
+        for (id, pending) in drained {
+            let _ = pending.answer.send(Answer::Withdrawn);
+            self.events.emit("mcp-approval-closed", json!({ "id": id }));
+        }
+    }
+
     pub fn pending(&self) -> Vec<McpApproval> {
         let mut pending: Vec<McpApproval> = lock(&self.pending).values().map(|pending| pending.approval.clone()).collect();
         pending.sort_by(|a, b| a.id.cmp(&b.id));
@@ -482,16 +546,21 @@ impl McpState {
         }
     }
 
-    /// Starts, restarts or stops the desktop listener to match the settings. The web edition serves `/mcp` from its
-    /// own router, so this does nothing there.
+    /// Matches the settings. Desktop: starts, restarts or stops the listener. Web (which serves `/mcp` from its own
+    /// router): makes sure the MCP token exists. Turning the server off or changing its port ends every session and
+    /// withdraws every pending approval.
     pub fn apply(&self) -> AppResult<()> {
         let Some(app) = self.app() else {
             return Ok(());
         };
-        if app.capabilities.edition == "web" {
-            return Ok(());
-        }
         let settings = app.config.read(|config| config.mcp.clone());
+        if app.capabilities.edition == "web" {
+            if !settings.enabled {
+                self.end_all();
+                return Ok(());
+            }
+            return self.token().map(|_| ());
+        }
         let mut listener = lock(&self.listener);
         if settings.enabled && listener.as_ref().is_some_and(|running| running.port == settings.port) {
             return Ok(());
@@ -501,8 +570,8 @@ impl McpState {
             tracing::info!(port = running.port, "MCP server stopped");
         }
         *lock(&self.error) = None;
+        self.end_all();
         if !settings.enabled {
-            lock(&self.sessions).clear();
             return Ok(());
         }
         self.token()?;
