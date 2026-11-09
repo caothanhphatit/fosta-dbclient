@@ -29,6 +29,8 @@ interface Panel {
   entry: StatementResult | null;
   loadedRows: number;
   loadedAt: number;
+  /** The list: its rows as last loaded (JSON), so an unchanged list is not loaded again. */
+  loadedSignature?: string;
 }
 
 interface MessageGroup {
@@ -171,16 +173,18 @@ export class ResultArea {
     if (!list?.grid) return;
     list.countLabel.textContent = formatNumber(sets.length);
     if (final || list.loadedRows === 0 || now - list.loadedAt > GRID_RELOAD_MS) {
-      list.grid.load({
-        ...gridSetup(
-          LIST_COLUMNS,
-          sets.map((entry) => listRow(entry, unfinished)),
-          this.dialect(),
-        ),
-        clientFilter: true,
-        clientSort: true,
-        extraMenu: () => [{ label: "Open this result", icon: "expand", run: () => this.openSelected() }],
-      });
+      const rows = sets.map((entry) => listRow(entry, unfinished));
+      // Reloaded only when a row changed, so the list's sort and selection are not redone every second for nothing.
+      const signature = JSON.stringify(rows);
+      if (signature !== list.loadedSignature) {
+        list.grid.load({
+          ...gridSetup(LIST_COLUMNS, rows, this.dialect()),
+          clientFilter: true,
+          clientSort: true,
+          extraMenu: () => [{ label: "Open this result", icon: "expand", run: () => this.openSelected() }],
+        });
+        list.loadedSignature = signature;
+      }
       list.loadedRows = sets.length;
       list.loadedAt = now;
     }

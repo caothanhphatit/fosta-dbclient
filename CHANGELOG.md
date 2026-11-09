@@ -30,9 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   dependencies.
 - **Tabs come back after a restart**: each workspace's open tabs (tables, query tabs with their text, language and database,
   diagrams, command logs) and the active tab are saved in `fosta-studio-tabs.json` next to the config (the data volume on the web) and
-  restored on start. A restored tab connects only when it is shown; a tab whose connection is gone is dropped with a note.
-- **Unsaved query text**: closing a query tab whose text was edited and not run asks first, and quitting lists those tabs.
-- **Query results**: click a column header (or use its menu) to sort the loaded rows; *Refresh names* reloads the completion names.
+  restored on start. A restored tab connects only when it is shown; a tab whose connection is gone is dropped with a note. A file
+  that cannot be read is never overwritten; one that does not parse is moved to `fosta-studio-tabs.json.corrupt`. Two windows of the
+  web edition merge their tabs instead of overwriting each other's (a tab closed in one window but open in the other comes back).
+- **Unsaved query text**: closing a query tab whose text was edited and not run asks first, and quitting lists those tabs (once:
+  restored text left unchanged is not listed again). *Close all*, and deleting a workspace or a connection, ask one question for
+  all tabs that would lose something; declining keeps the workspace or connection.
+- **Query results**: click a column header (or use its menu) to sort the loaded rows (numbers and decimals exactly, timestamps by
+  instant); *Refresh names* reloads the completion names.
 
 ### Fixed
 
@@ -42,8 +47,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   tabs (click one to open it), so a 15,000-statement script no longer freezes the window.
 - **Stop** in a query tab shows *Stopped* with the rows received so far instead of an error.
 - **Tab titles** name the connection, and the database, when two tabs share a title.
-- **Lost sessions**: after the backend or the server restarted, a query tab reconnects and reopens its session on the next run
-  (and says so when an open transaction was lost), and the tree no longer shows a connection the backend lost as connected.
+- **Lost sessions**: after the backend or the server restarted, a query tab reconnects and reopens its session on the next run, and
+  the tree no longer shows a connection the backend lost as connected. The run goes again on its own only when every statement
+  reads; otherwise (and when an open transaction was lost) nothing runs and the tab says the session was reset, since settings such
+  as `SET ROLE`, `search_path` and temporary tables are gone.
 - **Completion** names reload after a tree Refresh and after DDL runs in the tab; a new query tab on SQLite starts in `main`.
 - **Vector index recall**: a row as close as the exact k-th result now counts as a hit, so tables with duplicate vectors no longer
   report a recall near 0.

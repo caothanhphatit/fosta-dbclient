@@ -45,6 +45,15 @@ function sameColumnNames(a: ColumnInfo[], b: ColumnInfo[]): boolean {
   return a.length === b.length && a.every((column, index) => column.name === b[index].name);
 }
 
+/** Whether rows about to load show the same cells as the rows shown now (a reload with nothing new). */
+function sameRows(shown: readonly GridRow[], next: readonly Value[][]): boolean {
+  if (shown.length !== next.length) return false;
+  return shown.every((row, index) => {
+    const cells = next[index];
+    return row.current === cells || (row.current.length === cells.length && row.current.every((cell, column) => valuesEqual(cell, cells[column])));
+  });
+}
+
 const TOOLTIP_THRESHOLD = 60;
 /** Rows rendered beyond the viewport on each side. */
 const OVERSCAN = 12;
@@ -70,6 +79,9 @@ export class DataGrid {
   private filters: ColumnFilters = {};
   /** The header sort of a `clientSort` grid (kept across `load` while the column exists). */
   private clientSort: SortState | null = null;
+  /** Changes whenever a row is added, removed or edited, or other rows load: the sort cache is then stale. */
+  private rowGeneration = 0;
+  private sortCache: { generation: number; column: number; descending: boolean; order: number[] } | null = null;
   private hidden: string[] = [];
   /** Indexes of the columns that are drawn, in order (hidden columns left out). */
   private displayed: number[] = [];
@@ -112,6 +124,8 @@ export class DataGrid {
     if (!(setup.clientFilter && sameColumns)) this.filters = { ...setup.columnFilters };
     if (!setup.clientSort || !setup.columns.some((column) => column.name === this.clientSort?.column)) this.clientSort = null;
     this.applyHidden(setup.hiddenColumns);
+    // A reload with the same rows (a result list refreshed while nothing changed) keeps the sorted order.
+    if (!sameRows(this.rows, setup.rows)) this.rowGeneration += 1;
     this.rows = setup.rows.map((row, index) => ({
       original: row,
       current: [...row],
@@ -224,22 +238,35 @@ export class DataGrid {
   }
 
   private computeVisible(): number[] {
-    const indexes = this.rows.flatMap((row, index) => (row.removed ? [] : [index]));
-    if (!this.setup.clientFilter) return this.sortedRows(indexes);
-    const active = this.setup.columns
-      .map((column, index) => ({ column, index, text: this.filters[column.name] ?? "" }))
-      .filter(({ text }) => text.trim() !== "");
-    return this.sortedRows(
-      indexes.filter((rowIndex) => active.every(({ column, index, text }) => matchesFilter(this.rows[rowIndex].current[index] ?? NULL, column, text))),
-    );
+    const keep = (row: GridRow) => !row.removed;
+    const active = this.setup.clientFilter
+      ? this.setup.columns.map((column, index) => ({ column, index, text: this.filters[column.name] ?? "" })).filter(({ text }) => text.trim() !== "")
+      : [];
+    const visible = (rowIndex: number) => {
+      const row = this.rows[rowIndex];
+      return keep(row) && active.every(({ column, index, text }) => matchesFilter(row.current[index] ?? NULL, column, text));
+    };
+    return this.sortedOrder().filter(visible);
   }
 
-  /** The loaded rows in the order of the header sort (`clientSort` grids); otherwise unchanged. */
-  private sortedRows(indexes: number[]): number[] {
+  /**
+   * Every row index in the order of the header sort (`clientSort` grids), else as loaded. The sorted order is kept
+   * until the rows or the sort change, so a render (a filter typed, a column hidden, a reload with the same rows) does
+   * not sort again.
+   */
+  private sortedOrder(): number[] {
     const sort = this.clientSort;
     const column = sort ? this.setup.columns.findIndex((item) => item.name === sort.column) : -1;
-    if (!sort || column < 0) return indexes;
-    return sortIndexes(indexes, (index) => this.rows[index].current[column], sort.descending);
+    if (!sort || column < 0) return this.rows.map((_, index) => index);
+    const cached = this.sortCache;
+    if (cached && cached.generation === this.rowGeneration && cached.column === column && cached.descending === sort.descending) return cached.order;
+    const order = sortIndexes(
+      this.rows.map((_, index) => index),
+      (index) => this.rows[index].current[column],
+      sort.descending,
+    );
+    this.sortCache = { generation: this.rowGeneration, column, descending: sort.descending, order };
+    return order;
   }
 
   /** Header click on a `clientSort` grid: ascending, then descending, then the order the rows came in. */
@@ -317,6 +344,7 @@ export class DataGrid {
       removed: false,
       element: null,
     };
+    this.rowGeneration += 1;
     const index = this.rows.push(row) - 1;
     this.visiblePosition.set(index, this.visible.push(index) - 1);
     this.element.querySelector(".grid-empty")?.remove();
@@ -335,6 +363,7 @@ export class DataGrid {
       this.refreshRow(index);
     } else {
       this.rows.splice(index, 1);
+      this.rowGeneration += 1;
       this.selection = null;
       this.render();
     }
@@ -708,6 +737,7 @@ export class DataGrid {
     const row = this.rows[position.row];
     if (!row || row.deleted || this.isReadOnlyColumn(position.column)) return;
     row.current[position.column] = value;
+    this.rowGeneration += 1;
     row.touched.add(position.column);
     row.edited = true;
     this.refreshRow(position.row);

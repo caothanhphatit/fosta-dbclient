@@ -26,6 +26,7 @@ Everything lives next to the executable (the portable app), in the app's data fo
 | `fosta-studio-secrets.enc` + `fosta-studio-secret.key` (web edition) | The same secrets, encrypted with XChaCha20-Poly1305 | Yes; set `FOSTA_STUDIO_SECRET_KEY` to keep the key out of the volume |
 | `fosta-studio-history.jsonl` | Query history (text, time, duration, row count) | Statement text as you typed it; turn history off or clear it under *Settings* |
 | `fosta-studio-tabs.json` | The open tabs of each workspace, with the text of query tabs (restored on the next start) | Query text as you typed it, also with history off; closing a tab removes its text |
+| `fosta-studio-tabs.json.corrupt` | The last tabs file that did not parse, moved aside (only when that happened) | The same query text; delete it when you no longer need it |
 | `fosta-studio-audit.jsonl` | Blocked, confirmed and relaxed operations | Statement excerpts |
 | Log folder | Application log | No passwords; statements are truncated |
 
