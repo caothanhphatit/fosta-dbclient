@@ -131,6 +131,7 @@
   "privacy.ai.text": "模型能看到表和列的元数据，以及你选择分享的编辑器内容、错误和日志。语句只在你运行时才会执行。可选的只读查询工具每次查询最多读取 50 行，这些行会发送给你的服务商；可在设置中或按工作区关闭它。",
   "privacy.gateway.title": "语句网关",
   "privacy.gateway.text": "每条语句，无论在哪种数据库上，都要经过同一个网关，并按工作区应用规则：Open、Guarded、Read-only 或 Custom。标记为 Production 的工作区默认为 Read-only，放宽规则时总会给出醒目的警告。",
+  "privacy.link": "安全细节：存储了什么、存在哪里，以及发送了什么",
   "roadmap.kicker": "路线图",
   "roadmap.title": "未来方向",
   "roadmap.intro": "计划中的工作，大致按顺序排列。计划可能会调整；欢迎提交 issue 讨论其中任何一项。",

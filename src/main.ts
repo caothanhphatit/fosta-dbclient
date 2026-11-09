@@ -34,7 +34,8 @@ import { ConnectionTree } from "./features/connections/tree";
 import { TasksPanel } from "./features/tasks/tasksPanel";
 import { embeddingDialog } from "./features/vector/embeddingDialog";
 import { setConfirmationConfigSink } from "./features/safety/confirmationDialog";
-import { connectionSafety, relaxedFromBaseline, safetyLabel, safetyOf, writesBlocked } from "./features/safety/safety";
+import { dismissedProductionHints, dismissProductionHint, productionWorkspace, shouldOfferProductionMove } from "./features/safety/productionHint";
+import { connectionSafety, PRODUCTION_ICON, relaxedFromBaseline, safetyLabel, safetyOf, writesBlocked } from "./features/safety/safety";
 import { workspaceDialog } from "./features/workspaces/workspaceDialog";
 import { activeWorkspace, WorkspaceRail, workspaceColor, workspaceIcon, type WorkspaceActivity } from "./features/workspaces/workspaceRail";
 
@@ -319,11 +320,39 @@ function newQueryFromSelection(): void {
 }
 
 async function editConnection(profile: ConnectionProfile | null): Promise<void> {
+  const before = new Set((workspace?.connections ?? []).map((item) => item.id));
   const config = await connectionDialog(profile, {
     commands: workspace?.tasks ?? [],
     create: async (target) => (await tasksPanel.edit(null, { forConnection: target }))?.task ?? null,
   });
-  if (config) applyConfig(config);
+  if (!config) return;
+  applyConfig(config);
+  const saved = workspace?.connections.find((item) => (profile ? item.id === profile.id : !before.has(item.id)));
+  if (saved) await offerProductionMove(saved);
+}
+
+/** A connection that looks like production, saved outside a Production workspace: offer to move it there (read-only by default). */
+async function offerProductionMove(profile: ConnectionProfile): Promise<void> {
+  const current = workspace;
+  if (!current || !currentConfig || !shouldOfferProductionMove(profile, current, dismissedProductionHints())) return;
+  const target = productionWorkspace(currentConfig.workspaces);
+  const where = target ? `the ${target.name} workspace` : "a new Production workspace";
+  const move = await confirmDialog(`"${profile.name}" looks like a production database. Move it to ${where}, where it is read-only by default?`, "Move");
+  if (!move) {
+    dismissProductionHint(profile.id);
+    return;
+  }
+  try {
+    let targetId = target?.id;
+    if (!targetId) {
+      targetId = crypto.randomUUID();
+      applyConfig(await api.saveWorkspace({ id: targetId, name: "Production", color: "red", icon: PRODUCTION_ICON }));
+    }
+    applyConfig(await api.saveConnection(profile, null, targetId));
+    toast(`Moved "${profile.name}" to ${target?.name ?? "Production"} (read-only)`);
+  } catch (error) {
+    showError(error, "Move connection");
+  }
 }
 
 async function deleteConnection(profile: ConnectionProfile): Promise<void> {

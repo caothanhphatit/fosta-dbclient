@@ -1,0 +1,17 @@
+# cargo audit (CI job "Dependency audit"): advisories reviewed and accepted for now, each with the reason.
+# Remove an entry as soon as the dependency that pulls it in has a fixed release.
+[advisories]
+ignore = [
+  # rsa (Marvin attack, timing side channel on RSA decryption), via russh / ssh-key. The SSH client only signs with RSA
+  # keys; no fixed release of the 0.10 line yet.
+  "RUSTSEC-2023-0071",
+  # rustls 0.21 and rustls-webpki 0.101, via tiberius (SQL Server) with its rustls feature, used only in non-Windows builds
+  # (the web edition). tiberius 0.12.3 is the latest release and still depends on tokio-rustls 0.24. Windows builds use
+  # native TLS and are not affected. Tracked: move SQL Server off this stack in the web edition.
+  "RUSTSEC-2026-0346",
+  "RUSTSEC-2026-0349",
+  "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
+  "RUSTSEC-2026-0104",
+  "RUSTSEC-2026-0382",
+]

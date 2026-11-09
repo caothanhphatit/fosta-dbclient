@@ -131,6 +131,7 @@
   "privacy.ai.text": "The model sees table and column metadata plus the editor text, errors and logs you choose to share. Statements run only when you run them. The optional read-only query tool reads up to 50 rows per query, which go to your provider; turn it off in Settings or per workspace.",
   "privacy.gateway.title": "Statement gateway",
   "privacy.gateway.text": "Every statement, on every engine, passes through one gateway with rules per workspace: Open, Guarded, Read-only or Custom. A workspace marked Production defaults to Read-only, and relaxing a rule always comes with a loud warning.",
+  "privacy.link": "Security details: what is stored where, and what is sent",
   "roadmap.kicker": "Roadmap",
   "roadmap.title": "Where it is heading",
   "roadmap.intro": "Planned work, roughly in order. Plans change; open an issue to discuss any of it.",

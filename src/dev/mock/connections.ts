@@ -39,15 +39,15 @@ export function saveConnection(
   if (!profile.savePassword) savedPasswords.delete(profile.id);
   else if (password !== null || secrets?.password !== undefined) savedPasswords.add(profile.id);
   const target = workspaceId ?? state.config.workspaces.find((workspace) => workspace.connections.some((item) => item.id === profile.id))?.id;
+  // Like the backend: the profile leaves every other workspace (a move) and is replaced or added in the target.
+  const destination = target ?? state.config.activeWorkspace;
   const workspaces = state.config.workspaces.map((workspace) => {
+    if (workspace.id !== destination) return { ...workspace, connections: workspace.connections.filter((item) => item.id !== profile.id) };
     const index = workspace.connections.findIndex((item) => item.id === profile.id);
-    if (index >= 0) {
-      const connections = [...workspace.connections];
-      connections[index] = profile;
-      return { ...workspace, connections };
-    }
-    if (workspace.id === (target ?? state.config.activeWorkspace)) return { ...workspace, connections: [...workspace.connections, profile] };
-    return workspace;
+    const connections = [...workspace.connections];
+    if (index >= 0) connections[index] = profile;
+    else connections.push(profile);
+    return { ...workspace, connections };
   });
   state.config = { ...state.config, workspaces };
   return state.config;

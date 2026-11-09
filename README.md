@@ -2,6 +2,8 @@
 
 # Fosta Studio
 
+[![CI](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml/badge.svg)](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml) [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) [![Release](https://img.shields.io/github/v/release/caothanhphatit/fosta-dbclient)](https://github.com/caothanhphatit/fosta-dbclient/releases/latest)
+
 **English** · [Tiếng Việt](README.vi.md)
 
 A small, fast database client for **11 engines**: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch,
@@ -77,6 +79,7 @@ Building, tests and test databases: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## More
 
+- [Security and privacy](docs/security.md): what is stored where, what is sent, how read-only works.
 - [ROADMAP.md](ROADMAP.md): what comes next.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how it is built.
 - [docs/engines](docs/engines): notes per engine, SSH and TLS.

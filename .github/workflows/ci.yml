@@ -64,3 +64,21 @@ jobs:
       # Only the server: no Tauri, so no WebKitGTK system packages are needed.
       - run: cargo clippy --all-targets --no-default-features --features web -- -D warnings
       - run: cargo test --no-default-features --features web
+
+  audit:
+    name: Dependency audit (cargo audit, npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # Accepted advisories, each with its reason, are listed in src-tauri/.cargo/audit.toml; anything new fails the job.
+      - name: cargo audit
+        working-directory: src-tauri
+        run: cargo audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: npm audit (runtime dependencies)
+        run: npm audit --omit=dev --audit-level=high

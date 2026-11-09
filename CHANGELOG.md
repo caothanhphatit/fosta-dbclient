@@ -24,6 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   portable app links to the release; the web edition shows the Docker commands, and `deploy/docker-compose.yml` has an optional
   Watchtower service (`--profile autoupdate`).
 
+- **Production hint**: saving a connection whose name, host, database or URL says prod, production, prd or live, outside a Production
+  workspace, offers to move it there (read-only by default).
+- **Security and privacy** page ([docs/security.md](docs/security.md)) and [SECURITY.md](SECURITY.md); CI audits Rust and npm
+  dependencies.
+
 ### Fixed
 
 - **Vector index recall**: a row as close as the exact k-th result now counts as a hit, so tables with duplicate vectors no longer
