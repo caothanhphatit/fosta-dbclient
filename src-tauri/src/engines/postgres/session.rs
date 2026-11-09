@@ -1,10 +1,12 @@
 //! A PostgreSQL query session.
 //!
-//! - Plain queries (SELECT / WITH / VALUES / TABLE) run through a server-side cursor (`DECLARE … NO SCROLL CURSOR`, `FETCH n`):
-//!   rows arrive in batches, and stopping at the row limit closes the cursor, so the server never computes or sends the rest.
+//! - Plain queries (SELECT / WITH / VALUES / TABLE) run through a server-side cursor (`DECLARE … NO SCROLL CURSOR`, then
+//!   `FETCH` of one row past the limit): rows stream as they arrive, and the server never computes or sends the rest.
 //!   Outside an explicit transaction the cursor lives in a short transaction of its own.
 //! - Other statements run through the extended protocol; rows they return (`RETURNING`, `SHOW`, `EXPLAIN`) beyond the limit are
 //!   read and dropped, since stopping a data change half way is not an option.
+//! - The requests of one statement are pipelined (sent together, answers read in order), so a long script of small
+//!   statements costs about one round trip per statement.
 //! - Cancel sends PostgreSQL's CancelRequest on a separate connection (the session's CancelToken).
 //! - The statement timeout is the server's `statement_timeout`, set when it changes.
 //! - The transaction state is asked from the server after each run: in a transaction block `now()` (the transaction start)
@@ -21,6 +23,8 @@ use tokio_postgres::{CancelToken, Client, SimpleQueryMessage};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 const CURSOR: &str = "fosta_cursor";
+/// In a transaction block `now()` is the block's start, so it differs from the statement's own timestamp.
+const STATE_PROBE: &str = "SELECT now() <> statement_timestamp()";
 
 pub struct PgSession {
     client: Client,
@@ -92,7 +96,12 @@ impl PgSession {
 
     /// Asks the server whether a transaction block is open (see the module docs).
     pub async fn refresh_state(&self) -> TxState {
-        let state = match self.client.simple_query("SELECT now() <> statement_timestamp()").await {
+        self.store_state(self.client.simple_query(STATE_PROBE).await)
+    }
+
+    /// Keeps the transaction state the probe's answer tells.
+    fn store_state(&self, probe: std::result::Result<Vec<SimpleQueryMessage>, tokio_postgres::Error>) -> TxState {
+        let state = match probe {
             Ok(msgs) => msgs
                 .iter()
                 .find_map(|m| match m {
@@ -145,6 +154,9 @@ impl PgSession {
         }
         self.apply_limits(opts).await.map_err(before)?;
         let mut result = Ok(());
+        // A cursor query leaves the transaction state as it was, and any other statement asks for it along with its
+        // own requests, so the server is asked on its own only before the first cursor query.
+        let mut state_known = false;
         for (index, st) in split::split(Dialect::Postgres, sql).into_iter().enumerate() {
             sink.event(StreamEvent::Statement {
                 index,
@@ -152,8 +164,13 @@ impl PgSession {
             });
             let started = Instant::now();
             let r = if is_cursor_query(&st.text) {
+                if !state_known {
+                    self.refresh_state().await;
+                    state_known = true;
+                }
                 self.run_cursor(index, &st.text, opts, sink, started).await
             } else {
+                state_known = true;
                 self.run_direct(index, &st.text, opts, sink, started).await
             };
             if let Err(error) = r {
@@ -218,100 +235,154 @@ impl PgSession {
         Ok(())
     }
 
+    /// A cursor query in one round trip: `[BEGIN;] DECLARE`, `FETCH FORWARD limit+1` and `COMMIT` (or `CLOSE` inside the
+    /// user's transaction) are sent together and their answers read in order. The FETCH streams, so rows reach the sink as
+    /// they arrive, and the server computes at most one row past the cap. The columns come with the first row; an empty
+    /// result describes the query afterwards. After a failure the later requests fail too (their errors are ignored), and
+    /// `COMMIT` of the failed block of our own rolls it back.
     async fn run_cursor(&self, index: usize, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink, started: Instant) -> Result<()> {
-        let own_tx = self.refresh_state().await == TxState::Idle;
-        if own_tx {
-            self.client.batch_execute("BEGIN").await.map_err(map_err)?;
-        }
-        let r = self.fetch_cursor(index, sql, opts, sink, started).await;
-        match (&r, own_tx) {
-            (Ok(_), true) => self.client.batch_execute("COMMIT").await.map_err(map_err)?,
-            (Err(_), true) => {
-                let _ = self.client.batch_execute("ROLLBACK").await;
-            }
-            _ => {}
-        }
-        r
-    }
-
-    async fn fetch_cursor(&self, index: usize, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink, started: Instant) -> Result<()> {
-        let declare = format!("DECLARE {CURSOR} NO SCROLL CURSOR FOR {sql}");
-        // The server reports a position in the whole DECLARE text; the statement starts after the prefix.
+        use futures_util::{future::maybe_done, pin_mut, poll, TryStreamExt};
+        let own_tx = self.transaction_state() == TxState::Idle;
+        let declare = format!("{}DECLARE {CURSOR} NO SCROLL CURSOR FOR {sql}", if own_tx { "BEGIN; " } else { "" });
+        // The server reports a position in the whole query text; the statement starts after the prefix.
         let prefix = (declare.chars().count() - sql.chars().count()) as u32;
-        self.client.batch_execute(&declare).await.map_err(|error| {
-            let mut error = map_err(error);
-            error.position = error.position.map(|position| position.saturating_sub(prefix));
-            error
-        })?;
-        let batch = opts.batch_size.max(1);
-        let fetch = self
-            .client
-            .prepare(&format!("FETCH FORWARD {batch} FROM {CURSOR}"))
-            .await
-            .map_err(map_err)?;
-        let columns = result_columns(fetch.columns());
-        let mut batcher = Batcher::new(index, opts);
-        let mut truncated = false;
-        if sink.event(StreamEvent::Columns { index, columns }) == Flow::Continue {
-            loop {
-                let rows = self.client.query(&fetch, &[]).await.map_err(map_err)?;
-                let full = rows.len() == batch;
-                let mut stopped = false;
-                for (i, row) in rows.iter().enumerate() {
-                    if !batcher.push(types::row_values(row), sink) {
-                        stopped = true;
-                        truncated = i + 1 < rows.len() || full;
-                        break;
-                    }
+        let fetch = match u32::try_from(opts.row_limit.saturating_add(1)) {
+            Ok(count) if count <= i32::MAX as u32 => format!("FETCH FORWARD {count} FROM {CURSOR}"),
+            _ => format!("FETCH ALL FROM {CURSOR}"),
+        };
+        let end = if own_tx { "COMMIT".to_owned() } else { format!("CLOSE {CURSOR}") };
+        let no_params = std::iter::empty::<(&(dyn tokio_postgres::types::ToSql + Sync), tokio_postgres::types::Type)>();
+        let declared = maybe_done(self.client.batch_execute(&declare));
+        let fetched = maybe_done(self.client.query_typed_raw(&fetch, no_params));
+        let ended = maybe_done(self.client.batch_execute(&end));
+        pin_mut!(declared, fetched, ended);
+        // Each request is sent when its future is first polled: poll all three before waiting for any answer.
+        let _ = poll!(declared.as_mut());
+        let _ = poll!(fetched.as_mut());
+        let _ = poll!(ended.as_mut());
+
+        let mut columns_sent = false;
+        let outcome: Result<(usize, bool)> = async {
+            declared.as_mut().await;
+            declared.as_mut().take_output().unwrap_or(Ok(())).map_err(|error| {
+                let mut error = map_err(error);
+                error.position = error.position.map(|position| position.saturating_sub(prefix));
+                error
+            })?;
+            fetched.as_mut().await;
+            let stream = fetched.as_mut().take_output().expect("polled to completion").map_err(map_err)?;
+            pin_mut!(stream);
+            let mut batcher = Batcher::new(index, opts);
+            let mut wants_rows = true;
+            let mut reading = true;
+            let mut received = 0usize;
+            while let Some(row) = stream.try_next().await.map_err(map_err)? {
+                if !columns_sent {
+                    columns_sent = true;
+                    wants_rows = sink.event(StreamEvent::Columns {
+                        index,
+                        columns: result_columns(row.columns()),
+                    }) == Flow::Continue;
+                    reading = wants_rows;
                 }
-                if stopped || !full {
-                    break;
+                received += 1;
+                if reading {
+                    reading = batcher.push(types::row_values(&row), sink);
                 }
             }
             batcher.flush(sink);
+            Ok((batcher.kept, wants_rows && received > batcher.kept))
         }
-        self.client.batch_execute(&format!("CLOSE {CURSOR}")).await.map_err(map_err)?;
+        .await;
+        // The block of our own ends (or the cursor closes) whatever happened above.
+        ended.as_mut().await;
+        let ended = ended.as_mut().take_output().unwrap_or(Ok(()));
+        let (rows, truncated) = outcome?;
+        ended.map_err(map_err)?;
+        if !columns_sent {
+            let statement = self.client.prepare(sql).await.map_err(map_err)?;
+            sink.event(StreamEvent::Columns {
+                index,
+                columns: result_columns(statement.columns()),
+            });
+        }
         sink.event(StreamEvent::Done {
             index,
             affected: None,
-            rows: batcher.kept,
+            rows,
             truncated,
             elapsed_ms: started.elapsed().as_millis() as u64,
         });
         Ok(())
     }
 
+    /// Any other statement: its describe, its execution and a probe of the transaction state after it are sent together
+    /// (one round trip). Rows past the cap are read and dropped: the statement must finish (it may be changing rows).
     async fn run_direct(&self, index: usize, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink, started: Instant) -> Result<()> {
-        use futures_util::{pin_mut, StreamExt};
-        let stmt = self.client.prepare(sql).await.map_err(map_err)?;
-        if stmt.columns().is_empty() {
-            let n = self.client.execute(&stmt, &[]).await.map_err(map_err)?;
+        use futures_util::{future::maybe_done, pin_mut, poll};
+        let described = maybe_done(self.client.prepare(sql));
+        let no_params = std::iter::empty::<(&(dyn tokio_postgres::types::ToSql + Sync), tokio_postgres::types::Type)>();
+        let executed = maybe_done(self.client.query_typed_raw(sql, no_params));
+        let probed = maybe_done(self.client.simple_query(STATE_PROBE));
+        pin_mut!(described, executed, probed);
+        let _ = poll!(described.as_mut());
+        let _ = poll!(executed.as_mut());
+        let _ = poll!(probed.as_mut());
+        let outcome = self.finish_direct(index, sql, opts, sink, started, described, executed).await;
+        probed.as_mut().await;
+        self.store_state(probed.as_mut().take_output().expect("polled to completion"));
+        outcome
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_direct(
+        &self,
+        index: usize,
+        sql: &str,
+        opts: &RunOptions,
+        sink: &mut dyn ResultSink,
+        started: Instant,
+        mut described: std::pin::Pin<
+            &mut futures_util::future::MaybeDone<
+                impl std::future::Future<Output = std::result::Result<tokio_postgres::Statement, tokio_postgres::Error>>,
+            >,
+        >,
+        mut executed: std::pin::Pin<
+            &mut futures_util::future::MaybeDone<
+                impl std::future::Future<Output = std::result::Result<tokio_postgres::RowStream, tokio_postgres::Error>>,
+            >,
+        >,
+    ) -> Result<()> {
+        use futures_util::{pin_mut, TryStreamExt};
+        described.as_mut().await;
+        let statement = described.as_mut().take_output().expect("polled to completion");
+        executed.as_mut().await;
+        let stream = executed.as_mut().take_output().expect("polled to completion");
+        // Both fail alike on a statement that does not parse; the describe's error is the one to report.
+        let statement = statement.map_err(map_err)?;
+        let stream = stream.map_err(map_err)?;
+        pin_mut!(stream);
+        if statement.columns().is_empty() {
+            while stream.try_next().await.map_err(map_err)?.is_some() {}
             sink.event(StreamEvent::Done {
                 index,
-                affected: Some(n),
+                affected: Some(stream.rows_affected().unwrap_or(0)),
                 rows: 0,
                 truncated: false,
                 elapsed_ms: started.elapsed().as_millis() as u64,
             });
             return Ok(());
         }
-        let columns = result_columns(stmt.columns());
+        let columns = result_columns(statement.columns());
         let wants_rows = sink.event(StreamEvent::Columns { index, columns }) == Flow::Continue;
-        let stream = self
-            .client
-            .query_raw(&stmt, std::iter::empty::<&(dyn tokio_postgres::types::ToSql + Sync)>())
-            .await
-            .map_err(map_err)?;
-        pin_mut!(stream);
         let mut batcher = Batcher::new(index, opts);
         let mut truncated = false;
         let mut reading = wants_rows;
-        while let Some(row) = stream.next().await {
-            let row = row.map_err(map_err)?;
+        while let Some(row) = stream.try_next().await.map_err(map_err)? {
             if reading {
                 reading = batcher.push(types::row_values(&row), sink);
             } else {
-                truncated = true; // drained: the statement must finish (it may be changing rows)
+                truncated = true;
             }
         }
         batcher.flush(sink);

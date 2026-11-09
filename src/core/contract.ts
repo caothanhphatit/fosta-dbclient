@@ -231,6 +231,8 @@ export interface BrowseRequest {
   estimateTotal: boolean;
   exactTotal: boolean;
   columns: string[] | null;
+  /** Read from the end (Last page): the order reversed, rows still in the normal order; `hasMore` / `nextKeyset` then point toward the start. SQL engines only. */
+  reverse?: boolean;
 }
 
 export interface Total {

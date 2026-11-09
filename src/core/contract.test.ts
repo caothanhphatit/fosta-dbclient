@@ -252,6 +252,7 @@ const SHAPES: Record<string, Shape> = {
     estimateTotal: "boolean",
     exactTotal: "boolean",
     columns: nul(arr("string")),
+    reverse: opt("boolean"),
   }),
   page: obj<C.Page>({
     columns: arr(columnInfo),

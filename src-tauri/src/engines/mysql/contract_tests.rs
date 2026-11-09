@@ -40,7 +40,7 @@ fn key_filter(key: i64) -> Filter {
     }
 }
 
-fn spec(database: Option<&str>) -> ConnectionSpec {
+pub(super) fn spec(database: Option<&str>) -> ConnectionSpec {
     ConnectionSpec {
         engine: "mariadb".into(),
         host: env("HOST", "127.0.0.1"),
@@ -51,7 +51,7 @@ fn spec(database: Option<&str>) -> ConnectionSpec {
     }
 }
 
-fn secrets() -> ConnectSecrets {
+pub(super) fn secrets() -> ConnectSecrets {
     ConnectSecrets::password(&env("PASSWORD", "studio-root"))
 }
 

@@ -129,6 +129,7 @@ pub fn browse_to_common(request: &contract::BrowseRequest) -> AppResult<BrowseRe
         limit: request.limit,
         after: request.after.clone(),
         estimate_total: request.estimate_total,
+        reverse: request.reverse,
     })
 }
 

@@ -200,6 +200,8 @@ pub struct BrowseRequest {
     pub after: Option<Vec<Value>>,
     /// Ask for an estimated total (statistics for unfiltered tables, the planner's estimate otherwise).
     pub estimate_total: bool,
+    /// Read from the end: the order reversed, the rows returned in the normal order (see the contract's `reverse`).
+    pub reverse: bool,
 }
 
 impl BrowseRequest {
@@ -213,6 +215,7 @@ impl BrowseRequest {
             limit,
             after: None,
             estimate_total: false,
+            reverse: false,
         }
     }
 }

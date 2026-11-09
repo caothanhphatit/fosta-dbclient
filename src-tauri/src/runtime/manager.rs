@@ -16,14 +16,14 @@ use tokio::sync::mpsc;
 use serde::Serialize;
 
 use super::{
-    contain::{contained, crashed, is_crash},
+    contain::{contained, contained_until, crashed, is_crash},
     registry::registry,
 };
 use crate::{
     config,
     contract::{
-        Canceller, ConnectInfo, ConnectRequest, ConnectSecrets, Connection, ConnectionSpec, Endpoint, Engine, Flow, ResultSink, RunOptions,
-        RunRequest, RunSummary, Session, SessionInfo, SessionOptions, StreamEvent, TlsMode,
+        CancellationToken, Canceller, ConnectInfo, ConnectRequest, ConnectSecrets, Connection, ConnectionSpec, Endpoint, Engine, Flow,
+        ResultSink, RunOptions, RunRequest, RunSummary, Session, SessionInfo, SessionOptions, StreamEvent, TlsMode,
     },
     error::{AppError, AppResult, NOT_CONNECTED},
     gateway::Gateway,
@@ -75,6 +75,23 @@ impl Handle {
     {
         let label = self.engine.descriptor().label.clone();
         let outcome = contained(&label, what, call(Arc::clone(&self.conn))).await;
+        if outcome.as_ref().err().is_some_and(is_crash) {
+            self.poisoned.store(true, Ordering::Relaxed);
+        }
+        outcome.map_err(|error| error.with_engine(self.engine.id()))
+    }
+
+    /// [`call`](Self::call) that `cancel` can end. The engine sees the signal in its `CallContext` and may stop the
+    /// server's work (and free its pooled connection) within `grace`; after that its task is aborted. A cancelled call
+    /// answers `CANCELLED`, whatever the engine returned meanwhile.
+    pub async fn call_cancellable<T, F, Fut>(&self, what: &'static str, cancel: CancellationToken, grace: Duration, call: F) -> AppResult<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(Arc<dyn Connection>) -> Fut,
+        Fut: Future<Output = AppResult<T>> + Send + 'static,
+    {
+        let label = self.engine.descriptor().label.clone();
+        let outcome = contained_until(&label, what, call(Arc::clone(&self.conn)), Some((&cancel, grace))).await;
         if outcome.as_ref().err().is_some_and(is_crash) {
             self.poisoned.store(true, Ordering::Relaxed);
         }
@@ -178,6 +195,62 @@ pub struct ConnectionManager {
     sessions: Mutex<HashMap<String, SessionEntry>>,
     /// Checks every operation against the workspace's rules (see `crate::gateway`).
     pub gateway: Gateway,
+    /// Calls the UI may cancel by id (`cancel_request`).
+    pub requests: Requests,
+}
+
+/// How many cancels of not (yet) registered ids are remembered: a cancel can overtake its own request.
+const EARLY_CANCELS: usize = 64;
+
+/// Calls the UI may cancel by id: a page that was replaced by a newer one, a tab that closed, an export.
+#[derive(Default)]
+pub struct Requests {
+    running: Mutex<HashMap<String, CancellationToken>>,
+    early: Mutex<std::collections::VecDeque<String>>,
+}
+
+impl Requests {
+    /// A token for one call, cancellable by `id` (when given) until the guard drops.
+    pub fn register(&self, id: Option<&str>) -> (CancellationToken, RequestGuard<'_>) {
+        let token = CancellationToken::new();
+        let id = id.filter(|id| !id.is_empty()).map(str::to_owned);
+        if let Some(id) = &id {
+            let mut early = lock(&self.early);
+            if let Some(position) = early.iter().position(|known| known == id) {
+                early.remove(position);
+                token.cancel();
+            }
+            lock(&self.running).insert(id.clone(), token.clone());
+        }
+        (token, RequestGuard { requests: self, id })
+    }
+
+    /// Cancels the call registered as `id`; one that has not started yet is cancelled when it does.
+    pub fn cancel(&self, id: &str) {
+        if let Some(token) = lock(&self.running).get(id) {
+            token.cancel();
+            return;
+        }
+        let mut early = lock(&self.early);
+        if early.len() >= EARLY_CANCELS {
+            early.pop_front();
+        }
+        early.push_back(id.to_owned());
+    }
+}
+
+/// Unregisters a call when it ends.
+pub struct RequestGuard<'a> {
+    requests: &'a Requests,
+    id: Option<String>,
+}
+
+impl Drop for RequestGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = &self.id {
+            lock(&self.requests.running).remove(id);
+        }
+    }
 }
 
 /// The network layer's host settings: the app's known_hosts file in the data directory.

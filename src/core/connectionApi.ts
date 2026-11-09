@@ -27,7 +27,9 @@ export interface ConnectionApi {
   readonly connectionId: string;
   treeChildren(request: TreeRequest): Promise<TreeChildren>;
   describe(object: ObjectRef): Promise<ObjectDescription>;
-  browse(request: BrowseRequest): Promise<Page>;
+  /** With `requestId`, `cancelRequest(requestId)` stops the read on the server. */
+  browse(request: BrowseRequest, requestId?: string | null): Promise<Page>;
+  cancelRequest(requestId: string): Promise<void>;
   applyEdits(changes: RowChangeSet, caller?: Caller, confirmation?: Confirmation | null, importId?: string | null): Promise<ApplyResult>;
   openSession(sessionId: string, options?: SessionOptions | null): Promise<SessionInfo>;
   closeSession(sessionId: string): Promise<void>;
@@ -48,7 +50,8 @@ export function bindConnection(connectionId: string): ConnectionApi {
     connectionId,
     treeChildren: (request) => api.treeChildren(connectionId, request),
     describe: (object) => api.describeObject(connectionId, object),
-    browse: (request) => api.browseObject(connectionId, request),
+    browse: (request, requestId = null) => api.browseObject(connectionId, request, requestId),
+    cancelRequest: (requestId) => api.cancelRequest(requestId),
     applyEdits: (changes, caller = "gridSave", confirmation = null, importId = null) => api.applyEdits(connectionId, changes, caller, confirmation, importId),
     openSession: (sessionId, options = null) => api.openSession(connectionId, sessionId, options),
     closeSession: (sessionId) => api.closeSession(sessionId),

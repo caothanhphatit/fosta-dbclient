@@ -72,6 +72,7 @@ pub fn router(server: Server) -> Router {
     let api = Router::new()
         .route("/invoke/{command}", post(api::invoke))
         .route("/events", get(api::events))
+        .route("/export/{ticket}", get(crate::export::download))
         .route("/logout", post(logout))
         // Unknown API paths are a JSON 404 (after the session check), not the UI's index.html with 200.
         .fallback(api_not_found)

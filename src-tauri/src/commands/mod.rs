@@ -34,7 +34,7 @@ use crate::{
 };
 
 /// The gateway context (workspace, connection, rules) of a saved connection.
-pub(crate) fn gateway_context(state: &AppState, connection_id: &str) -> AppResult<Context> {
+pub fn gateway_context(state: &AppState, connection_id: &str) -> AppResult<Context> {
     state.config.read(|config| Context::for_connection(config, connection_id))
 }
 
@@ -86,7 +86,7 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<$crate::contract::TreeChildren> = $crate::commands::objects::tree_children;
             [async] describe_object(connection_id: String, object: $crate::contract::ObjectRef)
                 -> $crate::error::AppResult<$crate::contract::ObjectDescription> = $crate::commands::objects::describe_object;
-            [async] browse_object(connection_id: String, request: $crate::contract::BrowseRequest)
+            [async] browse_object(connection_id: String, request: $crate::contract::BrowseRequest, request_id: Option<String>)
                 -> $crate::error::AppResult<$crate::contract::Page> = $crate::commands::objects::browse_object;
             [async] apply_edits(connection_id: String, changes: $crate::contract::RowChangeSet, caller: Option<$crate::gateway::Caller>,
                 import_id: Option<String>, confirmation: Option<$crate::gateway::Confirmation>)
@@ -105,6 +105,7 @@ macro_rules! for_each_command {
             [async] cancel_run(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::query::cancel_run;
             [sync] classify_run(session_id: String, text: String)
                 -> $crate::error::AppResult<Vec<$crate::gateway::classify::Category>> = $crate::commands::query::classify_run;
+            [sync] cancel_request(request_id: String) -> () = $crate::commands::objects::cancel_request;
             [async] transaction(session_id: String, op: $crate::contract::TransactionOp)
                 -> $crate::error::AppResult<$crate::contract::TransactionState> = $crate::commands::query::transaction;
             [async] invoke_capability(connection_id: String, name: String, args: Option<serde_json::Value>,

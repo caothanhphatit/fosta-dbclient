@@ -37,9 +37,16 @@ pub async fn describe_object(state: &AppState, connection_id: String, object: Ob
         .await
 }
 
-pub async fn browse_object(state: &AppState, connection_id: String, request: BrowseRequest) -> AppResult<Page> {
+/// One page of rows. With `request_id`, `cancel_request` stops it (the grid replaced it with a newer page or closed).
+pub async fn browse_object(state: &AppState, connection_id: String, request: BrowseRequest, request_id: Option<String>) -> AppResult<Page> {
     let context = gateway_context(state, &connection_id)?;
-    gateway::browse(&state.engines, &context, &connection_id, &request).await
+    gateway::browse_cancellable(&state.engines, &context, &connection_id, &request, request_id.as_deref()).await
+}
+
+/// Stops the call started with `request_id` (a page read, an export); unknown ids are remembered briefly, since a
+/// cancel may arrive before its request.
+pub fn cancel_request(state: &AppState, request_id: String) {
+    state.engines.requests.cancel(&request_id);
 }
 
 /// Saves grid edits (`caller` "gridSave", the default) or imported rows ("import"; batches of one import share

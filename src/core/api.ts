@@ -24,6 +24,22 @@ import type {
 import { errorCode as codeOf, errorText as textOf, NOT_CONNECTED } from "./errors";
 export { NOT_CONNECTED, SESSION_LOST } from "./errors";
 import { downloadInBrowser, invoke as transportInvoke, invokeStreaming, isTauri, listen, type InvokeOptions, type UnlistenFn } from "./transport";
+
+/** An export the backend streams: every row matching `browse` (its paging fields are ignored). */
+export interface ExportRequest {
+  browse: ObjectBrowseRequest;
+  format: "csv" | "excel" | "json";
+  /** The Excel flavour's list separator. */
+  separator: string | null;
+  fileName: string;
+  /** `cancelRequest(requestId)` stops the export. */
+  requestId: string | null;
+}
+
+export interface ExportDone {
+  path: string;
+  rows: number;
+}
 import type {
   AiConnection,
   AiSettings,
@@ -130,7 +146,10 @@ export const api = {
   parseConnectionString: (engine: string, text: string) => invoke<ParsedConnectionString>("parse_connection_string", { engine, text }),
   treeChildren: (connectionId: string, request: TreeRequest) => invoke<TreeChildren>("tree_children", { connectionId, request }),
   describeObject: (connectionId: string, object: ObjectRef) => invoke<ObjectDescription>("describe_object", { connectionId, object }),
-  browseObject: (connectionId: string, request: ObjectBrowseRequest) => invoke<Page>("browse_object", { connectionId, request }),
+  /** With `requestId`, `cancelRequest(requestId)` stops the read (a replaced page, a closed tab). */
+  browseObject: (connectionId: string, request: ObjectBrowseRequest, requestId: string | null = null) =>
+    invoke<Page>("browse_object", { connectionId, request, requestId }),
+  cancelRequest: (requestId: string) => invoke<void>("cancel_request", { requestId }),
   /**
    * Row edits from a grid save or an import. Updates and deletes carry `original` (and `version`); a changed row fails the
    * whole set with a `CONFLICT` error. Batches of one import share `importId` and are confirmed once.
@@ -212,6 +231,11 @@ export const api = {
     isTauri() ? invoke<string>("save_download", { name, text, base64 }) : Promise.resolve(downloadInBrowser(name, text, base64)),
   /** Desktop only (`capabilities().revealFile`). */
   revealFile: (path: string) => invoke<void>("reveal_file", { path }),
+  /** Desktop only: writes the export into Downloads page by page (`onProgress` after each page). */
+  exportRows: (connectionId: string, request: ExportRequest, onProgress: (progress: { rows: number }) => void) =>
+    invokeStreaming<ExportDone, { rows: number }>("export_rows", { connectionId, request }, "onEvent", onProgress),
+  /** Web only: a one-time ticket; navigating a download to `/api/export/<ticket>` streams the file. */
+  exportPrepare: (connectionId: string, request: ExportRequest) => invoke<string>("export_prepare", { connectionId, request }),
   /** What this edition supports; see `core/capabilities.ts`. */
   capabilities: () => invoke<Capabilities>("capabilities"),
   /** Streams the reply through `onEvent`; resolves with the full text. */

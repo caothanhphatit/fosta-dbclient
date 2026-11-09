@@ -38,8 +38,8 @@ use crate::{
     audit::{AuditEntry, AuditLog, Outcome},
     config::AppConfig,
     contract::{
-        require, unsupported_capability, ApplyResult, BrowseRequest, CallContext, Capability, ClassifyInput, Filter, Limits, Page,
-        ResultSink, RowChangeSet, RunRequest, RunSummary, TransactionOp, TransactionState,
+        require, unsupported_capability, ApplyResult, BrowseRequest, CallContext, CancellationToken, Capability, ClassifyInput, Filter,
+        Limits, Page, ResultSink, RowChangeSet, RunRequest, RunSummary, TransactionOp, TransactionState,
     },
     error::{AppError, AppResult},
     lock::lock,
@@ -535,16 +535,64 @@ pub fn check_filter(mgr: &ConnectionManager, context: &Context, connection_id: &
 
 /// `browse_object`: validates the filter, then reads a page with the rules' limits.
 pub async fn browse(mgr: &ConnectionManager, context: &Context, connection_id: &str, request: &BrowseRequest) -> AppResult<Page> {
+    browse_cancellable(mgr, context, connection_id, request, None).await
+}
+
+/// A page read gives up after this long when the rules set no statement timeout (Open workspaces).
+pub const BROWSE_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long a cancelled page read may take to stop the server's work before its task is ended.
+const CANCEL_GRACE: Duration = Duration::from_secs(5);
+
+/// [`browse`] that `cancel_request(request_id)` can stop (a page replaced by a newer one, a closed tab): the engine stops
+/// the server's work where it can (MariaDB/MySQL `KILL QUERY`, PostgreSQL's CancelRequest), so the pooled connection is
+/// free again. Without a statement timeout in the rules a read is stopped after [`BROWSE_TIMEOUT`].
+pub async fn browse_cancellable(
+    mgr: &ConnectionManager,
+    context: &Context,
+    connection_id: &str,
+    request: &BrowseRequest,
+    request_id: Option<&str>,
+) -> AppResult<Page> {
+    let (cancel, _registered) = mgr.requests.register(request_id);
+    browse_until(mgr, context, connection_id, request, &cancel).await
+}
+
+/// [`browse`] that `cancel` stops (see [`browse_cancellable`]); an export reads all its pages under one signal.
+pub async fn browse_until(
+    mgr: &ConnectionManager,
+    context: &Context,
+    connection_id: &str,
+    request: &BrowseRequest,
+    cancel: &CancellationToken,
+) -> AppResult<Page> {
     let handle = mgr.handle(connection_id)?;
     require(handle.conn.capabilities(), Capability::BrowseRows)?;
     check_browse_filter(mgr, context, &handle, &request.filter)?;
-    let (request, ctx) = (request.clone(), CallContext::new(context.limits()));
-    handle
-        .call("read a page of rows", |conn| async move {
-            let tabular = conn.tabular().ok_or_else(|| unsupported_capability("browsing rows"))?;
-            tabular.browse(&request, &ctx).await
-        })
-        .await
+    let limits = context.limits();
+    let timeout = (limits.timeout_secs == 0).then_some(BROWSE_TIMEOUT);
+    let (request, ctx) = (request.clone(), CallContext::new(limits).with_cancel(cancel.clone()));
+    let call = handle.call_cancellable("read a page of rows", cancel.clone(), CANCEL_GRACE, |conn| async move {
+        let tabular = conn.tabular().ok_or_else(|| unsupported_capability("browsing rows"))?;
+        tabular.browse(&request, &ctx).await
+    });
+    let Some(limit) = timeout else {
+        return call.await;
+    };
+    tokio::pin!(call);
+    tokio::select! {
+        outcome = &mut call => outcome,
+        () = tokio::time::sleep(limit) => {
+            cancel.cancel();
+            let _ = call.await;
+            Err(AppError::coded(
+                "TIMEOUT",
+                format!(
+                    "Reading the page took longer than {} s and was stopped. Filter the rows, sort by an indexed column, or set a statement timeout in the workspace's rules.",
+                    limit.as_secs()
+                ),
+            ))
+        }
+    }
 }
 
 /// `apply_edits` from a grid save or an import: classified by the engine, confirmed per the rules, applied in one

@@ -16,4 +16,25 @@ describe("LatestRequest", () => {
     latest.close();
     expect(latest.isCurrent(pending)).toBe(false);
   });
+
+  it("cancels a running request when a newer one starts or the owner closes", () => {
+    const latest = new LatestRequest();
+    const cancelled: string[] = [];
+    const first = latest.begin(() => cancelled.push("first"));
+    latest.begin(() => cancelled.push("second"));
+    expect(cancelled).toEqual(["first"]);
+    latest.finish(first);
+    latest.close();
+    expect(cancelled).toEqual(["first", "second"]);
+  });
+
+  it("does not cancel a request that already finished", () => {
+    const latest = new LatestRequest();
+    const cancelled: string[] = [];
+    const done = latest.begin(() => cancelled.push("done"));
+    latest.finish(done);
+    latest.begin();
+    latest.close();
+    expect(cancelled).toEqual([]);
+  });
 });

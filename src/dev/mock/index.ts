@@ -650,6 +650,8 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const { engine } = connection(str("connectionId"));
       const request = payload.request as BrowseRequest;
       checkFilter(request);
+      // The mock engines read from the start only: Last falls back to an exact count and an offset.
+      if (request.reverse) throw mockError("UNSUPPORTED_CAPABILITY", "The mock engines do not read from the end.", { engine: engine.descriptor.id });
       return need(engine, "browse", "browsing rows")(request);
     }
     case "apply_edits":
@@ -695,6 +697,12 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const current = session(str("sessionId"));
       return classify(connection(current.connectionId).engine, str("text")).map((statement) => statement.category);
     }
+    case "export_prepare":
+    case "export_rows":
+      // The mock has no backend to stream from: the dialog builds the file in the page instead.
+      throw mockError("UNSUPPORTED_CAPABILITY", "The mock engines do not stream exports.", {});
+    case "cancel_request":
+      return null;
     case "cancel_run":
       sessions.get(str("sessionId"))?.running?.abort();
       return null;

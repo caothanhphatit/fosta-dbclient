@@ -1,8 +1,12 @@
 //! Exports saved to the Downloads folder.
 
+use std::io::Write as _;
+
+use super::gateway_context;
 use crate::{
     error::{AppError, AppResult},
-    files,
+    export::{self, ChunkSink, ExportProgress, ExportRequest},
+    files, AppState,
 };
 
 /// Saves an export into Downloads; `base64` is for binary content such as PNG.
@@ -17,6 +21,53 @@ pub fn save_download(name: String, text: Option<String>, base64: Option<String>)
 
 pub fn reveal_file(path: String) -> AppResult<()> {
     files::reveal(&path)
+}
+
+/// A finished export: where it was written and how many rows it holds.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportDone {
+    pub path: String,
+    pub rows: u64,
+}
+
+/// Writes the file in chunks as the pages arrive.
+struct FileSink(std::io::BufWriter<std::fs::File>);
+
+#[async_trait::async_trait]
+impl ChunkSink for FileSink {
+    async fn write(&mut self, chunk: Vec<u8>) -> AppResult<()> {
+        self.0.write_all(&chunk)?;
+        Ok(())
+    }
+}
+
+/// Desktop: exports every row matching the grid into Downloads, page by page (`progress` after each page);
+/// `cancel_request(request.request_id)` stops it and removes the partial file.
+pub async fn export_rows(
+    state: &AppState,
+    connection_id: String,
+    request: ExportRequest,
+    mut progress: impl FnMut(ExportProgress) + Send,
+) -> AppResult<ExportDone> {
+    let context = gateway_context(state, &connection_id)?;
+    let (cancel, _registered) = state.engines.requests.register(request.request_id.as_deref());
+    let (file, path) = files::create_download(&request.file_name)?;
+    let mut sink = FileSink(std::io::BufWriter::new(file));
+    let mut on_page = |rows| progress(ExportProgress { rows });
+    let written = export::export(&state.engines, &context, &connection_id, &request, &cancel, &mut sink, &mut on_page).await;
+    let flushed = written.and_then(|rows| sink.0.flush().map(|()| rows).map_err(AppError::from));
+    drop(sink);
+    match flushed {
+        Ok(rows) => Ok(ExportDone {
+            path: path.to_string_lossy().into_owned(),
+            rows,
+        }),
+        Err(error) => {
+            let _ = std::fs::remove_file(&path);
+            Err(error)
+        }
+    }
 }
 
 fn decode_base64(encoded: &str) -> AppResult<Vec<u8>> {

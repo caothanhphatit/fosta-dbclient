@@ -1,6 +1,15 @@
 //! Connection options from a `ConnectRequest`, and what the server is (MariaDB or MySQL, version, VECTOR support).
 
-use std::{future::Future, path::PathBuf, time::Duration};
+use std::{
+    future::Future,
+    ops::{Deref, DerefMut},
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use mysql_async::{prelude::*, ClientIdentity, Conn, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
 
@@ -11,12 +20,67 @@ use crate::{
     net,
 };
 
-/// Browse, catalog and cancel requests share this many pooled connections.
-const POOL_SIZE: usize = 4;
+/// Browse and catalog requests share this many pooled connections.
+pub const POOL_SIZE: usize = 4;
 /// Grid saves run one at a time per connection anyway.
 const EDIT_POOL_SIZE: usize = 2;
 /// How long a pooled connection may take to open after the first connect.
 pub const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A connection from the pool. The count of those in use tells a busy pool from an unreachable server when no
+/// connection comes within [`CHECKOUT_TIMEOUT`].
+pub struct Pooled {
+    conn: Conn,
+    in_use: Arc<AtomicUsize>,
+}
+
+impl Deref for Pooled {
+    type Target = Conn;
+    fn deref(&self) -> &Conn {
+        &self.conn
+    }
+}
+
+impl DerefMut for Pooled {
+    fn deref_mut(&mut self) -> &mut Conn {
+        &mut self.conn
+    }
+}
+
+impl Drop for Pooled {
+    fn drop(&mut self) {
+        self.in_use.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// A connection from `pool` (of `size`), or an error saying whether the pool was busy or the server did not answer.
+pub async fn checkout(pool: &Pool, in_use: &Arc<AtomicUsize>, size: usize) -> AppResult<Pooled> {
+    match tokio::time::timeout(CHECKOUT_TIMEOUT, pool.get_conn()).await {
+        Ok(conn) => {
+            let conn = conn?;
+            in_use.fetch_add(1, Ordering::Relaxed);
+            Ok(Pooled {
+                conn,
+                in_use: Arc::clone(in_use),
+            })
+        }
+        Err(_) => Err(checkout_timeout(in_use.load(Ordering::Relaxed), size)),
+    }
+}
+
+fn checkout_timeout(in_use: usize, size: usize) -> AppError {
+    let seconds = CHECKOUT_TIMEOUT.as_secs();
+    let message = if in_use >= size {
+        format!(
+            "All {size} connections of this server are busy (pages, counts or tree reads still running), and none was free within {seconds} s. Wait for them, or stop the long-running read."
+        )
+    } else {
+        format!(
+            "Opening a connection timed out after {seconds} s ({in_use} of {size} in use). Is the server reachable (and any port-forward running)?"
+        )
+    };
+    AppError::coded("TIMEOUT", message).retryable(true)
+}
 
 /// What the server is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,6 +233,18 @@ mod tests {
 
     use super::*;
     use crate::contract::{ConnectSecrets, ConnectionSpec, Endpoint, TlsConfig};
+
+    #[test]
+    fn a_busy_pool_is_not_blamed_on_the_network() {
+        let busy = checkout_timeout(4, 4).to_string();
+        assert!(busy.contains("All 4 connections"), "{busy}");
+        assert!(!busy.contains("reachable"), "{busy}");
+        let unreachable = checkout_timeout(1, 4).to_string();
+        assert!(
+            unreachable.contains("reachable") && unreachable.contains("1 of 4 in use"),
+            "{unreachable}"
+        );
+    }
 
     fn request(tls: Option<TlsConfig>) -> ConnectRequest {
         ConnectRequest {

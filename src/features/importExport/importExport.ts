@@ -7,9 +7,9 @@
  * as one set.
  */
 import { capabilities } from "../../core/capabilities";
-import { api, errorText } from "../../core/api";
+import { api, errorCode, errorText, type ExportRequest } from "../../core/api";
 import type { ConnectionApi } from "../../core/connectionApi";
-import type { ColumnInfo, ObjectRef, Page, Total, Value } from "../../core/contract";
+import type { BrowseRequest, ColumnInfo, ObjectRef, Page, Total, Value } from "../../core/contract";
 import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs";
 import { formatNumber, h } from "../../core/dom";
 import type { SqlDialect } from "../../core/sql";
@@ -50,6 +50,55 @@ export interface ExportSource {
   dialect: SqlDialect;
   /** Reads one page of every row matching the current filter and sort. */
   read: (cursor: PageCursor, limit: number) => Promise<Page>;
+  /** The same rows for the backend: CSV and JSON of every row are streamed to the file instead of built in the page. */
+  stream?: { connectionId: string; request: BrowseRequest };
+}
+
+/** Formats the backend writes itself, byte for byte as `exporters.ts` would (see `src-tauri/src/export.rs`). */
+const STREAMED: FileFormat[] = ["csv", "excel", "json"];
+
+/**
+ * Every row through the backend, which reads the pages and writes them as they come: desktop into Downloads (with
+ * progress; closing the dialog stops it and removes the partial file), web as the browser's download of a streamed
+ * response. Memory stays at one page either way. Resolves false when the backend cannot stream (the dev mock), so the
+ * dialog builds the file in the page instead.
+ */
+async function streamExport(
+  stream: NonNullable<ExportSource["stream"]>,
+  format: FileFormat,
+  fileName: string,
+  signal: AbortSignal,
+  onProgress: (rows: number) => void,
+): Promise<boolean> {
+  const request: ExportRequest = {
+    browse: stream.request,
+    format: format as ExportRequest["format"],
+    separator: format === "excel" ? excelSeparator() : null,
+    fileName,
+    requestId: `export-${crypto.randomUUID()}`,
+  };
+  const stop = () => void api.cancelRequest(request.requestId ?? "").catch(() => undefined);
+  signal.addEventListener("abort", stop);
+  try {
+    if (capabilities().browserDownloads) {
+      const ticket = await api.exportPrepare(stream.connectionId, request);
+      const link = h("a", { href: `/api/export/${encodeURIComponent(ticket)}`, download: fileName, hidden: true });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      toast(`${fileName}: the download has started`, "success");
+      return true;
+    }
+    const done = await api.exportRows(stream.connectionId, request, (progress) => onProgress(progress.rows));
+    if (!signal.aborted) savedDialog(`Exported ${formatNumber(done.rows)} rows`, done.path);
+    return true;
+  } catch (error) {
+    if (errorCode(error) === "UNSUPPORTED_CAPABILITY") return false;
+    if (signal.aborted || errorCode(error) === "CANCELLED") return true;
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", stop);
+  }
 }
 
 export function exportDialog(source: ExportSource): void {
@@ -91,6 +140,18 @@ export function exportDialog(source: ExportSource): void {
         primary: true,
         run: async () => {
           try {
+            const chosenFormat = FORMATS.find((item) => item.value === format.value) ?? FORMATS[0];
+            if (!scopePage.checked && source.stream && STREAMED.includes(chosenFormat.value)) {
+              const name = exportFileName(fileName.value, source.title, chosenFormat.extension);
+              const streamed = await streamExport(
+                source.stream,
+                chosenFormat.value,
+                name,
+                cancel.signal,
+                (done) => (progress.textContent = `Writing rows… ${formatNumber(done)}${of}`),
+              );
+              if (streamed) return;
+            }
             const rows = scopePage.checked
               ? source.pageRows
               : await fetchAllRows(source.read, cancel.signal, (done) => (progress.textContent = `Reading rows… ${formatNumber(done)}${of}`));

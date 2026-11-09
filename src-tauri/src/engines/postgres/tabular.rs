@@ -9,6 +9,7 @@ use std::time::Instant;
 use super::{as_sql, catalog, catalog::RELATION_KIND, map_err, text_params, PgDialect, PgEngine};
 use crate::{
     contract::{
+        cancelled,
         tabular::{conflict_error, RowConflict},
         ApplyResult, BrowseRequest, CallContext, ColumnInfo, Field, Filter, ObjectDescription, Page, RowChange, RowChangeSet, Total, Value,
         ValueKind,
@@ -112,11 +113,30 @@ impl PgEngine {
         result
     }
 
+    /// One page on the shared connection. Cancelling (`ctx.cancel`) while it waits for the connection gives up the wait;
+    /// while it runs, PostgreSQL's CancelRequest stops the statement, so the connection is free at once.
     pub(super) async fn browse_page(&self, request: &BrowseRequest, ctx: &CallContext) -> AppResult<Page> {
+        let client = tokio::select! {
+            client = self.client.lock() => client,
+            () = ctx.cancel.cancelled() => return Err(cancelled()),
+        };
+        let token = client.cancel_token();
+        let work = self.read_page(&client, request, ctx);
+        tokio::pin!(work);
+        tokio::select! {
+            outcome = &mut work => outcome,
+            () = ctx.cancel.cancelled() => {
+                let _ = token.cancel_query(self.tls.clone()).await;
+                let _ = work.await;
+                Err(cancelled())
+            }
+        }
+    }
+
+    async fn read_page(&self, client: &tokio_postgres::Client, request: &BrowseRequest, ctx: &CallContext) -> AppResult<Page> {
         let started = Instant::now();
-        let client = self.client.lock().await;
         let object = adapt::object_to_common(&request.object)?;
-        let description = convert(catalog::describe(&client, &object).await.map_err(AppError::from)?);
+        let description = convert(catalog::describe(client, &object).await.map_err(AppError::from)?);
         let versioned = has_version(&description);
         let primary_key: Vec<String> = description.primary_key.as_ref().map(|key| key.columns.clone()).unwrap_or_default();
         let shown: Vec<ColumnInfo> = match &request.columns {
@@ -146,7 +166,7 @@ impl PgEngine {
         let built = sqlbuild::build_browse_with_raw(&EditDialect, &core, &selected, &primary_key, raw.as_deref())?;
         let params = text_params(&built.params);
         let rows = self
-            .timed(&client, ctx.limits.timeout_secs, async {
+            .timed(client, ctx.limits.timeout_secs, async {
                 client
                     .query(&built.sql, &as_sql(&params))
                     .await
@@ -156,7 +176,7 @@ impl PgEngine {
         let mut rows: Vec<Vec<Value>> = rows.iter().map(super::types::row_values).collect();
         let versions = versioned.then(|| rows.iter_mut().map(|row| row.pop().unwrap_or(Value::Null)).collect::<Vec<_>>());
         let total = if request.exact_total || request.estimate_total {
-            self.total(&client, &description, request, &built, &params, ctx.limits.timeout_secs)
+            self.total(client, &description, request, &built, &params, ctx.limits.timeout_secs)
                 .await?
         } else {
             None
@@ -167,7 +187,7 @@ impl PgEngine {
             elapsed_ms,
         );
         if let Some(versions) = versions {
-            page.row_versions = Some(versions.into_iter().take(page.rows.len()).collect());
+            page.row_versions = Some(sqlbuild::page_order(versions, page.rows.len() as u64, &built));
         }
         page.total = total;
         Ok(page)

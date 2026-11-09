@@ -12,10 +12,12 @@ use super::{
     adapter::MySqlConnection,
     catalog::{self, database_of, qualified, quote_ident, TableColumns},
     connect::{within, CHECKOUT_TIMEOUT},
+    session::kill_query,
     values::{coerce, to_param, to_value},
 };
 use crate::{
     contract::{
+        cancelled,
         tabular::{conflict_error, RowConflict},
         ApplyResult, BrowseRequest, CallContext, ColumnInfo, Field, Filter, Page, RowChange, RowChangeSet, TabularData, Total, Value,
     },
@@ -136,12 +138,32 @@ impl MySqlConnection {
         within(CHECKOUT_TIMEOUT, "Opening a connection", self.edit_pool.get_conn()).await
     }
 
+    /// One page. Cancelling (`ctx.cancel`) while it waits for a pooled connection gives up the wait; while it runs, the
+    /// statement is stopped with `KILL QUERY`, so the connection goes back to the pool at once instead of finishing the
+    /// read in the background.
     async fn browse_page(&self, request: &BrowseRequest, ctx: &CallContext) -> AppResult<Page> {
+        let mut conn = tokio::select! {
+            conn = self.pooled() => conn?,
+            () = ctx.cancel.cancelled() => return Err(cancelled()),
+        };
+        let thread_id = conn.id();
+        let work = self.read_page(&mut conn, request, ctx);
+        tokio::pin!(work);
+        tokio::select! {
+            outcome = &mut work => outcome,
+            () = ctx.cancel.cancelled() => {
+                let _ = kill_query(&self.opts, thread_id).await;
+                let _ = work.await;
+                Err(cancelled())
+            }
+        }
+    }
+
+    async fn read_page(&self, conn: &mut Conn, request: &BrowseRequest, ctx: &CallContext) -> AppResult<Page> {
         let started = Instant::now();
         let database = database_of(&request.object)?.to_owned();
-        let mut conn = self.pooled().await?;
         let TableColumns { columns, primary_key } =
-            catalog::table_columns(&mut conn, self.server.mariadb, &database, &request.object.name).await?;
+            catalog::table_columns(conn, self.server.mariadb, &database, &request.object.name).await?;
         let columns = match &request.columns {
             Some(wanted) => columns.into_iter().filter(|column| wanted.contains(&column.name)).collect(),
             None => columns,
@@ -168,7 +190,7 @@ impl MySqlConnection {
         let rows = rows_of(rows, &columns);
         let elapsed_ms = started.elapsed().as_millis() as u64;
         let total = if request.exact_total || request.estimate_total {
-            self.total(&mut conn, &database, request, &built, &params, timeout).await?
+            self.total(conn, &database, request, &built, &params, timeout).await?
         } else {
             None
         };
