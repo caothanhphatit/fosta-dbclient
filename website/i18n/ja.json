@@ -19,6 +19,7 @@
   "hero.docker": "Docker で実行",
   "hero.github": "GitHub で見る",
   "hero.note": "バージョン {version} · Windows インストーラー／ポータブル版 .exe · Docker 版 Web エディション",
+  "hero.smartscreen": "アプリはまだコード署名されていないため、Windows に SmartScreen の警告が出ることがあります：<b>More info</b> → <b>Run anyway</b> を選んでください。",
   "hero.dockerLabel": "Docker コマンド",
   "hero.dockerTitle": "Docker で動く Web エディション",
   "hero.copy": "コピー",

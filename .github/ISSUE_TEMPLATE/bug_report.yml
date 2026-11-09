@@ -1,0 +1,72 @@
+name: Bug report
+description: Something does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please remove passwords, keys, host names and data you do not want to share before you submit.
+  - type: input
+    id: version
+    attributes:
+      label: Fosta Studio version
+      description: Shown at the right end of the status bar.
+      placeholder: "0.1.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: edition
+    attributes:
+      label: Edition
+      options:
+        - Windows installer
+        - Windows portable .exe
+        - Web edition (Docker)
+        - Built from source
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Database
+      options:
+        - MariaDB
+        - MySQL
+        - SQL Server
+        - PostgreSQL
+        - Oracle
+        - MongoDB
+        - Redis / Valkey
+        - SQLite
+        - ClickHouse
+        - Elasticsearch
+        - OpenSearch
+        - Not database-specific
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Database version and setup
+      description: For example "PostgreSQL 16 on AWS RDS, through an SSH tunnel" or "MongoDB Atlas".
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a connection to …
+        2. Run …
+        3. See …
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: In the app, open Settings (gear at the bottom left) → Copy diagnostics, and paste it here. It contains no passwords.
+      render: text

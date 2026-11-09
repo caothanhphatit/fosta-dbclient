@@ -1,0 +1,31 @@
+name: Feature request
+description: An idea for something Fosta Studio should do.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task or problem, not the solution. For example "I connect to five databases behind the same bastion every morning".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: How you imagine it working. Other tools that do it well are welcome references.
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Database it is about
+      options:
+        - Any / not database-specific
+        - MariaDB / MySQL
+        - SQL Server
+        - PostgreSQL
+        - Oracle
+        - MongoDB
+        - Redis / Valkey
+        - SQLite
+        - ClickHouse
+        - Elasticsearch / OpenSearch

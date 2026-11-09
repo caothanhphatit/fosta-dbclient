@@ -34,7 +34,7 @@ Chi tiết đầy đủ (tiếng Anh): [docs/features.md](docs/features.md).
 ### Windows
 
 Tải bộ cài hoặc file `.exe` portable ở [bản phát hành mới nhất](https://github.com/caothanhphatit/fosta-dbclient/releases/latest)
-rồi chạy. File chưa được ký số nên Windows SmartScreen có thể hỏi xác nhận. Bản cài đặt tự cập nhật (tải ngầm, cài khi bạn
+rồi chạy. File chưa được ký số nên Windows SmartScreen có thể cảnh báo: bấm *More info* → *Run anyway*. Bản cài đặt tự cập nhật (tải ngầm, cài khi bạn
 thoát app); bản portable báo khi có phiên bản mới.
 
 ### Chạy bằng Docker (bản web)

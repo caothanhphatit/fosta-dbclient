@@ -19,6 +19,7 @@
   "hero.docker": "Run with Docker",
   "hero.github": "View on GitHub",
   "hero.note": "Version {version} · Windows installer or portable .exe · Docker web edition",
+  "hero.smartscreen": "Windows may show a SmartScreen warning because the app is not code-signed yet: choose <b>More info</b> → <b>Run anyway</b>.",
   "hero.dockerLabel": "Docker commands",
   "hero.dockerTitle": "Web edition in Docker",
   "hero.copy": "Copy",

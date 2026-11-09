@@ -19,6 +19,7 @@
   "hero.docker": "用 Docker 运行",
   "hero.github": "在 GitHub 上查看",
   "hero.note": "版本 {version} · Windows 安装程序或便携版 .exe · Docker 网页版",
+  "hero.smartscreen": "由于应用尚未进行代码签名，Windows 可能显示 SmartScreen 警告：点击 <b>More info</b> → <b>Run anyway</b>。",
   "hero.dockerLabel": "Docker 命令",
   "hero.dockerTitle": "Docker 网页版",
   "hero.copy": "复制",
