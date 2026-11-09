@@ -174,7 +174,6 @@ fn run_statement(conn: &Connection, index: usize, sql: &str, opts: &RunOptions, 
     }
     let columns: Vec<ColumnInfo> = st
         .columns()
-        .iter()
         .map(|c| {
             let decl = c.decl_type().unwrap_or("");
             ColumnInfo::result(

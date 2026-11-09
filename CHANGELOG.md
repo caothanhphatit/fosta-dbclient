@@ -80,6 +80,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **SQL Server on Linux and in the web edition**: an untrusted certificate shows the same "Accept invalid certificates" hint as on
   Windows.
 
+### Security
+
+- **SQLite**: the bundled SQLite library is updated (`libsqlite3-sys` 0.39, `rusqlite` 0.41) for CVE-2026-119375
+  (RUSTSEC-2026-0459), reachable through a crafted database file.
+
 ## [0.1.0] - 2026-11-08
 
 First public release for Windows, plus a web edition for Docker.

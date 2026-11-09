@@ -101,7 +101,7 @@ tokio-postgres = { version = "0.7.18", optional = true }
 tokio-postgres-rustls = { version = "0.14", features = ["ring"], optional = true }
 rustls-pki-types = { version = "1.12", features = ["std"] }
 webpki-roots = "1"
-rusqlite = { version = "0.40.2", features = ["bundled", "column_decltype"], optional = true }
+rusqlite = { version = "0.41.1", features = ["bundled", "column_decltype"], optional = true }
 oracle = { version = "0.6.3", features = ["chrono"], optional = true }
 # Unpacks the Oracle Instant Client archive the Oracle engine downloads on demand.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"], optional = true }
