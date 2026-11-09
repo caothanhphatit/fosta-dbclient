@@ -669,6 +669,59 @@ mod tests {
             let forged = format!("{}={mcp}", crate::auth::COOKIE_NAME);
             assert_eq!(status(server.invoke("mcp_status").header("cookie", forged)).await, 401);
 
+            // Export tickets: only the session that asked for one redeems it, once; never the MCP token.
+            let prepare = || async {
+                server
+                    .invoke("export_prepare")
+                    .header("cookie", &cookie)
+                    .json(&json!({
+                        "connectionId": "missing",
+                        "request": {
+                            "browse": { "object": { "name": "t", "kind": "table" }, "limit": 100 },
+                            "format": "csv",
+                            "fileName": "t.csv"
+                        }
+                    }))
+                    .send()
+                    .await
+                    .unwrap()
+                    .json::<String>()
+                    .await
+                    .unwrap()
+            };
+            let export = |ticket: &str| server.client.get(format!("{}/api/export/{ticket}", server.base));
+            let spent = |response: reqwest::Response| async move {
+                response.status().as_u16() == 422 && response.text().await.unwrap().contains("expired or was already used")
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            let other_login = server
+                .client
+                .post(format!("{}/api/login", server.base))
+                .form(&[("token", access.as_str())])
+                .send()
+                .await
+                .unwrap();
+            let other_cookie = other_login.headers()[header::SET_COOKIE]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_owned();
+            assert_ne!(other_cookie, cookie);
+            let ticket = prepare().await;
+            assert_eq!(ticket.len(), 32);
+            assert_eq!(status(export(&ticket).bearer_auth(&mcp)).await, 401);
+            let forged = format!("{}={mcp}", crate::auth::COOKIE_NAME);
+            assert_eq!(status(export(&ticket).header("cookie", forged)).await, 401);
+            assert!(spent(export(&ticket).header("cookie", &other_cookie).send().await.unwrap()).await);
+            // The refused attempt spent it.
+            assert!(spent(export(&ticket).header("cookie", &cookie).send().await.unwrap()).await);
+            let ticket = prepare().await;
+            let redeemed = export(&ticket).header("cookie", &cookie).send().await.unwrap();
+            assert!(!spent(redeemed).await, "its own session redeems a ticket (the unknown connection fails after that)");
+            assert!(spent(export(&ticket).header("cookie", &cookie).send().await.unwrap()).await);
+
             // The browser rotates it: the old one stops working at once.
             let rotated: String = server
                 .invoke("rotate_mcp_token")

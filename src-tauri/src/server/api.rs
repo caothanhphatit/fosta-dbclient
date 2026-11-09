@@ -13,7 +13,7 @@ use std::{convert::Infallible, sync::Arc};
 use axum::{
     body::{Body, Bytes},
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -170,7 +170,7 @@ macro_rules! web_commands {
 
 fosta_studio::for_each_command!(web_commands);
 
-pub async fn invoke(State(server): State<Arc<Server>>, Path(command): Path<String>, body: Bytes) -> Response {
+pub async fn invoke(State(server): State<Arc<Server>>, Path(command): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
     let args = if body.iter().all(u8::is_ascii_whitespace) {
         json!({})
     } else {
@@ -182,7 +182,7 @@ pub async fn invoke(State(server): State<Arc<Server>>, Path(command): Path<Strin
         }
     };
     if command == "export_prepare" {
-        return crate::export::prepare(args);
+        return crate::export::prepare(args, crate::export::session_of(&headers));
     }
     if command == "ai_chat" {
         return ai_chat(Arc::clone(&server.state), args);

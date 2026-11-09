@@ -2,7 +2,7 @@
 //! one-time ticket, and the page then navigates a download to `GET /api/export/<ticket>`, which streams the file as
 //! the response body while the pages are read (the browser's download manager writes it to disk). A GET carries no
 //! CSRF header, so the ticket, issued to a signed-in page through a CSRF-checked POST, is what authorizes it; the
-//! session cookie is still required. Closing the download stops the export.
+//! session cookie is still required, and must be the one the ticket was issued to. Closing the download stops the export.
 
 use std::{
     collections::HashMap,
@@ -13,7 +13,7 @@ use std::{
 use axum::{
     body::{Body, Bytes},
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -27,7 +27,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::{api::InvokeError, web::Server};
+use crate::{api::InvokeError, auth, web::Server};
 
 /// How long a ticket waits for its download to start.
 const TICKET_TTL: Duration = Duration::from_secs(60);
@@ -35,6 +35,8 @@ const TICKET_TTL: Duration = Duration::from_secs(60);
 const CHUNKS_IN_FLIGHT: usize = 4;
 
 struct Ticket {
+    /// The session cookie of the page that asked for it (none with authentication off): only that session redeems it.
+    session: Option<String>,
     connection_id: String,
     request: ExportRequest,
     issued: Instant,
@@ -46,8 +48,17 @@ fn tickets() -> std::sync::MutexGuard<'static, HashMap<String, Ticket>> {
     TICKETS.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// `export_prepare(connectionId, request)` → the ticket for `GET /api/export/<ticket>`.
-pub fn prepare(args: Value) -> Response {
+/// The session cookie a request carries.
+pub fn session_of(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookies| auth::cookie_value(cookies, auth::COOKIE_NAME))
+        .map(str::to_owned)
+}
+
+/// `export_prepare(connectionId, request)` → the ticket for `GET /api/export/<ticket>`, redeemable by `session` only.
+pub fn prepare(args: Value, session: Option<String>) -> Response {
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Arguments {
@@ -68,6 +79,7 @@ pub fn prepare(args: Value) -> Response {
     all.insert(
         ticket.clone(),
         Ticket {
+            session,
             connection_id,
             request,
             issued: Instant::now(),
@@ -102,8 +114,10 @@ impl Drop for CancelOnDrop {
 }
 
 /// `GET /api/export/<ticket>`: the file, streamed.
-pub async fn download(State(server): State<Arc<Server>>, Path(ticket): Path<String>) -> Response {
+pub async fn download(State(server): State<Arc<Server>>, Path(ticket): Path<String>, headers: HeaderMap) -> Response {
+    // Removed before any check: a ticket is spent by its first use, also a refused one.
     let Some(Ticket {
+        session,
         connection_id,
         request,
         issued,
@@ -112,7 +126,7 @@ pub async fn download(State(server): State<Arc<Server>>, Path(ticket): Path<Stri
     else {
         return InvokeError::Command(export::unknown_ticket()).into_response();
     };
-    if issued.elapsed() >= TICKET_TTL {
+    if issued.elapsed() >= TICKET_TTL || session != session_of(&headers) {
         return InvokeError::Command(export::unknown_ticket()).into_response();
     }
     let state = Arc::clone(&server.state);
