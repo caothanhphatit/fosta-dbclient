@@ -1,7 +1,7 @@
 {
   "meta.title": "Fosta Studio: a small, fast, open-source database client",
-  "meta.description": "Fosta Studio is a free, open-source (GPL-3.0) desktop database client for Windows, with a web edition for Docker: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle, with workspaces, SSH and TLS, a fast data grid, ER diagrams and a built-in AI agent that knows your schema.",
-  "meta.socialDescription": "Free and open-source database client for 11 engines, from MariaDB and PostgreSQL to Redis, Elasticsearch and Oracle, with workspaces, SSH and TLS, safety rules and a built-in AI agent that knows your schema.",
+  "meta.description": "Free, open-source database client built in Rust: an AI agent that understands your database, MCP, multiple workspaces and tunnels that start on their own.",
+  "meta.socialDescription": "Built in Rust: an AI agent that understands your database structure, MCP support, multiple workspaces and tunnels that start on their own. Free and open source.",
   "meta.ogImageAlt": "Fosta Studio logo, an F made of data rows, with the text: free, open-source database client for 11 engines, built in Rust",
   "a11y.skip": "Skip to content",
   "a11y.backToTop": "Fosta Studio, back to top",
@@ -14,7 +14,7 @@
   "theme.toLight": "Switch to light theme",
   "hero.pill": "Free & open source",
   "hero.facts": "Windows · 9 MB installer · GPL-3.0",
-  "hero.lede": "A small, fast database client for <strong>11 engines: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle</strong>, with workspaces that bring their own tunnels and a built-in AI agent that knows your schema.",
+  "hero.lede": "A database client built in Rust, with an AI agent that understands your database structure, MCP support, multiple workspaces and tunnels that start on their own. Free and open source. Supports 11 databases, from MariaDB and PostgreSQL to MongoDB, Redis and Oracle.",
   "hero.download": "Download for Windows",
   "hero.mac": "Download for macOS",
   "hero.macNote": "<strong>On a Mac?</strong> There is no native macOS app yet, but the web edition runs on your Mac: install Docker Desktop, run these commands, then use Fosta Studio in your browser.",

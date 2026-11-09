@@ -1,7 +1,7 @@
 {
   "meta.title": "Fosta Studio：軽量・高速なオープンソースのデータベースクライアント",
-  "meta.description": "Fosta Studio は、無料・オープンソース（GPL-3.0）の Windows 向けデータベース クライアントです。Docker で動く Web 版もあり、MariaDB、MySQL、SQL Server、MongoDB、PostgreSQL、SQLite、Redis、Elasticsearch、OpenSearch、ClickHouse、Oracle に対応。ワークスペース、SSH と TLS、高速なデータグリッド、ER 図、スキーマを理解する AI エージェントを搭載しています。",
-  "meta.socialDescription": "無料・オープンソースのデータベース クライアント。MariaDB や PostgreSQL から Redis、Elasticsearch、Oracle まで 11 のエンジンに対応し、ワークスペース、SSH と TLS、安全ルール、スキーマを理解する AI エージェントを搭載。",
+  "meta.description": "Rust で作られた無料・オープンソースのデータベース クライアント。データベースの構造を理解する AI エージェント、MCP 対応、複数のワークスペース、自動で起動するトンネルを搭載。",
+  "meta.socialDescription": "Rust で作られた無料・オープンソースのデータベース クライアント。データベースの構造を理解する AI エージェント、MCP 対応、複数のワークスペース、自動で起動するトンネルを搭載。",
   "meta.ogImageAlt": "Fosta Studio のロゴ（データ行で組んだ F）と英語のキャッチコピー「Free, open-source database client for 11 engines. Built in Rust.」",
   "a11y.skip": "本文へスキップ",
   "a11y.backToTop": "Fosta Studio、ページの先頭へ",
@@ -14,7 +14,7 @@
   "theme.toLight": "ライトテーマに切り替え",
   "hero.pill": "無料・オープンソース",
   "hero.facts": "Windows · インストーラー 9 MB · GPL-3.0",
-  "hero.lede": "<strong>MariaDB、MySQL、SQL Server、MongoDB、PostgreSQL、SQLite、Redis、Elasticsearch、OpenSearch、ClickHouse、Oracle の 11 エンジン</strong>に対応した軽量で高速なデータベース クライアント。ワークスペースごとにトンネルを持ち、スキーマを理解する AI エージェントを搭載しています。",
+  "hero.lede": "Rust で作られたデータベース クライアント。データベースの構造を理解する AI エージェント、MCP 対応、複数のワークスペース、自動で起動するトンネルを備えています。無料・オープンソース。MariaDB や PostgreSQL から MongoDB、Redis、Oracle まで 11 のデータベースに対応。",
   "hero.download": "Windows 版をダウンロード",
   "hero.mac": "macOS 版をダウンロード",
   "hero.macNote": "<strong>Mac をお使いですか？</strong> ネイティブの macOS アプリはまだありませんが、Web エディションは Mac で動きます。Docker Desktop をインストールし、下のコマンドを実行すれば、ブラウザで Fosta Studio を使えます。",
