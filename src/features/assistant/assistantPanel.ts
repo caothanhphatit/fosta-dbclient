@@ -307,7 +307,9 @@ export class AssistantPanel {
             label: "Fix error",
             icon: "health",
             mode: "send",
-            prompt: () => `This failed with:\n${context.lastError?.()}\n\n${sql()}\nFix it and explain the cause in one sentence.`,
+            // The server's error text stays out of the user's message: it reaches the model as untrusted context data
+            // ("Last error from the server"), so text planted in an error cannot speak with the user's voice.
+            prompt: () => `This failed with the last error from the server (in the context):\n\n${sql()}\nFix it and explain the cause in one sentence.`,
           });
         }
         actions.push(...prompts);
@@ -509,8 +511,11 @@ function enginePrompts(info: EngineInfo): QuickAction[] {
   }));
 }
 
+/** A fenced block whose fence is longer than any backtick run in `code`, so the code cannot close it. */
 function fence(code: string, language: string): string {
-  return `\`\`\`${language}\n${code.trim()}\n\`\`\``;
+  const longest = Math.max(0, ...(code.match(/`+/g) ?? []).map((run) => run.length));
+  const ticks = "`".repeat(Math.max(3, longest + 1));
+  return `${ticks}${language}\n${code.trim()}\n${ticks}`;
 }
 
 function contextChip(context: AssistantContext): HTMLElement[] {

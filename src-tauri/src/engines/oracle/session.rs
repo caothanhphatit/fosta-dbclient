@@ -350,8 +350,18 @@ const NOT_FIRST_IN_TRANSACTION: &str = "ORA-01453";
 /// mistake. Not covered: DDL (it commits implicitly first), autonomous transactions (`PRAGMA AUTONOMOUS_TRANSACTION`)
 /// and work on a remote database through a link; those are kept out by the classification. A session that already has
 /// uncommitted changes is refused rather than rolled back, so the user's changes stay.
+///
+/// `EXPLAIN PLAN … FOR` (without `INTO`) only writes plan rows into the session's PLAN_TABLE, which a read-only transaction
+/// forbids; it runs in its own transaction instead and those rows are committed, so a following `DBMS_XPLAN.DISPLAY`
+/// sees them.
 fn run_read_only(conn: &Connection, index: usize, sql: &str, opts: &RunOptions, sink: &mut dyn ResultSink) -> Result<()> {
-    if let Err(error) = conn.execute("SET TRANSACTION READ ONLY", &[]) {
+    let explain = is_plain_explain_plan(sql);
+    let begin = if explain {
+        "SET TRANSACTION READ WRITE"
+    } else {
+        "SET TRANSACTION READ ONLY"
+    };
+    if let Err(error) = conn.execute(begin, &[]) {
         let error = map_err(error);
         if error.code.as_deref() == Some(NOT_FIRST_IN_TRANSACTION) {
             return Err(EngineError::new(
@@ -363,8 +373,22 @@ fn run_read_only(conn: &Connection, index: usize, sql: &str, opts: &RunOptions, 
         return Err(error);
     }
     let outcome = run_statement(conn, index, sql, opts, false, sink);
-    let rollback = conn.rollback().map_err(map_err);
-    outcome.and(rollback)
+    let end = if explain && outcome.is_ok() {
+        conn.commit()
+    } else {
+        conn.rollback()
+    };
+    outcome.and(end.map_err(map_err))
+}
+
+/// `EXPLAIN PLAN [SET STATEMENT_ID = '…'] FOR …`: writes plan rows into PLAN_TABLE and runs nothing. With `INTO` it could
+/// write into any table, so a statement with the word INTO anywhere (also `… FOR INSERT INTO`) is not plain.
+fn is_plain_explain_plan(sql: &str) -> bool {
+    let upper = sql.trim_start().to_ascii_uppercase();
+    let mut words = upper
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|word| !word.is_empty());
+    words.next() == Some("EXPLAIN") && words.next() == Some("PLAN") && !words.any(|word| word == "INTO")
 }
 
 fn run_statement(
@@ -459,6 +483,18 @@ fn run_statement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_explain_plan_without_into_skips_the_read_only_transaction() {
+        assert!(is_plain_explain_plan("EXPLAIN PLAN FOR SELECT * FROM t"));
+        assert!(is_plain_explain_plan("explain plan set statement_id = 'a' for select 1 from dual"));
+        assert!(!is_plain_explain_plan("EXPLAIN PLAN INTO shop.orders FOR SELECT 1 FROM dual"));
+        assert!(!is_plain_explain_plan(
+            "EXPLAIN PLAN SET STATEMENT_ID = 'x FOR y' INTO t FOR SELECT 1 FROM dual"
+        ));
+        assert!(!is_plain_explain_plan("SELECT 'EXPLAIN PLAN' FROM dual"));
+        assert!(!is_plain_explain_plan("/* x */ EXPLAIN PLAN FOR SELECT 1 FROM dual"));
+    }
 
     #[test]
     fn select_for_update_is_recognised_as_locking() {
