@@ -14,7 +14,7 @@ import { buildLayout, ASSISTANT_STORAGE_KEY, toggleSidebar } from "./app/layout"
 import { shellMenus } from "./app/menus";
 import { installOnExit, startUpdates } from "./app/update";
 import { confirmQuit, guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
-import { api } from "./core/api";
+import { api, onConnectionLost } from "./core/api";
 import { hideUnsupported, loadCapabilities } from "./core/capabilities";
 import { loadEngines } from "./core/engines";
 import { initDensity } from "./core/density";
@@ -81,6 +81,7 @@ const navigation = new AppNavigation(tabs, {
   connectionName: (connectionId) =>
     currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name ?? connectionId,
   historyEnabled: () => currentConfig?.queryHistory !== false,
+  ensureConnected: (connectionId): Promise<boolean> => tree.ensureConnected(connectionId),
   writesBlocked: (connectionId) => writesBlocked(connectionSafety(currentConfig?.workspaces ?? [], connectionId)),
 });
 
@@ -406,6 +407,8 @@ async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
 
 async function bootstrap(): Promise<void> {
   setConfirmationConfigSink(applyConfig);
+  // A call that finds its connection gone (the backend restarted) shows it as closed in the tree.
+  onConnectionLost((connectionId) => tree.connectionLost(connectionId));
   if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
     // Browser-only preview (`npm run dev`): a mock backend with sample data.
     const { installDevMock } = await import("./dev/mock");

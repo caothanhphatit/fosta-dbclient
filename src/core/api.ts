@@ -22,7 +22,7 @@ import type {
   TreeRequest,
 } from "./contract";
 import { errorCode as codeOf, errorText as textOf } from "./errors";
-import { downloadInBrowser, invoke, invokeStreaming, isTauri, listen, type UnlistenFn } from "./transport";
+import { downloadInBrowser, invoke as transportInvoke, invokeStreaming, isTauri, listen, type UnlistenFn } from "./transport";
 import type {
   AiConnection,
   AiSettings,
@@ -54,6 +54,33 @@ import type {
 } from "./types";
 
 export const PASSWORD_REQUIRED = "PASSWORD_REQUIRED";
+/** The code of a call on a connection the backend does not have open (it restarted, or the connection was dropped). */
+export const NOT_CONNECTED = "NOT_CONNECTED";
+/** The code of a call on a query tab's session the backend no longer has. */
+export const SESSION_LOST = "SESSION_LOST";
+
+const lostListeners = new Set<(connectionId: string) => void>();
+
+/** Calls `listener` when a call on a connection fails with `NOT_CONNECTED`, so the tree stops showing it as connected. */
+export function onConnectionLost(listener: (connectionId: string) => void): () => void {
+  lostListeners.add(listener);
+  return () => lostListeners.delete(listener);
+}
+
+/** Reports a `NOT_CONNECTED` failure of a call on `connectionId` (the query tab reports its own, from a session call). */
+export function reportConnectionLost(connectionId: string): void {
+  for (const listener of lostListeners) listener(connectionId);
+}
+
+/** Every command goes through here: a `NOT_CONNECTED` answer for a connection is reported to `onConnectionLost`. */
+async function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+  try {
+    return await transportInvoke<T>(command, args);
+  } catch (error) {
+    if (codeOf(error) === NOT_CONNECTED && typeof args.connectionId === "string") reportConnectionLost(args.connectionId);
+    throw error;
+  }
+}
 
 /** `parse_connection_string`: the profile fields a connection string sets, and its password (never stored in the profile). */
 export interface ParsedConnectionString {

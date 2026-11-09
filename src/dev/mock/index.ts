@@ -61,7 +61,7 @@ import type {
 import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf, unmarksLooserThanReadOnly, withoutConfirmation } from "../../features/safety/safety";
 import { chatRuns, deleteAiConnection, draftKey, fetchModels, probeChat, saveAiConnection, setAiActive, streamChat } from "./ai";
 import { checkTestPassword, deleteConnection, parseConnectionString, profiles, saveConnection } from "./connections";
-import { mockError, NOT_CONNECTED } from "./errors";
+import { mockError, NOT_CONNECTED, SESSION_LOST } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
 import { mockCheckUpdate, mockInstallKind, mockRestart, mockUpdaterCheck, mockUpdaterDownload, mockWhatsNew, setInstallKind } from "./update";
 import { VECTOR_DIMS } from "./shop";
@@ -94,6 +94,8 @@ interface Connection {
 
 const connections = new Map<string, Connection>();
 const sessions = new Map<string, MockSession>();
+/** Connections the "backend" dropped (`__fostaMock.restartBackend`): calls fail with `NOT_CONNECTED` until `connect`. */
+const dropped = new Set<string>();
 const recentErrors: Diagnostics["recentErrors"] = [];
 
 // --- Connections ----------------------------------------------------------------------------------------------------------
@@ -138,7 +140,7 @@ function connection(connectionId: string): Connection {
   const existing = connections.get(connectionId);
   if (existing) return existing;
   const profile = profiles().find((item) => item.id === connectionId);
-  if (!profile) throw mockError("ERROR", NOT_CONNECTED);
+  if (!profile || dropped.has(connectionId)) throw mockError("NOT_CONNECTED", NOT_CONNECTED);
   const opened = open(profile);
   connections.set(connectionId, opened);
   return opened;
@@ -154,7 +156,7 @@ function need<K extends keyof EngineMock>(engine: EngineMock, member: K, capabil
 
 function session(sessionId: string): MockSession {
   const found = sessions.get(sessionId);
-  if (!found) throw mockError("ERROR", "This query tab lost its session. Close it and open a new query.");
+  if (!found) throw mockError("SESSION_LOST", SESSION_LOST);
   return found;
 }
 
@@ -545,6 +547,7 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     }
     case "connect": {
       const profile = savedProfile(str("id"));
+      dropped.delete(profile.id);
       const connectNow = () => {
         try {
           const opened = open(profile);
@@ -665,6 +668,8 @@ declare global {
       connections(): string[];
       setTreePageSize(size: number | null): void;
       setInstallKind(kind: InstallKind): void;
+      /** Drops every session and open connection, like a restart of the backend (lost sessions, NOT_CONNECTED). */
+      restartBackend(): void;
     };
   }
 }
@@ -693,5 +698,11 @@ export function installDevMock(): void {
       treePageSize = size && size > 0 ? size : null;
     },
     setInstallKind,
+    restartBackend: () => {
+      // Like a restart of the app's backend or the web server: every session and open connection is gone.
+      for (const id of connections.keys()) dropped.add(id);
+      connections.clear();
+      sessions.clear();
+    },
   };
 }

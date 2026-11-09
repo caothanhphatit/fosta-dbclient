@@ -112,6 +112,8 @@ export class ConnectionTree {
   private selectedKey: string | null = null;
   /** The state of each workspace command, from `task-status` events (before any: `host.commandState`). */
   private readonly commandStates = new Map<string, TaskState>();
+  /** Connects in progress through `ensureConnected`. */
+  private readonly connecting = new Map<string, Promise<void>>();
 
   constructor(host: TreeHost) {
     this.host = host;
@@ -203,6 +205,39 @@ export class ConnectionTree {
 
   private nodeOf(connectionId: string): ConnectionNode | undefined {
     return this.nodes.find((node) => node.profile.id === connectionId);
+  }
+
+  /**
+   * Connects `connectionId` unless it is connected already (a restored tab shown for the first time, a query tab whose
+   * connection the backend lost); concurrent callers share one attempt. True once it is connected.
+   */
+  async ensureConnected(connectionId: string): Promise<boolean> {
+    const conn = this.cache.get(connectionId);
+    if (!conn) return false;
+    if (conn.state === "connected") return true;
+    let pending = this.connecting.get(connectionId);
+    if (!pending) {
+      pending = this.connect(conn).finally(() => this.connecting.delete(connectionId));
+      this.connecting.set(connectionId, pending);
+    }
+    await pending;
+    return this.connectedIds().has(connectionId);
+  }
+
+  /**
+   * The backend no longer has this connection open (it restarted, or the server dropped it): show it as closed. Its
+   * tabs stay; they connect again when used.
+   */
+  connectionLost(connectionId: string): void {
+    const conn = this.cache.get(connectionId);
+    if (!conn || conn.state !== "connected") return;
+    conn.state = "idle";
+    conn.expanded = false;
+    conn.generation += 1;
+    conn.model.clear();
+    setConnectInfo(connectionId, null);
+    this.host.status(`${conn.profile.name} is no longer connected (the server or the app restarted)`);
+    this.render();
   }
 
   // --- Connecting -------------------------------------------------------------------------------------------------------

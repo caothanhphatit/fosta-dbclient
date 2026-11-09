@@ -42,6 +42,8 @@ export interface NavigationHost {
   writesBlocked(connectionId: string): boolean;
   /** Whether query runs are recorded (the `queryHistory` setting). */
   historyEnabled(): boolean;
+  /** Connects the connection unless it is connected (through the tree, which shows it); true once it is. */
+  ensureConnected(connectionId: string): Promise<boolean>;
 }
 
 /** What `openObject` opens: a tree node, an object reference, or nothing (the connection itself: a console). */
@@ -338,6 +340,7 @@ export class AppNavigation implements Navigator {
       connectionName: (id) => this.host.connectionName(id),
       historyEnabled: () => this.host.historyEnabled(),
       openQuery: (id, db, sql) => this.openQuery(id, db, sql),
+      reconnect: (id) => this.host.ensureConnected(id),
     };
     const counter = this.queryCounter;
     const view = asQueryView((await this.openObject(profile, null, "console", { database, text: initialSql, host, title: `Query ${counter}` })) ?? undefined);

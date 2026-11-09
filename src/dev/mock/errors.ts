@@ -16,3 +16,4 @@ export function positionAt(text: string, offset: number): { line: number; column
 }
 
 export const NOT_CONNECTED = "Not connected. Double-click the connection to connect first.";
+export const SESSION_LOST = "This query tab lost its session (its connection closed, or the app restarted).";

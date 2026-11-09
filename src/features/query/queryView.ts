@@ -10,7 +10,7 @@
  */
 import type { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
-import { api, errorText } from "../../core/api";
+import { api, errorCode, errorText, NOT_CONNECTED, reportConnectionLost, SESSION_LOST } from "../../core/api";
 import { databaseName, databaseNodes, type ConnectionApi } from "../../core/connectionApi";
 import type {
   ConnectInfo,
@@ -53,6 +53,8 @@ export interface QueryHost {
   /** The `queryHistory` setting. */
   historyEnabled(): boolean;
   openQuery(connectionId: string, database: string | null, sql: string): void;
+  /** Connects again a connection the backend lost; true once it is connected. */
+  reconnect?(connectionId: string): Promise<boolean>;
 }
 
 /** Everything a query tab is built from (the view registry fills it from the `ViewContext`). */
@@ -474,6 +476,45 @@ export class QueryView implements TabContent {
     }
   }
 
+  /**
+   * After `SESSION_LOST` / `NOT_CONNECTED`: connects again when the connection is gone too, and opens a new session.
+   * False when the lost session had an open transaction: that is said in Messages and nothing runs, since running the
+   * statements again outside it would commit them one by one.
+   */
+  private async reopenSession(error: unknown): Promise<boolean> {
+    const hadTransaction = this.hasOpenTransaction();
+    this.session = null;
+    this.sessionOpening = null;
+    this.sessionId = crypto.randomUUID();
+    this.showTransaction(this.transactionsSupported ? { supported: true, open: false, autoCommit: this.autoCommit.checked, failed: false } : null);
+    let reason = error;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (errorCode(reason) === NOT_CONNECTED) {
+        reportConnectionLost(this.connectionId);
+        if (!(await this.host.reconnect?.(this.connectionId))) throw reason;
+      }
+      try {
+        await this.ensureSession();
+        break;
+      } catch (next) {
+        if (attempt > 0 || errorCode(next) !== NOT_CONNECTED) throw next;
+        reason = next;
+      }
+    }
+    if (hadTransaction) {
+      this.resultArea.showMessages([
+        {
+          text: "This tab lost its session (its connection closed, or the app or the server restarted), and with it the open transaction: its uncommitted changes were rolled back. Nothing ran; run again to continue in a new session.",
+          kind: "error",
+        },
+      ]);
+      this.runStatus.textContent = "Session lost";
+      return false;
+    }
+    toast("This tab's session was lost (a restart); it was reopened and the query ran again", "info");
+    return true;
+  }
+
   private closeSession(): void {
     if (!this.session && !this.sessionOpening) return;
     const sessionId = this.sessionId;
@@ -504,6 +545,11 @@ export class QueryView implements TabContent {
       const done: Partial<Record<TransactionOp, string>> = { begin: "Transaction started", commit: "Committed", rollback: "Rolled back" };
       if (op !== "status") toast(done[op] ?? transactionLabel(state), "success");
     } catch (error) {
+      if (sessionGone(error)) {
+        // The next run opens a new session (and connects again when needed).
+        this.session = null;
+        this.sessionId = crypto.randomUUID();
+      }
       showError(error, "Transaction");
       this.showTransaction(this.transaction);
       void this.refreshTransaction();
@@ -634,9 +680,9 @@ export class QueryView implements TabContent {
     let results = new RunResults();
     this.cancelRequested = false;
     this.setRunning(true);
-    try {
+    const execute = async () => {
       await this.ensureSession();
-      const summary = await withConfirmation((confirmation) => {
+      return withConfirmation((confirmation) => {
         // A retry after a confirmation starts over.
         results = this.startResults();
         const current = results;
@@ -654,6 +700,17 @@ export class QueryView implements TabContent {
           inFlight,
         );
       });
+    };
+    try {
+      let summary: RunSummary | null;
+      try {
+        summary = await execute();
+      } catch (error) {
+        // The backend lost the session (or the connection) before anything ran: open a new one and run once more.
+        if (!sessionGone(error) || results.entries.length > 0) throw error;
+        if (!(await this.reopenSession(error))) return;
+        summary = await execute();
+      }
       if (summary === null) {
         this.resultArea.showMessages([{ text: "Cancelled; nothing ran.", kind: "muted" }]);
         this.runStatus.textContent = "Cancelled";
@@ -807,6 +864,12 @@ export class QueryView implements TabContent {
     const height = clamp(this.editorHost.offsetHeight + delta, MIN_EDITOR_HEIGHT, maximum);
     this.editorHost.style.height = `${height}px`;
   }
+}
+
+/** The backend no longer has the tab's session, or its connection: nothing ran, so the tab may reopen and run again. */
+function sessionGone(error: unknown): boolean {
+  const code = errorCode(error);
+  return code === SESSION_LOST || code === NOT_CONNECTED;
 }
 
 /** A language for an engine whose descriptor lists none (an unknown engine id): plain text. */
