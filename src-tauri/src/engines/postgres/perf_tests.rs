@@ -99,7 +99,9 @@ async fn perf_postgres_long_script_round_trips() {
     println!("3,750-statement script: {elapsed:?}");
     assert_eq!(sink.sets.len(), 3750);
     let digest = digest(&sink);
-    let hash = digest.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    let hash = digest
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
     println!("result digest: {hash:016x} ({} bytes)", digest.len());
     let capped = sink.sets.iter().find(|set| set.sql.contains("generate_series")).unwrap();
     assert!(capped.truncated);

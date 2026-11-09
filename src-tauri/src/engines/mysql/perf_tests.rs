@@ -2,14 +2,35 @@
 //! free their pooled connection, the last page is exact on a table larger than its estimate. Each test creates its own
 //! table in `shop` and drops it.
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use super::contract_tests::{secrets, spec};
 use crate::{
-    contract::{CallContext, CollectSink, NodeKind, ObjectRef, RunOptions, RunRequest, Session, SessionOptions},
+    contract::{
+        BrowseRequest, CallContext, CollectSink, Filter, NodeKind, ObjectRef, RawFilterLang, RunOptions, RunRequest, Session,
+        SessionOptions, CANCELLED,
+    },
     error::AppResult,
+    gateway::{
+        self,
+        rules::{Preset, SafetySettings},
+        Context,
+    },
     runtime::{ConnectionManager, Handle},
 };
+
+fn open_workspace() -> Context {
+    Context {
+        workspace_id: "perf".into(),
+        workspace_name: "Perf".into(),
+        connection_id: "perf".into(),
+        connection_name: "perf".into(),
+        safety: SafetySettings::preset(Preset::Open),
+    }
+}
 
 async fn shop() -> (ConnectionManager, Handle) {
     let manager = ConnectionManager::default();
@@ -93,4 +114,84 @@ async fn perf_mariadb_truncated_query_stops_reading_at_the_cap() {
 
     run(&handle, &session, "DROP TABLE perf_truncate").await.unwrap();
     assert!(elapsed.as_millis() < 1500, "the capped query took {elapsed:?}");
+}
+
+/// A page whose read takes long on the server: its filter counts a cross join of a billion rows.
+fn slow_page(object: &ObjectRef) -> BrowseRequest {
+    let mut request = BrowseRequest::new(object.clone(), 50);
+    request.filter = Filter::Raw {
+        language: RawFilterLang::Sql,
+        text: "`id` = 1 AND (SELECT COUNT(*) FROM perf_cancel a, perf_cancel b, perf_cancel c) > 0".into(),
+    };
+    request
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mariadb.yml"]
+async fn perf_mariadb_cancelled_pages_free_the_pool() {
+    let (manager, handle) = shop().await;
+    let manager = Arc::new(manager);
+    let session = session(&handle).await;
+    let object = big_table(&handle, &session, "perf_cancel", 1000).await;
+    let context = open_workspace();
+
+    // Four slow pages take every pooled connection: a fifth request says so instead of blaming the network.
+    let mut slow = Vec::new();
+    for i in 0..4 {
+        let (manager, context, request) = (Arc::clone(&manager), context.clone(), slow_page(&object));
+        slow.push(tokio::spawn(async move {
+            let id = format!("slow-{i}");
+            let started = Instant::now();
+            let outcome = gateway::browse_cancellable(&manager, &context, "perf", &request, Some(&id)).await;
+            (outcome, started.elapsed())
+        }));
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let error = gateway::browse(&manager, &context, "perf", &BrowseRequest::new(object.clone(), 50))
+        .await
+        .expect_err("the pool is busy");
+    assert!(error.to_string().contains("All 4 connections"), "{error}");
+
+    // Cancelling stops the server's work and frees the connections at once.
+    let cancelled_at = Instant::now();
+    for i in 0..4 {
+        manager.requests.cancel(&format!("slow-{i}"));
+    }
+    for task in slow {
+        let (outcome, _) = task.await.unwrap();
+        assert_eq!(outcome.expect_err("cancelled").code(), Some(CANCELLED));
+    }
+    let stop = cancelled_at.elapsed();
+    let started = Instant::now();
+    let page = gateway::browse(&manager, &context, "perf", &BrowseRequest::new(object.clone(), 50))
+        .await
+        .unwrap();
+    let next = started.elapsed();
+    println!("4 cancelled pages stopped in {stop:?}; the next page took {next:?}");
+    assert_eq!(page.rows.len(), 50);
+    assert!(
+        stop < Duration::from_secs(3) && next < Duration::from_secs(2),
+        "{stop:?} / {next:?}"
+    );
+    let sink = run(
+        &handle,
+        &session,
+        "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE INFO LIKE '%perf_cancel c%' AND INFO NOT LIKE '%PROCESSLIST%'",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        sink.sets[0].rows[0][0],
+        crate::contract::Value::Int(0),
+        "no read is left running on the server"
+    );
+
+    // A cancel that arrives before its request still cancels it.
+    manager.requests.cancel("early");
+    let error = gateway::browse_cancellable(&manager, &context, "perf", &slow_page(&object), Some("early"))
+        .await
+        .expect_err("cancelled before it started");
+    assert_eq!(error.code(), Some(CANCELLED));
+
+    run(&handle, &session, "DROP TABLE perf_cancel").await.unwrap();
 }

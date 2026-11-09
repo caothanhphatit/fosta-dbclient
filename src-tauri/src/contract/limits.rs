@@ -1,8 +1,67 @@
 //! Engine-level backstops set by the workspace's safety rules, and the context every engine call receives.
 
-use std::time::{Duration, Instant};
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 use super::stream::RunOptions;
+use crate::error::AppError;
+
+pub const CANCELLED: &str = "CANCELLED";
+
+/// The error of a call that was cancelled (a replaced page, a closed tab, a stopped export).
+pub fn cancelled() -> AppError {
+    AppError::coded(CANCELLED, "The request was cancelled")
+}
+
+/// A cancel signal shared by a caller and the call it started; clones share it.
+#[derive(Clone, Default)]
+pub struct CancellationToken(Arc<CancelState>);
+
+#[derive(Default)]
+struct CancelState {
+    cancelled: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.cancelled.store(true, Ordering::SeqCst);
+        self.0.notify.notify_waiters();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Completes once [`cancel`](Self::cancel) was called (at once when it already was).
+    pub async fn cancelled(&self) {
+        loop {
+            let notified = self.0.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+impl fmt::Debug for CancellationToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("CancellationToken").field(&self.is_cancelled()).finish()
+    }
+}
 
 const DEFAULT_MAX_ROWS: usize = 1000;
 const DEFAULT_BATCH_SIZE: usize = 200;
@@ -39,14 +98,26 @@ impl Limits {
 }
 
 /// Passed to every engine call: the rules' backstops and an optional deadline.
+/// Engines that can stop the server's work (MariaDB/MySQL `KILL QUERY`, PostgreSQL's CancelRequest) watch `cancel`;
+/// the caller ends the others' task.
 #[derive(Clone, Debug, Default)]
 pub struct CallContext {
     pub limits: Limits,
     pub deadline: Option<Instant>,
+    pub cancel: CancellationToken,
 }
 
 impl CallContext {
     pub fn new(limits: Limits) -> Self {
-        Self { limits, deadline: None }
+        Self {
+            limits,
+            deadline: None,
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = cancel;
+        self
     }
 }

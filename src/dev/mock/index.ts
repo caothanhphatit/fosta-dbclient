@@ -615,6 +615,8 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
         (payload.onEvent as Channel<StreamEvent> | undefined) ?? null,
         (payload.maxRows as number | null | undefined) ?? null,
       );
+    case "cancel_request":
+      return null;
     case "cancel_run":
       sessions.get(str("sessionId"))?.running?.abort();
       return null;

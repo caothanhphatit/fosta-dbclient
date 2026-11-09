@@ -8,9 +8,9 @@ mod catalog;
 mod connect;
 #[cfg(test)]
 mod contract_tests;
+pub mod descriptor;
 #[cfg(test)]
 mod perf_tests;
-pub mod descriptor;
 mod session;
 mod tabular;
 mod url;

@@ -84,7 +84,7 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<$crate::contract::TreeChildren> = $crate::commands::objects::tree_children;
             [async] describe_object(connection_id: String, object: $crate::contract::ObjectRef)
                 -> $crate::error::AppResult<$crate::contract::ObjectDescription> = $crate::commands::objects::describe_object;
-            [async] browse_object(connection_id: String, request: $crate::contract::BrowseRequest)
+            [async] browse_object(connection_id: String, request: $crate::contract::BrowseRequest, request_id: Option<String>)
                 -> $crate::error::AppResult<$crate::contract::Page> = $crate::commands::objects::browse_object;
             [async] apply_edits(connection_id: String, changes: $crate::contract::RowChangeSet, caller: Option<$crate::gateway::Caller>,
                 import_id: Option<String>, confirmation: Option<$crate::gateway::Confirmation>)
@@ -101,6 +101,7 @@ macro_rules! for_each_command {
             [stream] run(session_id: String, request: $crate::contract::RunRequest, confirmation: Option<$crate::gateway::Confirmation>, max_rows: Option<usize>)
                 -> $crate::error::AppResult<$crate::contract::RunSummary> => $crate::contract::StreamEvent = $crate::commands::query::run;
             [async] cancel_run(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::query::cancel_run;
+            [sync] cancel_request(request_id: String) -> () = $crate::commands::objects::cancel_request;
             [async] transaction(session_id: String, op: $crate::contract::TransactionOp)
                 -> $crate::error::AppResult<$crate::contract::TransactionState> = $crate::commands::query::transaction;
             [async] invoke_capability(connection_id: String, name: String, args: Option<serde_json::Value>,

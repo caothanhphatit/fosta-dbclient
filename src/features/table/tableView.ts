@@ -565,11 +565,13 @@ export class TableView implements TabContent {
     const history = options.history ?? this.history;
     const sort = options.sort === undefined ? this.sort : options.sort;
     if (options.exact) this.exact = true;
-    const ticket = this.loads.begin();
+    // A newer page change or closing the tab cancels this read on the server, which frees its connection.
+    const requestId = `browse-${crypto.randomUUID()}`;
+    const ticket = this.loads.begin(() => void this.connection.cancelRequest(requestId).catch(() => undefined));
     this.element.classList.add("busy");
     try {
       const filter = this.currentFilter();
-      const page = await this.connection.browse(this.request(filter, cursor, sort));
+      const page = await this.connection.browse(this.request(filter, cursor, sort), requestId).finally(() => this.loads.finish(ticket));
       // A newer page change (or a closed tab) wins over this answer.
       if (!this.loads.isCurrent(ticket)) return;
       this.cursor = cursor;

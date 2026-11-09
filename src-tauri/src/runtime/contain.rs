@@ -2,8 +2,14 @@
 //! `ENGINE_CRASHED` error for that call instead of closing the app. The connection that panicked is marked poisoned by
 //! its owner and refuses further calls until the user connects again. Panics go to the application log with a backtrace.
 
-use std::{any::Any, future::Future, sync::OnceLock, time::Instant};
+use std::{
+    any::Any,
+    future::Future,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
+use crate::contract::{cancelled, CancellationToken};
 use serde_json::json;
 use tracing::Instrument as _;
 
@@ -18,12 +24,38 @@ pub async fn contained<T: Send + 'static>(
     what: &str,
     fut: impl Future<Output = AppResult<T>> + Send + 'static,
 ) -> AppResult<T> {
+    contained_until(engine, what, fut, None).await
+}
+
+/// [`contained`] that `cancel` can end: the engine may finish on its own within the grace period (one that watches the
+/// signal in its `CallContext` stops the server's work and frees its connection), then its task is aborted. A
+/// cancelled call answers `CANCELLED`, whatever the engine returned meanwhile.
+pub async fn contained_until<T: Send + 'static>(
+    engine: &str,
+    what: &str,
+    fut: impl Future<Output = AppResult<T>> + Send + 'static,
+    cancel: Option<(&CancellationToken, Duration)>,
+) -> AppResult<T> {
     let started = Instant::now();
     let span = tracing::debug_span!("engine", engine, op = what);
-    let outcome = match tokio::spawn(fut.instrument(span)).await {
+    let mut task = tokio::spawn(fut.instrument(span));
+    let joined = match cancel {
+        None => (&mut task).await,
+        Some((token, grace)) => tokio::select! {
+            joined = &mut task => joined,
+            () = token.cancelled() => {
+                if tokio::time::timeout(grace, &mut task).await.is_err() {
+                    task.abort();
+                }
+                tracing::debug!(engine, op = what, ms = started.elapsed().as_millis() as u64, "engine call cancelled");
+                return Err(cancelled());
+            }
+        },
+    };
+    let outcome = match joined {
         Ok(result) => result,
         Err(error) if error.is_panic() => Err(crashed(engine, what, &panic_text(error.into_panic()))),
-        Err(_) => Err(AppError::new("The operation was cancelled")),
+        Err(_) => Err(cancelled()),
     };
     let ms = started.elapsed().as_millis() as u64;
     match &outcome {

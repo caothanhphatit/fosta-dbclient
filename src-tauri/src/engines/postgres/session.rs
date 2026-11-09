@@ -341,8 +341,16 @@ impl PgSession {
         opts: &RunOptions,
         sink: &mut dyn ResultSink,
         started: Instant,
-        mut described: std::pin::Pin<&mut futures_util::future::MaybeDone<impl std::future::Future<Output = std::result::Result<tokio_postgres::Statement, tokio_postgres::Error>>>>,
-        mut executed: std::pin::Pin<&mut futures_util::future::MaybeDone<impl std::future::Future<Output = std::result::Result<tokio_postgres::RowStream, tokio_postgres::Error>>>>,
+        mut described: std::pin::Pin<
+            &mut futures_util::future::MaybeDone<
+                impl std::future::Future<Output = std::result::Result<tokio_postgres::Statement, tokio_postgres::Error>>,
+            >,
+        >,
+        mut executed: std::pin::Pin<
+            &mut futures_util::future::MaybeDone<
+                impl std::future::Future<Output = std::result::Result<tokio_postgres::RowStream, tokio_postgres::Error>>,
+            >,
+        >,
     ) -> Result<()> {
         use futures_util::{pin_mut, TryStreamExt};
         described.as_mut().await;

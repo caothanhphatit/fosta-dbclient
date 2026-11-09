@@ -91,7 +91,10 @@ export const api = {
   parseConnectionString: (engine: string, text: string) => invoke<ParsedConnectionString>("parse_connection_string", { engine, text }),
   treeChildren: (connectionId: string, request: TreeRequest) => invoke<TreeChildren>("tree_children", { connectionId, request }),
   describeObject: (connectionId: string, object: ObjectRef) => invoke<ObjectDescription>("describe_object", { connectionId, object }),
-  browseObject: (connectionId: string, request: ObjectBrowseRequest) => invoke<Page>("browse_object", { connectionId, request }),
+  /** With `requestId`, `cancelRequest(requestId)` stops the read (a replaced page, a closed tab). */
+  browseObject: (connectionId: string, request: ObjectBrowseRequest, requestId: string | null = null) =>
+    invoke<Page>("browse_object", { connectionId, request, requestId }),
+  cancelRequest: (requestId: string) => invoke<void>("cancel_request", { requestId }),
   /**
    * Row edits from a grid save or an import. Updates and deletes carry `original` (and `version`); a changed row fails the
    * whole set with a `CONFLICT` error. Batches of one import share `importId` and are confirmed once.

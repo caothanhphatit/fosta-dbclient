@@ -46,7 +46,8 @@ pub(super) async fn kill_query(opts: &Opts, thread_id: u32) -> AppResult<()> {
 fn stoppable(mariadb: bool, statement: &str) -> bool {
     let first = first_word(statement).to_ascii_uppercase();
     let dialect = if mariadb { SqlDialectId::MariaDb } else { SqlDialectId::MySql };
-    matches!(first.as_str(), "SELECT" | "WITH" | "VALUES" | "TABLE" | "SHOW") && classify_sql(dialect, statement).worst() == Some(Category::Read)
+    matches!(first.as_str(), "SELECT" | "WITH" | "VALUES" | "TABLE" | "SHOW")
+        && classify_sql(dialect, statement).worst() == Some(Category::Read)
 }
 
 /// The first word of a statement after comments, white space and opening parentheses.

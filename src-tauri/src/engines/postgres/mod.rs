@@ -9,12 +9,12 @@ mod catalog;
 pub mod connect;
 #[cfg(test)]
 mod contract_tests;
-#[cfg(test)]
-mod perf_tests;
 pub mod descriptor;
 mod explain;
 mod graph;
 mod nodes;
+#[cfg(test)]
+mod perf_tests;
 mod run;
 pub mod session;
 mod tabular;
@@ -470,12 +470,14 @@ pub(crate) fn as_sql(params: &[Option<String>]) -> Vec<&(dyn ToSql + Sync)> {
 pub struct PgEngine {
     opts: PgOptions,
     client: Mutex<Client>,
+    /// For the CancelRequest that stops a page read.
+    tls: MakeRustlsConnect,
     version: String,
 }
 
 impl PgEngine {
     pub async fn connect(opts: PgOptions) -> Result<Self> {
-        let (client, _tls) = open(&opts).await?;
+        let (client, tls) = open(&opts).await?;
         let version: String = client
             .query_one("SELECT current_setting('server_version')", &[])
             .await
@@ -484,6 +486,7 @@ impl PgEngine {
         Ok(Self {
             opts,
             client: Mutex::new(client),
+            tls,
             version,
         })
     }

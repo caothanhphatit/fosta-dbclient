@@ -41,7 +41,7 @@ pub use engine::{
     classify_common, default_validate_filter, require, Connection, DatabaseAdmin, Engine, ParsedConnection, SchemaGraphSource, TabularData,
 };
 pub use errors::{not_wired, unsupported_capability, EngineError, EngineResult, ErrorKind};
-pub use limits::{CallContext, Limits};
+pub use limits::{cancelled, CallContext, CancellationToken, Limits, CANCELLED};
 pub use object::{
     ActionTarget, Badge, BuiltinAction, NodeAction, NodeKey, NodeKind, ObjectNode, ObjectRef, Tone, TreeChildren, TreeRequest,
 };

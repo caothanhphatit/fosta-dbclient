@@ -1,14 +1,14 @@
 //! The MariaDB/MySQL engine port: one adapter for both engine ids. A connection keeps a small pool for the tree,
 //! browsing and Stop, a second pool with `CLIENT_FOUND_ROWS` for grid saves, and one dedicated connection per query tab.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{atomic::AtomicUsize, Arc, OnceLock};
 
 use async_trait::async_trait;
-use mysql_async::{prelude::*, Conn, Opts, Pool};
+use mysql_async::{prelude::*, Opts, Pool};
 
 use super::{
     catalog,
-    connect::{self, within, Server, CHECKOUT_TIMEOUT},
+    connect::{self, Pooled, Server, POOL_SIZE},
     descriptor::{self, Flavor},
     session::{MySqlCanceller, MySqlSession},
     url, vector,
@@ -96,6 +96,7 @@ impl Engine for MySqlAdapter {
             pool,
             edit_pool,
             server,
+            in_use: Arc::default(),
         }))
     }
 }
@@ -106,15 +107,17 @@ pub struct MySqlConnection {
     info: ServerInfo,
     capabilities: CapabilitySet,
     /// For query sessions (without `CLIENT_FOUND_ROWS`, so affected rows read like the mysql client's).
-    opts: Opts,
+    pub(super) opts: Opts,
     pub(super) pool: Pool,
     pub(super) edit_pool: Pool,
     pub(super) server: Server,
+    /// Connections of `pool` in use, to tell a busy pool from an unreachable server.
+    in_use: Arc<AtomicUsize>,
 }
 
 impl MySqlConnection {
-    pub(super) async fn pooled(&self) -> AppResult<Conn> {
-        within(CHECKOUT_TIMEOUT, "Opening a connection", self.pool.get_conn()).await
+    pub(super) async fn pooled(&self) -> AppResult<Pooled> {
+        connect::checkout(&self.pool, &self.in_use, POOL_SIZE).await
     }
 }
 
