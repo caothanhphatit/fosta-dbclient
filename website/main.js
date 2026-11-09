@@ -155,6 +155,137 @@
     });
   }
 
+  // Screenshot presentation: the capture sits in a window frame (title bar like the HTML mock) over a soft brand glow.
+  // The window exists before the image arrives (fixed 16:10 box), so a lazy-loaded image never shifts the page.
+  // Motion is CSS transform/opacity only; the pointer tilt runs through requestAnimationFrame on fine pointers.
+  var shotMotion = null;
+
+  function buildShotWindow(figure, img) {
+    var win = document.createElement("div");
+    win.className = "shot-window";
+    var bar = document.createElement("div");
+    bar.className = "am-titlebar shot-bar";
+    bar.setAttribute("aria-hidden", "true");
+    var logo = document.createElement("img");
+    logo.src = figure.getAttribute("data-shot").replace(/screenshots\/[^/]*$/, "logo.svg");
+    logo.alt = "";
+    logo.width = 14;
+    logo.height = 14;
+    var title = document.createElement("span");
+    title.textContent = "Fosta Studio";
+    var controls = document.createElement("span");
+    controls.className = "am-win";
+    controls.innerHTML = "<i></i><i></i><i></i>";
+    bar.appendChild(logo);
+    bar.appendChild(title);
+    bar.appendChild(controls);
+    var screen = document.createElement("div");
+    screen.className = "shot-screen";
+    img.loading = "lazy";
+    img.onload = function () {
+      img.classList.add("is-loaded");
+    };
+    img.onerror = function () {
+      figure.classList.remove("has-shot", "has-window");
+      if (win.parentNode) win.parentNode.removeChild(win);
+    };
+    screen.appendChild(img);
+    var sheen = document.createElement("span");
+    sheen.className = "shot-sheen";
+    sheen.setAttribute("aria-hidden", "true");
+    var light = document.createElement("span");
+    light.className = "shot-light";
+    light.setAttribute("aria-hidden", "true");
+    screen.appendChild(sheen);
+    screen.appendChild(light);
+    // data-spot="left,top,width,height" in percent of the capture, data-spot-label: a ring and a caption chip.
+    var spot = figure.getAttribute("data-spot");
+    if (spot) {
+      var box = spot.split(",");
+      var ring = document.createElement("span");
+      ring.className = "shot-spot";
+      ring.setAttribute("aria-hidden", "true");
+      ring.style.left = box[0] + "%";
+      ring.style.top = box[1] + "%";
+      ring.style.width = box[2] + "%";
+      ring.style.height = box[3] + "%";
+      var chip = document.createElement("span");
+      chip.className = "shot-chip";
+      chip.textContent = figure.getAttribute("data-spot-label") || "";
+      ring.appendChild(chip);
+      screen.appendChild(ring);
+    }
+    win.appendChild(bar);
+    win.appendChild(screen);
+    figure.insertBefore(win, figure.firstChild);
+    figure.classList.add("has-shot", "has-window");
+    initShotMotion(figure, win, light);
+  }
+
+  function initShotMotion(figure, win, light) {
+    if (shotMotion === null) {
+      shotMotion = {
+        reduced: !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches),
+        fine: !!(window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches),
+        io: null,
+      };
+      if ("IntersectionObserver" in window && !shotMotion.reduced) {
+        shotMotion.io = new IntersectionObserver(
+          function (entries) {
+            entries.forEach(function (entry) {
+              entry.target.classList.toggle("is-live", entry.isIntersecting);
+              if (entry.isIntersecting) entry.target.classList.add("is-in");
+            });
+          },
+          { rootMargin: "0px 0px -8% 0px" },
+        );
+      }
+    }
+    if (shotMotion.reduced) return;
+    // Below the fold: fade and lift in when scrolled to. Carousel slides are revealed by the carousel itself.
+    if (shotMotion.io) {
+      var below = !figure.classList.contains("slide-shot") && figure.getBoundingClientRect().top > window.innerHeight;
+      figure.classList.add(below ? "shot-reveal" : "is-in");
+      shotMotion.io.observe(figure);
+    }
+    if (!shotMotion.fine) return;
+
+    var frame = 0;
+    var px = 0;
+    var py = 0;
+    var active = false;
+    function paint() {
+      frame = 0;
+      var rect = win.getBoundingClientRect();
+      var x = (px - rect.left) / rect.width - 0.5;
+      var y = (py - rect.top) / rect.height - 0.5;
+      win.style.transform = "perspective(1400px) rotateX(" + (-y * 3.5).toFixed(2) + "deg) rotateY(" + (x * 5).toFixed(2) + "deg)";
+      light.style.transform = "translate(" + (x * 100).toFixed(1) + "%, " + (y * 100).toFixed(1) + "%)";
+      figure.style.setProperty("--glow-x", (x * -14).toFixed(1) + "px");
+      figure.style.setProperty("--glow-y", (y * -10).toFixed(1) + "px");
+    }
+    figure.addEventListener("pointermove", function (event) {
+      if (event.pointerType && event.pointerType !== "mouse") return;
+      px = event.clientX;
+      py = event.clientY;
+      if (!active) {
+        active = true;
+        figure.classList.add("is-hover");
+      }
+      if (!frame) frame = window.requestAnimationFrame(paint);
+    });
+    figure.addEventListener("pointerleave", function () {
+      active = false;
+      figure.classList.remove("is-hover");
+      if (frame) window.cancelAnimationFrame(frame);
+      frame = 0;
+      win.style.transform = "";
+      light.style.transform = "";
+      figure.style.removeProperty("--glow-x");
+      figure.style.removeProperty("--glow-y");
+    });
+  }
+
   function initSlots(name, manifest, imgClass, readyClass) {
     var slots = document.querySelectorAll("figure[data-" + name + "]");
     if (!slots.length || !window.fetch) return;
@@ -171,15 +302,18 @@
           img.className = imgClass;
           img.alt = figure.getAttribute("data-" + name + "-alt") || "";
           img.decoding = "async";
+          if (name === "shot") {
+            src = shotSrc(figure, available);
+            themedShots.push({ figure: figure, img: img, available: available });
+            buildShotWindow(figure, img);
+            img.src = src;
+            return;
+          }
           img.onload = function () {
             if (!img.naturalWidth) return;
             figure.insertBefore(img, figure.firstChild);
             figure.classList.add(readyClass);
           };
-          if (name === "shot") {
-            src = shotSrc(figure, available);
-            themedShots.push({ figure: figure, img: img, available: available });
-          }
           img.src = src;
         });
       })
