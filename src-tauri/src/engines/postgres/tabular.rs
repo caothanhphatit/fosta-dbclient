@@ -187,7 +187,7 @@ impl PgEngine {
             elapsed_ms,
         );
         if let Some(versions) = versions {
-            page.row_versions = Some(versions.into_iter().take(page.rows.len()).collect());
+            page.row_versions = Some(sqlbuild::page_order(versions, page.rows.len() as u64, &built));
         }
         page.total = total;
         Ok(page)

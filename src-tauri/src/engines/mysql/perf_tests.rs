@@ -195,3 +195,56 @@ async fn perf_mariadb_cancelled_pages_free_the_pool() {
 
     run(&handle, &session, "DROP TABLE perf_cancel").await.unwrap();
 }
+
+fn ids(page: &crate::contract::Page) -> Vec<i64> {
+    page.rows
+        .iter()
+        .map(|row| match &row[0] {
+            crate::contract::Value::Int(id) => *id,
+            other => panic!("id {other:?}"),
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mariadb.yml"]
+async fn perf_mariadb_last_page_reads_from_the_end() {
+    let (manager, handle) = shop().await;
+    let session = session(&handle).await;
+    let object = big_table(&handle, &session, "perf_last", 1_000_000).await;
+    run(&handle, &session, "ANALYZE TABLE perf_last").await.unwrap();
+    let context = open_workspace();
+
+    // Unsorted: the last 200 rows by key, in order, with the exact total (the statistics only estimate it).
+    let mut request = BrowseRequest::new(object.clone(), 200);
+    request.reverse = true;
+    request.exact_total = true;
+    let started = Instant::now();
+    let last = gateway::browse(&manager, &context, "perf", &request).await.unwrap();
+    println!("last page by key: {:?}", started.elapsed());
+    assert_eq!(ids(&last), (999_801..=1_000_000).collect::<Vec<_>>());
+    assert_eq!(last.total.map(|total| (total.value, total.exact)), Some((1_000_000, true)));
+    assert!(last.has_more);
+    // The page before it, by keyset from its first row.
+    request.after = last.next_keyset.clone();
+    request.exact_total = false;
+    let before = gateway::browse(&manager, &context, "perf", &request).await.unwrap();
+    assert_eq!(ids(&before), (999_601..=999_800).collect::<Vec<_>>());
+
+    // Sorted by an unindexed column: the same rows a deep OFFSET finds, without walking the table.
+    let mut sorted = BrowseRequest::new(object.clone(), 200);
+    sorted.sort = vec![crate::contract::SortKey::asc("amount")];
+    sorted.offset = 999_800;
+    let started = Instant::now();
+    let by_offset = gateway::browse(&manager, &context, "perf", &sorted).await.unwrap();
+    let offset_took = started.elapsed();
+    sorted.offset = 0;
+    sorted.reverse = true;
+    let started = Instant::now();
+    let by_end = gateway::browse(&manager, &context, "perf", &sorted).await.unwrap();
+    println!("sorted last page: OFFSET {offset_took:?}, from the end {:?}", started.elapsed());
+    assert_eq!(ids(&by_end), ids(&by_offset));
+    assert_eq!(by_end.rows.len(), 200);
+
+    run(&handle, &session, "DROP TABLE perf_last").await.unwrap();
+}

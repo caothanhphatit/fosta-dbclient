@@ -41,7 +41,7 @@ import type { TabContent } from "../../core/tabs";
 import type { TableTarget, VectorInfo } from "../../core/types";
 import { displayValue } from "../../core/values";
 import type { ViewContext } from "../../core/views";
-import { api } from "../../core/api";
+import { api, errorCode } from "../../core/api";
 import { forced, type BuiltChange } from "../grid/changeSet";
 import { conditionsFilter, filterConditions, type ColumnFilters } from "../grid/columnFilter";
 import { openColumnsPopover } from "../grid/columnsPopover";
@@ -69,6 +69,8 @@ const NULL: Value = { t: "null", v: null };
 interface PageCursor {
   offset: number;
   after: Value[] | null;
+  /** Read from the end: `after` is then the first row of the page after this one (see `BrowseRequest.reverse`). */
+  reverse?: boolean;
 }
 
 interface ReloadOptions {
@@ -116,6 +118,8 @@ export class TableView implements TabContent {
   private limit = 200;
   private total: Total | null = null;
   private exact = false;
+  /** The engine cannot read from the end (non-SQL engines): Last pages by the exact count instead. */
+  private reverseUnsupported = false;
   private sort: SortState | null = null;
   private columns: ColumnInfo[] = [];
   private columnFilters: ColumnFilters;
@@ -404,12 +408,14 @@ export class TableView implements TabContent {
       object: this.object,
       filter,
       sort: keys,
-      offset: cursor.offset,
+      offset: cursor.reverse ? 0 : cursor.offset,
       after: cursor.after,
       limit: this.limit,
       estimateTotal: true,
-      exactTotal: this.exact,
+      // Row numbers of a page read from the end come from the exact total.
+      exactTotal: this.exact || (cursor.reverse === true && !cursor.after && !this.total?.exact),
       columns: null,
+      ...(cursor.reverse ? { reverse: true } : {}),
     };
   }
 
@@ -518,6 +524,16 @@ export class TableView implements TabContent {
   }
 
   private goPrevious(): void {
+    const page = this.page;
+    if (this.cursor.reverse) {
+      // A page read from the end: the one before it is read from the end too, after its first row (no deep OFFSET).
+      // History then holds the pages after, for Next. Without a keyset (a nullable sort column) it steps back by offset.
+      if (!page?.hasMore) return;
+      const offset = Math.max(0, this.cursor.offset - this.limit);
+      if (page.nextKeyset) void this.reload({ cursor: { offset, after: page.nextKeyset, reverse: true }, history: [...this.history, this.cursor] });
+      else void this.reload({ cursor: { offset, after: null }, history: [] });
+      return;
+    }
     if (this.cursor.offset === 0) return;
     const history = [...this.history];
     // Keyset pages cannot be computed backwards: Previous returns to the cursor of the page before. After a jump by offset
@@ -527,19 +543,42 @@ export class TableView implements TabContent {
   }
 
   private goNext(): void {
+    if (this.cursor.reverse) {
+      // Back toward the last page, along the pages Previous went through.
+      const history = [...this.history];
+      const next = history.pop();
+      if (next) void this.reload({ cursor: next, history });
+      return;
+    }
     const page = this.page;
     if (!page?.hasMore) return;
     const offset = this.cursor.offset + page.rows.length;
     void this.reload({ cursor: { offset, after: page.nextKeyset ?? null }, history: [...this.history, this.cursor] });
   }
 
+  /** Whether the current page is the last one. */
+  private atLastPage(): boolean {
+    return this.cursor.reverse ? !this.cursor.after : !this.page?.hasMore;
+  }
+
+  /**
+   * The last page. With a key the engine reads it from the end (the order reversed, so no deep OFFSET, and exact on a
+   * table larger than its statistics say); otherwise the rows are counted exactly first and the page read by offset.
+   */
   private goLast(): void {
-    const offset = this.lastPageOffset();
-    if (offset === null) {
-      toast("The total is not known yet: press Count first");
+    if (this.atLastPage()) return;
+    if (this.keyColumns.length > 0 && !this.reverseUnsupported) {
+      void this.reload({ cursor: { offset: 0, after: null, reverse: true }, history: [] });
       return;
     }
-    if (offset !== this.cursor.offset) void this.reload({ cursor: { offset, after: null }, history: [] });
+    void this.goLastByCount();
+  }
+
+  private async goLastByCount(): Promise<void> {
+    if (!this.total?.exact) await this.reload({ exact: true });
+    const offset = this.lastPageOffset();
+    if (offset === null || !this.total?.exact) return;
+    if (offset !== this.cursor.offset || this.cursor.after || this.cursor.reverse) void this.reload({ cursor: { offset, after: null }, history: [] });
   }
 
   private applyColumnFilters(filters: ColumnFilters): void {
@@ -561,7 +600,7 @@ export class TableView implements TabContent {
       return;
     }
     if (!options.force && this.grid.hasChanges() && !(await confirmDialog("Discard unsaved changes?", "Discard"))) return;
-    const cursor = options.cursor ?? this.cursor;
+    let cursor = options.cursor ?? this.cursor;
     const history = options.history ?? this.history;
     const sort = options.sort === undefined ? this.sort : options.sort;
     if (options.exact) this.exact = true;
@@ -574,14 +613,20 @@ export class TableView implements TabContent {
       const page = await this.connection.browse(this.request(filter, cursor, sort), requestId).finally(() => this.loads.finish(ticket));
       // A newer page change (or a closed tab) wins over this answer.
       if (!this.loads.isCurrent(ticket)) return;
+      if (page.total) this.total = page.total;
+      else if (cursor.offset === 0 && !cursor.reverse) this.total = null;
+      if (cursor.reverse) {
+        // A page read from the end: its row numbers come from the exact total; one that reaches the start begins at 0.
+        if (!page.hasMore) cursor = { ...cursor, offset: 0 };
+        else if (!cursor.after && this.total?.exact) cursor = { ...cursor, offset: Math.max(0, this.total.value - page.rows.length) };
+      } else if (!page.hasMore && !this.total?.exact) {
+        // The last page tells the exact number of rows.
+        this.total = { value: cursor.offset + page.rows.length, exact: true };
+      }
       this.cursor = cursor;
       this.history = history;
       this.sort = sort;
       this.page = page;
-      if (page.total) this.total = page.total;
-      else if (cursor.offset === 0) this.total = null;
-      // The last page tells the exact number of rows.
-      if (!page.hasMore && !this.total?.exact) this.total = { value: cursor.offset + page.rows.length, exact: true };
       this.appliedRaw = filter.kind === "raw" ? filter.text : "";
       this.columns = page.columns;
       this.keyColumns = page.keyColumns;
@@ -612,7 +657,15 @@ export class TableView implements TabContent {
       });
       this.describePage();
     } catch (error) {
-      if (this.loads.isCurrent(ticket)) showError(error, `Read rows of ${this.target.database}.${this.label}`);
+      if (!this.loads.isCurrent(ticket)) return;
+      if (cursor.reverse && errorCode(error) === "UNSUPPORTED_CAPABILITY") {
+        // This engine cannot read from the end: count exactly, then page by offset.
+        this.reverseUnsupported = true;
+        this.element.classList.remove("busy");
+        void this.goLastByCount();
+        return;
+      }
+      showError(error, `Read rows of ${this.target.database}.${this.label}`);
     } finally {
       if (this.loads.isCurrent(ticket)) this.element.classList.remove("busy");
     }
@@ -634,11 +687,16 @@ export class TableView implements TabContent {
       : "The total is unknown; press Count";
     this.countButton.hidden = Boolean(total?.exact) || (!page.hasMore && offset === 0);
     const { first, prev, next, last } = this.pagerButtons;
-    first.disabled = offset === 0 && !this.cursor.after;
-    prev.disabled = offset === 0;
-    next.disabled = !page.hasMore;
-    const lastOffset = this.lastPageOffset();
-    last.disabled = !page.hasMore || lastOffset === null || lastOffset <= offset;
+    const reverse = this.cursor.reverse === true;
+    // A page read from the end has rows before it while `hasMore`, and pages after it while Previous left history.
+    const before = reverse ? page.hasMore : offset > 0;
+    const after = reverse ? this.history.length > 0 : page.hasMore;
+    first.disabled = !before && !this.cursor.after;
+    prev.disabled = !before;
+    next.disabled = !after;
+    // Last needs the exact count only where the engine cannot read from the end.
+    const byCount = this.keyColumns.length === 0 || this.reverseUnsupported;
+    last.disabled = this.atLastPage() || (byCount && !page.hasMore);
   }
 
   dispose(): void {

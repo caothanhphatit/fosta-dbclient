@@ -180,6 +180,11 @@ pub struct BrowseRequest {
     /// Only these columns (all when `None`).
     #[serde(default)]
     pub columns: Option<Vec<String>>,
+    /// Read from the end ("Last page" without a deep OFFSET): the order is reversed (sort keys and the key tiebreak), the
+    /// rows still come in the normal order. `has_more` and `next_keyset` then point toward the start: `after` set to a
+    /// reversed page's `next_keyset` reads the page before it. SQL engines only; the others refuse it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reverse: bool,
 }
 
 impl BrowseRequest {
@@ -194,6 +199,7 @@ impl BrowseRequest {
             estimate_total: false,
             exact_total: false,
             columns: None,
+            reverse: false,
         }
     }
 }

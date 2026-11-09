@@ -444,6 +444,9 @@ impl Connection for EsConnection {
 #[async_trait]
 impl TabularData for EsConnection {
     async fn browse(&self, request: &BrowseRequest, _ctx: &CallContext) -> AppResult<Page> {
+        if request.reverse {
+            return Err(unsupported_capability("reading an index from its end"));
+        }
         grid::browse(&self.engine, request).await
     }
 

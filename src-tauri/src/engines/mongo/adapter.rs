@@ -179,6 +179,9 @@ impl Connection for MongoConnection {
 #[async_trait]
 impl TabularData for MongoConnection {
     async fn browse(&self, request: &BrowseRequest, ctx: &CallContext) -> AppResult<Page> {
+        if request.reverse {
+            return Err(crate::contract::unsupported_capability("reading a collection from its end"));
+        }
         tabular::browse(&self.client, request, ctx).await
     }
 

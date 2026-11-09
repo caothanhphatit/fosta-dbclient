@@ -149,6 +149,8 @@ pub struct BrowseSql {
     pub keyset_ok: bool,
     /// The WHERE clause alone (with the same parameters), for estimated counts.
     pub where_sql: String,
+    /// The rows come in reversed order (a page read from the end); [`finish_page`] turns them back.
+    pub reverse: bool,
 }
 
 /// Builds `SELECT … FROM … WHERE <filter> [AND <keyset>] ORDER BY … LIMIT limit+1`. `key` are the row-identifying columns.
@@ -194,6 +196,13 @@ pub fn build_browse_with_raw<D: SqlDialect + ?Sized>(
         }
     }
     let keyset_ok = !key.is_empty() && order.iter().all(|(c, _)| columns.iter().any(|col| col.name == *c && !col.nullable));
+    if req.reverse && order.is_empty() {
+        return Err(EngineError::input(
+            "Reading from the end needs an order: sort by a column, or give the table a primary key.",
+        ));
+    }
+    // Reading from the end flips every direction; a plain flip also mirrors where NULLs go in every SQL dialect.
+    let sql_order: Vec<(String, bool)> = order.iter().map(|(c, desc)| (c.clone(), *desc != req.reverse)).collect();
 
     let mut where_parts = Vec::new();
     if !filter_sql.is_empty() {
@@ -210,7 +219,7 @@ pub fn build_browse_with_raw<D: SqlDialect + ?Sized>(
                 "The keyset cursor does not match the sort order; reload the first page.",
             ));
         }
-        where_parts.push(keyset_sql(&mut b, &order, after, columns)?);
+        where_parts.push(keyset_sql(&mut b, &sql_order, after, columns)?);
     }
     let where_clause = if where_parts.is_empty() {
         String::new()
@@ -227,7 +236,7 @@ pub fn build_browse_with_raw<D: SqlDialect + ?Sized>(
             None => String::new(),
         }
     } else {
-        let items: Vec<String> = order
+        let items: Vec<String> = sql_order
             .iter()
             .map(|(c, desc)| format!("{}{}", d.quote_ident(c), if *desc { " DESC" } else { " ASC" }))
             .collect();
@@ -243,6 +252,7 @@ pub fn build_browse_with_raw<D: SqlDialect + ?Sized>(
         order,
         keyset_ok,
         where_sql: filter_sql,
+        reverse: req.reverse,
     })
 }
 
@@ -342,7 +352,8 @@ fn keyset_sql<D: SqlDialect + ?Sized>(
     Ok(format!("({})", ors.join(" OR ")))
 }
 
-/// Trims the extra row fetched to detect more pages and computes the keyset cursor.
+/// Trims the extra row fetched to detect more pages and computes the keyset cursor. A page read from the end gets its
+/// rows back in the normal order; its keyset is that of its first row, for the page before it.
 pub fn finish_page(
     columns: Vec<ColumnInfo>,
     mut rows: Vec<Vec<Value>>,
@@ -353,6 +364,26 @@ pub fn finish_page(
 ) -> Page {
     let has_more = rows.len() as u64 > limit;
     rows.truncate(limit as usize);
+    finish_rows(columns, rows, has_more, built, key_columns, estimated_total)
+}
+
+/// Puts the per-row extras of a page (row versions) in the order [`finish_page`] gives its rows.
+pub fn page_order<T>(mut items: Vec<T>, limit: u64, built: &BrowseSql) -> Vec<T> {
+    items.truncate(limit as usize);
+    if built.reverse {
+        items.reverse();
+    }
+    items
+}
+
+fn finish_rows(
+    columns: Vec<ColumnInfo>,
+    mut rows: Vec<Vec<Value>>,
+    has_more: bool,
+    built: &BrowseSql,
+    key_columns: Vec<String>,
+    estimated_total: Option<i64>,
+) -> Page {
     let next_keyset = if built.keyset_ok && has_more {
         rows.last().map(|row| {
             built
@@ -370,6 +401,9 @@ pub fn finish_page(
     } else {
         None
     };
+    if built.reverse {
+        rows.reverse();
+    }
     Page {
         columns,
         rows,
@@ -661,6 +695,37 @@ mod tests {
         req.sort = vec![SortKey::asc("name")];
         req.after = Some(vec![Value::Text("a".into()), Value::Int(1)]);
         assert!(build_browse(&Ansi, &req, &cols(), &["id".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn pages_from_the_end_reverse_the_order_and_turn_the_rows_back() {
+        let mut req = BrowseRequest::new(ObjectRef::table(None, "t"), 2);
+        req.sort = vec![SortKey::desc("created")];
+        req.reverse = true;
+        let key = ["id".to_owned()];
+        let b = build_browse(&Ansi, &req, &cols(), &key).unwrap();
+        assert!(b.sql.ends_with("ORDER BY \"created\" ASC, \"id\" DESC LIMIT 3"), "{}", b.sql);
+        // The rows arrive last first; one more than the limit means there are rows before them.
+        let row = |id: i64| vec![Value::Int(id), Value::Null, Value::Int(id * 10)];
+        let page = finish_page(cols(), vec![row(9), row(8), row(7)], 2, &b, key.to_vec(), None);
+        assert_eq!(page.rows, vec![row(8), row(9)]);
+        assert!(page.has_more);
+        // The keyset of the first row on the page reads the page before it.
+        assert_eq!(page.next_keyset, Some(vec![Value::Int(80), Value::Int(8)]));
+        assert_eq!(page_order(vec!["v9", "v8", "v7"], 2, &b), vec!["v8", "v9"]);
+        req.after = page.next_keyset;
+        let before = build_browse(&Ansi, &req, &cols(), &key).unwrap();
+        assert!(
+            before
+                .sql
+                .contains("WHERE ((\"created\" > $1) OR (\"created\" = $2 AND \"id\" < $3))"),
+            "{}",
+            before.sql
+        );
+        // Without any order there is no end to read from.
+        let mut unordered = BrowseRequest::new(ObjectRef::table(None, "t"), 2);
+        unordered.reverse = true;
+        assert!(build_browse(&Ansi, &unordered, &cols(), &[]).is_err());
     }
 
     #[test]

@@ -574,6 +574,8 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const { engine } = connection(str("connectionId"));
       const request = payload.request as BrowseRequest;
       checkFilter(request);
+      // The mock engines read from the start only: Last falls back to an exact count and an offset.
+      if (request.reverse) throw mockError("UNSUPPORTED_CAPABILITY", "The mock engines do not read from the end.", { engine: engine.descriptor.id });
       return need(engine, "browse", "browsing rows")(request);
     }
     case "apply_edits":

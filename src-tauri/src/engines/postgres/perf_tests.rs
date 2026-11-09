@@ -6,10 +6,75 @@ use std::{fmt::Write as _, sync::Arc, time::Instant};
 
 use super::contract_tests::{secrets, spec};
 use crate::{
-    contract::{CallContext, CollectSink, RunOptions, RunRequest, Session, SessionOptions},
+    contract::{
+        BrowseRequest, CallContext, CollectSink, NodeKind, ObjectRef, RunOptions, RunRequest, Session, SessionOptions, SortKey, Value,
+    },
     error::AppResult,
+    gateway::{
+        self,
+        rules::{Preset, SafetySettings},
+        Context,
+    },
     runtime::{ConnectionManager, Handle},
 };
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/postgres.yml"]
+async fn perf_postgres_last_page_reads_from_the_end() {
+    let (manager, handle) = shop().await;
+    let session = session(&handle).await;
+    run(&handle, &session, "DROP TABLE IF EXISTS public.perf_last").await.unwrap();
+    run(
+        &handle,
+        &session,
+        "CREATE TABLE public.perf_last AS SELECT g AS id, (g::bigint * 7919 % 100000) / 100.0 AS amount FROM generate_series(1, 1000000) g; \
+         ALTER TABLE public.perf_last ADD PRIMARY KEY (id), ALTER COLUMN amount SET NOT NULL",
+    )
+    .await
+    .unwrap();
+    let context = Context {
+        workspace_id: "perf".into(),
+        workspace_name: "Perf".into(),
+        connection_id: "perf".into(),
+        connection_name: "perf".into(),
+        safety: SafetySettings::preset(Preset::Open),
+    };
+    let object = ObjectRef::new(Some("shop"), Some("public"), "perf_last", NodeKind::TABLE);
+    let ids = |page: &crate::contract::Page| -> Vec<i64> {
+        page.rows
+            .iter()
+            .map(|row| match &row[0] {
+                Value::Int(id) => *id,
+                other => panic!("id {other:?}"),
+            })
+            .collect()
+    };
+    let mut request = BrowseRequest::new(object.clone(), 200);
+    request.reverse = true;
+    request.exact_total = true;
+    let last = gateway::browse(&manager, &context, "perf", &request).await.unwrap();
+    assert_eq!(ids(&last), (999_801..=1_000_000).collect::<Vec<_>>());
+    assert_eq!(last.total.map(|total| (total.value, total.exact)), Some((1_000_000, true)));
+    request.after = last.next_keyset.clone();
+    request.exact_total = false;
+    let before = gateway::browse(&manager, &context, "perf", &request).await.unwrap();
+    assert_eq!(ids(&before), (999_601..=999_800).collect::<Vec<_>>());
+
+    let mut sorted = BrowseRequest::new(object, 200);
+    sorted.sort = vec![SortKey::asc("amount")];
+    sorted.offset = 999_800;
+    let started = Instant::now();
+    let by_offset = gateway::browse(&manager, &context, "perf", &sorted).await.unwrap();
+    let offset_took = started.elapsed();
+    sorted.offset = 0;
+    sorted.reverse = true;
+    let started = Instant::now();
+    let by_end = gateway::browse(&manager, &context, "perf", &sorted).await.unwrap();
+    println!("sorted last page: OFFSET {offset_took:?}, from the end {:?}", started.elapsed());
+    assert_eq!(ids(&by_end), ids(&by_offset));
+
+    run(&handle, &session, "DROP TABLE public.perf_last").await.unwrap();
+}
 
 async fn shop() -> (ConnectionManager, Handle) {
     let manager = ConnectionManager::default();
