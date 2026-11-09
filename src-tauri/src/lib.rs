@@ -32,6 +32,7 @@ mod perf_tests;
 pub mod runtime;
 pub mod secrets;
 pub mod tasks;
+pub mod update;
 
 use std::sync::Arc;
 

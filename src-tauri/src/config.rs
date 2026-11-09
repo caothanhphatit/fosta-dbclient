@@ -283,6 +283,8 @@ pub struct AppConfig {
     pub debug_logging: bool,
     /// Settings → "Allow the assistant to run read-only queries" (on unless turned off; each workspace can override it).
     pub assistant_read_queries: bool,
+    /// Settings → "Check for updates", plus what the last check found (`update.rs`).
+    pub update_check: crate::update::UpdateCheckSettings,
     /// Shown once by the UI after startup (a corrupt config file was set aside). Never written to disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup_notice: Option<String>,
@@ -313,6 +315,8 @@ struct StoredConfig {
     debug_logging: bool,
     #[serde(default)]
     assistant_read_queries: Option<bool>,
+    #[serde(default)]
+    update_check: crate::update::UpdateCheckSettings,
     /// Legacy single assistant setting, migrated into one connection.
     #[serde(default)]
     ai: Option<AiSettings>,
@@ -376,6 +380,7 @@ impl From<StoredConfig> for AppConfig {
             query_history: stored.query_history.unwrap_or(true),
             debug_logging: stored.debug_logging,
             assistant_read_queries: stored.assistant_read_queries.unwrap_or(true),
+            update_check: stored.update_check,
             startup_notice: None,
         };
         config.repair_ai_active();

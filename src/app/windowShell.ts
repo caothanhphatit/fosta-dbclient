@@ -55,14 +55,32 @@ export function revealWindowAfterFirstPaint(): void {
   if (isTauri()) requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show()));
 }
 
-/** Closing the window rolls back open transactions; ask first. */
-export function guardWindowClose(tabs: TabManager): void {
+/**
+ * Asks before quitting (closing, or restarting to update) when open transactions would be rolled back or unsaved edits
+ * lost; true to go ahead. `action` is the button, "Close" or "Restart".
+ */
+export async function confirmQuit(tabs: TabManager, action: "Close" | "Restart"): Promise<boolean> {
+  const contents = tabs.contents();
+  const open = contents.filter((content) => isQueryView(content) && content.hasOpenTransaction()).length;
+  const edited = contents.filter((content) => content.hasUnsavedChanges?.() === true).length;
+  if (open === 0 && edited === 0) return true;
+  const doing = action === "Close" ? "Closing" : "Restarting";
+  const lost = [
+    open > 0 ? `${open} query tab(s) have an open transaction. ${doing} Fosta Studio rolls them back, so uncommitted changes are lost.` : "",
+    edited > 0 ? `${edited} tab(s) have unsaved edits, which are lost.` : "",
+  ];
+  return confirmDialog(`${lost.filter(Boolean).join(" ")} ${action} anyway?`, action);
+}
+
+/** Closing the window rolls back open transactions and drops unsaved edits; ask first. `beforeExit` runs once agreed. */
+export function guardWindowClose(tabs: TabManager, beforeExit: () => Promise<void> = async () => {}): void {
   // The browser preview (dev mock) has no window to guard.
   if (!("__TAURI_INTERNALS__" in window)) return;
   void getCurrentWindow().onCloseRequested(async (event) => {
-    const open = tabs.contents().filter((content) => isQueryView(content) && content.hasOpenTransaction()).length;
-    if (open === 0) return;
-    const message = `${open} query tab(s) have an open transaction. Closing Fosta Studio rolls them back, so uncommitted changes are lost. Close anyway?`;
-    if (!(await confirmDialog(message, "Close"))) event.preventDefault();
+    if (!(await confirmQuit(tabs, "Close"))) {
+      event.preventDefault();
+      return;
+    }
+    await beforeExit();
   });
 }

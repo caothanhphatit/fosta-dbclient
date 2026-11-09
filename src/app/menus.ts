@@ -10,6 +10,7 @@ import { density, setDensity } from "../core/density";
 import { describeTheme, setTheme, themePreference, type ThemePreference } from "../core/theme";
 import type { AppConfig, Workspace } from "../core/types";
 import { copyDiagnostics, openLogFolder, setDebugLogging } from "./diagnostics";
+import { checkForUpdatesNow } from "./update";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: "light", label: "Light" },
@@ -76,6 +77,13 @@ export function shellMenus(host: MenuHost): ShellMenus {
       },
       { label: "Copy diagnostics", icon: "copy", run: () => void copyDiagnostics() },
       { label: "Open log folder", icon: "logs", run: () => void openLogFolder() },
+      "separator",
+      {
+        label: "Check for updates",
+        icon: host.config()?.updateCheck?.enabled !== false ? "check" : undefined,
+        run: () => void setUpdateCheck(host.config()?.updateCheck?.enabled === false),
+      },
+      { label: "Check for updates now", icon: "download", run: () => void checkForUpdatesNow() },
       ...(capabilities().edition === "web" ? (["separator", { label: "Sign out…", icon: "key", run: () => void confirmSignOut() }] as MenuItem[]) : []),
     ];
   }
@@ -116,6 +124,16 @@ export function shellMenus(host: MenuHost): ShellMenus {
       setStatus(enabled ? "Query history is on" : "Query history is off; new runs are not recorded");
     } catch (error) {
       showError(error, "Change query history");
+    }
+  }
+
+  /** Daily check at startup (one request to GitHub, no other data); "Check for updates now" works either way. */
+  async function setUpdateCheck(enabled: boolean): Promise<void> {
+    try {
+      applyConfig(await api.setUpdateCheck(enabled));
+      setStatus(enabled ? "Checks for updates once a day" : "No automatic update check");
+    } catch (error) {
+      showError(error, "Change the update check");
     }
   }
 

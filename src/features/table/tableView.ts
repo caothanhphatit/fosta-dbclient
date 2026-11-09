@@ -295,6 +295,10 @@ export class TableView implements TabContent {
     void this.reload({ cursor: { offset: 0, after: null }, history: [] });
   }
 
+  hasUnsavedChanges(): boolean {
+    return this.grid.hasChanges();
+  }
+
   canClose(): boolean | Promise<boolean> {
     return !this.grid.hasChanges() || confirmDialog(`Discard unsaved changes in ${this.label}?`, "Discard");
   }

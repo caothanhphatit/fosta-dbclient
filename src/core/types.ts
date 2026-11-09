@@ -224,9 +224,32 @@ export interface AppConfig {
   assistantReadQueries?: boolean;
   /** Settings file version; 2 since the engine contract. */
   configVersion?: number;
+  /** Settings → "Check for updates" and what the last check found. */
+  updateCheck?: UpdateCheckSettings;
   /** Set once after startup when the settings file could not be read and was set aside. */
   startupNotice?: string;
 }
+
+export interface UpdateCheckSettings {
+  enabled: boolean;
+  /** RFC 3339. */
+  lastChecked: string | null;
+  latestVersion: string | null;
+  lastRunVersion: string | null;
+}
+
+/** `check_update`: the latest release compared with this build. */
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  newer: boolean;
+  /** The release page on GitHub. */
+  url: string;
+  publishedAt: string | null;
+}
+
+/** How this copy was installed: the NSIS installer updates in place, the portable exe and the web edition do not. */
+export type InstallKind = "installer" | "portable" | "web";
 
 export interface ChatMessage {
   role: "user" | "assistant";

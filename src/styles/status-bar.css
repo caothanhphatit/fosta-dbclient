@@ -48,3 +48,62 @@
   color: var(--warning);
   font-weight: 600;
 }
+
+/* Update item (app/update.ts) */
+
+.status-update {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px 0 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font: 600 11px var(--font-ui);
+  cursor: pointer;
+}
+
+.status-update .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.status-update:hover {
+  border-color: var(--accent);
+}
+
+.status-update.ready {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.update-dialog p {
+  margin: 0 0 8px;
+}
+
+.update-command {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 4px 4px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.update-command code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.update-progress {
+  width: 100%;
+}

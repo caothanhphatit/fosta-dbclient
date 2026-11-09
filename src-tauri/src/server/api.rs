@@ -341,7 +341,12 @@ mod tests {
         let mut missing = Vec::new();
         for piece in source.split("invoke<").skip(1) {
             let Some(name) = piece.split('"').nth(1) else { continue };
-            if !COMMANDS.contains(&name) && !matches!(name, "save_download" | "reveal_file" | "open_log_folder" | "ai_chat") {
+            if !COMMANDS.contains(&name)
+                && !matches!(
+                    name,
+                    "save_download" | "reveal_file" | "open_log_folder" | "open_release_page" | "ai_chat"
+                )
+            {
                 missing.push(name.to_owned());
             }
         }

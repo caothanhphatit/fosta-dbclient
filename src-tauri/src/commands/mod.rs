@@ -16,6 +16,7 @@ pub mod lang;
 pub mod objects;
 pub mod query;
 pub mod tasks;
+pub mod update;
 pub mod vector;
 pub mod workspaces;
 
@@ -51,7 +52,7 @@ pub fn capabilities(state: &AppState) -> Capabilities {
 /// command also takes a trailing `crate::events::EventSink<EventType>` (desktop: a Tauri channel `onEvent`; web: NDJSON).
 ///
 /// Not listed (each front-end handles them itself): `ai_chat` (it streams events), and the desktop-only
-/// `save_download` / `reveal_file` / `open_log_folder` (the web edition downloads through the browser).
+/// `save_download` / `reveal_file` / `open_log_folder` / `open_release_page` (the web edition downloads through the browser).
 #[macro_export]
 macro_rules! for_each_command {
     ($callback:ident) => {
@@ -163,6 +164,11 @@ macro_rules! for_each_command {
 
             [sync] diagnostics() -> $crate::commands::diagnostics::Diagnostics = $crate::commands::diagnostics::diagnostics;
             [sync] set_debug_logging(enabled: bool) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::diagnostics::set_debug_logging;
+
+            [async] check_update(force: bool) -> $crate::error::AppResult<Option<$crate::update::UpdateInfo>> = $crate::commands::update::check_update;
+            [sync] install_kind() -> String = $crate::commands::update::install_kind;
+            [sync] set_update_check(enabled: bool) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::update::set_update_check;
+            [sync] whats_new() -> $crate::error::AppResult<Option<String>> = $crate::commands::update::whats_new;
         }
     };
 }
@@ -192,6 +198,7 @@ infallible_output!(
     (),
     AppConfig,
     Capabilities,
+    String,
     Vec<String>,
     Vec<TaskStatus>,
     diagnostics::Diagnostics,

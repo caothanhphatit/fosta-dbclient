@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Updates**: a daily check for a new release (Settings → Check for updates, on by default; *Check for updates now* any time) and
+  an *Update X.Y.Z* item in the status bar. The installed Windows app downloads the update in the background and installs it on
+  quit or with *Restart to update*, asking first about open transactions and unsaved edits, then shows what's new once. The
+  portable app links to the release; the web edition shows the Docker commands, and `deploy/docker-compose.yml` has an optional
+  Watchtower service (`--profile autoupdate`).
+
 ## [0.1.0] - 2026-11-08
 
 First public release for Windows, plus a web edition for Docker.

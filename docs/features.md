@@ -71,6 +71,11 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     handed back as a code block. Each run is shown in the chat and written to the audit log. Turn it off in Settings or per workspace;
     the rows it reads are sent to your AI provider, and Production and Read-only workspaces stay off unless you allow them.
 - Light, dark or system theme.
+- **Updates**: once a day the app asks GitHub for the latest release (only the app version is sent, as the user agent; turn it off
+  in Settings → Check for updates, or check now from the same menu). A newer version shows *Update X.Y.Z* in the status bar. The
+  installed Windows app downloads it in the background and installs it when you quit, or right away with *Restart to update*
+  (open transactions and unsaved edits are asked about first); after updating, a note links to what's new. The portable app links
+  to the release page, and the web edition shows the Docker commands (see [web-edition.md](web-edition.md#updating)).
 
 ## Oracle Instant Client
 Oracle needs Oracle Instant Client 19c or newer on the machine. The first time you connect, Fosta Studio offers to download Instant

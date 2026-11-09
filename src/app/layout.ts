@@ -8,6 +8,7 @@ import type { AssistantPanel } from "../features/assistant/assistantPanel";
 import type { ConnectionTree } from "../features/connections/tree";
 import type { TasksPanel } from "../features/tasks/tasksPanel";
 import type { WorkspaceRail } from "../features/workspaces/workspaceRail";
+import { updateStatusItem } from "./update";
 
 const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 640;
@@ -89,7 +90,18 @@ export function buildLayout(parts: LayoutParts): HTMLElement {
   }
   area.classList.toggle("with-assistant", remembered === "open");
   const version = h("span", { class: "status-version", title: "Fosta Studio version" }, `v${__APP_VERSION__}`);
-  const statusBar = h("footer", { class: "status-bar" }, statusContext, statusText, spacer(), errorPanelBadge(), safetyStatus, taskSummary, version);
+  const statusBar = h(
+    "footer",
+    { class: "status-bar" },
+    statusContext,
+    statusText,
+    spacer(),
+    errorPanelBadge(),
+    safetyStatus,
+    taskSummary,
+    updateStatusItem(),
+    version,
+  );
   const main = h("div", { class: "app-main" }, toolbar, area, errorPanelElement(), statusBar);
   (document.getElementById("app") ?? document.body).append(rail.element, main);
   return area;

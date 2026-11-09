@@ -23,6 +23,15 @@ jobs:
       notes: ${{ steps.notes.outputs.notes }}
       docker: ${{ steps.docker.outputs.present }}
     steps:
+      # The installed app only accepts updates signed with this key (plugins.updater.pubkey in tauri.conf.json).
+      - name: Updater signing key is set
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::The repository secret TAURI_SIGNING_PRIVATE_KEY is missing. Add the updater's private key (Settings > Secrets and variables > Actions); without it installed apps cannot update."
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -79,12 +88,18 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the installer for the in-app updater (tauri.release.conf.json turns on createUpdaterArtifacts).
+          # The password secret may be left unset: the key has an empty password.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Fosta Studio ${{ needs.verify.outputs.version }}
           releaseBody: ${{ needs.verify.outputs.notes }}
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+          # latest.json, read by installed apps from releases/latest/download/latest.json.
+          includeUpdaterJson: true
           # Bundling is off in tauri.conf.json (local builds are portable); the release turns on the NSIS installer.
           args: --config src-tauri/tauri.release.conf.json
       - name: Attach the portable exe

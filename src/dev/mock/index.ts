@@ -18,6 +18,9 @@
  *
  * Tree paging demo: `__fostaMock.setTreePageSize(2)` caps every `tree_children` page at 2 nodes, so the tree shows its
  * "Load more" row; `setTreePageSize(null)` restores the requested limit.
+ *
+ * Updates (`update.ts`): `check_update` always finds 0.1.1; `__fostaMock.setInstallKind("portable")` or `"web"` changes the
+ * update dialog (or `?installKind=web` in the address), `?whatsNew` shows the "What's new" note.
  */
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
@@ -50,6 +53,7 @@ import type {
   Diagnostics,
   HistoryEntry,
   HistoryQuery,
+  InstallKind,
   StatementCategory,
   Workspace,
 } from "../../core/types";
@@ -58,6 +62,7 @@ import { chatRuns, deleteAiConnection, draftKey, fetchModels, probeChat, saveAiC
 import { checkTestPassword, deleteConnection, parseConnectionString, profiles, saveConnection } from "./connections";
 import { mockError, NOT_CONNECTED } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
+import { mockCheckUpdate, mockInstallKind, mockRestart, mockUpdaterCheck, mockUpdaterDownload, mockWhatsNew, setInstallKind } from "./update";
 import { VECTOR_DIMS } from "./shop";
 import { state } from "./state";
 import type { EngineMock, MockSession } from "./types";
@@ -454,6 +459,35 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "diagnostics":
       return diagnostics();
 
+    // Updates (update.ts)
+    case "check_update":
+      return mockCheckUpdate();
+    case "install_kind":
+      return mockInstallKind();
+    case "whats_new":
+      return mockWhatsNew();
+    case "set_update_check":
+      state.config = {
+        ...state.config,
+        updateCheck: { lastChecked: null, latestVersion: null, lastRunVersion: null, ...state.config.updateCheck, enabled: Boolean(payload.enabled) },
+      };
+      return state.config;
+    case "open_release_page":
+      window.open(str("url"), "_blank", "noopener");
+      return null;
+    case "plugin:updater|check":
+      return mockUpdaterCheck();
+    case "plugin:updater|download": {
+      const emitter = channelEmitter(payload.onEvent as Channel<unknown>);
+      return mockUpdaterDownload((event) => emitter.emit(event)).finally(() => emitter.end());
+    }
+    case "plugin:updater|install":
+      return mockRestart(payload.restartAfterInstall !== false);
+    case "plugin:process|restart":
+      return mockRestart();
+    case "plugin:resources|close":
+      return null;
+
     // Assistant
     case "save_ai_connection":
       return saveAiConnection(payload.connection as AiConnection, (payload.apiKey as string | null) ?? null);
@@ -593,6 +627,7 @@ declare global {
       deleteRow(connectionId: string, table: string, key?: unknown): string;
       connections(): string[];
       setTreePageSize(size: number | null): void;
+      setInstallKind(kind: InstallKind): void;
     };
   }
 }
@@ -616,5 +651,6 @@ export function installDevMock(): void {
     setTreePageSize: (size) => {
       treePageSize = size && size > 0 ? size : null;
     },
+    setInstallKind,
   };
 }
