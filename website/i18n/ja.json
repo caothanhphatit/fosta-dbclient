@@ -283,6 +283,7 @@
   "don.help.bugs.text": "バグ報告フォームを使い、アプリがコピーしてくれる診断情報を貼り付けてください。<a href=\"https://github.com/caothanhphatit/fosta-dbclient/issues/new/choose\">issue を作成</a>",
   "don.help.share.title": "紹介する",
   "don.help.share.text": "同僚に教えたり、チームのチャットで話題にしたり、使い方を記事に書いたりしてください。",
+  "don.help.discord": "<a href=\"https://discord.gg/pBFkZD5mhN\">Discord のコミュニティに参加する</a>",
   "don.help.translate.title": "翻訳する",
   "don.help.translate.text": "このウェブサイトの翻訳を改善したり、言語を追加したりできます。<a href=\"https://github.com/caothanhphatit/fosta-dbclient/blob/main/website/README.md#translations\">翻訳の仕組み</a>",
   "don.qr.title": "寄付する",

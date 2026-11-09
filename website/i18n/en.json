@@ -283,6 +283,7 @@
   "don.help.bugs.text": "Use the bug report form and paste the diagnostics the app copies for you. <a href=\"https://github.com/caothanhphatit/fosta-dbclient/issues/new/choose\">Open an issue</a>",
   "don.help.share.title": "Share it",
   "don.help.share.text": "Tell a colleague, mention it in your team chat, or write about how you use it.",
+  "don.help.discord": "<a href=\"https://discord.gg/pBFkZD5mhN\">Join the community on Discord</a>",
   "don.help.translate.title": "Translate",
   "don.help.translate.text": "Improve a translation of this website, or add a language. <a href=\"https://github.com/caothanhphatit/fosta-dbclient/blob/main/website/README.md#translations\">How translations work</a>",
   "don.qr.title": "Donate",

@@ -283,6 +283,7 @@
   "don.help.bugs.text": "使用问题报告表单，并粘贴应用为你复制好的诊断信息。<a href=\"https://github.com/caothanhphatit/fosta-dbclient/issues/new/choose\">提交 issue</a>",
   "don.help.share.title": "分享",
   "don.help.share.text": "推荐给同事，在团队群里提一下，或写写你是怎么用它的。",
+  "don.help.discord": "<a href=\"https://discord.gg/pBFkZD5mhN\">加入 Discord 社区</a>",
   "don.help.translate.title": "翻译",
   "don.help.translate.text": "改进本网站的某个翻译，或新增一种语言。<a href=\"https://github.com/caothanhphatit/fosta-dbclient/blob/main/website/README.md#translations\">翻译说明</a>",
   "don.qr.title": "捐赠",

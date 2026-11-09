@@ -283,6 +283,7 @@
   "don.help.bugs.text": "Dùng form báo lỗi và dán thông tin chẩn đoán mà app sao chép sẵn cho bạn. <a href=\"https://github.com/caothanhphatit/fosta-dbclient/issues/new/choose\">Tạo issue</a>",
   "don.help.share.title": "Chia sẻ",
   "don.help.share.text": "Giới thiệu cho đồng nghiệp, nhắc tới trong nhóm chat của team, hoặc viết về cách bạn dùng nó.",
+  "don.help.discord": "<a href=\"https://discord.gg/pBFkZD5mhN\">Tham gia cộng đồng trên Discord</a>",
   "don.help.translate.title": "Dịch",
   "don.help.translate.text": "Cải thiện bản dịch của website này, hoặc thêm một ngôn ngữ. <a href=\"https://github.com/caothanhphatit/fosta-dbclient/blob/main/website/README.md#translations\">Cách dịch</a>",
   "don.qr.title": "Quyên góp",
