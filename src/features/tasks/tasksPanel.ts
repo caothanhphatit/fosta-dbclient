@@ -131,6 +131,7 @@ export class TasksPanel {
             : { icon: "play", title: "Start", run: () => void this.toggle(task, false) },
           { icon: "refresh", title: "Restart", run: () => void attempt(() => api.restartTask(task.id)) },
           { icon: "logs", title: "Show log", run: () => this.host.openLogs(task) },
+          { icon: "edit", title: "Edit", run: () => void this.edit(task) },
         ],
       };
     });
