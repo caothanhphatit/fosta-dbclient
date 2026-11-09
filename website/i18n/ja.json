@@ -2,7 +2,7 @@
   "meta.title": "Fosta Studio：軽量・高速なオープンソースのデータベースクライアント",
   "meta.description": "Fosta Studio は、無料・オープンソース（GPL-3.0）の Windows 向けデータベース クライアントです。Docker で動く Web 版もあり、MariaDB、MySQL、SQL Server、MongoDB、PostgreSQL、SQLite、Redis、Elasticsearch、OpenSearch、ClickHouse、Oracle に対応。ワークスペース、SSH と TLS、高速なデータグリッド、ER 図、スキーマを理解する AI エージェントを搭載しています。",
   "meta.socialDescription": "無料・オープンソースのデータベース クライアント。MariaDB や PostgreSQL から Redis、Elasticsearch、Oracle まで 11 のエンジンに対応し、ワークスペース、SSH と TLS、安全ルール、スキーマを理解する AI エージェントを搭載。",
-  "meta.ogImageAlt": "Fosta Studio のロゴと英語のキャッチコピー「a small, fast, open-source database client」",
+  "meta.ogImageAlt": "Fosta Studio のロゴ（データ行で組んだ F）と英語のキャッチコピー「Free, open-source database client for 11 engines. Built in Rust.」",
   "a11y.skip": "本文へスキップ",
   "a11y.backToTop": "Fosta Studio、ページの先頭へ",
   "nav.label": "メインナビゲーション",

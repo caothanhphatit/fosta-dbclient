@@ -1,3 +1,4 @@
+import logoUrl from "../assets/logo.svg";
 import { h, icon, type IconName } from "../core/dom";
 
 const SHORTCUTS: [string, string][] = [
@@ -31,7 +32,7 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
     h(
       "div",
       { class: "welcome-inner" },
-      h("div", { class: "welcome-brand" }, icon("database", "welcome-icon"), h("h1", {}, "Fosta Studio")),
+      h("div", { class: "welcome-brand" }, h("img", { class: "welcome-icon", src: logoUrl, alt: "" }), h("h1", {}, "Fosta Studio")),
       h("p", { class: "welcome-sub" }, "Workspace ", workspaceName),
       h(
         "div",

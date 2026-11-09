@@ -1,3 +1,5 @@
+<img src="website/assets/logo.svg" alt="" width="72" align="left">
+
 # Fosta Studio
 
 **English** · [Tiếng Việt](README.vi.md)

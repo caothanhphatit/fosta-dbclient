@@ -32,12 +32,8 @@
 }
 
 .welcome-icon {
-  width: 36px;
-  height: 36px;
-  padding: 7px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #4f8cff, #2b5fd6);
-  color: #fff;
+  width: 44px;
+  height: 44px;
 }
 
 .welcome-sub {
