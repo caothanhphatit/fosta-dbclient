@@ -274,9 +274,9 @@
   "don.qr.bank.alt": "Mã QR chuyển khoản ngân hàng (VietQR)",
   "don.qr.soon": "Mã QR sắp có",
   "don.qr.bank.title": "Chuyển khoản ngân hàng (VietQR)",
-  "don.qr.bank.details": "Thông tin tài khoản sắp có.",
-  "don.qr.wallet.alt": "Mã QR thanh toán bằng ví điện tử",
-  "don.qr.wallet.title": "Ví điện tử",
-  "don.qr.wallet.details": "Thông tin ví sắp có.",
+  "don.qr.bank.details": "VIB · CAO THÀNH PHÁT · 359331365",
+  "don.qr.wallet.alt": "Mã QR thanh toán qua MoMo (VietQR)",
+  "don.qr.wallet.title": "Ví điện tử (MoMo)",
+  "don.qr.wallet.details": "MoMo · CAO THANH PHAT",
   "don.thanks": "Cảm ơn bạn đã giúp Fosta Studio tiếp tục miễn phí."
 }

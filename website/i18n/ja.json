@@ -274,9 +274,9 @@
   "don.qr.bank.alt": "銀行振込（VietQR）用の QR コード",
   "don.qr.soon": "QR コードは準備中です",
   "don.qr.bank.title": "銀行振込（VietQR）",
-  "don.qr.bank.details": "口座情報は準備中です。",
-  "don.qr.wallet.alt": "電子ウォレット支払い用の QR コード",
-  "don.qr.wallet.title": "電子ウォレット",
-  "don.qr.wallet.details": "ウォレット情報は準備中です。",
+  "don.qr.bank.details": "VIB · CAO THÀNH PHÁT · 359331365",
+  "don.qr.wallet.alt": "MoMo 支払い用の QR コード（VietQR）",
+  "don.qr.wallet.title": "電子ウォレット（MoMo）",
+  "don.qr.wallet.details": "MoMo · CAO THANH PHAT",
   "don.thanks": "Fosta Studio を無料のまま続けるためのご支援に感謝します。"
 }

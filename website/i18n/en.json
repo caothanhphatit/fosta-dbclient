@@ -274,9 +274,9 @@
   "don.qr.bank.alt": "QR code for a bank transfer (VietQR)",
   "don.qr.soon": "QR code coming soon",
   "don.qr.bank.title": "Bank transfer (VietQR)",
-  "don.qr.bank.details": "Account details coming soon.",
-  "don.qr.wallet.alt": "QR code for an e-wallet payment",
-  "don.qr.wallet.title": "E-wallet",
-  "don.qr.wallet.details": "Wallet details coming soon.",
+  "don.qr.bank.details": "VIB · CAO THÀNH PHÁT · 359331365",
+  "don.qr.wallet.alt": "QR code for a MoMo payment (VietQR)",
+  "don.qr.wallet.title": "E-wallet (MoMo)",
+  "don.qr.wallet.details": "MoMo · CAO THANH PHAT",
   "don.thanks": "Thank you for helping keep Fosta Studio free."
 }
