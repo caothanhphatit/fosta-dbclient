@@ -1,1 +1,14 @@
-["workspaces.png", "grid.png", "diagram.png", "assistant.png", "commands.png", "commands-dialog.png"]
+[
+  "workspaces.png",
+  "grid.png",
+  "diagram.png",
+  "assistant.png",
+  "commands.png",
+  "commands-dialog.png",
+  "workspaces-light.png",
+  "grid-light.png",
+  "diagram-light.png",
+  "assistant-light.png",
+  "commands-light.png",
+  "commands-dialog-light.png"
+]

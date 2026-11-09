@@ -21,7 +21,7 @@ Guidelines:
 - Use sample data only (the Docker test databases from `dev/` or the `npm run dev` mock). No real hostnames, customer data,
   keys or connection strings.
 - Crop to the relevant part of the window, about 16:10 (for example 1600×1000), at 2× scale for sharp text.
-- Light theme fits both page themes best; keep all four in the same theme.
+- Each screenshot has a dark file (`grid.png`) and a light twin (`grid-light.png`), both listed in `shots.json`. `main.js` loads the one that matches the active theme and swaps it live when the visitor toggles the theme. Without a `-light` file the dark one is used in both themes.
 - Optimise the files (e.g. `oxipng` or `pngquant`); aim for under 300 KB each.
 - The alt text lives in `index.html` (`data-shot-alt` on each `<figure>`) and, translated, in `website/i18n/*.json` (keys `*.shotAlt`); update both if a screenshot shows something different.
 

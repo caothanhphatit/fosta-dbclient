@@ -4,6 +4,7 @@
 
   var root = document.documentElement;
   var KEY = "fosta-studio-site-theme";
+  var themedShots = []; // screenshot images that follow the theme, see initSlots
   var media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 
   function stored() {
@@ -24,6 +25,7 @@
   function sync() {
     root.classList.toggle("is-dark", isDark());
     var button = document.querySelector("[data-theme-toggle]");
+    refreshShots();
     if (!button) return;
     // The labels are translated at build time and carried on the button.
     var label = button.getAttribute(isDark() ? "data-label-light" : "data-label-dark");
@@ -137,6 +139,22 @@
   // Optional images: each <figure data-NAME="path/file.png"> keeps its placeholder until the file name is listed in
   // the manifest (a JSON array of file names) next to the images. Listing them avoids 404s for missing files. The
   // manifest's URL follows the data attribute, which the build already made relative to the page (../assets/...).
+  // Screenshots come in a dark file (name.png) and a light twin (name-light.png), both listed in shots.json. Only the
+  // one for the current theme is requested; sync() calls refreshShots() so the toggle swaps them live.
+  function shotSrc(figure, available) {
+    var src = figure.getAttribute("data-shot");
+    if (isDark()) return src;
+    var light = src.replace(/\.png$/, "-light.png");
+    return available.indexOf(light.split("/").pop()) === -1 ? src : light;
+  }
+
+  function refreshShots() {
+    themedShots.forEach(function (item) {
+      var src = shotSrc(item.figure, item.available);
+      if (item.img.getAttribute("src") !== src) item.img.src = src;
+    });
+  }
+
   function initSlots(name, manifest, imgClass, readyClass) {
     var slots = document.querySelectorAll("figure[data-" + name + "]");
     if (!slots.length || !window.fetch) return;
@@ -158,6 +176,10 @@
             figure.insertBefore(img, figure.firstChild);
             figure.classList.add(readyClass);
           };
+          if (name === "shot") {
+            src = shotSrc(figure, available);
+            themedShots.push({ figure: figure, img: img, available: available });
+          }
           img.src = src;
         });
       })
