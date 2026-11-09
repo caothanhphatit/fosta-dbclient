@@ -201,42 +201,32 @@ pub fn match_pattern(filter: &str) -> Option<String> {
     }
 }
 
-/// A tree cursor is the `SCAN` cursor, plus `|n` when the last `SCAN` call returned more keys than fitted the page (a small
-/// database comes back whole whatever `COUNT` says): the next page repeats that call and skips the `n` keys already shown.
-fn split_cursor(cursor: Option<&str>) -> (String, usize) {
-    match cursor.unwrap_or_default().split_once('|') {
-        Some((scan, skip)) => (scan.to_owned(), skip.parse().unwrap_or(0)),
-        None => (cursor.unwrap_or_default().to_owned(), 0),
-    }
-}
-
-/// One `SCAN` page of a database's keys as tree nodes: at most `limit` of them.
+/// One page of a database's keys as tree nodes. A page ends where a `SCAN` call ends, and the tree cursor is the `SCAN`
+/// cursor itself: repeating a call to show the rest of a batch can miss keys, because the server may rehash between calls
+/// and return that cursor's keys in another order. So a page holds about `limit` keys (`COUNT` is set to the limit) and can
+/// run past it by one batch. Whole-iteration guarantees are `SCAN`'s: every key present throughout is shown, and a key may
+/// come again on a later page (the tree drops repeats).
 pub async fn keys_page(engine: &RedisEngine, db: i64, request: &TreeRequest) -> AppResult<TreeChildren> {
-    let limit = request.limit.unwrap_or(PAGE).clamp(1, 2000) as usize;
+    let limit = request.limit.unwrap_or(PAGE).clamp(1, 2000);
     let pattern = request.filter.as_deref().and_then(match_pattern);
-    let (scan_cursor, skip) = split_cursor(request.cursor.as_deref());
+    // Cursors from older builds carried "|n" (keys of the batch already shown); restart that batch.
+    let cursor = request.cursor.as_deref().unwrap_or_default();
+    let cursor = cursor.split_once('|').map_or(cursor, |(scan, _)| scan);
     let page = engine
         .scan_keys(&ScanRequest {
-            cursor: scan_cursor.clone(),
+            cursor: cursor.to_owned(),
             pattern: pattern.clone(),
-            page_size: Some(skip + limit),
+            count: Some(limit),
+            page_size: Some(limit as usize),
             ..Default::default()
         })
         .await?;
-    let collected = page.keys.len();
-    let shown: Vec<KeySummary> = page.keys.into_iter().skip(skip).take(limit).collect();
-    let consumed = skip + shown.len();
-    let next_cursor = if collected > consumed {
-        Some(format!("{scan_cursor}|{consumed}"))
-    } else {
-        (!page.done).then_some(page.cursor)
-    };
-    let keys: Vec<Blob> = shown.iter().map(|summary| summary.key.clone()).collect();
+    let keys: Vec<Blob> = page.keys.into_iter().map(|summary| summary.key).collect();
     let summaries = engine.key_summaries(keys).await?;
     let total_hint = if pattern.is_none() { engine.db_size().await.ok() } else { None };
     Ok(TreeChildren {
         nodes: summaries.iter().map(|summary| key_node(db, summary)).collect(),
-        next_cursor,
+        next_cursor: (!page.done).then_some(page.cursor),
         total_hint,
     })
 }
@@ -328,14 +318,6 @@ mod tests {
         assert!(object.binary);
         assert_eq!(key_of(&object).unwrap(), binary);
         assert_eq!(key_of(&key_object(0, &Blob::text("a b"))).unwrap(), Blob::text("a b"));
-    }
-
-    #[test]
-    fn tree_cursors_carry_the_keys_already_shown() {
-        assert_eq!(split_cursor(None), (String::new(), 0));
-        assert_eq!(split_cursor(Some("17")), ("17".into(), 0));
-        assert_eq!(split_cursor(Some("17|100")), ("17".into(), 100));
-        assert_eq!(split_cursor(Some("0|x")), ("0".into(), 0));
     }
 
     #[test]
