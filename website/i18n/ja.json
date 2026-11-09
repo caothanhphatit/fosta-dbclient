@@ -1,7 +1,7 @@
 {
   "meta.title": "Fosta Studio：軽量・高速なオープンソースのデータベースクライアント",
-  "meta.description": "Rust で作られた無料・オープンソースのデータベース クライアント。データベースの構造を理解する AI エージェント、MCP 対応、複数のワークスペース、自動で起動するトンネルを搭載。",
-  "meta.socialDescription": "Rust で作られた無料・オープンソースのデータベース クライアント。データベースの構造を理解する AI エージェント、MCP 対応、複数のワークスペース、自動で起動するトンネルを搭載。",
+  "meta.description": "Rust 製のデータベース クライアント。AI エージェントと MCP に対応し、分離されたワークスペースと、接続時に自動で起動する SSH トンネル・ポートフォワードを備えています。無料・オープンソース。",
+  "meta.socialDescription": "Rust 製のデータベース クライアント。AI エージェントと MCP に対応し、分離されたワークスペースと、接続時に自動で起動する SSH トンネル・ポートフォワードを備えています。無料・オープンソース。",
   "meta.ogImageAlt": "Fosta Studio のロゴ（データ行で組んだ F）と英語のキャッチコピー「Free, open-source database client for 11 engines. Built in Rust.」",
   "a11y.skip": "本文へスキップ",
   "a11y.backToTop": "Fosta Studio、ページの先頭へ",
@@ -14,7 +14,7 @@
   "theme.toLight": "ライトテーマに切り替え",
   "hero.pill": "無料・オープンソース",
   "hero.facts": "Windows · インストーラー 9 MB · GPL-3.0",
-  "hero.lede": "Rust で作られたデータベース クライアント。データベースの構造を理解する AI エージェント、MCP 対応、複数のワークスペース、自動で起動するトンネルを備えています。無料・オープンソース。MariaDB や PostgreSQL から MongoDB、Redis、Oracle まで 11 のデータベースに対応。",
+  "hero.lede": "Rust 製のデータベース クライアント。AI エージェントと MCP に対応し、分離されたワークスペースと、接続時に自動で起動する SSH トンネル・ポートフォワードを備えています。無料・オープンソース。 MariaDB や PostgreSQL から MongoDB、Redis、Oracle まで 11 のデータベースに対応。",
   "hero.download": "Windows 版をダウンロード",
   "hero.mac": "macOS 版をダウンロード",
   "hero.macNote": "<strong>Mac をお使いですか？</strong> ネイティブの macOS アプリはまだありませんが、Web エディションは Mac で動きます。Docker Desktop をインストールし、下のコマンドを実行すれば、ブラウザで Fosta Studio を使えます。",

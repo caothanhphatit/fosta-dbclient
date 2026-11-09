@@ -1,7 +1,7 @@
 {
   "meta.title": "Fosta Studio: database client mã nguồn mở, nhỏ gọn và nhanh",
-  "meta.description": "Database client viết bằng Rust, có AI agent hiểu cấu trúc database, hỗ trợ MCP, nhiều workspace, tunnel tự bật. Miễn phí, mã nguồn mở.",
-  "meta.socialDescription": "Database client viết bằng Rust, có AI agent hiểu cấu trúc database, hỗ trợ MCP, nhiều workspace, tunnel tự bật. Miễn phí, mã nguồn mở.",
+  "meta.description": "Database client viết bằng Rust, tích hợp AI agent và MCP: nhiều workspace tách biệt, SSH tunnel và port-forward tự bật. Miễn phí, mã nguồn mở.",
+  "meta.socialDescription": "Database client viết bằng Rust, tích hợp AI agent và MCP: nhiều workspace tách biệt, SSH tunnel và port-forward tự bật. Miễn phí, mã nguồn mở.",
   "meta.ogImageAlt": "Logo Fosta Studio (chữ F ghép từ các dòng dữ liệu) kèm dòng chữ tiếng Anh “Free, open-source database client for 11 engines. Built in Rust.”",
   "a11y.skip": "Chuyển đến nội dung chính",
   "a11y.backToTop": "Fosta Studio, về đầu trang",
@@ -14,7 +14,7 @@
   "theme.toLight": "Chuyển sang giao diện sáng",
   "hero.pill": "Miễn phí & mã nguồn mở",
   "hero.facts": "Windows · bộ cài 9 MB · GPL-3.0",
-  "hero.lede": "Database client viết bằng Rust, có AI agent hiểu cấu trúc database, hỗ trợ MCP, nhiều workspace, tunnel tự bật. Miễn phí, mã nguồn mở. Hỗ trợ 11 database, từ MariaDB và PostgreSQL đến MongoDB, Redis và Oracle.",
+  "hero.lede": "Database client viết bằng Rust, tích hợp AI agent và MCP: nhiều workspace tách biệt, SSH tunnel và port-forward tự bật. Miễn phí, mã nguồn mở. Hỗ trợ 11 database, từ MariaDB và PostgreSQL đến MongoDB, Redis và Oracle.",
   "hero.download": "Tải cho Windows",
   "hero.mac": "Tải cho macOS",
   "hero.macNote": "<strong>Dùng Mac?</strong> Chưa có app macOS riêng, nhưng bản web vẫn chạy tốt trên Mac: cài Docker Desktop, chạy các lệnh dưới đây rồi dùng Fosta Studio ngay trên trình duyệt.",

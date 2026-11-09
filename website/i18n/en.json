@@ -1,7 +1,7 @@
 {
   "meta.title": "Fosta Studio: a small, fast, open-source database client",
-  "meta.description": "Free, open-source database client built in Rust: an AI agent that understands your database, MCP, multiple workspaces and tunnels that start on their own.",
-  "meta.socialDescription": "Built in Rust: an AI agent that understands your database structure, MCP support, multiple workspaces and tunnels that start on their own. Free and open source.",
+  "meta.description": "A Rust-built database client with an AI agent and MCP: isolated workspaces, SSH tunnels and port-forwards that start on connect. Free and open source.",
+  "meta.socialDescription": "A Rust-built database client with an AI agent and MCP: isolated workspaces, SSH tunnels and port-forwards that start on connect. Free and open source.",
   "meta.ogImageAlt": "Fosta Studio logo, an F made of data rows, with the text: free, open-source database client for 11 engines, built in Rust",
   "a11y.skip": "Skip to content",
   "a11y.backToTop": "Fosta Studio, back to top",
@@ -14,7 +14,7 @@
   "theme.toLight": "Switch to light theme",
   "hero.pill": "Free & open source",
   "hero.facts": "Windows · 9 MB installer · GPL-3.0",
-  "hero.lede": "A database client built in Rust, with an AI agent that understands your database structure, MCP support, multiple workspaces and tunnels that start on their own. Free and open source. Supports 11 databases, from MariaDB and PostgreSQL to MongoDB, Redis and Oracle.",
+  "hero.lede": "A Rust-built database client with an AI agent and MCP: isolated workspaces, SSH tunnels and port-forwards that start on connect. Free and open source. Supports 11 databases, from MariaDB and PostgreSQL to MongoDB, Redis and Oracle.",
   "hero.download": "Download for Windows",
   "hero.mac": "Download for macOS",
   "hero.macNote": "<strong>On a Mac?</strong> There is no native macOS app yet, but the web edition runs on your Mac: install Docker Desktop, run these commands, then use Fosta Studio in your browser.",

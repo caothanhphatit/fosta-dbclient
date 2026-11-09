@@ -1,7 +1,7 @@
 {
   "meta.title": "Fosta Studio：小巧、快速的开源数据库客户端",
-  "meta.description": "用 Rust 构建的免费开源数据库客户端，内置理解数据库结构的 AI 智能体，支持 MCP、多个工作区，隧道可自动启动。",
-  "meta.socialDescription": "用 Rust 构建的免费开源数据库客户端，内置理解数据库结构的 AI 智能体，支持 MCP、多个工作区，隧道可自动启动。",
+  "meta.description": "用 Rust 构建的数据库客户端，内置 AI 智能体并支持 MCP：相互隔离的工作区，以及连接时自动启动的 SSH 隧道和端口转发。免费开源。",
+  "meta.socialDescription": "用 Rust 构建的数据库客户端，内置 AI 智能体并支持 MCP：相互隔离的工作区，以及连接时自动启动的 SSH 隧道和端口转发。免费开源。",
   "meta.ogImageAlt": "Fosta Studio 标志（由数据行组成的字母 F）及英文标语“Free, open-source database client for 11 engines. Built in Rust.”",
   "a11y.skip": "跳到主要内容",
   "a11y.backToTop": "Fosta Studio，返回顶部",
@@ -14,7 +14,7 @@
   "theme.toLight": "切换到浅色主题",
   "hero.pill": "免费且开源",
   "hero.facts": "Windows · 9 MB 安装程序 · GPL-3.0",
-  "hero.lede": "用 Rust 构建的数据库客户端，内置理解数据库结构的 AI 智能体，支持 MCP、多个工作区，隧道可自动启动。免费且开源。支持 11 种数据库，从 MariaDB 和 PostgreSQL 到 MongoDB、Redis 和 Oracle。",
+  "hero.lede": "用 Rust 构建的数据库客户端，内置 AI 智能体并支持 MCP：相互隔离的工作区，以及连接时自动启动的 SSH 隧道和端口转发。免费开源。 支持 11 种数据库，从 MariaDB 和 PostgreSQL 到 MongoDB、Redis 和 Oracle。",
   "hero.download": "下载 Windows 版",
   "hero.mac": "下载 macOS 版",
   "hero.macNote": "<strong>使用 Mac？</strong> 目前还没有原生 macOS 应用，但网页版可以在 Mac 上运行：安装 Docker Desktop，运行下面的命令，然后在浏览器中使用 Fosta Studio。",
