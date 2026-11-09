@@ -128,6 +128,7 @@ impl PgEngine {
             () = ctx.cancel.cancelled() => {
                 let _ = token.cancel_query(self.tls.clone()).await;
                 let _ = work.await;
+                absorb_late_cancel(&client).await;
                 Err(cancelled())
             }
         }
@@ -314,6 +315,19 @@ impl PgEngine {
 }
 
 use crate::error::AppError;
+
+/// The backend gets a CancelRequest asynchronously (the postmaster signals it), and the connection is shared with the
+/// tree and the other tabs: when the page read ended before the signal arrived, it could stop the next statement sent on
+/// it. One statement sent while the lock is still held takes it instead (a signal arriving while the backend is idle is
+/// ignored by the server).
+async fn absorb_late_cancel(client: &tokio_postgres::Client) {
+    for _ in 0..2 {
+        match client.simple_query("SELECT 1").await {
+            Err(error) if error.code() == Some(&tokio_postgres::error::SqlState::QUERY_CANCELED) => continue,
+            _ => return,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
