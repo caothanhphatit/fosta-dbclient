@@ -16,5 +16,6 @@
     "ci/engines/mongo.json"
   ],
   "nightlyOnly": false,
-  "filter": "contract_mongo"
+  "filter": "contract_mongo",
+  "note": "mongo:8.0 (8.0.34) and mongo:8 (8.3.13) exit at start-up on Linux kernels 6.19 to 7.0.13 (SERVER-121912), so the workflow runs on ubuntu-24.04 (kernel 6.17); ubuntu-latest is Ubuntu 26.04 with kernel 7.0. Drop the pin when the 8.0 image is 8.0.35 or newer."
 }

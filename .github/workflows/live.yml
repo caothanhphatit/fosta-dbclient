@@ -47,7 +47,11 @@ jobs:
     name: ${{ matrix.id }} ${{ matrix.version }}
     needs: plan
     if: needs.plan.outputs.count != '0'
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: that label moved to Ubuntu 26.04 (kernel 7.0) in October 2026, and mongod 8.0.x up to
+    # 8.0.34 and 8.3.x up to 8.3.13 refuse to start on kernels 6.19 to 7.0.13 ("MongoDB cannot start: Linux kernel
+    # versions 6.19 and newer has a known incompatibility", SERVER-121912: tcmalloc and the kernel's rseq ABI). Back to
+    # ubuntu-latest once the mongo:8.0 image is 8.0.35 or newer.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -61,10 +65,24 @@ jobs:
       - name: Start ${{ matrix.id }} ${{ matrix.version }}
         run: |
           export "${{ matrix.versionEnv }}=${{ matrix.version }}"
-          docker compose -f "${{ matrix.compose }}" up -d --wait
+          # A container that exits during start-up explains itself here, not only in the Service logs step.
+          if ! docker compose -f "${{ matrix.compose }}" up -d --wait; then
+            echo "::error::${{ matrix.id }} ${{ matrix.version }} did not start; container state and logs follow."
+            docker compose -f "${{ matrix.compose }}" ps -a
+            docker compose -f "${{ matrix.compose }}" logs --no-color --tail 200
+            exit 1
+          fi
       - name: Seed
         if: matrix.seed != ''
-        run: ${{ matrix.seed }}
+        run: |
+          export "${{ matrix.versionEnv }}=${{ matrix.version }}"
+          # In a subshell: a seed may cd (Oracle's does), and the compose path below is relative to the checkout.
+          if ! ( ${{ matrix.seed }} ); then
+            echo "::error::seeding ${{ matrix.id }} ${{ matrix.version }} failed; container state and logs follow."
+            docker compose -f "${{ matrix.compose }}" ps -a
+            docker compose -f "${{ matrix.compose }}" logs --no-color --tail 200
+            exit 1
+          fi
       - name: Contract tests
         working-directory: src-tauri
         run: |

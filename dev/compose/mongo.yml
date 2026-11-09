@@ -1,4 +1,5 @@
-# MongoDB 8 (MONGO_TAG overrides the image tag) for the contract tests.
+# MongoDB 8 (MONGO_TAG overrides the image tag) for the contract tests. mongod 8.0.x up to 8.0.34 and 8.3.x up to 8.3.13
+# refuse to start on Linux kernels 6.19 to 7.0.13 (SERVER-121912); Docker Desktop and Ubuntu 24.04 hosts are fine.
 # Test-only credentials; never reuse them.
 # docker compose -f dev/compose/mongo.yml up -d --wait
 # 127.0.0.1:27017  root / studio-root  database events (auth db admin); contract data in fosta_contract
