@@ -10,6 +10,7 @@ import type { ConnectionTree } from "../features/connections/tree";
 import type { TasksPanel } from "../features/tasks/tasksPanel";
 import type { WorkspaceRail } from "../features/workspaces/workspaceRail";
 import { updateStatusItem } from "./update";
+import { mcpStatusItem } from "../features/mcp/mcpSettings";
 
 const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 640;
@@ -121,6 +122,7 @@ export function buildLayout(parts: LayoutParts): HTMLElement {
     errorPanelBadge(),
     safetyStatus,
     taskSummary,
+    mcpStatusItem(),
     updateStatusItem(),
     version,
   );

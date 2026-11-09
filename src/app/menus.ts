@@ -11,6 +11,7 @@ import { describeTheme, setTheme, themePreference, type ThemePreference } from "
 import type { AppConfig, Workspace } from "../core/types";
 import { copyDiagnostics, openLogFolder, setDebugLogging } from "./diagnostics";
 import { checkForUpdatesNow } from "./update";
+import { openMcpSettings } from "../features/mcp/mcpSettings";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
   { value: "light", label: "Light" },
@@ -57,6 +58,7 @@ export function shellMenus(host: MenuHost): ShellMenus {
         run: () => void setAssistantReadQueries(host.config()?.assistantReadQueries === false),
       },
       { label: "Embedding API…", icon: "vector", run: () => void host.configureEmbedding() },
+      { label: "MCP server…", icon: "plug", run: () => void openMcpSettings() },
       "separator",
       {
         label: "Comfortable density",

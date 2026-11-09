@@ -73,7 +73,8 @@ export interface SafetySettings {
   baseline: SafetyPreset | null;
 }
 
-export type Caller = "queryTab" | "gridFilter" | "gridSave" | "import" | "createDatabase" | "assistant" | "transaction" | "settings";
+export type Caller =
+  "queryTab" | "gridFilter" | "gridSave" | "import" | "createDatabase" | "assistant" | "transaction" | "settings" | "engineView" | "mcp" | "mcpRead";
 
 /** One statement as the gateway classified it. */
 export interface StatementInfo {
@@ -151,6 +152,54 @@ export interface WorkspaceMeta {
   safety?: SafetySettings;
   /** Overrides "Allow the assistant to run read-only queries" here; always present in a loaded config. */
   assistantQueries?: AssistantQueries;
+  /** What MCP clients may do here (default off; Production and Read-only workspaces at most read-only). */
+  mcp?: McpAccess;
+}
+
+/** MCP clients' access to a workspace's connections. */
+export type McpAccess = "off" | "readOnly" | "askBeforeWrites";
+
+/** Settings → MCP server. */
+export interface McpSettings {
+  enabled: boolean;
+  /** Desktop: the port on 127.0.0.1. */
+  port: number;
+}
+
+/** A `run_query` from an MCP client waiting for the user (`mcp-approval` event). */
+export interface McpApproval {
+  id: string;
+  /** Self-reported client name and its friendly label. */
+  client: string;
+  clientLabel: string;
+  connectionId: string;
+  connection: string;
+  workspace: string;
+  database: string | null;
+  statement: string;
+  /** The gateway's confirmation details, without the token. */
+  problem: GatewayProblem;
+  timeoutMs: number;
+}
+
+export interface McpStatus {
+  enabled: boolean;
+  port: number;
+  running: boolean;
+  error: string | null;
+  url: string;
+  calls: number;
+  bridgeCommand: string[];
+  clients: string[];
+  pending: McpApproval[];
+}
+
+/** `mcp-activity`: tool calls so far and the clients connected now. */
+export interface McpActivity {
+  calls: number;
+  clients: string[];
+  client: string | null;
+  tool: string | null;
 }
 
 /** A workspace's choice for the assistant's read-only queries: follow the setting, or always / never allow them. */
@@ -232,6 +281,8 @@ export interface AppConfig {
   configVersion?: number;
   /** Settings → "Check for updates" and what the last check found. */
   updateCheck?: UpdateCheckSettings;
+  /** Settings → MCP server (off by default). */
+  mcp?: McpSettings;
   /** Set once after startup when the settings file could not be read and was set aside. */
   startupNotice?: string;
 }

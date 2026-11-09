@@ -13,6 +13,8 @@ import { renderStatusContext } from "./app/statusBar";
 import { buildLayout, ASSISTANT_STORAGE_KEY, toggleSidebar } from "./app/layout";
 import { shellMenus } from "./app/menus";
 import { installOnExit, startUpdates } from "./app/update";
+import { initMcpApprovals } from "./features/mcp/mcpApproval";
+import { initMcpStatus } from "./features/mcp/mcpSettings";
 import { confirmQuit, guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
 import { api } from "./core/api";
 import { hideUnsupported, loadCapabilities } from "./core/capabilities";
@@ -458,6 +460,8 @@ async function bootstrap(): Promise<void> {
     applyConfig(config);
     if (config.startupNotice) toast(config.startupNotice, "info");
     void startUpdates({ confirmRestart: () => confirmQuit(tabs, "Restart") });
+    void initMcpStatus(applyConfig);
+    void initMcpApprovals();
     if (supported.tasks) await tasksPanel.init();
   } catch (error) {
     showError(error, "Load the configuration");

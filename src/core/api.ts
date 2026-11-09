@@ -34,6 +34,9 @@ import type {
   Confirmation,
   ConnectionProfile,
   Diagnostics,
+  McpActivity,
+  McpApproval,
+  McpStatus,
   EmbeddingSettings,
   HealthCheck,
   HistoryEntry,
@@ -198,7 +201,30 @@ export const api = {
   whatsNew: () => invoke<string | null>("whats_new"),
   /** Desktop only: opens a GitHub release page in the default browser. */
   openReleasePage: (url: string) => invoke<void>("open_release_page", { url }),
+  /** Settings → MCP server. */
+  mcpStatus: () => invoke<McpStatus>("mcp_status"),
+  /** Turns the MCP server on or off; `port` (desktop) when changed. Fails, leaving it off, when the port is taken. */
+  setMcpSettings: (enabled: boolean, port: number | null) => invoke<AppConfig>("set_mcp_settings", { enabled, port }),
+  /** Desktop only: the bearer token MCP clients send. */
+  mcpToken: () => invoke<string>("mcp_token"),
+  /** Desktop only: a new token; clients set up with the old one stop working. */
+  rotateMcpToken: () => invoke<string>("rotate_mcp_token"),
+  /** The user's answer to an MCP client's `run_query`; `typed` for typed confirmations. */
+  mcpAnswer: (id: string, approve: boolean, typed: string | null) => invoke<void>("mcp_answer", { id, approve, typed }),
 };
+
+export function onMcpApproval(handler: (approval: McpApproval) => void): Promise<UnlistenFn> {
+  return listen<McpApproval>("mcp-approval", handler);
+}
+
+/** An approval was answered (here or in another window) or withdrawn. */
+export function onMcpApprovalClosed(handler: (event: { id: string }) => void): Promise<UnlistenFn> {
+  return listen<{ id: string }>("mcp-approval-closed", handler);
+}
+
+export function onMcpActivity(handler: (activity: McpActivity) => void): Promise<UnlistenFn> {
+  return listen<McpActivity>("mcp-activity", handler);
+}
 
 export function onTaskStatus(handler: (status: TaskStatus) => void): Promise<UnlistenFn> {
   return listen<TaskStatus>("task-status", handler);
