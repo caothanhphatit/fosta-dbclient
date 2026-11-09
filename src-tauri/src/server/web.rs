@@ -719,7 +719,10 @@ mod tests {
             assert!(spent(export(&ticket).header("cookie", &cookie).send().await.unwrap()).await);
             let ticket = prepare().await;
             let redeemed = export(&ticket).header("cookie", &cookie).send().await.unwrap();
-            assert!(!spent(redeemed).await, "its own session redeems a ticket (the unknown connection fails after that)");
+            assert!(
+                !spent(redeemed).await,
+                "its own session redeems a ticket (the unknown connection fails after that)"
+            );
             assert!(spent(export(&ticket).header("cookie", &cookie).send().await.unwrap()).await);
 
             // The browser rotates it: the old one stops working at once.
