@@ -60,7 +60,8 @@ const STREAMED: FileFormat[] = ["csv", "excel", "json"];
 /**
  * Every row through the backend, which reads the pages and writes them as they come: desktop into Downloads (with
  * progress; closing the dialog stops it and removes the partial file), web as the browser's download of a streamed
- * response. Memory stays at one page either way.
+ * response. Memory stays at one page either way. Resolves false when the backend cannot stream (the dev mock), so the
+ * dialog builds the file in the page instead.
  */
 async function streamExport(
   stream: NonNullable<ExportSource["stream"]>,
@@ -68,7 +69,7 @@ async function streamExport(
   fileName: string,
   signal: AbortSignal,
   onProgress: (rows: number) => void,
-): Promise<void> {
+): Promise<boolean> {
   const request: ExportRequest = {
     browse: stream.request,
     format: format as ExportRequest["format"],
@@ -76,22 +77,24 @@ async function streamExport(
     fileName,
     requestId: `export-${crypto.randomUUID()}`,
   };
-  if (capabilities().browserDownloads) {
-    const ticket = await api.exportPrepare(stream.connectionId, request);
-    const link = h("a", { href: `/api/export/${encodeURIComponent(ticket)}`, download: fileName, hidden: true });
-    document.body.append(link);
-    link.click();
-    link.remove();
-    toast(`${fileName}: the download has started`, "success");
-    return;
-  }
   const stop = () => void api.cancelRequest(request.requestId ?? "").catch(() => undefined);
   signal.addEventListener("abort", stop);
   try {
+    if (capabilities().browserDownloads) {
+      const ticket = await api.exportPrepare(stream.connectionId, request);
+      const link = h("a", { href: `/api/export/${encodeURIComponent(ticket)}`, download: fileName, hidden: true });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      toast(`${fileName}: the download has started`, "success");
+      return true;
+    }
     const done = await api.exportRows(stream.connectionId, request, (progress) => onProgress(progress.rows));
     if (!signal.aborted) savedDialog(`Exported ${formatNumber(done.rows)} rows`, done.path);
+    return true;
   } catch (error) {
-    if (signal.aborted || errorCode(error) === "CANCELLED") return;
+    if (errorCode(error) === "UNSUPPORTED_CAPABILITY") return false;
+    if (signal.aborted || errorCode(error) === "CANCELLED") return true;
     throw error;
   } finally {
     signal.removeEventListener("abort", stop);
@@ -140,14 +143,14 @@ export function exportDialog(source: ExportSource): void {
             const chosenFormat = FORMATS.find((item) => item.value === format.value) ?? FORMATS[0];
             if (!scopePage.checked && source.stream && STREAMED.includes(chosenFormat.value)) {
               const name = exportFileName(fileName.value, source.title, chosenFormat.extension);
-              await streamExport(
+              const streamed = await streamExport(
                 source.stream,
                 chosenFormat.value,
                 name,
                 cancel.signal,
                 (done) => (progress.textContent = `Writing rows… ${formatNumber(done)}${of}`),
               );
-              return;
+              if (streamed) return;
             }
             const rows = scopePage.checked
               ? source.pageRows

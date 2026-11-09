@@ -38,7 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Last page** reads from the end (reversed order, no deep OFFSET) and counts exactly, so it is right on tables larger than
   their statistics and fast when sorted.
 - **CSV and JSON export of every row** streams to the file (desktop) or the browser's download (web) instead of building it in
-  the page; the files are unchanged.
+  the page; the files are unchanged (except integers beyond 2^53, now exact in JSON).
 - **PostgreSQL scripts** run in about one round trip per statement (a 3,750-statement script: 22.8 s → 4.5 s).
 - **Vector index recall**: a row as close as the exact k-th result now counts as a hit, so tables with duplicate vectors no longer
   report a recall near 0.

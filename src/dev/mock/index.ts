@@ -617,6 +617,10 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
         (payload.onEvent as Channel<StreamEvent> | undefined) ?? null,
         (payload.maxRows as number | null | undefined) ?? null,
       );
+    case "export_prepare":
+    case "export_rows":
+      // The mock has no backend to stream from: the dialog builds the file in the page instead.
+      throw mockError("UNSUPPORTED_CAPABILITY", "The mock engines do not stream exports.", {});
     case "cancel_request":
       return null;
     case "cancel_run":
