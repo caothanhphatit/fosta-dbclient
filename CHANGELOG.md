@@ -29,7 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Security and privacy** page ([docs/security.md](docs/security.md)) and [SECURITY.md](SECURITY.md); CI audits Rust and npm
   dependencies.
 - **Tabs come back after a restart**: each workspace's open tabs (tables, query tabs with their text, language and database,
-  diagrams, command logs) and the active tab are saved in `fosta-tabs.json` next to the config (the data volume on the web) and
+  diagrams, command logs) and the active tab are saved in `fosta-studio-tabs.json` next to the config (the data volume on the web) and
   restored on start. A restored tab connects only when it is shown; a tab whose connection is gone is dropped with a note.
 - **Unsaved query text**: closing a query tab whose text was edited and not run asks first, and quitting lists those tabs.
 - **Query results**: click a column header (or use its menu) to sort the loaded rows; *Refresh names* reloads the completion names.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_TAB_TEXT, parseSavedTabs, queryNumber, restorableTabs, serializeTabs, type SavedTab } from "./tabState";
+import { fitToBytes, jsonBytes, MAX_TAB_TEXT, parseSavedTabs, queryNumber, restorableTabs, serializeTabs, type SavedTab } from "./tabState";
 
 const query = (text: string, connectionId = "c1", title = "Query 1"): SavedTab => ({
   kind: "query",
@@ -50,6 +50,18 @@ describe("serializeTabs and parseSavedTabs", () => {
 
   it("drops an out-of-range active index", () => {
     expect(serializeTabs([logs], 5, 0).active).toBeNull();
+  });
+});
+
+describe("fitToBytes", () => {
+  it("drops the text of the last query tabs until the UTF-8 JSON fits", () => {
+    // Two bytes per character: 300 characters take 600 bytes, more than the character count suggests.
+    const state = serializeTabs([query("é".repeat(300), "c1", "Query 1"), query("ü".repeat(300), "c1", "Query 2")], null, 10_000);
+    const fitted = fitToBytes(state, 1_000);
+    expect(jsonBytes(fitted)).toBeLessThanOrEqual(1_000);
+    expect(fitted.tabs[0]).toMatchObject({ text: "é".repeat(300) });
+    expect(fitted.tabs[1]).toMatchObject({ text: "", textOmitted: true });
+    expect(fitToBytes(state, 1_000_000)).toBe(state);
   });
 });
 

@@ -42,6 +42,31 @@ export interface SavedWorkspaceTabs {
 export const MAX_TAB_TEXT = 1_000_000;
 /** The most text kept per workspace: the web server takes requests up to 2 MB; the desktop app has more room. */
 export const WORKSPACE_TEXT_BUDGET = { desktop: 12_000_000, web: 1_500_000 } as const;
+/** The most a saved workspace may take as UTF-8 JSON (the web request limit; the backend's own cap on the desktop). */
+export const WORKSPACE_MAX_BYTES = { desktop: 15_000_000, web: 1_800_000 } as const;
+
+const encoder = new TextEncoder();
+
+/** The size of `state` as the request carries it (UTF-8 JSON). */
+export function jsonBytes(state: unknown): number {
+  return encoder.encode(JSON.stringify(state)).length;
+}
+
+/**
+ * Leaves out the text of the last query tabs that have some until `state` takes at most `maxBytes` (non-ASCII text
+ * and JSON escapes take more bytes than characters).
+ */
+export function fitToBytes(state: SavedWorkspaceTabs, maxBytes: number, size: (state: SavedWorkspaceTabs) => number = jsonBytes): SavedWorkspaceTabs {
+  let current = state;
+  for (let index = current.tabs.length - 1; index >= 0 && size(current) > maxBytes; index -= 1) {
+    const tab = current.tabs[index];
+    if (tab.kind !== "query" || (tab.text === "" && tab.saved === "")) continue;
+    const tabs = [...current.tabs];
+    tabs[index] = { ...tab, text: "", saved: "", textOmitted: tab.text.trim() !== "" || tab.textOmitted === true };
+    current = { ...current, tabs };
+  }
+  return current;
+}
 
 /**
  * The state to save: each query tab keeps its text when it fits in `MAX_TAB_TEXT` and in what is left of `budget`

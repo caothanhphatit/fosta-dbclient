@@ -9,7 +9,16 @@ import { showError } from "../core/errorPanel";
 import type { TabManager } from "../core/tabs";
 import type { AppConfig } from "../core/types";
 import type { AppNavigation } from "./navigation";
-import { parseSavedTabs, restorableTabs, serializeTabs, WORKSPACE_TEXT_BUDGET, type SavedTab } from "./tabState";
+import {
+  fitToBytes,
+  parseSavedTabs,
+  restorableTabs,
+  serializeTabs,
+  WORKSPACE_MAX_BYTES,
+  WORKSPACE_TEXT_BUDGET,
+  type SavedTab,
+  type SavedWorkspaceTabs,
+} from "./tabState";
 
 const SAVE_DELAY_MS = 1000;
 
@@ -71,19 +80,8 @@ export class TabPersistence {
     this.timer = null;
     if (!this.ready) return;
     this.navigation.pruneRecords();
-    const budget = WORKSPACE_TEXT_BUDGET[capabilities().edition === "web" ? "web" : "desktop"];
     const writes: Promise<void>[] = [];
-    for (const workspaceId of this.workspaceIds()) {
-      const { keys, active } = this.tabs.layout(workspaceId);
-      const entries = keys
-        .map((key) => ({ key, tab: this.navigation.savedTab(key) }))
-        .filter((entry): entry is { key: string; tab: SavedTab } => entry.tab !== null);
-      const activeIndex = entries.findIndex((entry) => entry.key === active);
-      const state = serializeTabs(
-        entries.map((entry) => entry.tab),
-        activeIndex >= 0 ? activeIndex : null,
-        budget,
-      );
+    for (const [workspaceId, { state }] of this.plan()) {
       const json = JSON.stringify(state);
       if (this.saved.get(workspaceId) === json || (state.tabs.length === 0 && !this.saved.has(workspaceId))) continue;
       writes.push(
@@ -94,6 +92,37 @@ export class TabPersistence {
       );
     }
     await Promise.all(writes);
+  }
+
+  /** Tabs whose query text is too large to keep (they would come back empty), so quitting can say so. */
+  textLostKeys(): Set<string> {
+    const lost = new Set<string>();
+    for (const { state, keys } of this.plan().values()) {
+      state.tabs.forEach((tab, index) => {
+        if (tab.kind === "query" && tab.textOmitted) lost.add(keys[index]);
+      });
+    }
+    return lost;
+  }
+
+  /** What each workspace's save holds now, with the tab key of each saved tab. */
+  private plan(): Map<string, { state: SavedWorkspaceTabs; keys: string[] }> {
+    const edition = capabilities().edition === "web" ? "web" : "desktop";
+    const plans = new Map<string, { state: SavedWorkspaceTabs; keys: string[] }>();
+    for (const workspaceId of this.workspaceIds()) {
+      const { keys, active } = this.tabs.layout(workspaceId);
+      const entries = keys
+        .map((key) => ({ key, tab: this.navigation.savedTab(key) }))
+        .filter((entry): entry is { key: string; tab: SavedTab } => entry.tab !== null);
+      const activeIndex = entries.findIndex((entry) => entry.key === active);
+      const bounded = serializeTabs(
+        entries.map((entry) => entry.tab),
+        activeIndex >= 0 ? activeIndex : null,
+        WORKSPACE_TEXT_BUDGET[edition],
+      );
+      plans.set(workspaceId, { state: fitToBytes(bounded, WORKSPACE_MAX_BYTES[edition]), keys: entries.map((entry) => entry.key) });
+    }
+    return plans;
   }
 
   /** A deleted workspace: its saved tabs go too. */

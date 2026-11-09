@@ -73,6 +73,11 @@ export class ResultArea {
     this.messages.element.append(this.placeholder);
   }
 
+  /** `start`, unless the area already shows `results` (a run that failed before it started still clears the last one). */
+  begin(results: RunResults): void {
+    if (results !== this.results) this.start(results);
+  }
+
   /** Brings the tabs (or the list), their counts and the Messages lines up to date with what arrived. */
   update(results: RunResults, final: boolean, unfinished = "running…"): void {
     if (results !== this.results) return;

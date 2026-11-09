@@ -483,6 +483,8 @@ export class QueryView implements TabContent {
    */
   private async reopenSession(error: unknown): Promise<boolean> {
     const hadTransaction = this.hasOpenTransaction();
+    // Auto-commit was off: the new session must not run the statements one commit each.
+    const manualCommit = this.transactionsSupported && !this.autoCommit.checked;
     this.session = null;
     this.sessionOpening = null;
     this.sessionId = crypto.randomUUID();
@@ -501,6 +503,7 @@ export class QueryView implements TabContent {
         reason = next;
       }
     }
+    if (manualCommit) this.showTransaction(await this.connection.transaction(this.sessionId, "autoCommitOff"));
     if (hadTransaction) {
       this.resultArea.showMessages([
         {
@@ -826,6 +829,8 @@ export class QueryView implements TabContent {
       this.renderFrame = null;
     }
     const halted = stopped || summary?.stopped === true;
+    // A run that failed before its first attempt (opening the session) still replaces the previous results.
+    this.resultArea.begin(results);
     this.resultArea.update(results, true, halted ? "stopped" : "failed");
     const ms = Math.round(summary?.elapsedMs ?? elapsed);
     const statements = summary?.statements ?? results.entries.length;

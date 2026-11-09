@@ -1,4 +1,4 @@
-//! The open tabs of each workspace (`fosta-tabs.json` next to the config, on the web server in the data volume), so
+//! The open tabs of each workspace (`fosta-studio-tabs.json` next to the config, on the web server in the data volume), so
 //! tabs and the text of query tabs come back after a restart.
 //!
 //! The UI owns the shape of a workspace's state (which tabs, the active one, query text); the store keeps it as JSON,
@@ -18,7 +18,7 @@ use crate::{
     lock::lock,
 };
 
-pub const OPEN_TABS_FILE: &str = "fosta-tabs.json";
+pub const OPEN_TABS_FILE: &str = "fosta-studio-tabs.json";
 /// The most one workspace's tabs may take as JSON (the UI keeps each query text to 1 MB and stays under this).
 pub const MAX_WORKSPACE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_WORKSPACE_ID_CHARS: usize = 200;

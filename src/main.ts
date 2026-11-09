@@ -462,10 +462,14 @@ async function bootstrap(): Promise<void> {
     toggleSidebar: hideOrShowSidebar,
   });
   suppressBrowserContextMenu();
-  guardWindowClose(tabs, async () => {
-    await persistence.flush();
-    await installOnExit();
-  });
+  guardWindowClose(
+    tabs,
+    async () => {
+      await persistence.flush();
+      await installOnExit();
+    },
+    () => persistence.textLostKeys(),
+  );
   guardPageUnload(tabs, () => void persistence.flush());
   revealWindowAfterFirstPaint();
   preloadQueryView();
@@ -473,7 +477,14 @@ async function bootstrap(): Promise<void> {
     const config = await api.getConfig();
     applyConfig(config);
     if (config.startupNotice) toast(config.startupNotice, "info");
-    void startUpdates({ confirmRestart: () => confirmQuit(tabs, "Restart") });
+    void startUpdates({
+      confirmRestart: async () => {
+        const go = await confirmQuit(tabs, "Restart", persistence.textLostKeys());
+        // The tabs (and query text) come back after the update.
+        if (go) await persistence.flush();
+        return go;
+      },
+    });
     if (supported.tasks) await tasksPanel.init();
     await persistence.restore(config);
   } catch (error) {
