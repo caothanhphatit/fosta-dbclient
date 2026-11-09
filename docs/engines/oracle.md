@@ -80,6 +80,21 @@ the prompt then lists the manual steps. The Windows client needs the Microsoft V
 - **Relations**: foreign keys in both directions (referencing tables in any schema the user can see) and the ER diagram of a
   schema.
 
+## Vectors (AI Vector Search)
+
+The vector tools (search, health checks, index recall) appear on Oracle 23ai and newer.
+
+- **Columns**: dense `VECTOR` columns (`VECTOR(4, FLOAT32)`; dimensions from the type, or from a stored value for
+  `VECTOR(*)`). Sparse and `BINARY` vectors are not listed. The grid shows vectors as text (`FROM_VECTOR`) and offers *Find
+  similar* on them; query tabs read them as text too.
+- **Indexes**: IVF (`NEIGHBOR PARTITIONS`) and HNSW (`INMEMORY NEIGHBOR GRAPH`). The metric and build options are read from
+  `VECSYS.VECTOR$INDEX` when the user may (DBAs); otherwise the metric is found from the plan (the metric whose
+  `FETCH APPROX` search uses the index). HNSW needs `VECTOR_MEMORY_SIZE` (0 on the Free image, so the dev seed uses IVF).
+- **Search** orders by `VECTOR_DISTANCE(column, TO_VECTOR(:q), COSINE | EUCLIDEAN | DOT)` with `FETCH APPROX FIRST k ROWS
+  ONLY`, the form an index can serve; *Auto* uses the index's metric. It runs in a read-only transaction and shows the
+  `DBMS_XPLAN` plan with the index it used.
+- **Recall** compares `FETCH APPROX` with `FETCH EXACT` top-k.
+
 ## Not done
 
 - `OCIBreak` interrupts SQL, but some PL/SQL waits (for example `DBMS_SESSION.SLEEP`) only end when they finish.

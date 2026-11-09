@@ -2,7 +2,8 @@
 //! self-signed certificate) and OpenSearch (`dev/compose/opensearch.yml`, plain http on 9201, security plugin off).
 //!
 //! Before each suite the fixture recreates `contract_items` (1,000 documents, keys 1..=1000, the key declared in the
-//! mapping as `_meta.fosta.key = "id"`) and `contract_children` through console requests. Plus engine checks: the
+//! mapping as `_meta.fosta.key = "id"`, a 4-dimension `embedding` vector with an HNSW cosine graph: `dense_vector` on
+//! Elasticsearch, `knn_vector` on OpenSearch) and `contract_children` through console requests. Plus engine checks: the
 //! gateway (read-only workspace, refused paths, filter scripts), point-in-time paging past 10,000 hits on the seeded
 //! `logs-app` data stream, edits through an alias, error mapping, and the tree.
 //!
@@ -15,9 +16,13 @@ use serde_json::json;
 
 use crate::{
     contract::{
-        testing::suites::*, BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Field, Filter, FilterCond,
-        FilterOp, NodeKind, ObjectRef, Page, RawFilterLang, RowChange, RowChangeSet, RunOptions, RunRequest, Session, SessionOptions,
-        SortKey, TlsConfig, TlsMode, TreeRequest, Value,
+        testing::{
+            suites::*,
+            vector::{suite_vector, VectorFixture},
+        },
+        BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Field, Filter, FilterCond, FilterOp, NodeKind,
+        ObjectRef, Page, RawFilterLang, RowChange, RowChangeSet, RunOptions, RunRequest, Session, SessionOptions, SortKey, TlsConfig,
+        TlsMode, TreeRequest, Value,
     },
     error::AppResult,
     gateway::{
@@ -40,11 +45,30 @@ fn item(i: i64) -> serde_json::Value {
         "active": i % 2 == 0,
         "born": format!("2020-01-{:02}T00:00:00Z", (i % 28) + 1),
         "note": if i % 3 == 0 { serde_json::Value::Null } else { json!(format!("note {i}")) },
+        "embedding": embedding(i),
     })
 }
 
+/// The vector of document `i` (the PostgreSQL seed's formula: no zero vectors, which cosine refuses).
+fn embedding(i: i64) -> [f64; 4] {
+    let part = |factor: i64, modulus: i64| (((i * factor) % modulus) + 1) as f64 / modulus as f64;
+    [part(1, 10), part(3, 11), part(7, 13), part(9, 17)]
+}
+
+/// The mapping of `embedding`: an HNSW cosine graph on either flavor.
+fn embedding_mapping(opensearch: bool) -> serde_json::Value {
+    if opensearch {
+        json!({ "type": "knn_vector", "dimension": 4, "method": {
+            "name": "hnsw", "engine": "lucene", "space_type": "cosinesimil", "parameters": { "m": 16, "ef_construction": 100 }
+        } })
+    } else {
+        json!({ "type": "dense_vector", "dims": 4, "index": true, "similarity": "cosine",
+                "index_options": { "type": "hnsw", "m": 16, "ef_construction": 100 } })
+    }
+}
+
 /// Console requests that recreate the two indices.
-fn seed() -> Vec<String> {
+fn seed(opensearch: bool) -> Vec<String> {
     let mut items = String::from("POST /contract_items/_bulk?refresh=true&filter_path=errors,took\n");
     for i in 1..=1000 {
         items.push_str(&format!("{}\n{}\n", json!({ "index": { "_id": i.to_string() } }), item(i)));
@@ -57,8 +81,12 @@ fn seed() -> Vec<String> {
             json!({ "id": i, "item_id": i, "label": format!("child {i}") })
         ));
     }
+    let mut items_settings = json!({ "number_of_shards": 2, "number_of_replicas": 0 });
+    if opensearch {
+        items_settings["index.knn"] = json!(true);
+    }
     let items_mapping = json!({
-        "settings": { "number_of_shards": 2, "number_of_replicas": 0 },
+        "settings": items_settings,
         "mappings": {
             "_meta": { "fosta": { "key": "id" } },
             "properties": {
@@ -67,7 +95,8 @@ fn seed() -> Vec<String> {
                 "price": { "type": "scaled_float", "scaling_factor": 100 },
                 "active": { "type": "boolean" },
                 "born": { "type": "date" },
-                "note": { "type": "keyword" }
+                "note": { "type": "keyword" },
+                "embedding": embedding_mapping(opensearch)
             }
         }
     });
@@ -146,7 +175,7 @@ fn fixture_for(engine: &'static str, spec: ConnectionSpec, secrets: ConnectSecre
         child: ObjectRef::new(None, None, "contract_children", NodeKind::COLLECTION),
         key_column: "id",
         name_column: "name",
-        seed: seed(),
+        seed: seed(engine == "opensearch"),
         seed_database: None,
         key_filter,
         sleep_statement: Some("GET /_cluster/health?wait_for_nodes=99&timeout=30s"),
@@ -564,4 +593,47 @@ async fn contract_opensearch_languages() {
         .await
         .expect("OpenSearch SQL");
     assert_eq!(sink.sets[0].rows.len(), 3);
+}
+
+// --- Vector tools -------------------------------------------------------------------------------------------------
+
+const VECTORS: VectorFixture = VectorFixture {
+    database: "",
+    table: "contract_items",
+    column: "embedding",
+    dims: 4,
+    key_column: "id",
+    key: 7,
+    indexed: true,
+};
+
+/// The shared vector suite on `contract_items.embedding`, plus what the flavor's request looks like.
+async fn vector_suite(f: Fixture, field_type: &str, request: &str) {
+    let run = suite_vector(&f, &VECTORS)
+        .await
+        .unwrap_or_else(|| panic!("{}: vector search is available", f.engine));
+    let column = &run.info["columns"][0];
+    assert_eq!(column["typeName"], format!("{field_type}(4)"), "{}", run.info);
+    assert_eq!(column["metrics"], json!(["cosine"]), "{}", run.info);
+    let index = &run.info["indexes"][0];
+    assert_eq!((index["metric"].as_str(), index["kind"].as_str()), (Some("cosine"), Some("hnsw")));
+    assert_eq!(index["m"], 16);
+    assert_eq!(run.search["indexUsed"], "embedding");
+    assert!(run.search["sql"].as_str().unwrap().contains(request), "{}", run.search["sql"]);
+    let columns = run.search["result"]["columns"].as_array().unwrap();
+    let id = columns.iter().position(|column| column["name"] == "id").unwrap();
+    assert_eq!(run.search["result"]["rows"][0][id], json!({ "t": "int", "v": 7 }));
+    assert!(columns.iter().all(|column| column["name"] != "embedding"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/elasticsearch.yml"]
+async fn contract_elasticsearch_vector() {
+    vector_suite(fixture(), "dense_vector", "\"num_candidates\"").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/opensearch.yml"]
+async fn contract_opensearch_vector() {
+    vector_suite(opensearch_fixture(), "knn_vector", "\"knn\"").await;
 }

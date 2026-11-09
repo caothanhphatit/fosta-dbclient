@@ -219,6 +219,7 @@ impl VectorStore for PgVectors<'_> {
                     dims: column.dims?,
                     name: column.name,
                     type_name: column.type_name,
+                    metrics: Vec::new(),
                 })
             })
             .collect())

@@ -131,6 +131,7 @@
   "privacy.ai.text": "Model thấy metadata của bảng và cột, cùng nội dung editor, lỗi và log mà bạn chọn chia sẻ. Câu lệnh chỉ chạy khi bạn chạy. Công cụ query chỉ đọc (tuỳ chọn) đọc tối đa 50 dòng mỗi query và gửi chúng tới nhà cung cấp của bạn; hãy tắt nó trong Settings hoặc theo từng workspace.",
   "privacy.gateway.title": "Cổng kiểm soát câu lệnh",
   "privacy.gateway.text": "Mọi câu lệnh, trên mọi engine, đều đi qua một cổng duy nhất với quy tắc riêng cho từng workspace: Open, Guarded, Read-only hoặc Custom. Workspace được đánh dấu Production sẽ mặc định là Read-only, và việc nới lỏng quy tắc luôn đi kèm cảnh báo rõ ràng.",
+  "privacy.link": "Chi tiết bảo mật: lưu gì ở đâu, gửi gì đi đâu",
   "roadmap.kicker": "Lộ trình",
   "roadmap.title": "Chặng đường phía trước",
   "roadmap.intro": "Các hạng mục đã lên kế hoạch, xếp gần đúng theo thứ tự. Kế hoạch có thể thay đổi; hãy mở issue nếu bạn muốn thảo luận về bất kỳ mục nào.",

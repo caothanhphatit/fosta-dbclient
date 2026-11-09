@@ -32,7 +32,8 @@ CREATE TABLE products (
     name           VARCHAR2(200) NOT NULL,
     price          NUMBER(12, 2) NOT NULL CHECK (price >= 0),
     attributes     CLOB CHECK (attributes IS JSON),
-    price_with_vat NUMBER(12, 2) GENERATED ALWAYS AS (ROUND(price * 1.1, 2)) VIRTUAL
+    price_with_vat NUMBER(12, 2) GENERATED ALWAYS AS (ROUND(price * 1.1, 2)) VIRTUAL,
+    embedding      VECTOR(4, FLOAT32) NOT NULL
 );
 
 CREATE TABLE orders (
@@ -68,11 +69,17 @@ SELECT LEVEL, 'customer' || LEVEL || '@example.com', 'Customer ' || LEVEL,
        CASE WHEN MOD(LEVEL, 17) = 0 THEN 1 ELSE 0 END
 FROM dual CONNECT BY LEVEL <= 2000;
 
-INSERT INTO products (id, category_id, sku, name, price, attributes)
+INSERT INTO products (id, category_id, sku, name, price, attributes, embedding)
 SELECT LEVEL, 1 + MOD(LEVEL, 7), 'SKU-' || LPAD(LEVEL, 5, '0'), 'Product ' || LEVEL,
        ROUND(5 + MOD(LEVEL * 7919, 500) + MOD(LEVEL, 100) / 100, 2),
-       JSON_OBJECT('color' VALUE DECODE(MOD(LEVEL, 3), 0, 'red', 1, 'green', 'blue'), 'weight' VALUE MOD(LEVEL, 40))
+       JSON_OBJECT('color' VALUE DECODE(MOD(LEVEL, 3), 0, 'red', 1, 'green', 'blue'), 'weight' VALUE MOD(LEVEL, 40)),
+       TO_VECTOR('[' || (MOD(LEVEL, 10) + 1) / 10 || ',' || (MOD(LEVEL * 3, 11) + 1) / 11 || ','
+                 || (MOD(LEVEL * 7, 13) + 1) / 13 || ',' || (MOD(LEVEL * 9, 17) + 1) / 17 || ']', 4, FLOAT32)
 FROM dual CONNECT BY LEVEL <= 500;
+
+-- IVF (NEIGHBOR PARTITIONS): HNSW needs VECTOR_MEMORY_SIZE, which is 0 on the Free image. DDL commits the rows above.
+CREATE VECTOR INDEX products_embedding_idx ON products (embedding)
+    ORGANIZATION NEIGHBOR PARTITIONS DISTANCE COSINE WITH TARGET ACCURACY 95;
 
 INSERT INTO orders
 SELECT LEVEL, 1 + MOD(LEVEL * 31, 2000), DECODE(MOD(LEVEL, 4), 0, 'new', 1, 'paid', 2, 'shipped', 'cancelled'),

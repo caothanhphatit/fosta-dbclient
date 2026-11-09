@@ -18,15 +18,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Vector tools on PostgreSQL (pgvector)**: `vector` and `halfvec` columns, HNSW and IVFFlat indexes with their metric, similarity
   search by cosine, L2 or inner product, health checks and index recall, when the extension is installed in the database. The dev
   and CI image is now `pgvector/pgvector`.
-- **Vector tools on Redis 8**: search indexes with `VECTOR` fields (FLAT or HNSW, HASH or JSON documents) listed in database 0,
-  KNN search with the field's metric (other metrics scan up to 50,000 documents), health checks and index recall.
-- **Vector tools on ClickHouse**: `Array(Float32)` columns and `vector_similarity` HNSW indexes, search by cosine, L2 or inner
-  product, health checks and index recall (exact top-k with `use_skip_indexes = 0`).
+- **Vector tools on Elasticsearch and OpenSearch**.
+- **Vector tools on Oracle 23ai**: `VECTOR` columns, IVF and HNSW indexes, `VECTOR_DISTANCE` search, health checks and recall.
+- **Vector tools on Redis 8**: search indexes with `VECTOR` fields (FLAT or HNSW), KNN search, health checks and recall.
+- **Vector tools on ClickHouse**: `Array(Float32)` columns and `vector_similarity` indexes, search, health checks and recall.
 - **Updates**: a daily check for a new release (Settings → Check for updates, on by default; *Check for updates now* any time) and
   an *Update X.Y.Z* item in the status bar. The installed Windows app downloads the update in the background and installs it on
   quit or with *Restart to update*, asking first about open transactions and unsaved edits, then shows what's new once. The
   portable app links to the release; the web edition shows the Docker commands, and `deploy/docker-compose.yml` has an optional
   Watchtower service (`--profile autoupdate`).
+
+- **Production hint**: saving a connection whose name, host, database or URL says prod, production, prd or live, outside a Production
+  workspace, offers to move it there (read-only by default).
+- **Security and privacy** page ([docs/security.md](docs/security.md)) and [SECURITY.md](SECURITY.md); CI audits Rust and npm
+  dependencies.
 
 ### Fixed
 

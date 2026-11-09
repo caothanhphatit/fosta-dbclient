@@ -244,6 +244,8 @@ impl VectorStore for ChVectors<'_> {
                     name: column.name,
                     dims,
                     type_name: column.type_name,
+                    // The distance function is the query's choice; an index serves its own.
+                    metrics: Vec::new(),
                 });
             }
         }

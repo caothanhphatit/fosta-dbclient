@@ -93,6 +93,13 @@ pub async fn suite_vector(f: &Fixture, v: &VectorFixture) -> Option<VectorRun> {
         .map(|m| m.as_str().unwrap().to_owned())
         .collect();
     assert!(metrics.iter().any(|metric| metric == "cosine"), "{engine}: {metrics:?}");
+    // A column whose similarity is fixed lists its own metrics; searches use only those.
+    let fixed: Vec<String> = column["metrics"]
+        .as_array()
+        .map(|list| list.iter().map(|m| m.as_str().unwrap().to_owned()).collect())
+        .unwrap_or_default();
+    let refused_metric = metrics.iter().find(|metric| !fixed.is_empty() && !fixed.contains(metric)).cloned();
+    let metrics = if fixed.is_empty() { metrics } else { fixed };
     if v.indexed {
         let index = info["indexes"].as_array().unwrap().iter().find(|index| index["column"] == v.column);
         let index = index.unwrap_or_else(|| panic!("{engine}: no index in {info}"));
@@ -164,6 +171,18 @@ pub async fn suite_vector(f: &Fixture, v: &VectorFixture) -> Option<VectorRun> {
         wrong.expect_err("dimension mismatch").to_string().contains("dimensions"),
         "{engine}"
     );
+    if let Some(metric) = refused_metric {
+        let refused = invoke(
+            &manager,
+            "vector.search",
+            search(json!({ "kind": "literal", "text": literal }), &metric),
+        )
+        .await;
+        assert!(
+            refused.expect_err("a metric outside the column's").to_string().contains("only"),
+            "{engine} {metric}"
+        );
+    }
 
     // Health: the column, index, rows and sample checks.
     let health = invoke(&manager, "vector.health", target(json!({ "sample": 100 }))).await.unwrap();

@@ -2,6 +2,8 @@
 
 # Fosta Studio
 
+[![CI](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml/badge.svg)](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml) [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) [![Release](https://img.shields.io/github/v/release/caothanhphatit/fosta-dbclient)](https://github.com/caothanhphatit/fosta-dbclient/releases/latest)
+
 [English](README.md) · **Tiếng Việt**
 
 Database client nhỏ gọn, chạy nhanh, hỗ trợ **11 engine**: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis,
@@ -78,6 +80,7 @@ Build, test và database để test: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Thêm
 
+- [Bảo mật và quyền riêng tư](docs/security.md) (tiếng Anh): lưu gì ở đâu, gửi gì đi đâu, chế độ chỉ đọc hoạt động thế nào.
 - [ROADMAP.md](ROADMAP.md): những gì sắp làm.
 - [ARCHITECTURE.md](ARCHITECTURE.md): kiến trúc bên trong.
 - [docs/engines](docs/engines): ghi chú cho từng engine, SSH và TLS.

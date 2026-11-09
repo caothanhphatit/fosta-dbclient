@@ -48,6 +48,7 @@ pub mod search;
 mod session;
 mod tree;
 pub mod values;
+mod vector;
 
 #[cfg(test)]
 mod contract_tests;

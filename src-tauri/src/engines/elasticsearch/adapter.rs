@@ -4,7 +4,7 @@
 //!
 //! Engine views call these `invoke` names: `es.indexDetails`, `es.clusterHealth`, `es.cat`, `es.document`, `es.names`
 //! and `es.fields` (reads), `es.documentOp` (a [`DocumentOp`]) and `es.byQuery` (a [`ByQueryOp`]), both classified by
-//! their own `class()`. Unknown names are refused.
+//! their own `class()`, and the vector operations (`vector.*`, reads; see [`super::vector`]). Unknown names are refused.
 
 use std::{
     collections::HashMap,
@@ -28,14 +28,15 @@ use super::{
     docs::{ByQueryKind, ByQueryOp, DocumentOp},
     dsl, edits, grid,
     session::{self, CONSOLE, ESQL, SQL},
-    tree,
+    tree, vector,
 };
 use crate::{
     contract::{
-        classify_common, default_validate_filter, unsupported_capability, value::percent_decode, ApplyResult, AuthMethodId, BrowseRequest,
-        CallContext, Capability, CapabilitySet, Category, Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec,
-        Engine, EngineDescriptor, Filter, LanguageSpec, NodeAction, ObjectDescription, ObjectRef, OpenedSession, Page, ParsedConnection,
-        RawFilterLang, RowChangeSet, ServerInfo, SessionOptions, StatementInfo, TabularData, TlsConfig, TlsMode, TreeChildren, TreeRequest,
+        classify_common, default_validate_filter, require, unsupported_capability, value::percent_decode,
+        vector::OPERATIONS as VECTOR_OPERATIONS, ApplyResult, AuthMethodId, BrowseRequest, CallContext, Capability, CapabilitySet,
+        Category, Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, Engine, EngineDescriptor, Filter,
+        LanguageSpec, NodeAction, ObjectDescription, ObjectRef, OpenedSession, Page, ParsedConnection, RawFilterLang, RowChangeSet,
+        ServerInfo, SessionOptions, StatementInfo, TabularData, TlsConfig, TlsMode, TreeChildren, TreeRequest,
     },
     error::{AppError, AppResult},
 };
@@ -212,6 +213,10 @@ fn classify_capability(name: &str, args: &serde_json::Value) -> StatementInfo {
             let index = args.get("index").and_then(|index| index.as_str()).map(str::to_owned);
             StatementInfo::new(Category::Read, name, &excerpt).with_tables(index.into_iter().collect())
         }
+        _ if VECTOR_OPERATIONS.contains(&name) => {
+            let index = args.get("table").and_then(|table| table.as_str()).map(str::to_owned);
+            StatementInfo::new(Category::Read, name, &excerpt).with_tables(index.into_iter().collect())
+        }
         "es.documentOp" => match serde_json::from_value::<DocumentOp>(args.clone()) {
             Ok(op) => {
                 let index = match &op {
@@ -284,7 +289,10 @@ impl Engine for ElasticAdapter {
         let features = engine.features();
         // Without a point in time (ES before 7.10, OpenSearch before 2.4) keyset paging still works on a declared key
         // and on sets within the first 10,000 documents, so the capabilities stay those of the descriptor.
-        let capabilities = self.descriptor().capabilities;
+        let mut capabilities = self.descriptor().capabilities;
+        if !vector::cluster_supports(&engine).await {
+            capabilities = capabilities.without(Capability::Vector);
+        }
         let languages = self
             .descriptor()
             .languages
@@ -425,6 +433,10 @@ impl Connection for EsConnection {
             "es.byQuery" => {
                 let op: ByQueryOp = serde_json::from_value(args).map_err(|error| AppError::new(format!("invalid arguments: {error}")))?;
                 Ok(serde_json::to_value(self.engine.by_query(&op).await?)?)
+            }
+            _ if VECTOR_OPERATIONS.contains(&name) => {
+                require(self.capabilities, Capability::Vector)?;
+                vector::invoke(&self.engine, name, args).await
             }
             _ => Err(unsupported_capability(name)),
         }
@@ -593,6 +605,13 @@ mod tests {
         assert_eq!(by_query("delete").worst(), Some(Category::Destructive));
         assert!(capability("es.documentOp", json!({ "op": "nuke" })).refusal().is_some());
         assert_eq!(capability("es.reindexAll", json!({})).refusal(), Some("unknown operation"));
+        for name in VECTOR_OPERATIONS {
+            let vector = capability(name, json!({ "database": "", "table": "products", "column": "embedding" }));
+            assert_eq!(vector.worst(), Some(Category::Read), "{name}");
+            assert_eq!(vector.tables(), vec!["products".to_owned()]);
+        }
+        assert!(ELASTICSEARCH.descriptor().capabilities.contains(Capability::Vector));
+        assert!(OPENSEARCH.descriptor().capabilities.contains(Capability::Vector));
     }
 
     #[test]

@@ -622,6 +622,8 @@ impl VectorStore for RedisVectors {
                 ),
                 name: field.attribute,
                 dims: field.dims,
+                // Every metric: the field's own through its index, the others by a bounded scan.
+                metrics: Vec::new(),
             })
             .collect())
     }

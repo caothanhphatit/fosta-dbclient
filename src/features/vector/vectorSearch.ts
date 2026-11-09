@@ -4,7 +4,7 @@ import { toast } from "../../core/dialogs";
 import { clamp, copyText, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
 import { capabilityOf, engineInfo } from "../../core/engines";
 import { DataGrid, gridSetup } from "../grid/grid";
-import { keyCells } from "./vectorRows";
+import { columnMetrics, keyCells } from "./vectorRows";
 import type { Navigator } from "../../core/navigator";
 import { RecordPanel } from "../table/recordPanel";
 import { makeSplitter } from "../../core/splitter";
@@ -58,11 +58,16 @@ export class VectorSearchView implements TabContent {
     this.grid = new DataGrid();
     this.record = new RecordPanel();
     this.searchButton = toolButton("vector", "Search", () => void this.search(), "Search (Ctrl+Enter)");
+    // Engines without SQL filter with their own raw filter language (Query DSL on Elasticsearch / OpenSearch).
+    const engine = engineInfo(target.driver);
+    if (!engine.sqlDialect && engine.filter.raw) this.filterInput.placeholder = engine.filter.placeholder;
     this.queryText.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") void this.search();
     });
     this.columnSelect.addEventListener("change", () => {
-      if (this.info) this.describeIndex(this.info);
+      if (!this.info) return;
+      this.renderMetrics(this.info);
+      this.describeIndex(this.info);
     });
 
     const form = h(
@@ -127,16 +132,23 @@ export class VectorSearchView implements TabContent {
     try {
       const info = await api.vectorInfo(this.target.connectionId, this.target.database, this.target.table);
       this.info = info;
-      const metrics = METRICS.filter((metric) => metric.value === "auto" || info.metrics.includes(metric.value));
-      this.metricSelect.replaceChildren(...metrics.map((metric) => h("option", { value: metric.value }, metric.label)));
       this.columnSelect.replaceChildren(
         ...info.columns.map((column) => h("option", { value: column.name, selected: column.name === preferred }, `${column.name} (${column.dims})`)),
       );
+      this.renderMetrics(info);
       this.describeIndex(info);
       if (this.seed) void this.search();
     } catch (error) {
       showError(error, "Vector search");
     }
+  }
+
+  /** The distance picker: the selected column's own metrics when its similarity is fixed, else the engine's. */
+  private renderMetrics(info: VectorInfo): void {
+    const allowed = columnMetrics(info, this.columnSelect.value);
+    const current = this.metricSelect.value;
+    const metrics = METRICS.filter((metric) => metric.value === "auto" || allowed.includes(metric.value));
+    this.metricSelect.replaceChildren(...metrics.map((metric) => h("option", { value: metric.value, selected: metric.value === current }, metric.label)));
   }
 
   private describeIndex(info: VectorInfo): void {
