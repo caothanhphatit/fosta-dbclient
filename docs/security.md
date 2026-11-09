@@ -10,7 +10,7 @@ Fosta Studio has no account and no telemetry. It connects only to:
 - **Your databases**, and the SSH hosts you configure for tunnels.
 - **The AI provider you choose**, only when you use the assistant or embeddings, with your own key. See [The assistant](#the-assistant).
 - **GitHub, once a day,** to check for a new release (`api.github.com`, with no data about you or your databases). Turn it off under
-  *Settings → Check for updates*. The installed app downloads updates from the project's GitHub releases and installs them only if
+  _Settings → Check for updates_. The installed app downloads updates from the project's GitHub releases and installs them only if
   their signature matches the key built into the app.
 - **download.oracle.com**, only if you ask the app to download Oracle Instant Client; the file must match a pinned SHA-256.
 
@@ -22,15 +22,15 @@ sends nothing on its own; what an MCP client reads goes wherever that client sen
 Everything lives next to the executable (the portable app), in the app's data folder (the installed app), or in the `/data` volume
 (the web edition).
 
-| File | Holds | Secrets? |
-|---|---|---|
-| `fosta-studio.json` | Workspaces, connections, commands, settings | No: passwords and keys are never written here |
-| Windows Credential Manager (desktop) | Saved database passwords, SSH passphrases, AI and embedding keys | Yes, protected by Windows |
-| `fosta-studio-secrets.enc` + `fosta-studio-secret.key` (web edition) | The same secrets, encrypted with XChaCha20-Poly1305 | Yes; set `FOSTA_STUDIO_SECRET_KEY` to keep the key out of the volume |
-| `fosta-studio-history.jsonl` | Query history (text, time, duration, row count) | Statement text as you typed it; turn history off or clear it under *Settings* |
-| `app:mcp-token` in Windows Credential Manager (desktop) or `fosta-studio-secrets.enc` (web edition) | The MCP server's bearer token, for MCP clients only | Yes |
-| `fosta-studio-audit.jsonl` | Blocked, confirmed and relaxed operations, assistant runs and every MCP call | Statement excerpts |
-| Log folder | Application log | No passwords; statements are truncated |
+| File                                                                                                | Holds                                                                        | Secrets?                                                                      |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `fosta-studio.json`                                                                                 | Workspaces, connections, commands, settings                                  | No: passwords and keys are never written here                                 |
+| Windows Credential Manager (desktop)                                                                | Saved database passwords, SSH passphrases, AI and embedding keys             | Yes, protected by Windows                                                     |
+| `fosta-studio-secrets.enc` + `fosta-studio-secret.key` (web edition)                                | The same secrets, encrypted with XChaCha20-Poly1305                          | Yes; set `FOSTA_STUDIO_SECRET_KEY` to keep the key out of the volume          |
+| `fosta-studio-history.jsonl`                                                                        | Query history (text, time, duration, row count)                              | Statement text as you typed it; turn history off or clear it under _Settings_ |
+| `app:mcp-token` in Windows Credential Manager (desktop) or `fosta-studio-secrets.enc` (web edition) | The MCP server's bearer token, for MCP clients only                          | Yes                                                                           |
+| `fosta-studio-audit.jsonl`                                                                          | Blocked, confirmed and relaxed operations, assistant runs and every MCP call | Statement excerpts                                                            |
+| Log folder                                                                                          | Application log                                                              | No passwords; statements are truncated                                        |
 
 A saved password is tied to its server. If you change a connection's host, port, user, SSH route, TLS settings or command without
 typing the password again, the saved one is deleted instead of being sent to the new target.
@@ -58,7 +58,7 @@ replacement for database permissions.
 
 ## The assistant
 
-The model sees table and column names, the editor text, errors and task logs you share. Statements run only when you press *Run*,
+The model sees table and column names, the editor text, errors and task logs you share. Statements run only when you press _Run_,
 under the workspace's rules. The optional read-only query tool lets the assistant read up to 50 rows per query (10 seconds, one
 statement); those rows go to your provider. It is off for Production and Read-only workspaces unless you allow it, and every run is
 shown in the chat and written to the audit log. Database content is passed to the model as untrusted data.
@@ -66,7 +66,7 @@ shown in the chat and written to the audit log. Database content is passed to th
 ## MCP clients
 
 The MCP server ([mcp.md](mcp.md)) lets AI clients such as Claude Code, Claude Desktop or Cursor use saved connections. It is off
-until you turn it on in *Settings → MCP server*, and each workspace is invisible to clients until *Edit workspace → MCP clients*
+until you turn it on in _Settings → MCP server_, and each workspace is invisible to clients until _Edit workspace → MCP clients_
 allows it.
 
 What a client **can see**: the connections of those workspaces (id, name, engine, workspace), their databases, tables, columns and
@@ -93,7 +93,7 @@ approval, denial and timeout is written to the audit log with caller `mcp` and t
 self-reported, so approve what a statement does, not who asks.
 
 On the **web edition**, `/mcp` takes a separate random 256-bit **MCP token**, kept in the encrypted secret store and shown and
-rotated in *Settings → MCP server*. It is never the access token: `/mcp` refuses the access token and the session cookie, and the
+rotated in _Settings → MCP server_. It is never the access token: `/mcp` refuses the access token and the session cookie, and the
 MCP token cannot sign in or call `/api`, so a client holding it cannot open the app, approve its own statements or change a
 workspace's MCP access. An `Origin` header must name the server itself, and the endpoint is off when authentication is off.
 

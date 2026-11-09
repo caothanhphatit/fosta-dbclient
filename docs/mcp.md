@@ -9,8 +9,8 @@ you allow it.
 
 ## Turn it on
 
-1. **Settings → MCP server…** → *Run the MCP server* → *Save*. The desktop app listens on `127.0.0.1:3910` (change the port there)
-   and creates a random token, kept in Windows Credential Manager. The dialog shows it (*Show*, *Copy*, *Rotate…*) and the setup
+1. **Settings → MCP server…** → _Run the MCP server_ → _Save_. The desktop app listens on `127.0.0.1:3910` (change the port there)
+   and creates a random token, kept in Windows Credential Manager. The dialog shows it (_Show_, _Copy_, _Rotate…_) and the setup
    for each client below, with the token filled in.
 2. **Edit workspace → MCP clients** for each workspace clients may use:
    - **Off** (default): its connections do not exist for clients.
@@ -24,7 +24,7 @@ The status bar shows **MCP** with the number of tool calls while the server is o
 
 ## Set up a client
 
-Replace `<token>` with the token from *Settings → MCP server* (the dialog's snippets already contain it).
+Replace `<token>` with the token from _Settings → MCP server_ (the dialog's snippets already contain it).
 
 **Claude Code**
 
@@ -57,15 +57,15 @@ Fosta Studio must be running for any of these to work; otherwise every call answ
 
 ## Tools
 
-| Tool | What it does |
-|---|---|
+| Tool               | What it does                                                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------- |
 | `list_connections` | Connections in workspaces that allow MCP: id, name, engine, workspace, access, connected. No hosts, users or passwords. |
-| `list_databases` | Databases (schemas) of a connection. |
-| `list_tables` | Tables, views, collections or keys of a database with approximate row counts (key-value engines: at most 200 keys). |
-| `describe_table` | Columns, keys, defaults and the definition of one table, view or collection. |
-| `schema_overview` | Every table with its columns, and the foreign keys between them. |
-| `run_read_query` | One read-only statement in a read-only session: 100 rows by default (`max_rows` up to 500), 30 seconds. |
-| `run_query` | One statement that may change data, only in *Ask before writes* workspaces, after you approve it. |
+| `list_databases`   | Databases (schemas) of a connection.                                                                                    |
+| `list_tables`      | Tables, views, collections or keys of a database with approximate row counts (key-value engines: at most 200 keys).     |
+| `describe_table`   | Columns, keys, defaults and the definition of one table, view or collection.                                            |
+| `schema_overview`  | Every table with its columns, and the foreign keys between them.                                                        |
+| `run_read_query`   | One read-only statement in a read-only session: 100 rows by default (`max_rows` up to 500), 30 seconds.                 |
+| `run_query`        | One statement that may change data, only in _Ask before writes_ workspaces, after you approve it.                       |
 
 Every tool except `list_connections` takes `connection` (an id from `list_connections`) and optionally `database` (default: the
 connection's database). A connection that is not open yet is opened on demand with its saved password; without one, the client is
@@ -80,13 +80,13 @@ always shows the whole statement that would run.
 When a client calls `run_query`, Fosta Studio shows a dialog naming the client ("Claude Code wants to run a statement"), with the
 full statement and its category (write, DDL, destructive, admin):
 
-- *Run* runs it once. Where the workspace's rules ask for a typed confirmation (for example destructive statements under Guarded
+- _Run_ runs it once. Where the workspace's rules ask for a typed confirmation (for example destructive statements under Guarded
   rules), you type the table or workspace name first.
-- *Deny*, closing the dialog, or no answer within 120 seconds denies it; nothing runs.
+- _Deny_, closing the dialog, or no answer within 120 seconds denies it; nothing runs.
 - Statements the rules block are refused without a dialog. Every statement asks, even under Open rules that would run it directly in
   a query tab.
 - After you approve, the settings are checked again: if meanwhile the MCP server was turned off, the workspace's MCP access is no
-  longer *Ask before writes*, or its rules now block the statement or need a typed confirmation it did not get, nothing runs.
+  longer _Ask before writes_, or its rules now block the statement or need a typed confirmation it did not get, nothing runs.
 - Turning the server off, changing its port or rotating its token withdraws every waiting statement and ends every client session.
 
 The name in the dialog is what the client reports about itself, so it is a label, not proof of identity: approve what the statement
@@ -96,7 +96,7 @@ does, not who sent it.
 
 The web server serves the same endpoint at `/mcp` on its own port, still gated per workspace:
 
-- Turn it on in *Settings → MCP server*. Clients authenticate with a separate **MCP token**, created when you turn the server on
+- Turn it on in _Settings → MCP server_. Clients authenticate with a separate **MCP token**, created when you turn the server on
   and kept in the server's encrypted secret store (`fosta-studio-secrets.enc`). The dialog shows it and rotates it, as on the
   desktop.
 - The MCP token works only for `/mcp`: it cannot sign in (`/?token=`, the sign-in form) and `/api` refuses it, so a client holding
