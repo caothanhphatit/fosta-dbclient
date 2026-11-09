@@ -174,7 +174,8 @@ export class AppNavigation implements Navigator {
       const name = node?.label ?? (object ? (object.schema ? `${object.schema}.${object.name}` : object.name) : profile.name);
       const { title, subtitle } = this.describeTab(registration, ctx, role, name, params);
       const tabIcon: IconName = role === "data" ? nodeIcon(node?.icon, dataIcon(kind)) : (registration.icon ?? "table");
-      this.tabs.open({ key, scope, title, subtitle, icon: tabIcon, create: () => factory(ctx) });
+      const database = object?.database ?? (typeof params.database === "string" ? params.database : null);
+      this.tabs.open({ key, scope, title, subtitle, icon: tabIcon, connection: profile.name, database, create: () => factory(ctx) });
     } catch (error) {
       showError(error, `Open ${describeOpen(role, kind)}`);
       return null;
@@ -229,6 +230,8 @@ export class AppNavigation implements Navigator {
       key,
       title: `${target.table} · vector search`,
       subtitle: `${target.database}.${target.table}`,
+      connection: this.host.connectionName(target.connectionId),
+      database: target.database,
       icon: "vector",
       create: () => new VectorSearchView(target, column, this, seed ?? null),
     });
@@ -239,6 +242,8 @@ export class AppNavigation implements Navigator {
       key: this.tabKey(target.connectionId, "vector-health", target.database, target.table),
       title: `${target.table} · vector health`,
       subtitle: `${target.database}.${target.table}`,
+      connection: this.host.connectionName(target.connectionId),
+      database: target.database,
       icon: "health",
       create: () => new VectorHealthView(target, column),
     });
