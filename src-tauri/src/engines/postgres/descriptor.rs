@@ -14,7 +14,7 @@ pub fn descriptor() -> EngineDescriptor {
         id: ID.into(),
         label: LABEL.into(),
         family: EngineFamily::Sql,
-        icon: "database".into(),
+        icon: "postgres".into(),
         status: EngineStatus::Ready,
         sql_dialect: Some(SqlDialectId::Postgres),
         capabilities: CapabilitySet::of(&[

@@ -14,7 +14,7 @@ pub fn descriptor() -> EngineDescriptor {
         id: ID.into(),
         label: LABEL.into(),
         family: EngineFamily::Sql,
-        icon: "database".into(),
+        icon: "sqlite".into(),
         status: EngineStatus::Ready,
         sql_dialect: Some(SqlDialectId::Sqlite),
         capabilities: CapabilitySet::of(&[

@@ -51,8 +51,20 @@ export interface RailHost {
 }
 
 /** The strip on the far left: one entry per workspace with its live state, plus theme and settings. */
+const RAIL_STORAGE_KEY = "db-studio.rail";
+
+function railHiddenStored(): boolean {
+  try {
+    return localStorage.getItem(RAIL_STORAGE_KEY) === "hidden";
+  } catch {
+    return false;
+  }
+}
+
 export class WorkspaceRail {
   readonly element: HTMLElement;
+  /** The thin strip on the left edge that shows the rail again while it is hidden. */
+  readonly revealButton: HTMLButtonElement;
   private readonly host: RailHost;
   private readonly list = h("div", { class: "rail-list", role: "tablist", "aria-label": "Workspaces" });
   private readonly themeButton: HTMLButtonElement;
@@ -69,15 +81,41 @@ export class WorkspaceRail {
     settingsButton.addEventListener("click", (event) => host.openSettings(event));
     const addButton = h("button", { class: "rail-add", type: "button", title: "New workspace" }, icon("plus"), h("span", {}, "New"));
     addButton.addEventListener("click", () => host.create());
+    const hideButton = iconButton("chevron", "Hide workspaces (Ctrl+Shift+B)", () => this.setHidden(true));
+    hideButton.classList.add("rail-hide");
+    this.revealButton = h(
+      "button",
+      { class: "rail-reveal", type: "button", title: "Show workspaces (Ctrl+Shift+B)", "aria-label": "Show workspaces" },
+      icon("chevron"),
+    ) as HTMLButtonElement;
+    this.revealButton.addEventListener("click", () => this.setHidden(false));
     this.element = h(
       "nav",
       { class: "rail", "aria-label": "Workspace rail" },
-      h("div", { class: "rail-heading" }, "Workspaces"),
+      h("div", { class: "rail-heading" }, h("span", {}, "Workspaces"), hideButton),
       this.list,
       addButton,
       h("div", { class: "spacer" }),
       h("div", { class: "rail-footer" }, this.themeButton, settingsButton),
     );
+    const hidden = railHiddenStored();
+    this.element.classList.toggle("is-hidden", hidden);
+    this.revealButton.hidden = !hidden;
+  }
+
+  /** Hides the rail (a thin strip on the left edge brings it back) or shows it; remembered in this browser. */
+  setHidden(hidden: boolean): void {
+    this.element.classList.toggle("is-hidden", hidden);
+    this.revealButton.hidden = !hidden;
+    try {
+      localStorage.setItem(RAIL_STORAGE_KEY, hidden ? "hidden" : "shown");
+    } catch {
+      // Not remembered: private window or blocked storage.
+    }
+  }
+
+  toggleHidden(): void {
+    this.setHidden(!this.element.classList.contains("is-hidden"));
   }
 
   setConfig(config: AppConfig): void {

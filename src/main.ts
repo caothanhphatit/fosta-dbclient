@@ -448,6 +448,7 @@ async function bootstrap(): Promise<void> {
     newQuery: newQueryFromSelection,
     toggleAssistant,
     toggleSidebar: hideOrShowSidebar,
+    toggleRail: () => rail.toggleHidden(),
   });
   suppressBrowserContextMenu();
   guardWindowClose(tabs, installOnExit);

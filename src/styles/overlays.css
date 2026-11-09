@@ -290,6 +290,25 @@
 .driver-icon.mongodb {
   color: #1f9d55;
 }
+.driver-icon.postgres {
+  color: #4a88c7;
+}
+.driver-icon.sqlite {
+  color: #2f95d6;
+}
+.driver-icon.clickhouse {
+  color: #d8a800;
+}
+.driver-icon.oracle,
+.driver-icon.redis {
+  color: #dc3f35;
+}
+.driver-icon.elasticsearch {
+  color: #13a89e;
+}
+.driver-icon.opensearch {
+  color: #2f80d8;
+}
 
 .driver-soon {
   position: absolute;

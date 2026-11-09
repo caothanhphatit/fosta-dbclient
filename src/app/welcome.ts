@@ -6,6 +6,7 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl+T", "New query"],
   ["Ctrl+Shift+A", "Assistant panel"],
   ["Ctrl+B", "Show or hide the sidebar"],
+  ["Ctrl+Shift+B", "Show or hide the workspaces"],
   ["Ctrl+1 … 9", "Switch workspace"],
   ["Ctrl+Enter", "Run SQL (selection or all)"],
   ["Enter / F2", "Edit the selected cell"],

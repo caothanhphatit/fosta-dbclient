@@ -16,7 +16,7 @@ pub fn descriptor() -> EngineDescriptor {
         id: ID.into(),
         label: LABEL.into(),
         family: EngineFamily::KeyValue,
-        icon: "key".into(),
+        icon: "redis".into(),
         status: EngineStatus::Ready,
         sql_dialect: None,
         // No row browsing or editing (`tabular`): keys are read and written through the typed `redis.*` operations.

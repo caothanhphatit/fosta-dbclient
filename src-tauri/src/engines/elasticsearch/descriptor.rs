@@ -113,7 +113,7 @@ fn build(flavor: Flavor) -> EngineDescriptor {
         id: flavor.id().into(),
         label: flavor.label().into(),
         family: EngineFamily::Search,
-        icon: "search".into(),
+        icon: flavor.id().into(),
         status: EngineStatus::Ready,
         sql_dialect: None,
         capabilities: CapabilitySet::of(&[

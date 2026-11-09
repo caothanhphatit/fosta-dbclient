@@ -15,7 +15,7 @@ pub fn descriptor() -> EngineDescriptor {
         id: ID.into(),
         label: LABEL.into(),
         family: EngineFamily::Sql,
-        icon: "database".into(),
+        icon: "oracle".into(),
         status: EngineStatus::Ready,
         sql_dialect: Some(SqlDialectId::Oracle),
         // Schemas (users) are listed where other engines list databases, so `MultipleDatabases` and not `Schemas`.

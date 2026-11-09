@@ -285,7 +285,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     id: "postgres",
     label: "PostgreSQL",
     family: "sql",
-    icon: "database",
+    icon: "postgres",
     status: "ready",
     sqlDialect: "postgres",
     capabilities: [
@@ -380,7 +380,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     id: "sqlite",
     label: "SQLite",
     family: "sql",
-    icon: "database",
+    icon: "sqlite",
     status: "ready",
     sqlDialect: "sqlite",
     capabilities: [
@@ -490,7 +490,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     id: "clickhouse",
     label: "ClickHouse",
     family: "sql",
-    icon: "database",
+    icon: "clickhouse",
     status: "ready",
     sqlDialect: "clickHouse",
     capabilities: [
@@ -570,7 +570,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     id: "oracle",
     label: "Oracle",
     family: "sql",
-    icon: "database",
+    icon: "oracle",
     status: "ready",
     sqlDialect: "oracle",
     capabilities: [
@@ -661,7 +661,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     id: "redis",
     label: "Redis",
     family: "keyValue",
-    icon: "key",
+    icon: "redis",
     status: "ready",
     sqlDialect: null,
     capabilities: ["tree", "describe", "multipleDatabases", "query", "cancel", "streamingResults", "keyValue", "console", "serverOverview"],
@@ -759,7 +759,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     id: "elasticsearch",
     label: "Elasticsearch",
     family: "search",
-    icon: "search",
+    icon: "elasticsearch",
     status: "ready",
     sqlDialect: null,
     capabilities: [
@@ -885,7 +885,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
     id: "opensearch",
     label: "OpenSearch",
     family: "search",
-    icon: "search",
+    icon: "opensearch",
     status: "ready",
     sqlDialect: null,
     capabilities: [

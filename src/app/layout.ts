@@ -125,6 +125,6 @@ export function buildLayout(parts: LayoutParts): HTMLElement {
     version,
   );
   const main = h("div", { class: "app-main" }, toolbar, area, errorPanelElement(), statusBar);
-  (document.getElementById("app") ?? document.body).append(rail.element, main);
+  (document.getElementById("app") ?? document.body).append(rail.element, rail.revealButton, main);
   return area;
 }

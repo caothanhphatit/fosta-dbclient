@@ -145,6 +145,25 @@
 .tree-row.driver-mongodb > .icon {
   color: #1f9d55;
 }
+.tree-row.driver-postgres > .icon {
+  color: #4a88c7;
+}
+.tree-row.driver-sqlite > .icon {
+  color: #2f95d6;
+}
+.tree-row.driver-clickhouse > .icon {
+  color: #d8a800;
+}
+.tree-row.driver-oracle > .icon,
+.tree-row.driver-redis > .icon {
+  color: #dc3f35;
+}
+.tree-row.driver-elasticsearch > .icon {
+  color: #13a89e;
+}
+.tree-row.driver-opensearch > .icon {
+  color: #2f80d8;
+}
 
 .tree-meta {
   margin-left: auto;

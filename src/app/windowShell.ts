@@ -14,6 +14,7 @@ export interface ShortcutHost {
   newQuery(): void;
   toggleAssistant(): void;
   toggleSidebar(): void;
+  toggleRail(): void;
 }
 
 export function installShortcuts(host: ShortcutHost): void {
@@ -40,6 +41,9 @@ export function installShortcuts(host: ShortcutHost): void {
     } else if (key === "b" && !event.shiftKey) {
       event.preventDefault();
       host.toggleSidebar();
+    } else if (key === "b" && event.shiftKey) {
+      event.preventDefault();
+      host.toggleRail();
     } else if (key === "a" && event.shiftKey) {
       event.preventDefault();
       host.toggleAssistant();

@@ -61,6 +61,14 @@ const ICONS = {
   mssql:
     '<rect x="2" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="2" width="5.2" height="5.2" rx="0.8"/><rect x="2" y="8.8" width="5.2" height="5.2" rx="0.8"/><rect x="8.8" y="8.8" width="5.2" height="5.2" rx="0.8"/>',
   mongodb: '<path d="M8 1.5c3.3 2.6 4.8 5.4 4.3 8.4-.4 2.4-2.1 4-4.3 4.6-2.2-.6-3.9-2.2-4.3-4.6C3.2 6.9 4.7 4.1 8 1.5z"/><path d="M8 4.5v10"/>',
+  postgres:
+    '<path d="M8.5 2.5c-3.3 0-5.5 2.2-5.5 5 0 1.6.7 2.7 1.5 3.4V14"/><path d="M6.6 11.5V13"/><path d="M8.5 2.5c2.9 0 5 1.8 5 4.3 0 2.2-1.6 3.7-3.6 3.7H8"/><path d="M8.4 2.6c-.8 1.4-.8 3.6.6 5.4"/><circle cx="5.8" cy="6.2" r=".6" fill="currentColor"/>',
+  sqlite: '<path d="M13.5 2.5C8.8 3.2 5.3 7 4.4 11.6"/><path d="M13.5 2.5c.6 4.8-2.8 9.1-7.9 9.6"/><path d="M4.4 11.6 2.5 13.5"/><path d="M10.5 5.5 6.2 9.8"/>',
+  clickhouse: '<path d="M3 3v10M6 3v10M9 3v10M12.5 6.5v3" stroke-width="2.2" stroke-linecap="butt"/>',
+  oracle: '<rect x="1.5" y="4.5" width="13" height="7" rx="3.5" stroke-width="1.8"/>',
+  redis: '<path d="M8 2.5 13.5 5 8 7.5 2.5 5z"/><path d="M2.5 8 8 10.5 13.5 8"/><path d="M2.5 11 8 13.5 13.5 11"/>',
+  elasticsearch: '<path d="M13.2 5.5A5.6 5.6 0 0 0 2.8 6"/><path d="M2.8 10a5.6 5.6 0 0 0 10.4.5"/><path d="M2.5 8h11"/>',
+  opensearch: '<path d="M13.5 8A5.5 5.5 0 1 1 8 2.5"/><path d="M13.5 2.5c0 3.6-2.6 6.3-6 6.3"/>',
   send: '<path d="M2.5 8L13.5 2.5 10 13.5 7.5 9z"/><path d="M7.5 9l6-6.5"/>',
   columns: '<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M6 2.5v11M10 2.5v11"/>',
   expand: '<path d="M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9"/>',
