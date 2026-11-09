@@ -10,7 +10,8 @@ import { density, setDensity } from "../core/density";
 import { describeTheme, setTheme, themePreference, type ThemePreference } from "../core/theme";
 import type { AppConfig, Workspace } from "../core/types";
 import { copyDiagnostics, openLogFolder, setDebugLogging } from "./diagnostics";
-import { checkForUpdatesNow } from "./update";
+import { checkForUpdatesNow, openRelease } from "./update";
+import { COMMUNITY_URL } from "./updateLogic";
 import { openMcpSettings } from "../features/mcp/mcpSettings";
 
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
@@ -86,6 +87,8 @@ export function shellMenus(host: MenuHost): ShellMenus {
         run: () => void setUpdateCheck(host.config()?.updateCheck?.enabled === false),
       },
       { label: "Check for updates now", icon: "download", run: () => void checkForUpdatesNow() },
+      "separator",
+      { label: "Community (Discord)", icon: "plug", run: () => openRelease(COMMUNITY_URL) },
       ...(capabilities().edition === "web" ? (["separator", { label: "Sign out…", icon: "key", run: () => void confirmSignOut() }] as MenuItem[]) : []),
     ];
   }

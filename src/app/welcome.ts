@@ -18,6 +18,7 @@ export interface WelcomeActions {
   newConnection(): void;
   newQuery(): void;
   newTask(): void;
+  openCommunity(): void;
 }
 
 /** The screen shown when no tab is open. `workspaceName` is updated by the caller. */
@@ -45,6 +46,7 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
           "tasks",
         ),
       ),
+      h("p", { class: "welcome-sub" }, h("button", { class: "link-button", type: "button", onclick: () => actions.openCommunity() }, "Community (Discord)")),
       h("ul", { class: "shortcuts" }, ...SHORTCUTS.map(([keys, action]) => h("li", {}, h("kbd", {}, keys), h("span", {}, action)))),
     ),
   );

@@ -2,7 +2,7 @@
 
 # Fosta Studio
 
-[![CI](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml/badge.svg)](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml) [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) [![Release](https://img.shields.io/github/v/release/caothanhphatit/fosta-dbclient)](https://github.com/caothanhphatit/fosta-dbclient/releases/latest)
+[![CI](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml/badge.svg)](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml) [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) [![Release](https://img.shields.io/github/v/release/caothanhphatit/fosta-dbclient)](https://github.com/caothanhphatit/fosta-dbclient/releases/latest) [![Discord](https://img.shields.io/badge/chat-Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/pBFkZD5mhN)
 
 [English](README.md) · **Tiếng Việt**
 
@@ -87,6 +87,10 @@ Build, test và database để test: [CONTRIBUTING.md](CONTRIBUTING.md).
 - [ROADMAP.md](ROADMAP.md): những gì sắp làm.
 - [ARCHITECTURE.md](ARCHITECTURE.md): kiến trúc bên trong.
 - [docs/engines](docs/engines): ghi chú cho từng engine, SSH và TLS.
+
+## Cộng đồng
+
+Hỏi đáp và trò chuyện: [Discord](https://discord.gg/pBFkZD5mhN). Báo lỗi và đề xuất tính năng: [GitHub Issues](https://github.com/caothanhphatit/fosta-dbclient/issues).
 
 ## Giấy phép
 

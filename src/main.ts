@@ -12,7 +12,8 @@ import { welcomeScreen } from "./app/welcome";
 import { renderStatusContext } from "./app/statusBar";
 import { buildLayout, ASSISTANT_STORAGE_KEY, toggleSidebar } from "./app/layout";
 import { shellMenus } from "./app/menus";
-import { installOnExit, startUpdates } from "./app/update";
+import { installOnExit, openRelease, startUpdates } from "./app/update";
+import { COMMUNITY_URL } from "./app/updateLogic";
 import { initMcpApprovals } from "./features/mcp/mcpApproval";
 import { initMcpStatus } from "./features/mcp/mcpSettings";
 import { TabPersistence } from "./app/tabPersistence";
@@ -53,6 +54,7 @@ const welcome = welcomeScreen(welcomeName, {
   newConnection: () => void editConnection(null),
   newQuery: newQueryFromSelection,
   newTask: () => void tasksPanel.edit(null),
+  openCommunity: () => openRelease(COMMUNITY_URL),
 });
 const tabs = new TabManager(welcome);
 let currentConfig: AppConfig | null = null;

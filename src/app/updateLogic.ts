@@ -1,6 +1,8 @@
 /** Pure parts of the update item (`update.ts`): labels, download progress and the web edition's commands. */
 
 export const RELEASES_URL = "https://github.com/caothanhphatit/fosta-dbclient/releases";
+/** The community Discord invite; the desktop backend opens exactly this link besides release pages. */
+export const COMMUNITY_URL = "https://discord.gg/pBFkZD5mhN";
 export const DOCKER_IMAGE = "ghcr.io/caothanhphatit/fosta-studio";
 
 /**

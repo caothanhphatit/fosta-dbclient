@@ -2,7 +2,7 @@
 
 # Fosta Studio
 
-[![CI](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml/badge.svg)](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml) [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) [![Release](https://img.shields.io/github/v/release/caothanhphatit/fosta-dbclient)](https://github.com/caothanhphatit/fosta-dbclient/releases/latest)
+[![CI](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml/badge.svg)](https://github.com/caothanhphatit/fosta-dbclient/actions/workflows/ci.yml) [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE) [![Release](https://img.shields.io/github/v/release/caothanhphatit/fosta-dbclient)](https://github.com/caothanhphatit/fosta-dbclient/releases/latest) [![Discord](https://img.shields.io/badge/chat-Discord-5865F2?logo=discord&logoColor=white)](https://discord.gg/pBFkZD5mhN)
 
 **English** · [Tiếng Việt](README.vi.md)
 
@@ -86,6 +86,10 @@ Building, tests and test databases: [CONTRIBUTING.md](CONTRIBUTING.md).
 - [ROADMAP.md](ROADMAP.md): what comes next.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how it is built.
 - [docs/engines](docs/engines): notes per engine, SSH and TLS.
+
+## Community
+
+Questions and chat: [Discord](https://discord.gg/pBFkZD5mhN). Bugs and feature requests: [GitHub Issues](https://github.com/caothanhphatit/fosta-dbclient/issues).
 
 ## License
 

@@ -7,6 +7,8 @@ Thanks for helping. This guide covers the local setup, the checks CI runs, and t
 > [Contributor License Agreement](CLA.md) by posting a comment; you keep the copyright in your work, and the CLA lets the
 > maintainer also offer Fosta Studio under commercial terms.
 
+Questions? Ask on [Discord](https://discord.gg/pBFkZD5mhN); use GitHub Issues for bugs and feature requests.
+
 ## Project layout
 
 ```

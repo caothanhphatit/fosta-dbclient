@@ -14,6 +14,8 @@ use crate::error::{AppError, AppResult};
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const LATEST_RELEASE_API: &str = "https://api.github.com/repos/caothanhphatit/fosta-dbclient/releases/latest";
+/// The community Discord invite, the one link besides release pages that `open_release_page` opens.
+pub const COMMUNITY_URL: &str = "https://discord.gg/pBFkZD5mhN";
 const RELEASES_PAGE: &str = "https://github.com/caothanhphatit/fosta-dbclient/releases";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CHECK_INTERVAL_HOURS: i64 = 24;

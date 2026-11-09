@@ -155,7 +155,8 @@ async function restartNow(): Promise<boolean> {
   return false;
 }
 
-function openRelease(url: string): void {
+/** Opens a release page or the community invite: the system browser on desktop, a new tab in the web edition. */
+export function openRelease(url: string): void {
   if (isTauri() && capabilities().edition === "desktop") {
     api.openReleasePage(url).catch((error: unknown) => showError(error, "Open the release page"));
   } else {
