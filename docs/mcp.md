@@ -45,6 +45,7 @@ claude mcp add --transport http fosta http://127.0.0.1:3910/mcp --header "Author
 ```
 
 **Claude Desktop** and other clients that only start a command (stdio): use the bridge, which reads the port and the token itself.
+It exits with a message when the MCP server is off, without sending the token anywhere.
 
 ```json
 { "mcpServers": { "fosta": { "command": "C:\\path\\to\\fosta-studio.exe", "args": ["mcp"] } } }
@@ -67,8 +68,12 @@ Fosta Studio must be running for any of these to work; otherwise every call answ
 | `run_query` | One statement that may change data, only in *Ask before writes* workspaces, after you approve it. |
 
 Every tool except `list_connections` takes `connection` (an id from `list_connections`) and optionally `database` (default: the
-connection's database). A connection that is not open yet is opened on demand, starting its workspace command first (a
-port-forward, for example). It needs a saved password; otherwise the client is told to ask you to connect once.
+connection's database). A connection that is not open yet is opened on demand with its saved password; without one, the client is
+told to ask you to connect once. MCP clients **never start a workspace command**: if the connection needs one (a port-forward, for
+example) and it is not running, the client is told to ask you to start it in Fosta Studio. A running command is reused.
+
+`run_read_query` and `run_query` take one statement of at most 20,000 characters; longer ones are refused, so the approval dialog
+always shows the whole statement that would run.
 
 ## Approving `run_query`
 
@@ -80,6 +85,9 @@ full statement and its category (write, DDL, destructive, admin):
 - *Deny*, closing the dialog, or no answer within 120 seconds denies it; nothing runs.
 - Statements the rules block are refused without a dialog. Every statement asks, even under Open rules that would run it directly in
   a query tab.
+- After you approve, the settings are checked again: if meanwhile the MCP server was turned off, the workspace's MCP access is no
+  longer *Ask before writes*, or its rules now block the statement or need a typed confirmation it did not get, nothing runs.
+- Turning the server off, changing its port or rotating its token withdraws every waiting statement and ends every client session.
 
 The name in the dialog is what the client reports about itself, so it is a label, not proof of identity: approve what the statement
 does, not who sent it.
@@ -88,15 +96,19 @@ does, not who sent it.
 
 The web server serves the same endpoint at `/mcp` on its own port, still gated per workspace:
 
-- Turn it on in *Settings → MCP server*. Clients authenticate with the server's **access token** as the bearer token
-  (`fosta-studio-server token` prints it); the session cookie is never accepted there.
+- Turn it on in *Settings → MCP server*. Clients authenticate with a separate **MCP token**, created when you turn the server on
+  and kept in the server's encrypted secret store (`fosta-studio-secrets.enc`). The dialog shows it and rotates it, as on the
+  desktop.
+- The MCP token works only for `/mcp`: it cannot sign in (`/?token=`, the sign-in form) and `/api` refuses it, so a client holding
+  it cannot open the app, approve its own statements or change a workspace. In turn `/mcp` refuses the access token and the session
+  cookie, and an `Origin` header must name the server itself.
 - With `FOSTA_STUDIO_AUTH=off` the endpoint refuses every request.
 - `run_query` approvals appear in every open browser session; the first answer wins. With no browser open, it is denied after
   120 seconds.
-- Stdio clients use `docker exec -i <container> /app/fosta-studio-server mcp`.
+- Stdio clients use `docker exec -i <container> /app/fosta-studio-server mcp`, which reads the MCP token from the secret store.
 
 ```sh
-claude mcp add --transport http fosta https://studio.example.com/mcp --header "Authorization: Bearer <access token>"
+claude mcp add --transport http fosta https://studio.example.com/mcp --header "Authorization: Bearer <MCP token>"
 ```
 
 ## Security model
@@ -104,14 +116,19 @@ claude mcp add --transport http fosta https://studio.example.com/mcp --header "A
 - **Loopback only (desktop).** The server binds `127.0.0.1`, refuses peers that are not loopback, a `Host` that is not
   `127.0.0.1` / `localhost`, and any `Origin` that is not a loopback page (DNS rebinding). Every request needs the bearer token,
   compared in constant time; rotate it in Settings, after which clients must be set up again.
+- **A token for MCP only (web).** The web edition's MCP token is separate from its access token; neither works in the other's
+  place.
+- **Sessions.** At most 64 client sessions are kept; the least recently used goes first, and a session unused for 30 minutes
+  expires. Either way the client initializes again (the stdio bridge does this by itself).
 - **No secrets to clients.** Clients get connection ids, names and engines, never hosts, users, passwords or the confirmation
   token. Error messages from a database may still mention a host name.
 - **The gateway decides.** Queries go through the same statement gateway as query tabs and the assistant. `run_read_query` accepts
   only statements the engine classifies as reads, in a read-only session, with the rules' own row limit and timeout when lower.
 - **Untrusted data.** Table names, rows and database errors come back inside `<untrusted_data>` blocks, so a prompt hidden in a row
   is marked as data for the client's model.
-- **Audit log.** Every call, refusal, approval, denial and timeout goes to `fosta-studio-audit.jsonl` with caller `mcp` and the
-  client's name. Turning the server on and allowing MCP in a workspace are recorded too.
+- **Audit log.** Every tool call goes to `fosta-studio-audit.jsonl` with caller `mcp` and the client's name, including refusals
+  (unknown tools, bad arguments, statements too long), approvals, denials, timeouts and withdrawn approvals. Turning the server on
+  and allowing MCP in a workspace are recorded too.
 - **Scope.** A client sees every database on the connections it may use. Allow only the workspaces you would hand to the client, and
   for production use a database user that can only read.
 
