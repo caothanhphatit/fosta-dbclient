@@ -60,7 +60,7 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     search; Insert or open an entry in a new tab. History stays on this machine, in `fosta-studio-history.jsonl` next to the `.exe` (newest
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
-- **Vector tools** (MariaDB 11.7+, PostgreSQL with pgvector): embedding search, column/index health checks, ANN recall versus exact
+- **Vector tools** (MariaDB 11.7+, PostgreSQL with pgvector, Elasticsearch 8+, OpenSearch with the k-NN plugin): embedding search, column/index health checks, ANN recall versus exact
   search (seeded, so a run can be repeated).
 - **Safety rules per workspace**: a statement gateway on every engine. Every statement the app runs (query tabs, grid filters and
   edits, imports, console requests, new databases) is parsed and classified as read, write, DDL, destructive or administrative, then checked against the workspace's rules: _Open_ (everything runs;

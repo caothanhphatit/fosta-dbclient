@@ -10,7 +10,7 @@
 # Elasticsearch:  products (nested variants, geo_point, dates, dense_vector, multi-fields; 300 docs) with the alias
 #                 products-current, ILM policy logs-policy, ingest pipeline logs-pipeline, component template
 #                 fosta-logs-mappings, index template logs-template, data stream logs-app with 20,000 time-series docs.
-# OpenSearch:     the same products index (without the vector field), ISM policy logs-policy, data stream logs-app
+# OpenSearch:     the same products index (knn_vector embedding, index.knn), ISM policy logs-policy, data stream logs-app
 #                 with 2,000 docs.
 set -eu
 
@@ -51,7 +51,7 @@ products_mapping() {
   vector=$1
   cat <<EOF
 {
-  "settings": { "number_of_shards": 1, "number_of_replicas": 0 },
+  "settings": { "number_of_shards": 1, "number_of_replicas": 0${2:-} },
   "mappings": {
     "properties": {
       "name": { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } } },
@@ -126,8 +126,8 @@ if curl -sS "$OS/" -o "$devnull" 2>/dev/null; then
   os DELETE "/_data_stream/logs-app" || true
   os DELETE "/products" || true
   os DELETE "/_plugins/_ism/policies/logs-policy" || true
-  os PUT "/products" "$(products_mapping '')"
-  products_bulk 0 | os POST "/_bulk?refresh=true" -
+  os PUT "/products" "$(products_mapping ',"embedding": { "type": "knn_vector", "dimension": 4, "method": { "name": "hnsw", "engine": "lucene", "space_type": "cosinesimil" } }' ', "index.knn": true')"
+  products_bulk 1 | os POST "/_bulk?refresh=true" -
   os POST "/_aliases" '{"actions":[{"add":{"index":"products","alias":"products-current"}}]}'
   os PUT "/_plugins/_ism/policies/logs-policy" '{"policy":{"description":"Logs","default_state":"hot","states":[{"name":"hot","actions":[],"transitions":[{"state_name":"delete","conditions":{"min_index_age":"30d"}}]},{"name":"delete","actions":[{"delete":{}}],"transitions":[]}],"ism_template":[{"index_patterns":["logs-app*"],"priority":100}]}}'
   os PUT "/_ingest/pipeline/logs-pipeline" '{"description":"Normalise log events","processors":[{"lowercase":{"field":"level"}},{"rename":{"field":"msg","target_field":"message","ignore_missing":true}}]}'

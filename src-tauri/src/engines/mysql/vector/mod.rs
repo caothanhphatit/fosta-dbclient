@@ -82,6 +82,7 @@ impl VectorStore for MariaVectors<'_> {
                     name: column.name,
                     dims,
                     type_name: format!("VECTOR({dims})"),
+                    metrics: Vec::new(),
                 })
             })
             .collect())

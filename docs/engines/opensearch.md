@@ -12,6 +12,10 @@ What differs:
 - **Languages**: the console and SQL (`_plugins/_sql`, JDBC format). No ES|QL.
 - **APIs**: point in time is `_search/point_in_time` (`pit_id`), lifecycle policies are ISM (`_plugins/_ism/policies`), and `_id`
   can be sorted (Elasticsearch 8 cannot); a declared key (`_meta.fosta.key`) is still needed to range it.
+- **Vectors**: with the k-NN plugin, `knn_vector` fields get the vector tools ([elasticsearch.md](elasticsearch.md#vectors)).
+  ANN search uses the `knn` query clause when the index has `index.knn: true`; the field's `space_type` (`cosinesimil`, `l2`,
+  `innerproduct`; l2 when the mapping names none) is its only metric. Exact search uses the plugin's `knn_score` script. The
+  filter goes inside the clause for the lucene and faiss engines and after the search for nmslib.
 
 Dev server: `dev/compose/opensearch.yml` (OpenSearch 2.19 on http://127.0.0.1:9201, security plugin off). Contract suites:
 `cargo test contract_opensearch -- --ignored --test-threads=1`.

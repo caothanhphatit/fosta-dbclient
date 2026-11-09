@@ -360,7 +360,8 @@ export interface VectorIndex {
 
 export interface VectorInfo {
   supported: boolean;
-  columns: { name: string; dims: number; typeName: string }[];
+  /** `metrics`: the distances a column with a fixed similarity can be searched with (empty or absent: `metrics` below). */
+  columns: { name: string; dims: number; typeName: string; metrics?: Metric[] }[];
   indexes: VectorIndex[];
   /** The distances a search may name besides `auto`. */
   metrics: Metric[];

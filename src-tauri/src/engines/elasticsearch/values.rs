@@ -24,6 +24,8 @@ pub struct FieldColumn {
     /// The field to use for exact matches, wildcards and sorting: the field itself, or its `keyword` sub-field for
     /// `text`; `None` when there is none.
     pub exact: Option<String>,
+    /// The dimensions of a `dense_vector` / `knn_vector` field (the grid offers *Find similar* on it).
+    pub vector_dims: Option<u32>,
 }
 
 impl FieldColumn {
@@ -31,6 +33,7 @@ impl FieldColumn {
         let mut info = ColumnInfo::result(&self.name, &self.field_type, self.kind.clone());
         info.hints = ColumnHints {
             primary,
+            vector_dims: self.vector_dims,
             ..ColumnHints::default()
         };
         info
@@ -55,7 +58,7 @@ pub fn kind_of(field_type: &str) -> ValueKind {
         "date" | "date_nanos" | "datetime" | "timestamp" => ValueKind::TimestampTz,
         "object" | "flattened" => ValueKind::Document,
         "nested" => ValueKind::Array(Box::new(ValueKind::Document)),
-        "dense_vector" => ValueKind::Array(Box::new(ValueKind::Float)),
+        "dense_vector" | "knn_vector" => ValueKind::Array(Box::new(ValueKind::Float)),
         "keyword" | "constant_keyword" | "wildcard" | "text" | "match_only_text" | "search_as_you_type" | "completion" | "version"
         | "ip" | "binary" | "semantic_text" => ValueKind::Text,
         _ => ValueKind::Json,
@@ -82,11 +85,18 @@ pub fn columns_from_mapping(mappings: &Json) -> Vec<FieldColumn> {
                 }),
                 _ => None,
             };
+            let vector_dims = match field_type.as_str() {
+                "dense_vector" => definition["dims"].as_u64(),
+                "knn_vector" => definition["dimension"].as_u64(),
+                _ => None,
+            }
+            .and_then(|dims| u32::try_from(dims).ok());
             FieldColumn {
                 name: name.clone(),
                 kind: kind_of(&field_type),
                 field_type,
                 exact,
+                vector_dims,
             }
         })
         .collect()
