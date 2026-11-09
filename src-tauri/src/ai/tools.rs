@@ -291,9 +291,8 @@ pub(super) async fn run_tool(
         "describe_table" => {
             let table = argument("table").ok_or("`table` is required")?;
             let database = catalog_database();
-            let object = catalog::objects(&handle, &ctx, &database)
+            let object = catalog::find(&handle, &ctx, &database, &table)
                 .await
-                .and_then(|listing| catalog::find_object(&listing.objects, &database, &table))
                 .map_err(|error| error.to_string())?;
             catalog::describe(&handle, &ctx, object)
                 .await
@@ -371,6 +370,13 @@ fn format_description(table: &str, description: &ObjectDescription) -> String {
     if let Some(ddl) = description.ddl.as_deref().filter(|ddl| !ddl.trim().is_empty()) {
         text.push_str("\nDefinition:\n");
         text.push_str(&truncate(ddl, MAX_DDL_CHARS));
+    }
+    // An object without columns (a Redis key: type, TTL, length) is described by its facts.
+    if !description.extra.is_empty() {
+        text.push_str("\nFacts:\n");
+        for (name, value) in &description.extra {
+            text.push_str(&format!("- {name}: {value}\n"));
+        }
     }
     text
 }

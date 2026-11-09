@@ -904,3 +904,37 @@ async fn contract_redis_vector() {
     assert_eq!(other_db["supported"], false, "search indexes live in database 0");
     manager.disconnect(suites::CONNECTION).await;
 }
+
+/// The assistant's `describe_table` finds a key the cut `list_tables` listing left out. Database 14 holds more keys than
+/// the listing shows, and `SCAN` orders them differently on every server start, so the key is chosen from what the listing
+/// did not return this time.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/redis.yml"]
+async fn contract_redis_assistant_describes_a_key_the_listing_left_out() {
+    use crate::ai::testing::tool;
+    let (manager, _handle) = suites::connect(&fixture()).await;
+    let listing = tool(&manager, suites::CONNECTION, Some("14"), None, "list_tables", json!({}))
+        .await
+        .unwrap();
+    assert!(
+        listing.contains("Note: only the first"),
+        "the seed must exceed the listing cap:\n{listing}"
+    );
+    let listed: Vec<&str> = listing.lines().filter_map(|line| line.split('\t').next()).collect();
+    let left_out = (0..PAGE_KEYS)
+        .map(|i| format!("contract:page:{i}"))
+        .find(|name| !listed.contains(&name.as_str()))
+        .expect("a seeded key the listing did not show");
+    let described = tool(
+        &manager,
+        suites::CONNECTION,
+        Some("14"),
+        None,
+        "describe_table",
+        json!({ "table": left_out }),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("describe_table {left_out}: {error}"));
+    assert!(described.contains("- Type: string"), "{left_out}: {described}");
+    manager.disconnect(suites::CONNECTION).await;
+}

@@ -25,8 +25,15 @@ pub const MAX_KEYS: usize = 200;
 /// Objects described one by one when the engine has no schema graph.
 const MAX_DESCRIBED: usize = 100;
 
-/// Up to `max` children of `parent`, following `next_cursor` (bounded).
-async fn children(handle: &Handle, ctx: &CallContext, parent: Option<NodeKey>, max: usize) -> AppResult<Vec<ObjectNode>> {
+/// Up to `max` children of `parent`, following `next_cursor` (bounded). `filter` is the tree's name filter, which an
+/// engine may ignore.
+async fn children(
+    handle: &Handle,
+    ctx: &CallContext,
+    parent: Option<NodeKey>,
+    max: usize,
+    filter: Option<&str>,
+) -> AppResult<Vec<ObjectNode>> {
     let mut nodes = Vec::new();
     let mut cursor = None;
     for _ in 0..WALK_MAX_PAGES {
@@ -35,7 +42,7 @@ async fn children(handle: &Handle, ctx: &CallContext, parent: Option<NodeKey>, m
             parent: parent.clone(),
             cursor: cursor.take(),
             limit: Some(WALK_PAGE.min(u32::try_from(room).unwrap_or(WALK_PAGE))),
-            filter: None,
+            filter: filter.map(str::to_owned),
         };
         let ctx = ctx.clone();
         let page = handle
@@ -61,7 +68,7 @@ fn database_name(node: &ObjectNode) -> String {
 
 /// The database nodes at the top of the tree.
 async fn database_nodes(handle: &Handle, ctx: &CallContext) -> AppResult<Vec<ObjectNode>> {
-    Ok(children(handle, ctx, None, MAX_OBJECTS)
+    Ok(children(handle, ctx, None, MAX_OBJECTS, None)
         .await?
         .into_iter()
         .filter(|node| node.kind == NodeKind::DATABASE)
@@ -87,22 +94,9 @@ pub struct Listing {
 /// engine's order; at most [`MAX_KEYS`] for a key-value engine and [`MAX_OBJECTS`] for the others. An engine without
 /// databases (Elasticsearch: indices, data streams and aliases in top-level folders) ignores `database`.
 pub async fn objects(handle: &Handle, ctx: &CallContext, database: &str) -> AppResult<Listing> {
-    let roots = children(handle, ctx, None, MAX_OBJECTS).await?;
     let key_value = handle.engine.descriptor().family == EngineFamily::KeyValue;
     let max = if key_value { MAX_KEYS } else { MAX_OBJECTS };
-    let mut found = Vec::new();
-    if roots.iter().any(|node| node.kind == NodeKind::DATABASE) {
-        if database.is_empty() {
-            return Err(AppError::new("No database selected; pass `database`."));
-        }
-        let root = roots
-            .into_iter()
-            .find(|node| node.kind == NodeKind::DATABASE && database_name(node) == database)
-            .ok_or_else(|| AppError::new(format!("There is no database {database} on this connection")))?;
-        collect(handle, ctx, root.key, 0, max, &mut found).await?;
-    } else {
-        visit(handle, ctx, roots, 0, max, &mut found).await?;
-    }
+    let found = walk(handle, ctx, database, max, None).await?;
     let note = (found.len() >= max).then(|| {
         if key_value {
             format!("only the first {max} keys were listed; the database may hold many more. Ask for a key pattern instead of listing")
@@ -113,6 +107,40 @@ pub async fn objects(handle: &Handle, ctx: &CallContext, database: &str) -> AppR
     Ok(Listing { objects: found, note })
 }
 
+/// The reference of the object called `name` in `database`. A cut listing (a Redis database with more keys than
+/// [`MAX_KEYS`]: `SCAN` returns them in an order that changes with every server start) does not settle it, so the walk is
+/// repeated with `name` as the tree filter, which a key-value engine turns into a key pattern; an engine that ignores the
+/// filter answers the same as before.
+pub async fn find(handle: &Handle, ctx: &CallContext, database: &str, name: &str) -> AppResult<ObjectRef> {
+    let listing = objects(handle, ctx, database).await?;
+    match find_object(&listing.objects, database, name) {
+        Err(error) if listing.note.is_some() => {
+            let matching = walk(handle, ctx, database, MAX_KEYS, Some(name)).await?;
+            find_object(&matching, database, name).map_err(|_| error)
+        }
+        outcome => outcome,
+    }
+}
+
+/// At most `max` listed objects of `database`, those matching `filter` when the engine applies it.
+async fn walk(handle: &Handle, ctx: &CallContext, database: &str, max: usize, filter: Option<&str>) -> AppResult<Vec<ObjectNode>> {
+    let roots = children(handle, ctx, None, MAX_OBJECTS, None).await?;
+    let mut found = Vec::new();
+    if roots.iter().any(|node| node.kind == NodeKind::DATABASE) {
+        if database.is_empty() {
+            return Err(AppError::new("No database selected; pass `database`."));
+        }
+        let root = roots
+            .into_iter()
+            .find(|node| node.kind == NodeKind::DATABASE && database_name(node) == database)
+            .ok_or_else(|| AppError::new(format!("There is no database {database} on this connection")))?;
+        collect(handle, ctx, root.key, 0, max, filter, &mut found).await?;
+    } else {
+        visit(handle, ctx, roots, 0, max, filter, &mut found).await?;
+    }
+    Ok(found)
+}
+
 /// Adds the listed objects under `parent` to `found`, visiting containers where they appear.
 fn collect<'a>(
     handle: &'a Handle,
@@ -120,12 +148,13 @@ fn collect<'a>(
     parent: NodeKey,
     depth: usize,
     max: usize,
+    filter: Option<&'a str>,
     found: &'a mut Vec<ObjectNode>,
 ) -> Walk<'a> {
     Box::pin(async move {
         let room = max.saturating_sub(found.len()).max(1);
-        let nodes = children(handle, ctx, Some(parent), room).await?;
-        visit(handle, ctx, nodes, depth, max, found).await
+        let nodes = children(handle, ctx, Some(parent), room, filter).await?;
+        visit(handle, ctx, nodes, depth, max, filter, found).await
     })
 }
 
@@ -138,6 +167,7 @@ fn visit<'a>(
     nodes: Vec<ObjectNode>,
     depth: usize,
     max: usize,
+    filter: Option<&'a str>,
     found: &'a mut Vec<ObjectNode>,
 ) -> Walk<'a> {
     Box::pin(async move {
@@ -148,7 +178,7 @@ fn visit<'a>(
             if is_listed(&node.kind) {
                 found.push(node);
             } else if node.expandable && depth < MAX_DEPTH && matches!(node.kind.as_str(), "schema" | "folder") {
-                collect(handle, ctx, node.key, depth + 1, max, found).await?;
+                collect(handle, ctx, node.key, depth + 1, max, filter, found).await?;
             }
         }
         Ok(())
