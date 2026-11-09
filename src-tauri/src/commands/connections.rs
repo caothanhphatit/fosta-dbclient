@@ -62,7 +62,11 @@ pub fn save_connection(
             format!("This makes the rules of a connection in the Production workspace less strict: type \"{name}\" to confirm."),
         )?;
     }
-    remember_secrets(config.connection(&profile.id), &profile, password, secrets)?;
+    // The profile as it will be stored (a move drops the old workspace's command), and refused before any secret changes.
+    let mut trial = config.clone();
+    trial.put_connection(&workspace_id, profile.clone())?;
+    let stored = trial.connection(&profile.id).cloned().unwrap_or_else(|| profile.clone());
+    remember_secrets(config.connection(&profile.id), &stored, password, secrets)?;
     let connection_id = profile.id.clone();
     let connection_name = profile.name.clone();
     let engine = profile.engine.clone();
@@ -623,6 +627,49 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("no longer exists"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_command_or_a_move_keeps_the_secrets_rule() {
+        let _store = memory_store(&[("conn:k:password", "pw")]);
+        let (def, _) = testing::long_running("pf");
+        let mut saved = using("k", Some("pf"));
+        saved.save_password = true;
+        let state = state_with(
+            "command-secrets",
+            crate::Capabilities::desktop(),
+            &def,
+            std::slice::from_ref(&saved),
+        );
+        let stored = || secrets::get(&SecretKey::connection("k", SecretSlot::Password)).unwrap();
+
+        // A command that is not one of the workspace's (deleted in another window): refused, the password stays.
+        let stale = ConnectionProfile {
+            command: Some("deleted".into()),
+            ..saved.clone()
+        };
+        let error = save_connection(&state, stale, None, None, None, None).unwrap_err();
+        assert!(error.to_string().contains("not a command"), "{error}");
+        assert_eq!(stored().as_deref(), Some("pw"));
+
+        // A move drops the old workspace's command: another target, so the saved password is forgotten.
+        state
+            .config
+            .update(|config| {
+                config.put_workspace(WorkspaceMeta {
+                    id: "other".into(),
+                    name: "Other".into(),
+                    color: String::new(),
+                    icon: "box".into(),
+                    safety: None,
+                    assistant_queries: None,
+                });
+                Ok(())
+            })
+            .unwrap();
+        let moved = save_connection(&state, saved, None, Some("other".into()), None, None).unwrap();
+        assert_eq!(moved.connection("k").unwrap().command, None);
+        assert_eq!(stored(), None);
     }
 
     #[tokio::test]

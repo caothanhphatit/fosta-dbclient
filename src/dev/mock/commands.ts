@@ -55,7 +55,7 @@ function allTasks(): TaskDef[] {
 
 function taskOf(id: string): TaskDef {
   const task = allTasks().find((item) => item.id === id);
-  if (!task) throw mockError("INVALID_INPUT", `Task '${id}' no longer exists`);
+  if (!task) throw mockError("INVALID_INPUT", `Command '${id}' no longer exists`);
   return task;
 }
 

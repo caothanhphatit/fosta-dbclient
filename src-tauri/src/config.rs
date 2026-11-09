@@ -672,7 +672,7 @@ impl ConfigStore {
         self.current()
             .task(id)
             .cloned()
-            .ok_or_else(|| AppError::new(format!("Task '{id}' no longer exists")))
+            .ok_or_else(|| AppError::new(format!("Command '{id}' no longer exists")))
     }
 
     /// Applies `change` and persists the result. A change that fails leaves

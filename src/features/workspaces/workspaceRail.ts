@@ -85,7 +85,7 @@ export class WorkspaceRail {
     this.render();
   }
 
-  /** Updates the connection / task badges without re-reading the config. */
+  /** Updates the connection / command badges without re-reading the config. */
   setActivity(activity: Map<string, WorkspaceActivity>): void {
     this.activity = activity;
     this.render();
@@ -112,7 +112,7 @@ export class WorkspaceRail {
       workspace.name,
       `Safety: ${safetyLabel(safetyOf(workspace))}${relaxed.length ? ` (relaxed: ${relaxed.map((change) => change.text).join("; ")})` : ""}`,
       `${workspace.connections.length} connection(s), ${activity.connected} open`,
-      `${workspace.tasks.length} task(s), ${activity.running} running`,
+      `${workspace.tasks.length} command(s), ${activity.running} running`,
       shortcut,
     ].filter(Boolean);
     const classes = [
@@ -127,7 +127,7 @@ export class WorkspaceRail {
       "span",
       { class: "ws-badges" },
       activity.connected ? h("span", { class: "ws-badge online", title: `${activity.connected} connection(s) open` }) : null,
-      activity.running ? h("span", { class: "ws-badge busy", title: `${activity.running} task(s) running` }) : null,
+      activity.running ? h("span", { class: "ws-badge busy", title: `${activity.running} command(s) running` }) : null,
       relaxed.length ? h("span", { class: "ws-badge relaxed", title: "Safety rules relaxed", "aria-label": "Safety rules relaxed" }, "!") : null,
     );
     const button = h(

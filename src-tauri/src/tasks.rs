@@ -347,7 +347,7 @@ impl TaskManager {
         let deadline = Instant::now() + STOP_TIMEOUT;
         while self.is_active(id) {
             if Instant::now() >= deadline {
-                return Err(AppError::new("The task did not stop in time"));
+                return Err(AppError::new("The command did not stop in time"));
             }
             tokio::time::sleep(STOP_POLL).await;
         }
