@@ -232,37 +232,37 @@
             <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/releases/latest">
               <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg><span data-i18n="hero.download">Download for Windows</span>
             </a>
+            <a class="btn btn-secondary" href="#docker" data-docker-toggle aria-controls="docker" aria-expanded="false">
+              <svg class="icon" aria-hidden="true"><use href="#i-box" /></svg><span data-i18n="hero.docker">Run with Docker</span>
+            </a>
             <a class="btn btn-secondary" href="https://github.com/caothanhphatit/fosta-dbclient">
               <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span data-i18n="hero.github">View on GitHub</span>
             </a>
           </div>
-          <p class="cta-note" data-i18n="hero.note">Version 0.1.0 for Windows: installer or portable .exe. Or run the web edition with Docker:</p>
-          <div class="docker-cmd" id="docker">
+          <p class="cta-note" data-i18n="hero.note">Version 0.1.0 · Windows installer or portable .exe · Docker web edition</p>
+          <div class="docker-panel" id="docker">
+            <div class="docker-panel-head">
+              <span class="docker-panel-title"
+                ><svg class="icon" aria-hidden="true"><use href="#i-term" /></svg><span data-i18n="hero.dockerTitle">Web edition in Docker</span></span
+              >
+              <button type="button" class="copy-btn" data-copy="docker-commands" hidden>
+                <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg
+                ><span data-copy-label data-i18n-attr="data-label-copied:hero.copied" data-label-copied="Copied" data-i18n="hero.copy">Copy</span>
+              </button>
+            </div>
             <pre
-              class="terminal"
+              class="docker-commands"
               tabindex="0"
               id="docker-commands"
               data-i18n-attr="aria-label:hero.dockerLabel"
               aria-label="Docker commands"
-            ><code><span class="prompt">$</span> docker run -d --name fosta-studio -p 127.0.0.1:8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio
-<span class="prompt">$</span> docker logs fosta-studio</code></pre>
-            <button
-              type="button"
-              class="copy-btn"
-              data-copy="docker-commands"
-              data-i18n-attr="aria-label:hero.copy; title:hero.copy; data-label-copied:hero.copied"
-              aria-label="Copy the commands"
-              title="Copy the commands"
-              data-label-copied="Copied"
-              hidden
-            >
-              <svg class="icon" aria-hidden="true"><use href="#i-copy" /></svg>
-            </button>
+            ><code><span class="line"><span class="prompt">$ </span>docker run -d --name fosta-studio -p 127.0.0.1:8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio</span>
+<span class="line"><span class="prompt">$ </span>docker logs fosta-studio</span></code></pre>
+            <p class="docker-panel-note" data-i18n="hero.dockerNote">
+              Then open the sign-in address printed in the log.
+              <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/web-edition.md">Web edition guide</a>
+            </p>
           </div>
-          <p class="cta-note docker-note" data-i18n="hero.dockerNote">
-            Then open the sign-in address printed in the log.
-            <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/web-edition.md">Web edition guide</a>
-          </p>
         </div>
 
         <div class="container hero-visual">

@@ -661,32 +661,112 @@ kbd {
   font-size: 14px;
 }
 
-/* Docker commands under the download button, with a copy button. */
-.docker-cmd {
-  position: relative;
-  max-width: 760px;
-  margin: 12px auto 0;
+/* Docker panel under the download buttons: opened by "Run with Docker" (always shown without JavaScript). */
+.docker-panel {
+  max-width: 720px;
+  margin: 18px auto 0;
+  overflow: hidden;
+  border: 1px solid #2c3139;
+  border-radius: var(--radius-lg);
+  background: #15171b;
+  color: #e6e8eb;
   text-align: left;
+  box-shadow: var(--shadow-sm);
 }
 
-.docker-cmd .terminal {
-  padding-right: 52px;
+.js-docker .docker-panel:not(.is-open) {
+  display: none;
+}
+
+.docker-panel.is-open {
+  animation: docker-in 0.18s ease-out;
+}
+
+@keyframes docker-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .docker-panel.is-open {
+    animation: none;
+  }
+}
+
+.docker-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid #2c3139;
+}
+
+.docker-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #aab1bc;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.docker-commands {
+  margin: 0;
+  padding: 14px 16px;
+  background: none;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.docker-commands code {
+  padding: 0;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+}
+
+/* Each command is its own line; a wrapped command is indented past its "$". */
+.docker-commands .line {
+  display: block;
+  padding-left: 2ch;
+  text-indent: -2ch;
+}
+
+.docker-commands .prompt {
+  color: #7ea6f4;
+  user-select: none;
+}
+
+.docker-panel-note {
+  margin: 0;
+  padding: 10px 16px 12px;
+  border-top: 1px solid #2c3139;
+  color: #aab1bc;
   font-size: 13px;
 }
 
+.docker-panel-note a {
+  color: #7ea6f4;
+}
+
 .copy-btn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: var(--radius);
   background: rgba(255, 255, 255, 0.06);
   color: #e6e8eb;
+  font: inherit;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -698,11 +778,6 @@ kbd {
 .copy-btn.is-copied {
   border-color: #3fb27f;
   color: #3fb27f;
-}
-
-.docker-note {
-  margin-top: 10px;
-  font-size: 13px;
 }
 
 .hero-visual {

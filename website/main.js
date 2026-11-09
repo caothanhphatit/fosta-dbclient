@@ -37,37 +37,48 @@
   if (media && media.addEventListener) media.addEventListener("change", sync);
   else if (media && media.addListener) media.addListener(sync); // Safari before 14
 
-  // Copy buttons next to command blocks: copy the commands without their "$" prompts. Hidden without the clipboard API.
+  // "Run with Docker" opens the command panel under the hero buttons; the panel is always shown without JavaScript.
+  function initDocker() {
+    var toggle = document.querySelector("[data-docker-toggle]");
+    var panel = document.getElementById("docker");
+    if (!toggle || !panel) return;
+    root.classList.add("js-docker");
+    function set(open) {
+      panel.classList.toggle("is-open", open);
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    toggle.addEventListener("click", function (event) {
+      event.preventDefault();
+      set(!panel.classList.contains("is-open"));
+    });
+    if (window.location.hash === "#docker") set(true);
+  }
+
+  // Copy buttons: copy the commands without their "$" prompts. Hidden without the clipboard API.
   function initCopy() {
     if (!navigator.clipboard || !navigator.clipboard.writeText) return;
     Array.prototype.forEach.call(document.querySelectorAll("[data-copy]"), function (button) {
       var source = document.getElementById(button.getAttribute("data-copy"));
-      if (!source) return;
-      var label = button.getAttribute("aria-label") || "";
+      var label = button.querySelector("[data-copy-label]");
+      if (!source || !label) return;
+      var text = label.textContent;
       var timer = 0;
       button.hidden = false;
       button.addEventListener("click", function () {
-        var copy = source.cloneNode(true);
-        Array.prototype.forEach.call(copy.querySelectorAll(".prompt"), function (prompt) {
-          prompt.remove();
+        var lines = Array.prototype.map.call(source.querySelectorAll(".line"), function (line) {
+          var copy = line.cloneNode(true);
+          Array.prototype.forEach.call(copy.querySelectorAll(".prompt"), function (prompt) {
+            prompt.remove();
+          });
+          return copy.textContent.trim();
         });
-        var text = copy.textContent
-          .split("\n")
-          .map(function (line) {
-            return line.trim();
-          })
-          .filter(Boolean)
-          .join("\n");
-        navigator.clipboard.writeText(text).then(function () {
-          var done = button.getAttribute("data-label-copied") || label;
+        navigator.clipboard.writeText(lines.join("\n")).then(function () {
           button.classList.add("is-copied");
-          button.setAttribute("aria-label", done);
-          button.setAttribute("title", done);
+          label.textContent = label.getAttribute("data-label-copied") || text;
           window.clearTimeout(timer);
           timer = window.setTimeout(function () {
             button.classList.remove("is-copied");
-            button.setAttribute("aria-label", label);
-            button.setAttribute("title", label);
+            label.textContent = text;
           }, 2000);
         });
       });
@@ -75,6 +86,7 @@
   }
 
   function init() {
+    initDocker();
     initCopy();
     var button = document.querySelector("[data-theme-toggle]");
     if (button) {
