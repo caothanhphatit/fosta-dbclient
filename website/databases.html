@@ -84,6 +84,7 @@
         <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
         <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
       </symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4" /></symbol>
       <symbol id="i-code" viewBox="0 0 24 24"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6" /></symbol>
       <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
       <symbol id="i-sun" viewBox="0 0 24 24">
@@ -241,7 +242,7 @@
                   <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
                   <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
                   <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
-                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span> 8+</td>
                 </tr>
                 <tr>
                   <th scope="row"><a href="#sqlite">SQLite</a></th>
@@ -261,7 +262,7 @@
                   <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
                   <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
                   <td class="m-yes"><span aria-hidden="true">✓</span><span class="sr-only" data-i18n="dbp.m.yes">Yes</span></td>
-                  <td class="m-no"><span aria-hidden="true">—</span><span class="sr-only" data-i18n="dbp.m.no">No</span></td>
+                  <td class="m-yes"><span aria-hidden="true">✓</span> 25.8+</td>
                 </tr>
                 <tr>
                   <th scope="row"><a href="#elasticsearch">Elasticsearch</a></th>
@@ -288,7 +289,8 @@
           </div>
           <p class="matrix-legend" data-i18n="dbp.matrix.legend">
             ✓ available, — not available. Redis is edited in its key browser, and ClickHouse edits run as mutations. Vector tools need MariaDB 11.7+, PostgreSQL
-            with pgvector, Oracle 23ai, Elasticsearch 8.0+ or OpenSearch with the k-NN plugin.
+            with pgvector, Oracle 23ai, Elasticsearch 8.0+, OpenSearch with the k-NN plugin, Redis 8 (search module) or ClickHouse 25.8+ (Array columns with a
+            vector_similarity index).
           </p>
         </div>
       </section>
@@ -463,6 +465,11 @@
                 </dd>
                 <dt data-i18n="dbp.views">Engine views</dt>
                 <dd data-i18n="dbp.redis.views">Key browser, a console with completion and Stop, and a server view with <code>INFO</code> and the slow log.</dd>
+                <dt data-i18n="dbp.vectors">Vector tools</dt>
+                <dd data-i18n="dbp.redis.vectors">
+                  With the search module (built into Redis 8): indexes with <code>VECTOR</code> fields (FLAT or HNSW) open as tables, with vector search and
+                  health checks. Redis 7.4 without the module has no vector tools.
+                </dd>
                 <dt data-i18n="dbp.notes">Notes</dt>
                 <dd data-i18n="dbp.redis.notes">
                   Also Valkey and other RESP servers. One standalone server: Redis Cluster and Sentinel are not supported yet.
@@ -513,6 +520,11 @@
                 <dt data-i18n="dbp.views">Engine views</dt>
                 <dd data-i18n="dbp.clickhouse.views">
                   Edits as asynchronous mutations on MergeTree tables, a Parts and mutations view, and a Server view with running queries and the query log.
+                </dd>
+                <dt data-i18n="dbp.vectors">Vector tools</dt>
+                <dd data-i18n="dbp.clickhouse.vectors">
+                  <code>Array(Float32)</code>, <code>Array(Float64)</code> or <code>Array(BFloat16)</code> columns with a <code>vector_similarity</code> index:
+                  vector search and health checks. Generally available in 25.8; older servers need an experimental setting.
                 </dd>
                 <dt data-i18n="dbp.notes">Notes</dt>
                 <dd data-i18n="dbp.clickhouse.notes">
@@ -608,6 +620,18 @@
               ></span>
               <h3 data-i18n="dbp.shared.conn.title">Connection strings</h3>
               <p data-i18n="dbp.shared.conn.text">Paste a connection string for any engine; passwords stay in Credential Manager.</p>
+            </li>
+            <li class="mini-card mini-card-wide">
+              <span class="why-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-plug" /></svg
+              ></span>
+              <div>
+                <h3 data-i18n="dbp.shared.mcp.title">MCP server</h3>
+                <p data-i18n="dbp.shared.mcp.text">
+                  AI agents such as Claude Desktop, Claude Code or Cursor can use your connections through MCP. Off by default; every write needs approval and
+                  every call is audited. <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/mcp.md">MCP guide</a>
+                </p>
+              </div>
             </li>
           </ul>
           <p class="section-more">

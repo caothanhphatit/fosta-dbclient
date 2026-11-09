@@ -286,6 +286,26 @@
           </div>
         </div>
 
+        <div class="container dbstrip">
+          <p class="dbstrip-title" id="dbstrip-title" data-i18n="dbstrip.title">Works with 11 databases</p>
+          <ul class="dbstrip-list" aria-labelledby="dbstrip-title">
+            <li><a class="dbchip c-mariadb" href="databases/#mariadb"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg>MariaDB</a></li>
+            <li><a class="dbchip c-mysql" href="databases/#mysql"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg>MySQL</a></li>
+            <li><a class="dbchip c-sqlserver" href="databases/#sqlserver"><svg class="icon" aria-hidden="true"><use href="#i-grid" /></svg>SQL Server</a></li>
+            <li><a class="dbchip c-mongodb" href="databases/#mongodb"><svg class="icon" aria-hidden="true"><use href="#i-box" /></svg>MongoDB</a></li>
+            <li><a class="dbchip c-postgresql" href="databases/#postgresql"><svg class="icon" aria-hidden="true"><use href="#i-table" /></svg>PostgreSQL</a></li>
+            <li><a class="dbchip c-sqlite" href="databases/#sqlite"><svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg>SQLite</a></li>
+            <li><a class="dbchip c-redis" href="databases/#redis"><svg class="icon" aria-hidden="true"><use href="#i-key" /></svg>Redis</a></li>
+            <li><a class="dbchip c-elasticsearch" href="databases/#elasticsearch"><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>Elasticsearch</a></li>
+            <li><a class="dbchip c-opensearch" href="databases/#opensearch"><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>OpenSearch</a></li>
+            <li><a class="dbchip c-clickhouse" href="databases/#clickhouse"><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg>ClickHouse</a></li>
+            <li><a class="dbchip c-oracle" href="databases/#oracle"><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg>Oracle</a></li>
+            <li class="dbstrip-more">
+              <a href="databases/"><span data-i18n="dbstrip.more">View details</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg></a>
+            </li>
+          </ul>
+        </div>
+
         <div class="container hero-visual">
           <!--
             Carousel of app views. Without JavaScript it is a horizontally scrollable strip (slide 1 shows first);
@@ -1389,9 +1409,9 @@
               <span class="feature-icon"
                 ><svg class="icon" aria-hidden="true"><use href="#i-target" /></svg
               ></span>
-              <h3 data-i18n="mini.vector.title">MariaDB vector tools</h3>
+              <h3 data-i18n="mini.vector.title">Vector tools</h3>
               <p data-i18n="mini.vector.text">
-                For MariaDB 11.7+: embedding search, column and index health checks, and recall of the vector index measured against exact search.
+                Embedding search, column and index health checks, and index recall against exact search on MariaDB 11.7+, PostgreSQL (pgvector), Oracle 23ai, Elasticsearch, OpenSearch, Redis 8 and ClickHouse.
               </p>
             </li>
             <li class="mini-card">
@@ -1411,6 +1431,17 @@
               <p data-i18n="mini.cell.text">
                 Press <kbd>Shift</kbd>+<kbd>Enter</kbd> on a long value for a large editor with NULL, word wrap, and Format / Minify with validation for JSON.
               </p>
+            </li>
+            <li class="mini-card mini-card-wide">
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-plug" /></svg
+              ></span>
+              <div>
+                <h3 data-i18n="mini.mcp.title">MCP server for AI agents</h3>
+                <p data-i18n="mini.mcp.text">
+                  AI agents such as Claude Desktop, Claude Code or Cursor can use your connections through MCP. It is off by default, and each workspace is set to Off, Read-only or Ask before writes. Every write needs your approval in the app, every call is audited, and Production workspaces are always read-only. <a href="https://github.com/caothanhphatit/fosta-dbclient/blob/main/docs/mcp.md">MCP guide</a>
+                </p>
+              </div>
             </li>
           </ul>
         </div>
@@ -1474,7 +1505,7 @@
               ></span>
               <div>
                 <h3><a class="engine-link" href="databases/#postgresql">PostgreSQL</a></h3>
-                <p data-i18n="engines.postgres">Schemas, jsonb and arrays, Stop on the server, EXPLAIN</p>
+                <p data-i18n="engines.postgres">Schemas, jsonb and arrays, Stop on the server, EXPLAIN, vector tools with pgvector</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
@@ -1494,7 +1525,7 @@
               ></span>
               <div>
                 <h3><a class="engine-link" href="databases/#clickhouse">ClickHouse</a></h3>
-                <p data-i18n="engines.clickhouse">Streaming queries, edits as mutations, parts and query log</p>
+                <p data-i18n="engines.clickhouse">Streaming queries, edits as mutations, parts and query log, vector search on Array columns</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
@@ -1504,7 +1535,7 @@
               ></span>
               <div>
                 <h3><a class="engine-link" href="databases/#oracle">Oracle</a></h3>
-                <p data-i18n="engines.oracle">PL/SQL and packages; Instant Client is downloaded for you</p>
+                <p data-i18n="engines.oracle">PL/SQL and packages, vector tools on 23ai; Instant Client is downloaded for you</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
@@ -1514,7 +1545,7 @@
               ></span>
               <div>
                 <h3><a class="engine-link" href="databases/#redis">Redis</a></h3>
-                <p data-i18n="engines.redis">Key browser with an editor for each data type, console with completion; also Valkey</p>
+                <p data-i18n="engines.redis">Key browser with an editor for each data type, console with completion, vector tools on Redis 8; also Valkey</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
@@ -1524,7 +1555,7 @@
               ></span>
               <div>
                 <h3><a class="engine-link" href="databases/#elasticsearch">Elasticsearch</a></h3>
-                <p data-i18n="engines.elastic">Mapping-typed grid, Dev Tools console, ES|QL and SQL</p>
+                <p data-i18n="engines.elastic">Mapping-typed grid, Dev Tools console, ES|QL and SQL, vector tools</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
@@ -1534,7 +1565,7 @@
               ></span>
               <div>
                 <h3><a class="engine-link" href="databases/#opensearch">OpenSearch</a></h3>
-                <p data-i18n="engines.opensearch">The same grid and console, SQL plugin, point-in-time paging</p>
+                <p data-i18n="engines.opensearch">The same grid and console, SQL plugin, point-in-time paging, vector tools</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>

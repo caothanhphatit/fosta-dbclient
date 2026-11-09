@@ -3734,3 +3734,172 @@ kbd {
     grid-template-columns: minmax(0, 280px);
   }
 }
+
+/* Supported databases strip (home page, inside the hero, between the text and the app illustration). */
+.dbstrip {
+  margin-top: 36px;
+  text-align: center;
+}
+
+.dbstrip + .hero-visual {
+  margin-top: 40px;
+}
+
+.dbstrip-title {
+  margin: 0 0 14px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dbstrip-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  max-width: 940px;
+  margin: 0 auto;
+  padding: 0;
+  list-style: none;
+}
+
+.dbchip {
+  --h: 215;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+
+.dbchip .icon {
+  box-sizing: content-box;
+  width: 16px;
+  height: 16px;
+  padding: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, hsl(var(--h) 75% 50%) 16%, transparent);
+  color: color-mix(in srgb, hsl(var(--h) 70% 48%) 78%, var(--text));
+}
+
+.dbchip:hover,
+.dbchip:focus-visible {
+  border-color: color-mix(in srgb, hsl(var(--h) 70% 50%) 55%, var(--line));
+  transform: translateY(-1px);
+}
+
+.dbchip:focus-visible,
+.dbstrip-more a:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+.dbstrip-more a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: var(--link);
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.dbstrip-more a:hover {
+  text-decoration: underline;
+}
+
+.c-mariadb {
+  --h: 205;
+}
+.c-mysql {
+  --h: 28;
+}
+.c-sqlserver {
+  --h: 350;
+}
+.c-mongodb {
+  --h: 140;
+}
+.c-postgresql {
+  --h: 222;
+}
+.c-sqlite {
+  --h: 190;
+}
+.c-redis {
+  --h: 4;
+}
+.c-elasticsearch {
+  --h: 170;
+}
+.c-opensearch {
+  --h: 245;
+}
+.c-clickhouse {
+  --h: 46;
+}
+.c-oracle {
+  --h: 15;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dbchip {
+    transition: none;
+  }
+  .dbchip:hover,
+  .dbchip:focus-visible {
+    transform: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .dbstrip-list {
+    gap: 8px;
+  }
+  .dbchip {
+    font-size: 13px;
+  }
+}
+
+/* A wide card closes a grid of mini cards (the MCP server): icon beside the text. */
+.mini-card-wide {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  grid-column: 1 / -1;
+}
+
+.mini-card-wide h3 {
+  margin-top: 0;
+}
+
+.mini-card-wide a {
+  color: var(--link);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .mini-card-wide {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .mini-card-wide h3 {
+    margin-top: 0;
+  }
+}
