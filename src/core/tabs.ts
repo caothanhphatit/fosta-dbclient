@@ -1,4 +1,5 @@
 import { showContextMenu, type MenuItem } from "./contextMenu";
+import { confirmDialog } from "./dialogs";
 import { h, icon, type IconName } from "./dom";
 import { disambiguateTitles, tabTooltip } from "./tabTitles";
 import { horizontalWheelDelta } from "./wheelScroll";
@@ -8,6 +9,8 @@ export interface TabContent {
   onActivate?(): void;
   dispose?(): void;
   canClose?(): boolean | Promise<boolean>;
+  /** What closing loses ("query text not run"), null for nothing: "Close all" asks once for every tab (no `canClose`). */
+  closeWarning?(): string | null;
   /** Edits not saved yet; quitting (or restarting to update) asks first. */
   hasUnsavedChanges?(): boolean;
 }
@@ -36,6 +39,8 @@ interface OpenTab {
 }
 
 const DEFAULT_SCOPE = "";
+/** The most tabs one "Close all" question names. */
+const MAX_LISTED = 12;
 
 export class TabManager {
   readonly element: HTMLElement;
@@ -123,25 +128,28 @@ export class TabManager {
   }
 
   /**
-   * Puts a new tab in the place of `key` (same position and scope; selected when that one was): a restored tab turning
-   * into its real view once it is shown. The old content is disposed.
+   * Puts a new tab in the place of `key` (same position; the scope of `spec`, else the old tab's; selected when that one
+   * was): a restored tab turning into its real view once it is shown. The old content is disposed. False when `key` is
+   * no longer open (it closed meanwhile): nothing is created.
    */
-  replace(key: string, spec: TabSpec): void {
+  replace(key: string, spec: TabSpec): boolean {
     const tab = this.tabs.find((item) => item.key === key);
-    if (!tab) return;
+    if (!tab) return false;
+    const scope = spec.scope ?? tab.scope;
     const content = spec.create();
     const { header, titleLabel } = this.createHeader(spec);
-    header.hidden = tab.header.hidden;
+    header.hidden = scope !== this.scope;
     content.element.hidden = true;
     tab.header.replaceWith(header);
     tab.content.element.replaceWith(content.element);
     tab.content.dispose?.();
     const wasActive = this.activeKey === key;
-    for (const [scope, remembered] of this.lastActive) if (remembered === key) this.lastActive.set(scope, spec.key);
-    Object.assign(tab, { key: spec.key, header, titleLabel, spec, content });
+    for (const [remembered, active] of this.lastActive) if (active === key) this.lastActive.set(remembered, spec.key);
+    Object.assign(tab, { key: spec.key, scope, header, titleLabel, spec, content });
     this.refreshTitles();
-    if (wasActive) this.activate(spec.key);
+    if (wasActive) this.activate(scope === this.scope ? spec.key : null);
     this.onTabsChanged?.();
+    return true;
   }
 
   /** The tab keys of `scope` in strip order, and the one active there (or last active, for another workspace). */
@@ -183,11 +191,20 @@ export class TabManager {
     return this.tabs.find((tab) => tab.key === key)?.content;
   }
 
-  async close(key: string): Promise<void> {
-    const index = this.tabs.findIndex((tab) => tab.key === key);
-    const tab = this.tabs[index];
-    if (!tab || (tab.content.canClose && !(await tab.content.canClose()))) return;
-    const wasActive = this.activeKey === key;
+  /** Closes the tab `key` once its content agrees (`canClose`); resolves false when it stays open. */
+  async close(key: string): Promise<boolean> {
+    const tab = this.tabs.find((item) => item.key === key);
+    if (!tab) return true;
+    if (tab.content.canClose && !(await tab.content.canClose())) return false;
+    if (this.tabs.includes(tab)) this.remove(tab);
+    return true;
+  }
+
+  /** Takes a tab out without asking. */
+  private remove(tab: OpenTab): void {
+    const index = this.tabs.indexOf(tab);
+    if (index < 0) return;
+    const wasActive = this.activeKey === tab.key;
     const siblings = this.tabs.filter((item) => item.scope === tab.scope);
     const position = siblings.indexOf(tab);
     const neighbour = siblings[position + 1] ?? siblings[position - 1];
@@ -214,10 +231,31 @@ export class TabManager {
     }
   }
 
-  closeWhere(matches: (key: string) => boolean): void {
-    for (const tab of [...this.tabs]) {
-      if (matches(tab.key)) void this.close(tab.key);
+  /**
+   * Closes every tab whose key `matches`. One question lists the tabs that would lose something (`closeWarning`, or
+   * `canClose` for a tab without one); declined, nothing closes. Resolves true when every matching tab closed.
+   */
+  async closeWhere(matches: (key: string) => boolean): Promise<boolean> {
+    const targets = this.tabs.filter((tab) => matches(tab.key));
+    const warned = targets.flatMap((tab) => {
+      const warning = tab.content.closeWarning?.();
+      return warning ? [`${tab.titleLabel.textContent ?? tab.key}: ${warning}`] : [];
+    });
+    if (warned.length > 0) {
+      const lines = warned.slice(0, MAX_LISTED).map((line) => `• ${line}`);
+      if (warned.length > MAX_LISTED) lines.push(`• …and ${warned.length - MAX_LISTED} more`);
+      const question = `${warned.length} tab(s) would lose something when closed:\n${lines.join("\n")}\nClose them anyway?`;
+      if (!(await confirmDialog(question, "Close tabs"))) return false;
     }
+    let all = true;
+    for (const tab of targets) {
+      if (!this.tabs.includes(tab)) continue;
+      // Tabs that can say what they lose were asked about above; others ask on their own.
+      const asked = typeof tab.content.closeWarning === "function";
+      if (asked) this.remove(tab);
+      else all = (await this.close(tab.key)) && all;
+    }
+    return all;
   }
 
   private visibleTabs(): OpenTab[] {
@@ -269,8 +307,12 @@ export class TabManager {
     const siblings = this.tabs.filter((tab) => tab.scope === scope);
     return [
       { label: "Close", icon: "x", run: () => void this.close(key) },
-      { label: "Close others", disabled: siblings.length < 2, run: () => this.closeWhere((item) => item !== key && siblings.some((tab) => tab.key === item)) },
-      { label: "Close all", run: () => this.closeWhere((item) => siblings.some((tab) => tab.key === item)) },
+      {
+        label: "Close others",
+        disabled: siblings.length < 2,
+        run: () => void this.closeWhere((item) => item !== key && siblings.some((tab) => tab.key === item)),
+      },
+      { label: "Close all", run: () => void this.closeWhere((item) => siblings.some((tab) => tab.key === item)) },
     ];
   }
 }

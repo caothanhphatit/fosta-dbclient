@@ -156,16 +156,17 @@ function need<K extends keyof EngineMock>(engine: EngineMock, member: K, capabil
 
 const MOCK_TABS_KEY = "fosta-mock.openTabs";
 
-function readMockTabs(): Record<string, unknown> {
+function readMockTabs(): { workspaces: Record<string, unknown>; revisions: Record<string, number> } {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(MOCK_TABS_KEY) ?? "{}");
-    return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    const parsed = JSON.parse(localStorage.getItem(MOCK_TABS_KEY) ?? "{}") as { workspaces?: unknown; revisions?: unknown } | null;
+    const record = (value: unknown) => (typeof value === "object" && value !== null ? value : {});
+    return { workspaces: record(parsed?.workspaces) as Record<string, unknown>, revisions: record(parsed?.revisions) as Record<string, number> };
   } catch {
-    return {};
+    return { workspaces: {}, revisions: {} };
   }
 }
 
-function writeMockTabs(stored: Record<string, unknown>): void {
+function writeMockTabs(stored: { workspaces: Record<string, unknown>; revisions: Record<string, number> }): void {
   try {
     localStorage.setItem(MOCK_TABS_KEY, JSON.stringify(stored));
   } catch {
@@ -497,11 +498,27 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "load_open_tabs":
       return readMockTabs();
     case "save_open_tabs": {
+      // Like the backend: a save based on another revision writes nothing and gets the stored tabs back.
       const stored = readMockTabs();
-      if (payload.tabs === null || payload.tabs === undefined) delete stored[str("workspaceId")];
-      else stored[str("workspaceId")] = payload.tabs;
+      const id = str("workspaceId");
+      const current = stored.revisions[id] ?? 0;
+      if (typeof payload.revision === "number" && payload.revision !== current) {
+        return { saved: false, revision: current, current: stored.workspaces[id] ?? null };
+      }
+      const known = new Set(state.config.workspaces.map((workspace) => workspace.id));
+      for (const key of Object.keys(stored.workspaces)) if (!known.has(key)) delete stored.workspaces[key];
+      for (const key of Object.keys(stored.revisions)) if (!known.has(key)) delete stored.revisions[key];
+      let revision = 0;
+      if (payload.tabs === null || payload.tabs === undefined || !known.has(id)) {
+        delete stored.workspaces[id];
+        delete stored.revisions[id];
+      } else {
+        revision = current + 1;
+        stored.workspaces[id] = payload.tabs;
+        stored.revisions[id] = revision;
+      }
       writeMockTabs(stored);
-      return null;
+      return { saved: true, revision, current: null };
     }
     case "history_clear":
       state.history = [];
@@ -648,6 +665,10 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
         (payload.onEvent as Channel<StreamEvent> | undefined) ?? null,
         (payload.maxRows as number | null | undefined) ?? null,
       );
+    case "classify_run": {
+      const current = session(str("sessionId"));
+      return classify(connection(current.connectionId).engine, str("text")).map((statement) => statement.category);
+    }
     case "cancel_run":
       sessions.get(str("sessionId"))?.running?.abort();
       return null;

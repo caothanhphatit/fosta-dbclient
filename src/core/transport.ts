@@ -19,10 +19,16 @@ export function isTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
 
+/** How the web edition sends one call. */
+export interface InvokeOptions {
+  /** The request outlives the page (saving while it unloads); browsers allow 64 KB of such bodies in flight. */
+  keepalive?: boolean;
+}
+
 /** Thrown (as Tauri does) with the backend's error message. */
-export async function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+export async function invoke<T>(command: string, args: Record<string, unknown> = {}, options: InvokeOptions = {}): Promise<T> {
   if (isTauri()) return tauriInvoke<T>(command, args);
-  const response = await post(command, args);
+  const response = await post(command, args, options);
   return (await response.json()) as T;
 }
 
@@ -56,7 +62,7 @@ export async function invokeStreaming<T, E>(command: string, args: Record<string
   }
 }
 
-async function post(command: string, args: Record<string, unknown>): Promise<Response> {
+async function post(command: string, args: Record<string, unknown>, options: InvokeOptions = {}): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(`/api/invoke/${encodeURIComponent(command)}`, {
@@ -64,6 +70,7 @@ async function post(command: string, args: Record<string, unknown>): Promise<Res
       credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-Fosta-Studio": "1" },
       body: JSON.stringify(args),
+      ...(options.keepalive ? { keepalive: true } : {}),
     });
   } catch {
     throw "Cannot reach the Fosta Studio server. Check that it is still running.";

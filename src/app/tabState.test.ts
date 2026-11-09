@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { fitToBytes, jsonBytes, MAX_TAB_TEXT, parseSavedTabs, queryNumber, restorableTabs, serializeTabs, type SavedTab } from "./tabState";
+import {
+  fitToBytes,
+  jsonBytes,
+  MAX_TAB_TEXT,
+  mergeTabs,
+  parseSavedTabs,
+  queryNumber,
+  restorableTabs,
+  serializeTabs,
+  type SavedTab,
+  type SavedWorkspaceTabs,
+} from "./tabState";
 
-const query = (text: string, connectionId = "c1", title = "Query 1"): SavedTab => ({
+const query = (text: string, connectionId = "c1", title = "Query 1", id = `q-${title}`): Extract<SavedTab, { kind: "query" }> => ({
+  id,
   kind: "query",
   connectionId,
   title,
@@ -11,6 +23,7 @@ const query = (text: string, connectionId = "c1", title = "Query 1"): SavedTab =
   saved: "",
 });
 const table: SavedTab = {
+  id: "t-orders",
   kind: "object",
   connectionId: "c2",
   title: "orders",
@@ -18,13 +31,39 @@ const table: SavedTab = {
   object: { database: "shop", schema: null, name: "orders", kind: "table" },
   filter: "status = 'NEW'",
 };
-const logs: SavedTab = { kind: "logs", taskId: "t1", title: "Tunnel · logs" };
+const logs: SavedTab = { id: "l-tunnel", kind: "logs", taskId: "t1", title: "Tunnel · logs" };
+
+const workspace = (tabs: SavedTab[], active: number | null = null): SavedWorkspaceTabs => ({ version: 1, tabs, active });
 
 describe("serializeTabs and parseSavedTabs", () => {
-  it("round-trips every kind of tab and the active one", () => {
+  it("round-trips every kind of tab, its id and the active one", () => {
     const state = serializeTabs([query("SELECT 1"), table, logs], 1, 10_000);
     const parsed = parseSavedTabs(JSON.parse(JSON.stringify(state)));
     expect(parsed).toEqual({ version: 1, tabs: [query("SELECT 1"), table, logs], active: 1 });
+  });
+
+  it("stores the saved text only when it differs from the text", () => {
+    const ran = { ...query("SELECT 1"), saved: "SELECT 1" };
+    const [stored] = serializeTabs([ran], null, 10_000).tabs;
+    expect(stored).not.toHaveProperty("saved");
+    // Read back, the text counts as saved again.
+    const parsed = parseSavedTabs(JSON.parse(JSON.stringify({ tabs: [stored] })));
+    expect(parsed?.tabs[0]).toEqual(stored);
+    expect(serializeTabs([query("SELECT 2")], null, 10_000).tabs[0]).toMatchObject({ saved: "" });
+  });
+
+  it("gives tabs of a file without ids (or with a repeated id) an id of their own", () => {
+    const parsed = parseSavedTabs({
+      tabs: [
+        { kind: "logs", taskId: "t1", title: "a" },
+        { kind: "logs", taskId: "t2", title: "b", id: "x" },
+        { kind: "logs", taskId: "t3", title: "c", id: "x" },
+      ],
+    });
+    const ids = parsed?.tabs.map((tab) => tab.id) ?? [];
+    expect(ids[1]).toBe("x");
+    expect(new Set(ids).size).toBe(3);
+    expect(ids.every((id) => id.length > 0)).toBe(true);
   });
 
   it("leaves out text over the per-tab limit or the workspace budget", () => {
@@ -61,12 +100,61 @@ describe("fitToBytes", () => {
     expect(jsonBytes(fitted)).toBeLessThanOrEqual(1_000);
     expect(fitted.tabs[0]).toMatchObject({ text: "é".repeat(300) });
     expect(fitted.tabs[1]).toMatchObject({ text: "", textOmitted: true });
+    expect(fitted.tabs[1]).not.toHaveProperty("saved");
     expect(fitToBytes(state, 1_000_000)).toBe(state);
+  });
+
+  it("measures once and drops exactly what re-measuring the whole state each time would", () => {
+    const tabs = [
+      query('"\\'.repeat(100), "c1", "Query 1"),
+      { ...query("a".repeat(100), "c1", "Query 2"), saved: "b".repeat(100) },
+      table,
+      query("ü".repeat(50), "c1", "Query 3"),
+    ];
+    const state = serializeTabs(tabs, null, 10_000);
+    /** The plain way: serialise the whole state again after each dropped text. */
+    const reference = (limit: number): SavedWorkspaceTabs => {
+      let current = state;
+      for (let index = current.tabs.length - 1; index >= 0 && jsonBytes(current) > limit; index -= 1) {
+        const tab = current.tabs[index];
+        if (tab.kind !== "query") continue;
+        const next = [...current.tabs];
+        next[index] = fitToBytes(workspace([tab]), 0).tabs[0];
+        current = { ...current, tabs: next };
+      }
+      return current;
+    };
+    for (const limit of [100, 300, 500, 700, 900, 1_100]) expect(fitToBytes(state, limit)).toEqual(reference(limit));
+  });
+});
+
+describe("mergeTabs", () => {
+  const a = query("A", "c1", "Query 1", "a");
+  const b = query("B", "c1", "Query 2", "b");
+  const c = query("C", "c1", "Query 3", "c");
+
+  it("is this window's tabs when the stored ones are its own", () => {
+    const local = workspace([a, b], 1);
+    expect(mergeTabs(local, workspace([a, b]), new Set(["a", "b"]))).toBe(local);
+    expect(mergeTabs(local, null, new Set())).toBe(local);
+  });
+
+  it("keeps another window's tabs after this window's, with this window's text and active tab", () => {
+    const local = workspace([{ ...a, text: "A changed" }], 0);
+    const stored = workspace([a, c], 1);
+    expect(mergeTabs(local, stored, new Set(["a"]))).toEqual(workspace([{ ...a, text: "A changed" }, c], 0));
+  });
+
+  it("does not bring back a tab this window closed", () => {
+    const local = workspace([a]);
+    const stored = workspace([a, b, c]);
+    // `b` was shown here and closed; `c` is another window's.
+    expect(mergeTabs(local, stored, new Set(["a", "b"])).tabs.map((tab) => tab.id)).toEqual(["a", "c"]);
   });
 });
 
 describe("restorableTabs", () => {
-  const saved = { version: 1 as const, tabs: [query("a"), table, logs, query("b", "c1", "Query 2")], active: 1 };
+  const saved = workspace([query("a"), table, logs, query("b", "c1", "Query 2")], 1);
 
   it("drops tabs whose connection or command is gone and keeps the active one", () => {
     const result = restorableTabs(

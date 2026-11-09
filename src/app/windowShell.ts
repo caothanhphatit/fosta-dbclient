@@ -61,16 +61,17 @@ export function revealWindowAfterFirstPaint(): void {
 
 /**
  * Asks before quitting (closing, or restarting to update) when open transactions would be rolled back or unsaved edits
- * lost; true to go ahead. `action` is the button, "Close" or "Restart".
+ * lost; true to go ahead. `action` is the button, "Close" or "Restart". Query text not run is named once: a restored
+ * tab whose text is still what came back was named when the app last quit, and comes back again.
  */
 export async function confirmQuit(tabs: TabManager, action: "Close" | "Restart", textLost: ReadonlySet<string> = new Set()): Promise<boolean> {
   const contents = tabs.contents();
   const open = contents.filter((content) => isQueryView(content) && content.hasOpenTransaction()).length;
   const edited = contents.filter((content) => content.hasUnsavedChanges?.() === true).length;
   const unrun = unsavedQueryTabs(tabs);
-  const kept = unrun.filter((tab) => !textLost.has(tab.key)).map((tab) => tab.title);
+  const kept = unrun.filter((tab) => !textLost.has(tab.key) && tab.changedSinceRestore).map((tab) => tab.title);
   const dropped = unrun.filter((tab) => textLost.has(tab.key)).map((tab) => tab.title);
-  if (open === 0 && edited === 0 && unrun.length === 0) return true;
+  if (open === 0 && edited === 0 && kept.length === 0 && dropped.length === 0) return true;
   const doing = action === "Close" ? "Closing" : "Restarting";
   const lost = [
     open > 0 ? `${open} query tab(s) have an open transaction. ${doing} Fosta Studio rolls them back, so uncommitted changes are lost.` : "",
@@ -81,32 +82,36 @@ export async function confirmQuit(tabs: TabManager, action: "Close" | "Restart",
   return confirmDialog(`${lost.filter(Boolean).join("\n")}\n${action} now?`, action);
 }
 
-/** The query tabs (restored ones too) whose text was edited and not run since: tab key and shown title. */
-export function unsavedQueryTabs(tabs: TabManager): { key: string; title: string }[] {
+/**
+ * The query tabs (restored ones too) whose text was edited and not run since: tab key, shown title, and whether the
+ * text changed since the tab was restored (always for a tab that was not restored).
+ */
+export function unsavedQueryTabs(tabs: TabManager): { key: string; title: string; changedSinceRestore: boolean }[] {
   return tabs.contents().flatMap((content) => {
-    const unsaved = (content as { hasUnsavedText?: () => boolean }).hasUnsavedText;
-    if (typeof unsaved !== "function" || !unsaved.call(content)) return [];
+    const view = content as { hasUnsavedText?: () => boolean; changedSinceRestore?: () => boolean };
+    if (typeof view.hasUnsavedText !== "function" || !view.hasUnsavedText()) return [];
     const key = tabs.keyOf(content);
-    return key ? [{ key, title: tabs.titleOf(key) }] : [];
+    return key ? [{ key, title: tabs.titleOf(key), changedSinceRestore: view.changedSinceRestore?.() ?? true }] : [];
   });
 }
 
 /**
  * The web edition: leaving or reloading the page asks first while a transaction is open, edits are unsaved or query
- * text has not been saved yet (`beforeLeave` saves the open tabs on the way out).
+ * text changed and has not been saved yet. `leaving` saves the open tabs on the way out; the page's hide, unload and
+ * close events all call it, and it sends only what changed.
  */
-export function guardPageUnload(tabs: TabManager, beforeLeave: () => void): void {
+export function guardPageUnload(tabs: TabManager, leaving: () => void): void {
   if (isTauri()) return;
-  window.addEventListener("pagehide", beforeLeave);
+  window.addEventListener("pagehide", leaving);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") beforeLeave();
+    if (document.visibilityState === "hidden") leaving();
   });
   window.addEventListener("beforeunload", (event) => {
-    beforeLeave();
+    leaving();
     const contents = tabs.contents();
     const risky =
       contents.some((content) => (isQueryView(content) && content.hasOpenTransaction()) || content.hasUnsavedChanges?.() === true) ||
-      unsavedQueryTabs(tabs).length > 0;
+      unsavedQueryTabs(tabs).some((tab) => tab.changedSinceRestore);
     if (risky) event.preventDefault();
   });
 }

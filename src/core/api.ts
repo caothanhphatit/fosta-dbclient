@@ -21,8 +21,9 @@ import type {
   TreeChildren,
   TreeRequest,
 } from "./contract";
-import { errorCode as codeOf, errorText as textOf } from "./errors";
-import { downloadInBrowser, invoke as transportInvoke, invokeStreaming, isTauri, listen, type UnlistenFn } from "./transport";
+import { errorCode as codeOf, errorText as textOf, NOT_CONNECTED } from "./errors";
+export { NOT_CONNECTED, SESSION_LOST } from "./errors";
+import { downloadInBrowser, invoke as transportInvoke, invokeStreaming, isTauri, listen, type InvokeOptions, type UnlistenFn } from "./transport";
 import type {
   AiConnection,
   AiSettings,
@@ -54,10 +55,6 @@ import type {
 } from "./types";
 
 export const PASSWORD_REQUIRED = "PASSWORD_REQUIRED";
-/** The code of a call on a connection the backend does not have open (it restarted, or the connection was dropped). */
-export const NOT_CONNECTED = "NOT_CONNECTED";
-/** The code of a call on a query tab's session the backend no longer has. */
-export const SESSION_LOST = "SESSION_LOST";
 
 const lostListeners = new Set<(connectionId: string) => void>();
 
@@ -73,15 +70,27 @@ export function reportConnectionLost(connectionId: string): void {
 }
 
 /** Every command goes through here: a `NOT_CONNECTED` answer for a connection is reported to `onConnectionLost`. */
-const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+const invoke = async <T>(command: string, args: Record<string, unknown> = {}, options: InvokeOptions = {}): Promise<T> => {
   try {
-    return await transportInvoke<T>(command, args);
+    return await transportInvoke<T>(command, args, options);
   } catch (error) {
     if (codeOf(error) === NOT_CONNECTED && typeof args.connectionId === "string") reportConnectionLost(args.connectionId);
     throw error;
   }
 };
 
+/** What `load_open_tabs` returns: each workspace's saved tabs and the revision it was saved at. */
+export interface StoredOpenTabs {
+  workspaces: Record<string, unknown>;
+  revisions: Record<string, number>;
+}
+
+/** What `save_open_tabs` answers; `saved` false: another window saved first (nothing was written), `current` is theirs. */
+export interface OpenTabsSaveOutcome {
+  saved: boolean;
+  revision: number;
+  current: unknown;
+}
 /** `parse_connection_string`: the profile fields a connection string sets, and its password (never stored in the profile). */
 export interface ParsedConnectionString {
   spec: ConnectionSpec;
@@ -146,6 +155,8 @@ export const api = {
     maxRows: number | null = null,
   ) => invokeStreaming<RunSummary, StreamEvent>("run", { sessionId, request, confirmation, maxRows }, "onEvent", onEvent),
   cancelRun: (sessionId: string) => invoke<void>("cancel_run", { sessionId }),
+  /** How the engine classifies `text` in the session's language, one category per statement; nothing runs. */
+  classifyRun: (sessionId: string, text: string) => invoke<StatementCategory[]>("classify_run", { sessionId, text }),
   /** Begin / commit / rollback / auto-commit of a session; resolves with the engine-reported state. */
   transaction: (sessionId: string, op: TransactionOp) => invoke<TransactionState>("transaction", { sessionId, op }),
   /** An engine-specific operation (`vector.search`, `redis.scan`, …); the gateway refuses names the engine does not know. */
@@ -206,9 +217,13 @@ export const api = {
   /** Records a query run; resolves with the stored entry, or null when history is turned off. */
   historyAppend: (entry: HistoryEntry) => invoke<HistoryEntry | null>("history_append", { entry }),
   /** The open tabs of every workspace from the last session, by workspace id (`app/tabState.ts` reads them). */
-  loadOpenTabs: () => invoke<Record<string, unknown>>("load_open_tabs"),
+  loadOpenTabs: () => invoke<StoredOpenTabs>("load_open_tabs"),
   /** Saves one workspace's open tabs; null forgets them. */
-  saveOpenTabs: (workspaceId: string, tabs: unknown) => invoke<void>("save_open_tabs", { workspaceId, tabs }),
+  saveOpenTabs: (workspaceId: string, tabs: unknown, revision: number | null = null) =>
+    invoke<OpenTabsSaveOutcome>("save_open_tabs", { workspaceId, tabs, revision }),
+  /** `saveOpenTabs` while the page unloads (web): the request outlives the page (`keepalive`, bodies up to 64 KB). */
+  saveOpenTabsOnUnload: (workspaceId: string, tabs: unknown, revision: number | null) =>
+    invoke<OpenTabsSaveOutcome>("save_open_tabs", { workspaceId, tabs, revision }, { keepalive: true }),
   /** Matching entries, newest first. */
   historyList: (query: HistoryQuery) => invoke<HistoryEntry[]>("history_list", { query }),
   historyDelete: (ids: string[]) => invoke<number>("history_delete", { ids }),

@@ -607,6 +607,28 @@ pub async fn run_limited(
     handle.run(session, request.clone(), options, sink).await
 }
 
+/// How the engine classifies `text` in the session's language, one category per statement, without running it. A
+/// statement the gateway refuses outright counts as `Unknown`. The query tab asks after reopening a lost session, to
+/// run again on its own only what reads.
+pub fn session_categories(mgr: &ConnectionManager, session_id: &str, text: &str) -> AppResult<Vec<Category>> {
+    let (handle, session) = mgr.session(session_id)?;
+    let classification = handle.engine.classify(&ClassifyInput::Statement {
+        language: session.language(),
+        text,
+    });
+    Ok(classification
+        .statements
+        .iter()
+        .map(|statement| {
+            if statement.refused.is_some() {
+                Category::Unknown
+            } else {
+                statement.category
+            }
+        })
+        .collect())
+}
+
 /// Begin / Commit / Rollback / auto-commit from the query toolbar: always allowed, even in a Read-only workspace (Begin
 /// then opens a read-only transaction where the engine has one).
 pub async fn transaction(mgr: &ConnectionManager, context: &Context, session_id: &str, op: TransactionOp) -> AppResult<TransactionState> {

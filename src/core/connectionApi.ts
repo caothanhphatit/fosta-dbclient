@@ -21,7 +21,7 @@ import type {
   TreeChildren,
   TreeRequest,
 } from "./contract";
-import type { Caller, Confirmation, SchemaGraph } from "./types";
+import type { Caller, Confirmation, SchemaGraph, StatementCategory } from "./types";
 
 export interface ConnectionApi {
   readonly connectionId: string;
@@ -33,6 +33,8 @@ export interface ConnectionApi {
   closeSession(sessionId: string): Promise<void>;
   run(sessionId: string, request: RunRequest, onEvent: (event: StreamEvent) => void, confirmation?: Confirmation | null): Promise<RunSummary>;
   cancelRun(sessionId: string): Promise<void>;
+  /** How the engine classifies `text` in the session's language, one category per statement (nothing runs). */
+  classifyRun(sessionId: string, text: string): Promise<StatementCategory[]>;
   transaction(sessionId: string, op: TransactionOp): Promise<TransactionState>;
   invokeCapability<T = unknown>(name: string, args?: unknown, confirmation?: Confirmation | null): Promise<T>;
   schemaGraph(database: string): Promise<SchemaGraph>;
@@ -52,6 +54,7 @@ export function bindConnection(connectionId: string): ConnectionApi {
     closeSession: (sessionId) => api.closeSession(sessionId),
     run: (sessionId, request, onEvent, confirmation = null) => api.run(sessionId, request, onEvent, confirmation),
     cancelRun: (sessionId) => api.cancelRun(sessionId),
+    classifyRun: (sessionId, text) => api.classifyRun(sessionId, text),
     transaction: (sessionId, op) => api.transaction(sessionId, op),
     invokeCapability: <T = unknown>(name: string, args: unknown = null, confirmation: Confirmation | null = null) =>
       api.invokeCapability<T>(connectionId, name, args, confirmation),

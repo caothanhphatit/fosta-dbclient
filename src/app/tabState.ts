@@ -1,11 +1,12 @@
 /**
  * What is saved of a workspace's open tabs (backend `save_open_tabs`, restored on the next start): which tabs, in
- * order, the active one, and the text of query tabs. Pure (no DOM), so serialisation and the size bounds are unit-tested.
+ * order, the active one, and the text of query tabs. Pure (no DOM), so serialisation, merging and the size bounds are
+ * unit-tested.
  */
 import type { ObjectRef } from "../core/contract";
 
-/** One open tab, enough to open it again. */
-export type SavedTab =
+/** One open tab, enough to open it again (without its id). */
+export type SavedTabBody =
   | {
       kind: "query";
       connectionId: string;
@@ -13,8 +14,8 @@ export type SavedTab =
       database: string | null;
       language: string | null;
       text: string;
-      /** The text that counts as saved (what last ran); other text asks before the tab closes. */
-      saved: string;
+      /** The text that counts as saved (what last ran); other text asks before the tab closes. Absent: `text` itself. */
+      saved?: string;
       /** The text was too large to keep: the tab comes back empty. */
       textOmitted?: boolean;
     }
@@ -30,6 +31,9 @@ export type SavedTab =
       database?: string | null;
     }
   | { kind: "logs"; taskId: string; title: string };
+
+/** One open tab; `id` stays the same across saves and restarts, so another window's save can be merged tab by tab. */
+export type SavedTab = SavedTabBody & { id: string };
 
 export interface SavedWorkspaceTabs {
   version: 1;
@@ -52,38 +56,74 @@ export function jsonBytes(state: unknown): number {
   return encoder.encode(JSON.stringify(state)).length;
 }
 
+/** The text that counts as saved for a query tab. */
+export function savedText(tab: Extract<SavedTab, { kind: "query" }>): string {
+  return tab.saved ?? tab.text;
+}
+
+/** A query tab without its text (marked `textOmitted` when it had some). */
+function withoutText(tab: Extract<SavedTab, { kind: "query" }>): SavedTab {
+  const { id, connectionId, title, database, language } = tab;
+  return { id, kind: "query", connectionId, title, database, language, text: "", textOmitted: tab.text.trim() !== "" || tab.textOmitted === true };
+}
+
+/** A query tab as stored: `saved` only when it differs from `text`. */
+function compact(tab: SavedTab): SavedTab {
+  if (tab.kind !== "query" || tab.saved === undefined || tab.saved !== tab.text) return tab;
+  const copy = { ...tab };
+  delete copy.saved;
+  return copy;
+}
+
 /**
  * Leaves out the text of the last query tabs that have some until `state` takes at most `maxBytes` (non-ASCII text
- * and JSON escapes take more bytes than characters).
+ * and JSON escapes take more bytes than characters). The whole state is measured once; each dropped text then only
+ * subtracts what its tab shrank by.
  */
-export function fitToBytes(state: SavedWorkspaceTabs, maxBytes: number, size: (state: SavedWorkspaceTabs) => number = jsonBytes): SavedWorkspaceTabs {
-  let current = state;
-  for (let index = current.tabs.length - 1; index >= 0 && size(current) > maxBytes; index -= 1) {
-    const tab = current.tabs[index];
-    if (tab.kind !== "query" || (tab.text === "" && tab.saved === "")) continue;
-    const tabs = [...current.tabs];
-    tabs[index] = { ...tab, text: "", saved: "", textOmitted: tab.text.trim() !== "" || tab.textOmitted === true };
-    current = { ...current, tabs };
+export function fitToBytes(state: SavedWorkspaceTabs, maxBytes: number): SavedWorkspaceTabs {
+  let size = jsonBytes(state);
+  if (size <= maxBytes) return state;
+  const tabs = [...state.tabs];
+  for (let index = tabs.length - 1; index >= 0 && size > maxBytes; index -= 1) {
+    const tab = tabs[index];
+    if (tab.kind !== "query" || (tab.text === "" && savedText(tab) === "")) continue;
+    const emptied = withoutText(tab);
+    size -= jsonBytes(tab) - jsonBytes(emptied);
+    tabs[index] = emptied;
   }
-  return current;
+  return { ...state, tabs };
 }
 
 /**
  * The state to save: each query tab keeps its text when it fits in `MAX_TAB_TEXT` and in what is left of `budget`
- * (earlier tabs first); otherwise its text is left out and marked `textOmitted`.
+ * (earlier tabs first); otherwise its text is left out and marked `textOmitted`. `saved` is kept only when it differs.
  */
 export function serializeTabs(tabs: SavedTab[], active: number | null, budget: number): SavedWorkspaceTabs {
   let left = budget;
   const bounded = tabs.map((tab): SavedTab => {
     if (tab.kind !== "query") return tab;
-    const size = tab.text.length + tab.saved.length;
+    const stored = compact(tab);
+    const size = tab.text.length + (stored.kind === "query" && stored.saved !== undefined ? stored.saved.length : 0);
     if (tab.text.length <= MAX_TAB_TEXT && size <= left) {
       left -= size;
-      return tab;
+      return stored;
     }
-    return { ...tab, text: "", saved: "", textOmitted: tab.text.trim() !== "" || tab.textOmitted === true };
+    return withoutText(tab);
   });
   return { version: 1, tabs: bounded, active: active !== null && active >= 0 && active < tabs.length ? active : null };
+}
+
+/**
+ * What a window saves for a workspace: its own tabs (in its order, with its active tab), then the tabs of the stored
+ * state that this window does not show and never had (another window's tabs, by id). A tab this window had and closed
+ * (`previous` has it, `local` does not) stays closed; a tab closed in another window but still open here comes back.
+ * With one window the stored state holds only its own tabs, so this is `local`.
+ */
+export function mergeTabs(local: SavedWorkspaceTabs, stored: SavedWorkspaceTabs | null, previous: ReadonlySet<string>): SavedWorkspaceTabs {
+  if (!stored || stored.tabs.length === 0) return local;
+  const shown = new Set(local.tabs.map((tab) => tab.id));
+  const foreign = stored.tabs.filter((tab) => !shown.has(tab.id) && !previous.has(tab.id));
+  return foreign.length === 0 ? local : { ...local, tabs: [...local.tabs, ...foreign] };
 }
 
 const isString = (value: unknown): value is string => typeof value === "string";
@@ -96,8 +136,8 @@ function parseObject(value: unknown): ObjectRef | null {
   return { database: optional(value.database), schema: optional(value.schema), name: value.name, kind: value.kind, ...(path ? { path } : {}) };
 }
 
-function parseTab(value: unknown): SavedTab | null {
-  if (!isRecord(value) || !isString(value.title)) return null;
+function parseBody(value: Record<string, unknown>): SavedTabBody | null {
+  if (!isString(value.title)) return null;
   if (value.kind === "query" && isString(value.connectionId) && isString(value.text)) {
     return {
       kind: "query",
@@ -106,7 +146,7 @@ function parseTab(value: unknown): SavedTab | null {
       database: isString(value.database) ? value.database : null,
       language: isString(value.language) ? value.language : null,
       text: value.text,
-      saved: isString(value.saved) ? value.saved : value.text,
+      ...(isString(value.saved) && value.saved !== value.text ? { saved: value.saved } : {}),
       ...(value.textOmitted === true ? { textOmitted: true } : {}),
     };
   }
@@ -130,13 +170,24 @@ function parseTab(value: unknown): SavedTab | null {
   return null;
 }
 
+function parseTab(value: unknown, seen: Set<string>): SavedTab | null {
+  if (!isRecord(value)) return null;
+  const body = parseBody(value);
+  if (!body) return null;
+  // A file from before tab ids (or a duplicate id) gets a fresh one.
+  const id = isString(value.id) && value.id !== "" && !seen.has(value.id) ? value.id : crypto.randomUUID();
+  seen.add(id);
+  return { id, ...body };
+}
+
 /** Reads what `load_open_tabs` returned for one workspace; malformed tabs are skipped, anything else gives null. */
 export function parseSavedTabs(value: unknown): SavedWorkspaceTabs | null {
   if (!isRecord(value) || !Array.isArray(value.tabs)) return null;
   const tabs: SavedTab[] = [];
+  const seen = new Set<string>();
   let active: number | null = null;
   value.tabs.forEach((item, index) => {
-    const tab = parseTab(item);
+    const tab = parseTab(item, seen);
     if (!tab) return;
     if (index === value.active) active = tabs.length;
     tabs.push(tab);

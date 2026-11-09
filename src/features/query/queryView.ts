@@ -10,7 +10,7 @@
  */
 import type { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
-import { api, errorCode, errorText, NOT_CONNECTED, reportConnectionLost, SESSION_LOST } from "../../core/api";
+import { api, errorCode, errorText, NOT_CONNECTED, reportConnectionLost } from "../../core/api";
 import { databaseName, databaseNodes, type ConnectionApi } from "../../core/connectionApi";
 import type {
   ConnectInfo,
@@ -42,6 +42,7 @@ import { commitsOpenTransaction, IDLE_TRANSACTION_MINUTES, idleReminderDue, tran
 import { AttemptTimer } from "./attemptTimer";
 import { HistoryPanel } from "./historyPanel";
 import { changesSchema, defaultDatabase, hasUnsavedText } from "./queryRules";
+import { lostSessionMessage, recoverLostSession, sessionGone } from "./lostSession";
 import { ResultArea, type Message } from "./resultArea";
 import { editorOffset, RunResults } from "./runResults";
 import { createSqlEditor, selectedOrAllText, setEditorLanguage } from "./sqlEditor";
@@ -67,6 +68,8 @@ export interface QueryViewOptions {
   text: string;
   /** Text that counts as saved (a restored tab: what had run there); default `text`, so a generated SELECT is not "unsaved". */
   baseline?: string;
+  /** A tab of the last session: its text was kept, so quitting with that text unchanged does not ask again. */
+  restored?: boolean;
   /** The language to start in (a restored tab); default: the connection's default language. */
   languageId?: string | null;
   host: QueryHost;
@@ -117,6 +120,8 @@ export class QueryView implements TabContent {
   private languageGeneration = 0;
   /** The text as it last ran (or as the tab opened); closing with other text asks first. */
   private baseline: string;
+  /** A restored tab's text as it came back (null: not restored). */
+  private readonly restoredText: string | null;
   private readonly multipleDatabases: boolean;
   private extensionGeneration = 0;
   private sessionId = crypto.randomUUID();
@@ -166,6 +171,7 @@ export class QueryView implements TabContent {
     this.transactionsSupported = hasCapability(capabilities, "transactions");
     this.multipleDatabases = hasCapability(capabilities, "multipleDatabases");
     this.baseline = options.baseline ?? options.text;
+    this.restoredText = options.restored ? options.text : null;
 
     this.editor = createSqlEditor(this.editorHost, options.text, {
       run: () => void this.run("selection"),
@@ -290,6 +296,20 @@ export class QueryView implements TabContent {
       unsaved ? `${open ? "Its" : "This tab's"} query text was edited and not run since; closing the tab discards it.` : "",
     ];
     return confirmDialog(`${reasons.filter(Boolean).join(" ")} Close anyway?`, "Close tab");
+  }
+
+  /** What closing this tab loses, for one question about several tabs ("Close all"); null when nothing. */
+  closeWarning(): string | null {
+    const open = this.hasOpenTransaction();
+    const unsaved = this.hasUnsavedText();
+    if (open && unsaved) return "an open transaction and query text not run";
+    if (open) return "an open transaction";
+    return unsaved ? "query text not run" : null;
+  }
+
+  /** False for a restored tab whose text is still the text it came back with (quitting keeps it, as before). */
+  changedSinceRestore(): boolean {
+    return this.restoredText === null || this.editor.state.doc.toString() !== this.restoredText;
   }
 
   /** Everything in the editor (what a restored tab gets back). */
@@ -477,12 +497,10 @@ export class QueryView implements TabContent {
   }
 
   /**
-   * After `SESSION_LOST` / `NOT_CONNECTED`: connects again when the connection is gone too, and opens a new session.
-   * False when the lost session had an open transaction: that is said in Messages and nothing runs, since running the
-   * statements again outside it would commit them one by one.
+   * After `SESSION_LOST` / `NOT_CONNECTED`: connects again when the connection is gone too, and opens a new session
+   * (with auto-commit off again when it was off). Whether the run then goes again is `recoverLostSession`'s call.
    */
-  private async reopenSession(error: unknown): Promise<boolean> {
-    const hadTransaction = this.hasOpenTransaction();
+  private async reopenSession(error: unknown): Promise<void> {
     // Auto-commit was off: the new session must not run the statements one commit each.
     const manualCommit = this.transactionsSupported && !this.autoCommit.checked;
     this.session = null;
@@ -504,18 +522,6 @@ export class QueryView implements TabContent {
       }
     }
     if (manualCommit) this.showTransaction(await this.connection.transaction(this.sessionId, "autoCommitOff"));
-    if (hadTransaction) {
-      this.resultArea.showMessages([
-        {
-          text: "This tab lost its session (its connection closed, or the app or the server restarted), and with it the open transaction: its uncommitted changes were rolled back. Nothing ran; run again to continue in a new session.",
-          kind: "error",
-        },
-      ]);
-      this.runStatus.textContent = "Session lost";
-      return false;
-    }
-    toast("This tab's session was lost (a restart); it was reopened and the query ran again", "info");
-    return true;
   }
 
   private closeSession(): void {
@@ -674,6 +680,7 @@ export class QueryView implements TabContent {
     const database = this.currentDatabase();
     const request: RunRequest = { text, database, offset };
     // What ran no longer counts as unsaved.
+    const previousBaseline = this.baseline;
     this.baseline = this.editor.state.doc.toString();
     this.onEdited?.();
     const startedAt = Date.now();
@@ -709,9 +716,24 @@ export class QueryView implements TabContent {
       try {
         summary = await execute();
       } catch (error) {
-        // The backend lost the session (or the connection) before anything ran: open a new one and run once more.
-        if (!sessionGone(error) || results.entries.length > 0) throw error;
-        if (!(await this.reopenSession(error))) return;
+        // The backend lost the session (or the connection) before anything ran: open a new one. The run goes again only
+        // when it just reads, since the new session lost what the old one had set (see `lostSession.ts`).
+        const outcome = await recoverLostSession(error, {
+          received: results.entries.length > 0,
+          hadTransaction: this.hasOpenTransaction(),
+          reopen: () => this.reopenSession(error),
+          classify: () => this.connection.classifyRun(this.sessionId, text),
+        });
+        if (outcome === "rethrow") throw error;
+        if (outcome !== "retry") {
+          // Nothing ran, so the text still counts as not run.
+          this.baseline = previousBaseline;
+          this.onEdited?.();
+          this.resultArea.showMessages([{ text: lostSessionMessage(outcome), kind: "error" }]);
+          this.runStatus.textContent = "Session reset";
+          return;
+        }
+        toast("This tab's session was lost (a restart); it was reopened and the query, which only reads, ran again", "info");
         summary = await execute();
       }
       if (summary === null) {
@@ -869,12 +891,6 @@ export class QueryView implements TabContent {
     const height = clamp(this.editorHost.offsetHeight + delta, MIN_EDITOR_HEIGHT, maximum);
     this.editorHost.style.height = `${height}px`;
   }
-}
-
-/** The backend no longer has the tab's session, or its connection: nothing ran, so the tab may reopen and run again. */
-function sessionGone(error: unknown): boolean {
-  const code = errorCode(error);
-  return code === SESSION_LOST || code === NOT_CONNECTED;
 }
 
 /** A language for an engine whose descriptor lists none (an unknown engine id): plain text. */

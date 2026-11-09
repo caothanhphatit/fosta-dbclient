@@ -127,7 +127,7 @@ const tree = new ConnectionTree({
     if (task) navigation.openLogs(task);
   },
   commandState: (commandId) => tasksPanel.stateOf(commandId),
-  connectionClosed: (connectionId) => navigation.closeConnectionTabs(connectionId),
+  connectionClosed: (connectionId) => void navigation.closeConnectionTabs(connectionId),
   refreshed: (connectionId, database) => navigation.refreshQueryNames(connectionId, database),
   configChanged: applyConfig,
   status: setStatus,
@@ -367,7 +367,8 @@ async function offerProductionMove(profile: ConnectionProfile): Promise<void> {
 async function deleteConnection(profile: ConnectionProfile): Promise<void> {
   if (!(await confirmDialog(`Delete connection "${profile.name}"?`, "Delete"))) return;
   try {
-    navigation.closeConnectionTabs(profile.id);
+    // A tab the user keeps (its unsaved work) keeps the connection too.
+    if (!(await navigation.closeConnectionTabs(profile.id))) return;
     applyConfig(await api.deleteConnection(profile.id));
   } catch (error) {
     showError(error, "Delete connection");
@@ -404,7 +405,11 @@ async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
   const summary = `${target.connections.length} connection(s) and ${target.tasks.length} command(s) will be removed, and saved passwords forgotten.`;
   if (!(await confirmDialog(`Delete workspace "${target.name}"?\n${summary}`, "Delete"))) return;
   try {
-    navigation.closeWorkspaceTabs(target.id);
+    // A tab the user keeps (its unsaved work) keeps the workspace too: no tab is left in a deleted workspace.
+    if (!(await navigation.closeWorkspaceTabs(target.id))) {
+      setStatus(`Workspace ${target.name} was not deleted: its tabs stay open`);
+      return;
+    }
     applyConfig(await api.deleteWorkspace(target.id));
     persistence.forget(target.id);
     setStatus(`Deleted workspace ${target.name}`);
@@ -470,7 +475,7 @@ async function bootstrap(): Promise<void> {
     },
     () => persistence.textLostKeys(),
   );
-  guardPageUnload(tabs, () => void persistence.flush());
+  guardPageUnload(tabs, () => persistence.saveOnLeave());
   revealWindowAfterFirstPaint();
   preloadQueryView();
   try {

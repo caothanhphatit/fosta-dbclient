@@ -65,6 +65,7 @@ export const sharedViews = (languageSupport: LanguageLoader): ViewRegistration[]
           // A restored tab: the text that had run there, and its language.
           baseline: typeof ctx.params?.baseline === "string" ? ctx.params.baseline : undefined,
           languageId: typeof ctx.params?.languageId === "string" ? ctx.params.languageId : null,
+          restored: ctx.params?.restored === true,
           host: (ctx.params?.host as QueryHost | undefined) ?? defaultQueryHost(ctx.profile),
           languageSupport: (languageId) => languageSupport(ctx.engine.id, languageId),
         });

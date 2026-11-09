@@ -6,7 +6,13 @@ import { confirmDialog } from "../core/dialogs";
 import { h } from "../core/dom";
 import type { TabContent } from "../core/tabs";
 import { hasUnsavedText } from "../features/query/queryRules";
-import type { SavedTab } from "./tabState";
+import { savedText, type SavedTab } from "./tabState";
+
+/**
+ * How opening a restored tab went: `opened` (or closed: there is nothing left to do), `failed` (it stays, with Try
+ * again), `deferred` (the user moved on, to another workspace say: it opens the next time it is shown).
+ */
+export type RestoreResult = "opened" | "failed" | "deferred";
 
 export class RestoredTab implements TabContent {
   readonly element: HTMLElement;
@@ -14,10 +20,10 @@ export class RestoredTab implements TabContent {
   private readonly retry = h("button", { class: "button", type: "button" }, "Try again");
   private opening = false;
 
-  /** `open` connects and replaces this tab with its view; it resolves false when that failed (connecting, say). */
+  /** `open` connects and replaces this tab with its view. */
   constructor(
     readonly saved: SavedTab,
-    private readonly open: () => Promise<boolean>,
+    private readonly open: () => Promise<RestoreResult>,
   ) {
     this.retry.hidden = true;
     this.retry.addEventListener("click", () => void this.materialize());
@@ -30,12 +36,21 @@ export class RestoredTab implements TabContent {
 
   /** Query text that was not run yet (saved with the tab): closing asks first, like an open query tab. */
   hasUnsavedText(): boolean {
-    return this.saved.kind === "query" && hasUnsavedText(this.saved.text, this.saved.saved);
+    return this.saved.kind === "query" && hasUnsavedText(this.saved.text, savedText(this.saved));
+  }
+
+  /** The text is what came back: quitting keeps it again without asking. */
+  changedSinceRestore(): boolean {
+    return false;
   }
 
   canClose(): boolean | Promise<boolean> {
     if (!this.hasUnsavedText()) return true;
     return confirmDialog("This tab's query text was edited and not run since; closing the tab discards it. Close anyway?", "Close tab");
+  }
+
+  closeWarning(): string | null {
+    return this.hasUnsavedText() ? "query text not run" : null;
   }
 
   private async materialize(): Promise<void> {
@@ -46,9 +61,13 @@ export class RestoredTab implements TabContent {
     try {
       // The tab manager is still activating this tab: replace it once that is done.
       await Promise.resolve();
-      if (await this.open()) return;
-      this.status.textContent = "This tab could not be opened. Connect in the tree, then try again.";
-      this.retry.hidden = false;
+      const result = await this.open();
+      if (result === "failed") {
+        this.status.textContent = "This tab could not be opened. Connect in the tree, then try again.";
+        this.retry.hidden = false;
+      } else if (result === "deferred") {
+        this.status.textContent = "";
+      }
     } finally {
       this.opening = false;
     }

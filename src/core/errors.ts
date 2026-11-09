@@ -45,6 +45,11 @@ function isStatement(value: unknown): value is { index: number; text: string } {
   return typeof value === "object" && value !== null && typeof (value as { text?: unknown }).text === "string";
 }
 
+/** The code of a call on a connection the backend does not have open (it restarted, or the connection was dropped). */
+export const NOT_CONNECTED = "NOT_CONNECTED";
+/** The code of a call on a query tab's session the backend no longer has. */
+export const SESSION_LOST = "SESSION_LOST";
+
 /** The structured code of an error, or null when it carries none (a plain string or a bare `Error`). */
 export function errorCode(error: unknown): string | null {
   if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return error.code;

@@ -12,8 +12,8 @@ import type { QueryHost, QueryView } from "../features/query/queryView";
 import { createLogView, type TasksPanel } from "../features/tasks/tasksPanel";
 import { VectorHealthView } from "../features/vector/vectorHealth";
 import { VectorSearchView } from "../features/vector/vectorSearch";
-import { RestoredTab } from "./restoredTab";
-import { queryNumber, type SavedTab } from "./tabState";
+import { RestoredTab, type RestoreResult } from "./restoredTab";
+import { queryNumber, savedText, type SavedTab, type SavedTabBody } from "./tabState";
 import { captureTyping } from "./typingBuffer";
 
 /** The query view chunk (CodeMirror). Loaded on first use, or ahead of it by `preloadQueryView`. */
@@ -65,6 +65,8 @@ export interface OpenParams extends Record<string, unknown> {
   database?: string | null;
   /** A restored tab (`RestoredTab`) this view replaces in place, at its position. */
   replaceKey?: string;
+  /** The workspace the tab belongs to (a restored tab: its own, even when another workspace is shown meanwhile). */
+  scope?: string;
 }
 
 function isNode(target: OpenTarget): target is ObjectNode {
@@ -117,7 +119,9 @@ function asQueryView(content: TabContent | undefined): QueryView | null {
 export class AppNavigation implements Navigator {
   private queryCounter = 0;
   /** How each open tab was opened (by tab key), so it can be saved and opened again on the next start. */
-  private readonly records = new Map<string, SavedTab>();
+  private readonly records = new Map<string, SavedTabBody>();
+  /** The saved id of each open tab (by tab key), kept when a restored tab turns into its view. */
+  private readonly ids = new Map<string, string>();
   /** A query tab's text changed (the open tabs are saved, debounced). */
   onTabEdited: (() => void) | null = null;
 
@@ -127,7 +131,12 @@ export class AppNavigation implements Navigator {
   ) {}
 
   tabKey(connectionId: string, kind: string, ...parts: string[]): string {
-    return [this.host.workspaceId(), connectionId, kind, ...parts].join("|");
+    return this.keyIn(this.host.workspaceId(), connectionId, kind, ...parts);
+  }
+
+  /** A tab key in the workspace `scope`. */
+  private keyIn(scope: string, connectionId: string, kind: string, ...parts: string[]): string {
+    return [scope, connectionId, kind, ...parts].join("|");
   }
 
   writesBlocked(connectionId: string): boolean {
@@ -142,12 +151,14 @@ export class AppNavigation implements Navigator {
     }
   }
 
-  closeConnectionTabs(connectionId: string): void {
-    this.tabs.closeWhere((key) => key.split("|")[1] === connectionId);
+  /** Closes the tabs of a connection (one question for those that would lose something); true when all closed. */
+  closeConnectionTabs(connectionId: string): Promise<boolean> {
+    return this.tabs.closeWhere((key) => key.split("|")[1] === connectionId);
   }
 
-  closeWorkspaceTabs(workspaceId: string): void {
-    this.tabs.closeWhere((key) => key.startsWith(`${workspaceId}|`));
+  /** Closes the tabs of a workspace (one question for those that would lose something); true when all closed. */
+  closeWorkspaceTabs(workspaceId: string): Promise<boolean> {
+    return this.tabs.closeWhere((key) => key.startsWith(`${workspaceId}|`));
   }
 
   /**
@@ -156,13 +167,13 @@ export class AppNavigation implements Navigator {
    * registered or creating it failed (reported in the error panel).
    */
   async openObject(profile: ConnectionProfile, target: OpenTarget, role: ViewRole, params: OpenParams = {}): Promise<TabContent | null> {
-    const scope = this.host.workspaceId();
+    const scope = params.scope ?? this.host.workspaceId();
     const engine = engineOf(profile);
     const node = isNode(target) ? target : null;
     const object = node ? node.object : (target as ObjectRef | null);
     const kind = node?.kind ?? object?.kind ?? "connection";
     const identity = object ? objectIdentity(object) : (node?.key.id ?? "");
-    const key = this.objectKey(profile.id, role, identity, params);
+    const key = this.objectKey(scope, profile.id, role, identity, params);
     const existing = this.tabs.contentOf(key);
     if (existing) {
       // A restored tab of something already open elsewhere gives way to that tab.
@@ -170,6 +181,9 @@ export class AppNavigation implements Navigator {
       this.tabs.open({ key, title: "", icon: "table", create: () => existing });
       return existing;
     }
+    // A restored tab closed while it was connecting stays closed.
+    const replaced = params.replaceKey ? this.tabs.contentOf(params.replaceKey) : undefined;
+    if (params.replaceKey && !replaced) return null;
     let registration: ViewRegistration | null;
     try {
       registration = await resolveView(engine, kind, role);
@@ -198,8 +212,13 @@ export class AppNavigation implements Navigator {
       const tabIcon: IconName = role === "data" ? nodeIcon(node?.icon, dataIcon(kind)) : (registration.icon ?? "table");
       const database = object?.database ?? (typeof params.database === "string" ? params.database : null);
       const spec = { key, scope, title, subtitle, icon: tabIcon, connection: profile.name, database, create: () => factory(ctx) };
-      if (params.replaceKey && this.tabs.contentOf(params.replaceKey)) this.tabs.replace(params.replaceKey, spec);
-      else this.tabs.open(spec);
+      if (params.replaceKey) {
+        // Only the restored tab this started from is replaced: closed (or replaced) meanwhile, nothing opens.
+        if (this.tabs.contentOf(params.replaceKey) !== replaced || !this.tabs.replace(params.replaceKey, spec)) return null;
+        this.keepId(params.replaceKey, key);
+      } else {
+        this.tabs.open(spec);
+      }
       if (object && role !== "console" && !params.suggested) {
         const { filter, columnFilters } = params;
         this.records.set(key, {
@@ -290,12 +309,25 @@ export class AppNavigation implements Navigator {
     this.host.configureEmbedding();
   }
 
-  openLogs(task: TaskDef, replaceKey?: string): void {
-    const key = this.tabKey("task", "logs", task.id);
-    const spec = { key, title: `${task.name} · logs`, icon: "logs" as const, create: () => createLogView(task, this.host.tasksPanel()) };
-    if (replaceKey && replaceKey !== key && !this.tabs.contentOf(key) && this.tabs.contentOf(replaceKey)) this.tabs.replace(replaceKey, spec);
-    else {
-      if (replaceKey && replaceKey !== key) void this.tabs.close(replaceKey);
+  /**
+   * Opens the log tab of a workspace command. `restore`: the restored tab it replaces in place (in that tab's workspace);
+   * a restored tab closed meanwhile stays closed.
+   */
+  openLogs(task: TaskDef, restore?: { replaceKey: string; scope: string }): void {
+    const key = this.keyIn(restore?.scope ?? this.host.workspaceId(), "task", "logs", task.id);
+    const spec = {
+      key,
+      scope: restore?.scope,
+      title: `${task.name} · logs`,
+      icon: "logs" as const,
+      create: () => createLogView(task, this.host.tasksPanel()),
+    };
+    if (restore && !this.tabs.contentOf(restore.replaceKey)) return;
+    if (restore && restore.replaceKey !== key && !this.tabs.contentOf(key)) {
+      this.tabs.replace(restore.replaceKey, spec);
+      this.keepId(restore.replaceKey, key);
+    } else {
+      if (restore && restore.replaceKey !== key) void this.tabs.close(restore.replaceKey);
       this.tabs.open(spec);
     }
     this.records.set(key, { kind: "logs", taskId: task.id, title: spec.title });
@@ -309,14 +341,33 @@ export class AppNavigation implements Navigator {
     if (content instanceof RestoredTab) return content.saved;
     const record = this.records.get(key);
     if (!record) return null;
+    const id = this.idOf(key);
     const view = asQueryView(content);
-    if (record.kind !== "query" || !view) return record;
-    return { ...record, database: view.currentDatabase(), language: view.languageId(), text: view.editorText(), saved: view.savedText() };
+    if (record.kind !== "query" || !view) return { ...record, id };
+    return { ...record, id, database: view.currentDatabase(), language: view.languageId(), text: view.editorText(), saved: view.savedText() };
   }
 
   /** Forgets how closed tabs were opened. */
   pruneRecords(): void {
     for (const key of [...this.records.keys()]) if (!this.tabs.contentOf(key)) this.records.delete(key);
+    for (const key of [...this.ids.keys()]) if (!this.tabs.contentOf(key)) this.ids.delete(key);
+  }
+
+  /** The saved id of the tab `key` (a new one the first time it is saved). */
+  private idOf(key: string): string {
+    let id = this.ids.get(key);
+    if (!id) {
+      id = crypto.randomUUID();
+      this.ids.set(key, id);
+    }
+    return id;
+  }
+
+  /** The tab `from` turned into `to` (a restored tab into its view): it keeps its saved id. */
+  private keepId(from: string, to: string): void {
+    const id = this.ids.get(from);
+    if (id) this.ids.set(to, id);
+    if (from !== to) this.ids.delete(from);
   }
 
   /**
@@ -326,59 +377,64 @@ export class AppNavigation implements Navigator {
   addRestored(scope: string, saved: SavedTab): string {
     const connectionId = saved.kind === "logs" ? "task" : saved.connectionId;
     const key = [scope, connectionId, saved.kind === "query" ? "console" : "restored", crypto.randomUUID()].join("|");
+    this.ids.set(key, saved.id);
     if (saved.kind === "query") this.queryCounter = Math.max(this.queryCounter, queryNumber(saved.title));
     const profile = saved.kind === "logs" ? undefined : this.host.profileOf(saved.connectionId);
     const database = saved.kind === "query" ? saved.database : saved.kind === "object" ? (saved.object.database ?? saved.database ?? null) : null;
     const icon: IconName =
       saved.kind === "query" ? "query" : saved.kind === "logs" ? "logs" : saved.role === "diagram" ? "diagram" : saved.role === "design" ? "design" : "table";
+    const restored: RestoredTab = new RestoredTab(saved, (): Promise<RestoreResult> => this.materialize(key, scope, restored));
     this.tabs.open(
-      {
-        key,
-        scope,
-        title: saved.title,
-        subtitle: database ?? undefined,
-        icon,
-        connection: profile?.name,
-        database,
-        create: () => new RestoredTab(saved, () => this.materialize(key, saved)),
-      },
+      { key, scope, title: saved.title, subtitle: database ?? undefined, icon, connection: profile?.name, database, create: () => restored },
       false,
     );
     return key;
   }
 
-  /** Turns the restored tab `key` into its view: connects first (a tab whose connection is gone is closed). */
-  private async materialize(key: string, saved: SavedTab): Promise<boolean> {
+  /**
+   * Turns the restored tab `key` into its view: connects first (a tab whose connection is gone is closed). Closed while
+   * it connected, it stays closed; when another workspace is shown by then, it waits until it is shown again.
+   */
+  private async materialize(key: string, scope: string, restored: RestoredTab): Promise<RestoreResult> {
+    const saved = restored.saved;
+    const stillThere = () => this.tabs.contentOf(key) === restored;
     if (saved.kind === "logs") {
       const task = this.host.taskOf(saved.taskId);
       if (!task) {
         toast("That command no longer exists");
         await this.tabs.close(key);
-        return true;
+        return "opened";
       }
-      this.openLogs(task, key);
-      return true;
+      this.openLogs(task, { replaceKey: key, scope });
+      return "opened";
     }
     const profile = this.host.profileOf(saved.connectionId);
     if (!profile) {
       toast("The connection of that tab no longer exists");
       await this.tabs.close(key);
-      return true;
+      return "opened";
     }
-    if (!(await this.host.ensureConnected(profile.id))) return false;
-    if (!this.tabs.contentOf(key)) return true;
+    const connected = await this.host.ensureConnected(profile.id);
+    if (!stillThere()) return "opened";
+    if (this.host.workspaceId() !== scope) return "deferred";
+    if (!connected) return "failed";
+    let opened: boolean;
     if (saved.kind === "query") {
       if (saved.textOmitted) toast(`The text of ${saved.title} was too large to keep, so the tab starts empty`);
-      return this.openQueryTab(profile.id, saved.database, saved.text, {
+      opened = await this.openQueryTab(profile.id, saved.database, saved.text, {
         replaceKey: key,
-        baseline: saved.saved,
+        scope,
+        baseline: savedText(saved),
         languageId: saved.language,
         title: saved.title,
       });
+    } else {
+      const params: OpenParams = { replaceKey: key, scope, filter: saved.filter, columnFilters: saved.columnFilters, database: saved.database };
+      if (saved.role === "diagram") params.database = saved.database ?? saved.object.database ?? saved.object.name;
+      opened = (await this.openObject(profile, saved.object, saved.role, params)) !== null;
     }
-    const params: OpenParams = { replaceKey: key, filter: saved.filter, columnFilters: saved.columnFilters, database: saved.database };
-    if (saved.role === "diagram") params.database = saved.database ?? saved.object.database ?? saved.object.name;
-    return (await this.openObject(profile, saved.object, saved.role, params)) !== null;
+    // Not opened while the restored tab is gone: it was closed meanwhile (nothing to show).
+    return opened || !stillThere() ? "opened" : "failed";
   }
 
   private profile(connectionId: string): ConnectionProfile | null {
@@ -388,14 +444,14 @@ export class AppNavigation implements Navigator {
   }
 
   /** `workspace|connection|role|identity`, plus the filter for data tabs and a fresh id for each console. */
-  private objectKey(connectionId: string, role: ViewRole, identity: string, params: OpenParams): string {
-    if (role === "console") return this.tabKey(connectionId, "console", crypto.randomUUID());
+  private objectKey(scope: string, connectionId: string, role: ViewRole, identity: string, params: OpenParams): string {
+    if (role === "console") return this.keyIn(scope, connectionId, "console", crypto.randomUUID());
     if (role === "data") {
       const filter = [params.filter ?? "", columnFiltersText(params.columnFilters)].filter(Boolean).join(" ");
-      if (params.suggested) return this.tabKey(connectionId, "data-suggested", identity, filter, crypto.randomUUID());
-      return this.tabKey(connectionId, "data", identity, filter);
+      if (params.suggested) return this.keyIn(scope, connectionId, "data-suggested", identity, filter, crypto.randomUUID());
+      return this.keyIn(scope, connectionId, "data", identity, filter);
     }
-    return this.tabKey(connectionId, role, identity);
+    return this.keyIn(scope, connectionId, role, identity);
   }
 
   private describeTab(
@@ -438,7 +494,7 @@ export class AppNavigation implements Navigator {
     connectionId: string,
     database: string | null,
     initialSql: string,
-    restore?: { replaceKey: string; baseline: string; languageId: string | null; title: string },
+    restore?: { replaceKey: string; scope: string; baseline: string; languageId: string | null; title: string },
   ): Promise<boolean> {
     const profile = this.profile(connectionId);
     if (!profile) return false;
@@ -461,10 +517,27 @@ export class AppNavigation implements Navigator {
     };
     const title = restore?.title ?? `Query ${this.queryCounter}`;
     const params: OpenParams = { database, text: initialSql, host, title };
-    if (restore) Object.assign(params, { replaceKey: restore.replaceKey, baseline: restore.baseline, languageId: restore.languageId });
+    if (restore) {
+      Object.assign(params, {
+        replaceKey: restore.replaceKey,
+        scope: restore.scope,
+        baseline: restore.baseline,
+        languageId: restore.languageId,
+        restored: true,
+      });
+    }
     const view = asQueryView((await this.openObject(profile, null, "console", params)) ?? undefined);
     if (!view) return false;
-    view.onChanged = () => this.host.queryChanged(view);
+    let shownDatabase = database;
+    view.onChanged = () => {
+      this.host.queryChanged(view);
+      // The tab's title and tooltip follow the database the tab works in.
+      const current = view.currentDatabase();
+      const tabKey = this.tabs.keyOf(view);
+      if (current === shownDatabase || !tabKey) return;
+      shownDatabase = current;
+      this.tabs.describe(tabKey, { subtitle: current ?? undefined, database: current });
+    };
     view.onEdited = () => this.onTabEdited?.();
     const key = this.tabs.keyOf(view);
     if (key) this.records.set(key, { kind: "query", connectionId, title, database, language: null, text: "", saved: "" });
