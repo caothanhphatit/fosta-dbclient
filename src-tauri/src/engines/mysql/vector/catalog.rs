@@ -23,30 +23,6 @@ pub async fn table_columns(conn: &mut Conn, database: &str, table: &str) -> AppR
         .collect())
 }
 
-pub async fn vector_columns(conn: &mut Conn, database: &str, table: &str) -> AppResult<HashMap<String, u32>> {
-    Ok(table_columns(conn, database, table)
-        .await?
-        .into_iter()
-        .filter_map(|column| Some((column.name, column.vector_dims?)))
-        .collect())
-}
-
-pub async fn vector_info(conn: &mut Conn, database: &str, table: &str) -> AppResult<VectorInfo> {
-    let supported = conn.query_drop("SELECT VEC_FromText('[1]')").await.is_ok();
-    let mut columns: Vec<VectorColumn> = vector_columns(conn, database, table)
-        .await?
-        .into_iter()
-        .map(|(name, dims)| VectorColumn { name, dims })
-        .collect();
-    columns.sort_by(|left, right| left.name.cmp(&right.name));
-    let indexes = vector_indexes(conn, database, table).await?;
-    Ok(VectorInfo {
-        supported,
-        columns,
-        indexes,
-    })
-}
-
 pub(super) async fn vector_indexes(conn: &mut Conn, database: &str, table: &str) -> AppResult<Vec<VectorIndex>> {
     let rows = text_rows(
         conn,
@@ -64,9 +40,12 @@ pub(super) async fn vector_indexes(conn: &mut Conn, database: &str, table: &str)
         .map(|row| {
             let name = row.text(0);
             let line = ddl.lines().find(|line| line.contains(&format!("KEY {name} ("))).unwrap_or_default();
+            let m: Option<u32> = option_value(line, " M=").and_then(|value| value.parse().ok());
             VectorIndex {
                 metric: option_value(line, "DISTANCE=").unwrap_or("euclidean").to_lowercase(),
-                m: option_value(line, " M=").and_then(|value| value.parse().ok()),
+                kind: "mhnsw".to_owned(),
+                params: format!("M={}", m.map_or_else(|| "default".to_owned(), |m| m.to_string())),
+                m,
                 column: row.text(1),
                 name,
             }

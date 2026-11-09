@@ -3,5 +3,6 @@
 
 pub mod fake;
 pub mod suites;
+pub mod vector;
 
 pub use fake::FakeEngine;

@@ -6,15 +6,17 @@ use std::{sync::Arc, time::Duration};
 
 use crate::{
     contract::{
-        session::TRANSACTION_ALREADY_OPEN, testing::suites::*, BrowseRequest, CallContext, Capability, Category, CollectSink,
-        ConnectSecrets, ConnectionSpec, Field, Filter, NodeKind, ObjectRef, RawFilterLang, RowChange, RowChangeSet, RunOptions, RunRequest,
-        Session, SessionOptions, TransactionOp, TreeRequest, Value, ValueKind,
+        session::TRANSACTION_ALREADY_OPEN,
+        testing::{suites::*, vector::*},
+        BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Field, Filter, NodeKind, ObjectRef,
+        RawFilterLang, RowChange, RowChangeSet, RunOptions, RunRequest, Session, SessionOptions, TransactionOp, TreeRequest, Value,
+        ValueKind,
     },
     error::AppResult,
     gateway::{
         self,
         rules::{Preset, SafetySettings},
-        Caller, Context,
+        Context,
     },
     runtime::{ConnectionManager, Handle},
 };
@@ -545,76 +547,32 @@ async fn contract_mariadb_schema_graph() {
     manager.disconnect("shop").await;
 }
 
+/// The shared vector suite on `shop.products` (VECTOR(4), cosine MHNSW index), plus MariaDB's own statement text.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs dev/compose/mariadb.yml"]
-async fn contract_mariadb_vector_operations() {
-    let (manager, handle) = shop().await;
-    if !handle.conn.capabilities().contains(Capability::Vector) {
-        println!("mariadb: no VECTOR support on this server; skipped");
+async fn contract_mariadb_vector() {
+    let vectors = VectorFixture {
+        database: "shop",
+        table: "products",
+        column: "embedding",
+        dims: 4,
+        key_column: "id",
+        key: 1,
+        indexed: true,
+    };
+    let Some(run) = suite_vector(&fixture(), &vectors).await else {
         return;
-    }
-    let context = Context {
-        workspace_id: "contract".into(),
-        workspace_name: "Contract".into(),
-        connection_id: "shop".into(),
-        connection_name: "shop".into(),
-        safety: SafetySettings::preset(Preset::ReadOnly),
     };
-    let invoke = |name: &'static str, args: serde_json::Value| {
-        let (manager, context) = (&manager, context.clone());
-        async move { gateway::invoke(manager, &context, Caller::EngineView, name, args, None).await }
-    };
-    let info = invoke("vector.info", serde_json::json!({ "database": "shop", "table": "products" }))
-        .await
-        .unwrap();
-    assert_eq!(info["supported"], true);
-    assert_eq!(info["columns"][0], serde_json::json!({ "name": "embedding", "dims": 4 }));
-    assert_eq!(info["indexes"][0]["metric"], "cosine");
-    // Key cells are typed values, as the grid holds them.
-    let key = serde_json::json!([{ "column": "id", "value": { "t": "int", "v": 1 } }]);
-    let fetched = invoke(
-        "vector.fetch",
-        serde_json::json!({ "database": "shop", "table": "products", "column": "embedding", "key": key }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(fetched.as_array().unwrap().len(), 4);
-    let search = invoke(
-        "vector.search",
-        serde_json::json!({
-            "database": "shop", "table": "products", "column": "embedding",
-            "query": { "kind": "row", "key": key }, "k": 3, "metric": "cosine", "filter": null
-        }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(search["result"]["rows"].as_array().unwrap().len(), 3);
-    // Typed result sets: the distance is a float, the id an int.
-    let columns = search["result"]["columns"].as_array().unwrap();
-    assert_eq!(columns[0]["name"], "vec_distance");
-    assert_eq!(columns[0]["kind"]["kind"], "float");
-    assert_eq!(search["result"]["rows"][0][0]["t"], "float");
+    assert_eq!(run.info["columns"][0]["typeName"], "VECTOR(4)");
+    assert_eq!(run.info["indexes"][0]["metric"], "cosine");
+    assert_eq!(run.info["indexes"][0]["kind"], "mhnsw");
+    assert!(run.search["sql"].as_str().unwrap().contains("VEC_DISTANCE_COSINE"));
+    // Typed result sets: the distance is a float, the id an int; vector columns are not selected.
+    let columns = run.search["result"]["columns"].as_array().unwrap();
+    assert_eq!(run.search["result"]["rows"][0][0]["t"], "float");
     let id = columns.iter().position(|column| column["name"] == "id").unwrap();
-    assert_eq!(search["result"]["rows"][0][id]["t"], "int");
-    assert_eq!(search["queryDims"], 4);
-    assert!(search["sql"].as_str().unwrap().contains("VEC_DISTANCE_COSINE"));
-    let health = invoke(
-        "vector.health",
-        serde_json::json!({ "database": "shop", "table": "products", "column": "embedding", "sample": 100 }),
-    )
-    .await
-    .unwrap();
-    assert!(health.as_array().unwrap().len() > 3);
-    let recall = invoke(
-        "vector.recall",
-        serde_json::json!({ "database": "shop", "table": "products", "column": "embedding", "k": 5, "queries": 3 }),
-    )
-    .await
-    .unwrap();
-    assert!(recall["recall"].as_f64().unwrap() > 0.0);
-    let unknown = invoke("vector.drop", serde_json::json!({})).await.expect_err("unknown operation");
-    assert_eq!(unknown.code(), Some(gateway::BLOCKED));
-    manager.disconnect("shop").await;
+    assert_eq!(run.search["result"]["rows"][0][id]["t"], "int");
+    assert!(columns.iter().all(|column| column["name"] != "embedding"));
 }
 
 // --- The statement gateway on a live server (ported from live_tests.rs) ---------------------------------------------------

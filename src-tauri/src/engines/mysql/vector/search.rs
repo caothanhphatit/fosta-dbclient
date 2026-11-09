@@ -2,27 +2,8 @@
 
 use super::*;
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct VectorSearchResult {
-    pub result: ResultSet,
-    pub plan: ResultSet,
-    pub index_used: Option<String>,
-    pub sql: String,
-    pub runnable_sql: String,
-    pub elapsed_ms: u64,
-    pub query_dims: usize,
-    pub primary_key: Vec<String>,
-}
-
-pub async fn search(conn: &mut Conn, request: &SearchArgs, query: &[f32]) -> AppResult<VectorSearchResult> {
-    let columns = table_columns(conn, &request.database, &request.table).await?;
-    let dims = columns
-        .iter()
-        .find(|column| column.name == request.column)
-        .and_then(|column| column.vector_dims)
-        .ok_or_else(|| AppError::new(format!("{} is not a VECTOR column", request.column)))?;
-    ensure_dims(query.len(), dims)?;
+pub(super) async fn search(conn: &mut Conn, table: &TableRef, request: &SearchRequest<'_>) -> AppResult<VectorSearchResult> {
+    let columns = table_columns(conn, &table.database, &table.table).await?;
     let vectors: HashMap<String, u32> = columns
         .iter()
         .filter_map(|column| Some((column.name.clone(), column.vector_dims?)))
@@ -33,19 +14,19 @@ pub async fn search(conn: &mut Conn, request: &SearchArgs, query: &[f32]) -> App
         .map(|column| quote_ident(&column.name))
         .collect::<Vec<_>>();
     let statement = SearchStatement {
-        target: qualified(&request.database, &request.table),
-        column: quote_ident(&request.column),
-        function: request.metric.function(),
+        target: qualified(&table.database, &table.table),
+        column: quote_ident(&request.column.name),
+        function: distance_function(request.metric),
         select_list: select_list.join(", "),
-        filter: where_clause(request.filter.as_deref()),
-        k: request.k.clamp(1, MAX_K),
+        filter: shared::where_clause(request.filter),
+        k: request.k,
     };
-    let runnable_sql = statement.render(&format!("VEC_FromText('{}')", vector_literal(query)));
+    let runnable_sql = statement.render(&format!("VEC_FromText('{}')", vector_literal(request.query)));
     let plan = first_set(read_result_sets(conn.query_iter(format!("EXPLAIN {runnable_sql}")).await?, &VectorHint::Guess).await?);
     let started = Instant::now();
     let result = first_set(read_result_sets(conn.query_iter(runnable_sql.clone()).await?, &VectorHint::Known(&vectors)).await?);
     let elapsed_ms = elapsed_millis(started);
-    let primary_key = primary_key(conn, &request.database, &request.table).await?;
+    let primary_key = primary_key(conn, &table.database, &table.table).await?;
     Ok(VectorSearchResult {
         index_used: index_in_plan(&plan),
         plan,
@@ -53,33 +34,12 @@ pub async fn search(conn: &mut Conn, request: &SearchArgs, query: &[f32]) -> App
         sql: statement.render("VEC_FromText(?)"),
         runnable_sql,
         elapsed_ms,
-        query_dims: query.len(),
+        query_dims: request.query.len(),
         primary_key,
     })
 }
 
-pub fn summarize(values: &[f32]) -> String {
-    let preview = values
-        .iter()
-        .take(PREVIEW_VALUES)
-        .map(|value| format!("{value:.4}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let more = if values.len() > PREVIEW_VALUES { ", …" } else { "" };
-    format!("[{}] ‖{:.3}‖ {preview}{more}", values.len(), norm(values))
-}
-
-pub fn ensure_dims(actual: usize, expected: u32) -> AppResult<()> {
-    if actual == expected as usize {
-        Ok(())
-    } else {
-        Err(AppError::new(format!(
-            "The query vector has {actual} dimensions but the column stores {expected}"
-        )))
-    }
-}
-
-pub(super) fn index_in_plan(plan: &ResultSet) -> Option<String> {
+pub(super) fn index_in_plan(plan: &RowSet) -> Option<String> {
     let key_column = plan.columns.iter().position(|column| column.name.eq_ignore_ascii_case("key"))?;
     plan.rows.iter().find_map(|row| row.get(key_column).and_then(Typed::display))
 }

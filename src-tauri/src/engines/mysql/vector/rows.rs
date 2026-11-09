@@ -41,7 +41,7 @@ pub(super) fn typed_cell(value: Value, column: &ColumnInfo) -> Typed {
 pub(super) async fn read_result_sets<P: Protocol>(
     mut result: QueryResult<'_, 'static, P>,
     hint: &VectorHint<'_>,
-) -> AppResult<Vec<ResultSet>> {
+) -> AppResult<Vec<RowSet>> {
     let mut sets = Vec::new();
     while let Some(columns) = result.columns() {
         let columns: Vec<ColumnInfo> = columns.iter().map(|column| typed_column(column, hint)).collect();
@@ -55,19 +55,11 @@ pub(super) async fn read_result_sets<P: Protocol>(
                     .collect(),
             );
         }
-        sets.push(ResultSet { columns, rows });
+        sets.push(RowSet { columns, rows });
     }
     // A failed later statement is held as a pending error that `columns()` does not report.
     result.next().await?;
     Ok(sets)
-}
-
-pub(super) fn where_clause(filter: Option<&str>) -> String {
-    filter
-        .map(str::trim)
-        .filter(|filter| !filter.is_empty())
-        .map(|filter| format!(" WHERE {filter}"))
-        .unwrap_or_default()
 }
 
 pub(super) async fn primary_key(conn: &mut Conn, database: &str, table: &str) -> AppResult<Vec<String>> {
@@ -96,7 +88,7 @@ pub(super) fn bind_values(key: &[KeyCell]) -> Vec<Value> {
     key.iter().map(|cell| to_param(&cell.value)).collect()
 }
 
-pub(super) fn first_set(sets: Vec<ResultSet>) -> ResultSet {
+pub(super) fn first_set(sets: Vec<RowSet>) -> RowSet {
     sets.into_iter().next().unwrap_or_default()
 }
 
@@ -105,12 +97,5 @@ pub(super) fn key_text(value: Value) -> Option<String> {
     match value {
         Value::Bytes(bytes) => Some(String::from_utf8(bytes).unwrap_or_else(|error| hex(error.as_bytes()))),
         other => plain_text(other),
-    }
-}
-
-pub(super) fn first_vector(row: Row) -> Option<Vec<f32>> {
-    match row.unwrap().into_iter().next() {
-        Some(Value::Bytes(bytes)) => decode_vector(&bytes),
-        _ => None,
     }
 }
