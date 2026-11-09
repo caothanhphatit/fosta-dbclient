@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   and CI image is now `pgvector/pgvector`.
 - **Vector tools on Elasticsearch and OpenSearch**.
 - **Vector tools on Oracle 23ai**: `VECTOR` columns, IVF and HNSW indexes, `VECTOR_DISTANCE` search, health checks and recall.
+- **Vector tools on Redis 8**: search indexes with `VECTOR` fields (FLAT or HNSW), KNN search, health checks and recall.
+- **Vector tools on ClickHouse**: `Array(Float32)` columns and `vector_similarity` indexes, search, health checks and recall.
 - **Updates**: a daily check for a new release (Settings → Check for updates, on by default; *Check for updates now* any time) and
   an *Update X.Y.Z* item in the status bar. The installed Windows app downloads the update in the background and installs it on
   quit or with *Restart to update*, asking first about open transactions and unsaved edits, then shows what's new once. The

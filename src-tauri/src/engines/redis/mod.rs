@@ -35,6 +35,7 @@ pub mod session;
 pub mod tree;
 pub mod types;
 pub mod values;
+pub mod vector;
 
 #[cfg(test)]
 mod contract_tests;

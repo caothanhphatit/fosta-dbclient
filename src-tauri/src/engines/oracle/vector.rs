@@ -388,6 +388,7 @@ fn vector_columns(columns: &[OraColumn]) -> Vec<VectorColumn> {
                 name: column.name.clone(),
                 dims: vector.dims?,
                 type_name: vector.type_name(),
+                metrics: Vec::new(),
             })
         })
         .collect()
@@ -838,6 +839,7 @@ mod tests {
             name: name.into(),
             dims: 4,
             type_name: "VECTOR(4, FLOAT32)".into(),
+            metrics: Vec::new(),
         }
     }
 

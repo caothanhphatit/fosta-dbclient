@@ -25,6 +25,7 @@ pub mod session;
 mod tests;
 mod tree;
 pub mod types;
+mod vector;
 
 pub use adapter::{ClickHouseAdapter, CLICKHOUSE};
 pub use session::ChSession;
@@ -479,7 +480,7 @@ impl SqlDialect for ChDialect {
 }
 
 /// The type of a query parameter bound to a column: LowCardinality is a storage detail, not a parameter type.
-fn param_type(ty: &str) -> String {
+pub(super) fn param_type(ty: &str) -> String {
     let t = ty.trim();
     if let Some(inner) = t.strip_prefix("LowCardinality(").and_then(|s| s.strip_suffix(')')) {
         return param_type(inner);

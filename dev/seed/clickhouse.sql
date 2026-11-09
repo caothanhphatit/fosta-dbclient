@@ -137,3 +137,19 @@ INSERT INTO shop.type_zoo (id) VALUES (2);
 -- Big enough to stream and cancel: 1,000,000 rows.
 CREATE TABLE shop.events (id UInt64, kind LowCardinality(String), at DateTime) ENGINE = MergeTree ORDER BY id;
 INSERT INTO shop.events SELECT number, ['view', 'click', 'buy'][1 + number % 3], toDateTime('2025-01-01 00:00:00') + number FROM numbers(1000000);
+
+-- Vector search: a 4-dimensional embedding per product with an HNSW index (vector_similarity is GA from 25.8).
+CREATE TABLE shop.product_embeddings
+(
+    product_id UInt32,
+    label String,
+    embedding Array(Float32),
+    INDEX embedding_idx embedding TYPE vector_similarity('hnsw', 'cosineDistance', 4),
+    CONSTRAINT embedding_dims CHECK length(embedding) = 4
+)
+ENGINE = MergeTree ORDER BY product_id;
+
+INSERT INTO shop.product_embeddings SELECT number + 1, concat('Product ', toString(number + 1)),
+    [toFloat32(((number + 1) % 10 + 1) / 10), toFloat32(((number + 1) * 3 % 11 + 1) / 11), toFloat32(((number + 1) * 7 % 13 + 1) / 13),
+     toFloat32(((number + 1) * 9 % 17 + 1) / 17)]
+FROM numbers(500);

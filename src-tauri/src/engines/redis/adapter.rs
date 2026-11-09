@@ -26,13 +26,14 @@ use super::{
     edit::RedisEdit,
     ops,
     session::{RedisSession, LANGUAGE},
+    vector::{self, RedisVectors, OPERATIONS as VECTOR_OPERATIONS, SEARCH_MODULE},
 };
 use crate::{
     contract::{
-        classify_common, unsupported_capability, AuthMethodId, CallContext, CapabilitySet, Category, Classification, ClassifyInput,
-        ConnectRequest, Connection, ConnectionSpec, Engine, EngineDescriptor, EngineError, NodeAction, NodeKind, ObjectDescription,
-        ObjectRef, OpenedSession, ParsedConnection, ServerInfo, SessionOptions, StatementInfo, TlsConfig, TlsMode, TreeChildren,
-        TreeRequest,
+        classify_common, require, unsupported_capability, vector as shared_vector, AuthMethodId, CallContext, Capability, CapabilitySet,
+        Category, Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, Engine, EngineDescriptor, EngineError,
+        NodeAction, NodeKind, ObjectDescription, ObjectRef, OpenedSession, ParsedConnection, ServerInfo, SessionOptions, StatementInfo,
+        TlsConfig, TlsMode, TreeChildren, TreeRequest,
     },
     error::{AppError, AppResult},
 };
@@ -108,6 +109,8 @@ fn classify_capability(name: &str, args: &serde_json::Value) -> StatementInfo {
             StatementInfo::new(Category::Read, name, &format!("{name} {args}"))
         }
         "redis.edit" => classify_edit(name, args),
+        // The vector operations only read (FT.INFO, FT.SEARCH, FT.EXPLAINCLI, HGET, JSON.GET).
+        _ if VECTOR_OPERATIONS.contains(&name) => StatementInfo::new(Category::Read, name, &format!("{name} {args}")),
         _ => StatementInfo::refused(name, name, "unknown operation"),
     }
 }
@@ -188,13 +191,20 @@ impl Engine for RedisAdapter {
             version,
             flavor: Some(server.mode.clone()),
         };
+        // The Query Engine (Redis 8, or the search module): MODULE LIST, or FT._LIST where MODULE is not allowed.
+        let search = base.has_module(SEARCH_MODULE) || base.query(&redis::cmd("FT._LIST")).await.is_ok();
+        let mut capabilities = self.descriptor().capabilities;
+        if !search {
+            capabilities = capabilities.without(Capability::Vector);
+        }
         Ok(Arc::new(RedisConnection {
             databases: server.databases.filter(|count| *count > 0).unwrap_or(catalog::DEFAULT_DATABASES),
             base,
             base_db,
             others: Mutex::new(HashMap::new()),
+            vectors: Mutex::new(None),
             info,
-            capabilities: self.descriptor().capabilities,
+            capabilities,
         }))
     }
 }
@@ -218,11 +228,32 @@ pub struct RedisConnection {
     base_db: i64,
     databases: u32,
     others: Mutex<HashMap<i64, RedisEngine>>,
+    /// The RESP2 connection to database 0 the vector operations use (search indexes live there).
+    vectors: Mutex<Option<RedisEngine>>,
     info: ServerInfo,
     capabilities: CapabilitySet,
 }
 
 impl RedisConnection {
+    /// The engine for the vector operations: database 0 over RESP2, connecting on first use.
+    async fn vector_engine(&self) -> AppResult<RedisEngine> {
+        if self.base_db == 0 && !self.base.options().resp3 {
+            return Ok(self.base.clone());
+        }
+        let mut vectors = self.vectors.lock().await;
+        if let Some(engine) = vectors.as_ref() {
+            return Ok(engine.clone());
+        }
+        let engine = RedisEngine::connect(RedisConnectOptions {
+            db: 0,
+            resp3: false,
+            ..self.base.options().clone()
+        })
+        .await?;
+        *vectors = Some(engine.clone());
+        Ok(engine)
+    }
+
     /// The engine of logical database `db`, connecting on first use.
     async fn engine_for(&self, db: i64) -> AppResult<RedisEngine> {
         if db == self.base_db {
@@ -291,7 +322,15 @@ impl Connection for RedisConnection {
             }
             Some(parent) if parent.kind == NodeKind::DATABASE => {
                 let db = catalog::db_of_parent(parent)?;
-                catalog::keys_page(&self.engine_for(db).await?, db, request).await
+                let mut page = catalog::keys_page(&self.engine_for(db).await?, db, request).await?;
+                // Search indexes with vector fields (database 0 only) come first, on the unfiltered first page.
+                let first_page = request.cursor.is_none() && request.filter.as_deref().is_none_or(|filter| filter.trim().is_empty());
+                if db == 0 && first_page && self.capabilities.contains(Capability::Vector) {
+                    let mut nodes = vector::index_nodes(&self.vector_engine().await?).await;
+                    nodes.append(&mut page.nodes);
+                    page.nodes = nodes;
+                }
+                Ok(page)
             }
             Some(_) => Ok(TreeChildren::default()),
         }
@@ -327,6 +366,11 @@ impl Connection for RedisConnection {
                     _ => ops::edit(&engine, &args).await,
                 }
             }
+            _ if VECTOR_OPERATIONS.contains(&name) => {
+                require(self.capabilities, Capability::Vector)?;
+                let mut store = RedisVectors::new(self.vector_engine().await?, true);
+                shared_vector::invoke(&mut store, name, args).await
+            }
             other => Err(unsupported_capability(other)),
         }
     }
@@ -337,6 +381,7 @@ impl Connection for RedisConnection {
 
     async fn close(&self) {
         self.others.lock().await.clear();
+        self.vectors.lock().await.take();
     }
 }
 
@@ -468,6 +513,9 @@ mod tests {
         assert_eq!(delete.tables().len(), 2);
         assert!(capability("redis.edit", json!({ "op": "teleport" })).refusal().is_some());
         assert_eq!(capability("redis.flush", json!({})).refusal(), Some("unknown operation"));
+        for name in VECTOR_OPERATIONS {
+            assert_eq!(capability(name, json!({ "table": "idx" })).worst(), Some(Category::Read), "{name}");
+        }
     }
 
     #[test]

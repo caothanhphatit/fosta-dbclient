@@ -4,7 +4,7 @@ import { toast } from "../../core/dialogs";
 import { clamp, copyText, formatNumber, h, icon, separator, spacer, toolButton } from "../../core/dom";
 import { capabilityOf, engineInfo } from "../../core/engines";
 import { DataGrid, gridSetup } from "../grid/grid";
-import { columnMetrics, keyCells } from "./vectorRows";
+import { columnMetrics, keyCells, searchTakesFilter } from "./vectorRows";
 import type { Navigator } from "../../core/navigator";
 import { RecordPanel } from "../table/recordPanel";
 import { makeSplitter } from "../../core/splitter";
@@ -45,6 +45,8 @@ export class VectorSearchView implements TabContent {
   private readonly grid: DataGrid;
   private readonly record: RecordPanel;
   private readonly searchButton: HTMLButtonElement;
+  /** Whether the engine takes a search filter (the gateway refuses one where it has no filter language). */
+  private readonly filterable: boolean;
   private source: SourceKind;
   private seed: KeyCell[] | null;
   private last: VectorSearchResult | null = null;
@@ -60,6 +62,7 @@ export class VectorSearchView implements TabContent {
     this.searchButton = toolButton("vector", "Search", () => void this.search(), "Search (Ctrl+Enter)");
     // Engines without SQL filter with their own raw filter language (Query DSL on Elasticsearch / OpenSearch).
     const engine = engineInfo(target.driver);
+    this.filterable = searchTakesFilter(engine);
     if (!engine.sqlDialect && engine.filter.raw) this.filterInput.placeholder = engine.filter.placeholder;
     this.queryText.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") void this.search();
@@ -84,7 +87,7 @@ export class VectorSearchView implements TabContent {
       ),
       this.queryText,
       this.sourceHint,
-      h("div", { class: "search-row" }, h("div", { class: "filter-box wide" }, icon("filter"), this.filterInput)),
+      ...(this.filterable ? [h("div", { class: "search-row" }, h("div", { class: "filter-box wide" }, icon("filter"), this.filterInput))] : []),
     );
     const toolbar = h(
       "div",
@@ -214,7 +217,7 @@ export class VectorSearchView implements TabContent {
         query,
         k: Number(this.kInput.value) || DEFAULT_K,
         metric: this.metricSelect.value as Metric,
-        filter: this.filterInput.value.trim() || null,
+        filter: this.filterable ? this.filterInput.value.trim() || null : null,
       });
       this.showResult(result);
     } catch (error) {

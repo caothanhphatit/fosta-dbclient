@@ -104,6 +104,25 @@ operations behind the views (`clickhouse.parts`, `.mutations`, `.processes`, `.q
   only; 50, 100 or 500 rows). The log is written a few seconds after a query ends. When the server has the log switched off, the
   view says so instead of failing.
 
+## Vectors
+
+The table view offers *Vector search* and *Vector health* on tables with vector columns.
+
+- **Columns**: `Array(Float32)`, `Array(Float64)` or `Array(BFloat16)`. The dimensions come from a `vector_similarity` index, else
+  from a `CHECK length(column) = n` constraint, else from the first non-empty row.
+- **Indexes**: `INDEX … TYPE vector_similarity('hnsw', 'cosineDistance' | 'L2Distance', dims, …)`. This is GA in 25.8; older
+  servers need `allow_experimental_vector_similarity_index`.
+- **Search**: `ORDER BY cosineDistance(column, CAST([..] AS Array(Float32)))` (or `L2Distance`, or `-dotProduct` for inner
+  product) with `LIMIT k`. A matching index serves this form: the bare distance (no conversion around it) of a typed constant
+  (a bare `[1, 0]` would be `Array(UInt8)`). The plan is `EXPLAIN indexes = 1`, and the index it names is the one used.
+- **Arrays of another length**: searches the index cannot serve add `WHERE length(column) = dims`, so an empty or shorter
+  array does not fail the distance function (error 190). That condition would disable the index, so the index path goes
+  without it, and runs again with it (without the index) when the server reports arrays of different sizes.
+- **Exact top-k** (recall) is the same query with `SETTINGS use_skip_indexes = 0`, the length condition and ties broken by
+  key. Every vector statement runs with `readonly = 2`.
+- **Keys**: the `ORDER BY` key identifies rows (it is not unique in ClickHouse, so rows that share one compare as one in
+  recall). A key with an expression part such as `toDate(ts)` gives no key: recall needs one.
+
 ## Not supported yet
 
 Cluster-aware features (`ON CLUSTER`, `clusterAllReplicas` browsing), the native TCP protocol, `RowBinary`, projections and

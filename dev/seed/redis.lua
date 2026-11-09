@@ -50,6 +50,18 @@ for i = 1, 5000 do
   redis.call('SADD', 'big:set', 'member-' .. i)
 end
 
+-- Vector search (the Query Engine is built into redis:8): products:<id> hashes with a 4-dimensional FLOAT32 embedding
+-- (a little-endian blob) and an HNSW cosine index over them. Search indexes live in database 0 only.
+local categories = { 'phones', 'laptops', 'books', 'kitchen' }
+pcall(redis.call, 'FT.DROPINDEX', 'products_idx')
+for i = 1, 100 do
+  redis.call('HSET', 'products:' .. i, 'name', 'Product ' .. i, 'category', categories[(i % 4) + 1], 'price', 5 + (i * 37) % 200,
+    'embedding', struct.pack('<ffff', (i % 10 + 1) / 10, (i * 3 % 11 + 1) / 11, (i * 7 % 13 + 1) / 13, (i * 9 % 17 + 1) / 17))
+end
+-- Without the search module (Redis 7.4) the hashes stay and the index is skipped.
+pcall(redis.call, 'FT.CREATE', 'products_idx', 'ON', 'HASH', 'PREFIX', '1', 'products:', 'SCHEMA', 'name', 'TEXT', 'category', 'TAG',
+  'price', 'NUMERIC', 'SORTABLE', 'embedding', 'VECTOR', 'HNSW', '6', 'TYPE', 'FLOAT32', 'DIM', '4', 'DISTANCE_METRIC', 'COSINE')
+
 -- Sets and a key in another database.
 redis.call('SADD', 'tags', 'red', 'green', 'blue')
 redis.call('SELECT', 1)
