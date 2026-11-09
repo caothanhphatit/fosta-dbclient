@@ -84,6 +84,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **SQLite**: the bundled SQLite library is updated (`libsqlite3-sys` 0.39, `rusqlite` 0.41) for CVE-2026-119375
   (RUSTSEC-2026-0459), reachable through a crafted database file.
+- **MariaDB/MySQL**: a page read cancelled just as it finished no longer leaves a `KILL QUERY` behind for the next statement on
+  that pooled connection (another tab's page or grid save failed with "Query execution was interrupted").
 
 ## [0.1.0] - 2026-11-08
 

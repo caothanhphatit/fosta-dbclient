@@ -11,7 +11,7 @@ use mysql_async::{prelude::*, Conn, Row, TxOpts};
 use super::{
     adapter::MySqlConnection,
     catalog::{self, database_of, qualified, quote_ident, TableColumns},
-    connect::{within, CHECKOUT_TIMEOUT},
+    connect::{within, Pooled, CHECKOUT_TIMEOUT},
     session::kill_query,
     values::{coerce, to_param, to_value},
 };
@@ -30,6 +30,8 @@ use crate::{
 
 /// Pages are capped so one request cannot pull a whole table.
 const MAX_PAGE_SIZE: u64 = 5000;
+/// MySQL `ER_QUERY_INTERRUPTED`: the statement was stopped by `KILL QUERY`.
+const ER_QUERY_INTERRUPTED: u16 = 1317;
 /// Below this many rows (by statistics) a total is counted exactly; above it the estimate is shown.
 const EXACT_COUNT_BELOW: u64 = 50_000;
 
@@ -140,23 +142,28 @@ impl MySqlConnection {
 
     /// One page. Cancelling (`ctx.cancel`) while it waits for a pooled connection gives up the wait; while it runs, the
     /// statement is stopped with `KILL QUERY`, so the connection goes back to the pool at once instead of finishing the
-    /// read in the background.
+    /// read in the background. A kill that arrives after the read ended is absorbed before the connection is shared again.
     async fn browse_page(&self, request: &BrowseRequest, ctx: &CallContext) -> AppResult<Page> {
         let mut conn = tokio::select! {
             conn = self.pooled() => conn?,
             () = ctx.cancel.cancelled() => return Err(cancelled()),
         };
         let thread_id = conn.id();
-        let work = self.read_page(&mut conn, request, ctx);
-        tokio::pin!(work);
-        tokio::select! {
-            outcome = &mut work => outcome,
-            () = ctx.cancel.cancelled() => {
-                let _ = kill_query(&self.opts, thread_id).await;
-                let _ = work.await;
-                Err(cancelled())
+        {
+            let work = self.read_page(&mut conn, request, ctx);
+            tokio::pin!(work);
+            tokio::select! {
+                // A read that is already complete is returned, not killed: a KILL then could only hit a later statement.
+                biased;
+                outcome = &mut work => return outcome,
+                () = ctx.cancel.cancelled() => {
+                    let _ = kill_query(&self.opts, thread_id).await;
+                    let _ = work.await;
+                }
             }
         }
+        absorb_late_kill(conn).await;
+        Err(cancelled())
     }
 
     async fn read_page(&self, conn: &mut Conn, request: &BrowseRequest, ctx: &CallContext) -> AppResult<Page> {
@@ -325,6 +332,22 @@ impl TabularData for MySqlConnection {
         }
         self.apply_set(changes).await
     }
+}
+
+/// `KILL QUERY` reaches the server asynchronously: when the page read had already ended, MySQL and MariaDB keep the
+/// kill flag on the idle thread and the next statement on that connection fails with error 1317 — and the connection
+/// is shared with the tree and the other tabs through the pool (a grid save runs on it too). One throw-away statement
+/// sent while the connection is still held takes the late kill instead; a connection that does not come clean in two
+/// tries, or fails otherwise, is closed rather than returned to the pool.
+async fn absorb_late_kill(mut conn: Pooled) {
+    for _ in 0..2 {
+        match conn.query_drop("DO 1").await {
+            Ok(()) => return,
+            Err(mysql_async::Error::Server(error)) if error.code == ER_QUERY_INTERRUPTED => continue,
+            Err(_) => break,
+        }
+    }
+    conn.discard().await;
 }
 
 #[cfg(test)]

@@ -30,20 +30,30 @@ pub const CHECKOUT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A connection from the pool. The count of those in use tells a busy pool from an unreachable server when no
 /// connection comes within [`CHECKOUT_TIMEOUT`].
 pub struct Pooled {
-    conn: Conn,
+    /// `None` once [`Pooled::discard`] closed it.
+    conn: Option<Conn>,
     in_use: Arc<AtomicUsize>,
+}
+
+impl Pooled {
+    /// Closes the connection instead of returning it to the pool (for one that may be in a doubtful state).
+    pub async fn discard(mut self) {
+        if let Some(conn) = self.conn.take() {
+            let _ = tokio::time::timeout(Duration::from_secs(2), conn.disconnect()).await;
+        }
+    }
 }
 
 impl Deref for Pooled {
     type Target = Conn;
     fn deref(&self) -> &Conn {
-        &self.conn
+        self.conn.as_ref().expect("a pooled connection is only taken by discard")
     }
 }
 
 impl DerefMut for Pooled {
     fn deref_mut(&mut self) -> &mut Conn {
-        &mut self.conn
+        self.conn.as_mut().expect("a pooled connection is only taken by discard")
     }
 }
 
@@ -60,7 +70,7 @@ pub async fn checkout(pool: &Pool, in_use: &Arc<AtomicUsize>, size: usize) -> Ap
             let conn = conn?;
             in_use.fetch_add(1, Ordering::Relaxed);
             Ok(Pooled {
-                conn,
+                conn: Some(conn),
                 in_use: Arc::clone(in_use),
             })
         }
