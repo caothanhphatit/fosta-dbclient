@@ -744,6 +744,7 @@ async fn contract_clickhouse_vector() {
             .starts_with("Some rows of embedding hold an array of another length"),
         "{late}"
     );
+    assert!(late["indexUsed"].is_null(), "{late}");
     for table in ["contract_vectors_ragged", "contract_vectors_late"] {
         run(
             &handle,

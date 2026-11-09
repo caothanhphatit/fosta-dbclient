@@ -492,8 +492,10 @@ impl VectorStore for ChVectors<'_> {
                 Err(error) => return Err(error),
             }
         };
-        let index_used = index_in_plan(&plan);
-        if guard && indexed {
+        // Searched again with the guard: EXPLAIN may still list the index, but it does not serve the search.
+        let retried = guard && indexed;
+        let index_used = index_in_plan(&plan).filter(|_| !retried);
+        if retried {
             plan.insert(
                 0,
                 format!(

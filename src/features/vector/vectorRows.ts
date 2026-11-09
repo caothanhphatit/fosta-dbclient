@@ -5,11 +5,17 @@
 import type { ColumnInfo, EngineDescriptor, Value } from "../../core/contract";
 import type { KeyCell, Metric, VectorInfo } from "../../core/types";
 
-/** The key cells of `row`: its key columns, or every non-vector column when the table has no key. */
+/** The distance column of a search result: computed, so never part of a row's key. */
+const DISTANCE_COLUMN = "vec_distance";
+
+/**
+ * The key cells of `row`: its key columns, or every non-vector column when the table has no key (a search result's
+ * distance column aside).
+ */
 export function keyCells(columns: ColumnInfo[], row: Value[], keyColumns: string[]): KeyCell[] {
   const keys = new Set(keyColumns);
   return columns.flatMap((column, index) => {
-    const isKey = keys.size === 0 ? column.hints.vectorDims == null : keys.has(column.name);
+    const isKey = keys.size === 0 ? column.hints.vectorDims == null && column.name !== DISTANCE_COLUMN : keys.has(column.name);
     return isKey ? [{ column: column.name, value: row[index] ?? { t: "null", v: null } }] : [];
   });
 }
