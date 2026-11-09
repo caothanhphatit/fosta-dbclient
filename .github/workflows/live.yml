@@ -47,11 +47,11 @@ jobs:
     name: ${{ matrix.id }} ${{ matrix.version }}
     needs: plan
     if: needs.plan.outputs.count != '0'
-    # Pinned, not ubuntu-latest: that label moved to Ubuntu 26.04 (kernel 7.0) in October 2026, and mongod 8.0.x up to
-    # 8.0.34 and 8.3.x up to 8.3.13 refuse to start on kernels 6.19 to 7.0.13 ("MongoDB cannot start: Linux kernel
-    # versions 6.19 and newer has a known incompatibility", SERVER-121912: tcmalloc and the kernel's rseq ABI). Back to
-    # ubuntu-latest once the mongo:8.0 image is 8.0.35 or newer.
-    runs-on: ubuntu-24.04
+    # The runner comes from the engine's `runsOn` in ci/engines/<id>.json (ubuntu-24.04 when unset). Mongo needs an older
+    # kernel: mongod 8.0.x up to 8.0.34 and 8.3.x up to 8.3.13 refuse to start on kernels 6.19 to 7.0.13 ("MongoDB cannot
+    # start: Linux kernel versions 6.19 and newer has a known incompatibility", SERVER-121912: tcmalloc and the kernel's
+    # rseq ABI), and both ubuntu-latest (26.04) and ubuntu-24.04 now boot 7.0.0-azure kernels.
+    runs-on: ${{ matrix.runsOn }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -61,9 +61,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          key: contract
+          # Per runner image: build scripts compiled against a newer glibc do not run on an older image.
+          key: contract-${{ matrix.runsOn }}
       - name: Start ${{ matrix.id }} ${{ matrix.version }}
         run: |
+          echo "Kernel $(uname -r)"
           export "${{ matrix.versionEnv }}=${{ matrix.version }}"
           # A container that exits during start-up explains itself here, not only in the Service logs step.
           if ! docker compose -f "${{ matrix.compose }}" up -d --wait; then

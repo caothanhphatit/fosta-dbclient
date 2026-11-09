@@ -3,8 +3,9 @@
 //   node ci/plan.mjs --all                    every enabled engine (nightly, pushes to main, manual runs)
 //   node ci/plan.mjs --changed <file>         engines whose `paths` match a changed file (one path per line)
 //
-// Prints `{"include":[{id, compose, version, versionEnv, seed, filter}, ...]}`, one entry per engine version. Entries with
-// `"enabled": false` are skipped; `"nightlyOnly": true` entries only run with --all.
+// Prints `{"include":[{id, compose, version, versionEnv, seed, filter, runsOn}, ...]}`, one entry per engine version.
+// Entries with `"enabled": false` are skipped; `"nightlyOnly": true` entries only run with --all. `runsOn` picks the
+// runner image and defaults to ubuntu-24.04.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
@@ -45,6 +46,7 @@ export function plan(engines, changed) {
         versionEnv: engine.versionEnv,
         seed: engine.seed ?? "",
         filter: engine.filter,
+        runsOn: engine.runsOn ?? "ubuntu-24.04",
       });
     }
   }

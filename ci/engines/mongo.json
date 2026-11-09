@@ -17,5 +17,6 @@
   ],
   "nightlyOnly": false,
   "filter": "contract_mongo",
-  "note": "mongo:8.0 (8.0.34) and mongo:8 (8.3.13) exit at start-up on Linux kernels 6.19 to 7.0.13 (SERVER-121912), so the workflow runs on ubuntu-24.04 (kernel 6.17); ubuntu-latest is Ubuntu 26.04 with kernel 7.0. Drop the pin when the 8.0 image is 8.0.35 or newer."
+  "runsOn": "ubuntu-22.04",
+  "note": "mongo:8.0 (8.0.34) and mongo:8 (8.3.13) exit at start-up on Linux kernels 6.19 to 7.0.13 (SERVER-121912), and the ubuntu-24.04 and ubuntu-latest runners now boot 7.0.0-azure kernels, so mongo runs on ubuntu-22.04 (kernel 6.8). Older 8.0 images are no way out: they lack the guard but crash on these kernels. Drop runsOn once a mongo:8.0 image without the guard ships (8.0.35 or newer). When GitHub retires ubuntu-22.04 before that, run the 8.0 job with continue-on-error instead."
 }
