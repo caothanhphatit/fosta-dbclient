@@ -213,7 +213,7 @@ pub struct ChatContext {
     pub editor_text: Option<String>,
     #[serde(default)]
     pub last_error: Option<String>,
-    /// Free-form extra context, e.g. the tail of a startup task log.
+    /// Free-form extra context, e.g. the tail of a command log.
     #[serde(default)]
     pub extra: Option<String>,
 }

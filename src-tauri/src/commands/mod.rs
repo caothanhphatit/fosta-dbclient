@@ -40,7 +40,7 @@ pub fn get_config(state: &AppState) -> AppConfig {
     state.config.snapshot()
 }
 
-/// What this front-end supports (startup tasks, "Show in folder", where downloads go); the UI hides the rest.
+/// What this front-end supports (workspace commands, "Show in folder", where downloads go); the UI hides the rest.
 pub fn capabilities(state: &AppState) -> Capabilities {
     state.capabilities.clone()
 }
@@ -119,8 +119,6 @@ macro_rules! for_each_command {
             [sync] save_task(task: $crate::tasks::TaskDef, workspace_id: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::tasks::save_task;
             [sync] delete_task(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::tasks::delete_task;
-            [sync] tunnel_status(connection_id: String) -> $crate::tasks::TaskStatus = $crate::commands::tasks::tunnel_status;
-            [sync] tunnel_logs(connection_id: String) -> Vec<String> = $crate::commands::tasks::tunnel_logs;
 
             [sync] save_workspace(workspace: $crate::config::WorkspaceMeta, relax_confirmation: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::save_workspace;

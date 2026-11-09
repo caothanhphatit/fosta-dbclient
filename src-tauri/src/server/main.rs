@@ -250,7 +250,7 @@ async fn run(settings: Settings) -> Result<(), String> {
         auth
     };
     if settings.tasks {
-        println!("Startup tasks and tunnel commands are on (FOSTA_STUDIO_TASKS): the UI can run programs inside this container.");
+        println!("Commands are on (FOSTA_STUDIO_TASKS): the UI can run programs inside this container.");
     }
 
     let (sender, _) = broadcast::channel(1024);

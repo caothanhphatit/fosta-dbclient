@@ -19,7 +19,6 @@ use crate::{
     lock::lock,
     secrets::LEGACY_AI_CONNECTION,
     tasks::TaskDef,
-    tunnel::TunnelConfig,
 };
 
 const CONFIG_FILE: &str = "fosta-studio.json";
@@ -71,9 +70,10 @@ pub struct ConnectionProfile {
     /// Safety rules for this connection only, replacing the workspace's (see `crate::gateway`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub safety: Option<SafetySettings>,
-    /// A command started before connecting and stopped on disconnect (e.g. `kubectl port-forward`; see `crate::tunnel`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tunnel: Option<TunnelConfig>,
+    /// The id of a command of the same workspace that must run while this connection is connected (e.g. `kubectl
+    /// port-forward`; see `crate::connection_command`).
+    #[serde(rename = "commandId", default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 fn default_engine() -> String {
@@ -103,7 +103,7 @@ impl ConnectionProfile {
     /// mongodb: `options.uri` → `url`. mssql: `options.encrypt` / `options.trustServerCertificate` → `tls`.
     /// Options present win over the typed fields, since the connection dialog still writes them.
     pub fn normalize(&mut self) {
-        self.tunnel = self.tunnel.as_ref().and_then(TunnelConfig::normalized);
+        self.command = blank(&self.command);
         match self.engine.as_str() {
             "mongodb" => {
                 if let Some(uri) = self.options.remove("uri") {
@@ -130,10 +130,10 @@ impl ConnectionProfile {
         }
     }
 
-    /// Whether `other` points at the same server, through the same SSH route, tunnel command and TLS checks, as this
-    /// saved profile, so this profile's saved secrets may be sent there. Name, database, options and safety rules do
-    /// not matter; any change to the SSH or TLS settings does (a new bastion or a weaker certificate check could
-    /// harvest the saved passwords), and so does another tunnel command (`svc/a` → `svc/b` keeps 127.0.0.1:13306).
+    /// Whether `other` points at the same server, through the same SSH route, command and TLS checks, as this saved
+    /// profile, so this profile's saved secrets may be sent there. Name, database, options and safety rules do not
+    /// matter; any change to the SSH or TLS settings does (a new bastion or a weaker certificate check could harvest
+    /// the saved passwords), and so does another command (a port-forward to `svc/b` keeps 127.0.0.1:13306).
     pub fn same_target(&self, other: &ConnectionProfile) -> bool {
         let (mut saved, mut draft) = (self.clone(), other.clone());
         saved.normalize();
@@ -146,22 +146,14 @@ impl ConnectionProfile {
             && blank(&saved.file) == blank(&draft.file)
             && ssh_route(saved.ssh.as_ref()) == ssh_route(draft.ssh.as_ref())
             && tls_checks(saved.tls.as_ref()) == tls_checks(draft.tls.as_ref())
-            && tunnel_command(saved.tunnel.as_ref()) == tunnel_command(draft.tunnel.as_ref())
-    }
-
-    /// Whether saving `other` over this profile changes the command its tunnel runs (so the running one must stop).
-    pub fn tunnel_changed(&self, other: &ConnectionProfile) -> bool {
-        let normalized = |profile: &ConnectionProfile| profile.tunnel.as_ref().and_then(TunnelConfig::normalized);
-        match (normalized(self), normalized(other)) {
-            (Some(before), Some(after)) => !before.same_command(&after),
-            (before, after) => before.is_some() != after.is_some(),
-        }
+            && saved.command == draft.command
     }
 }
 
-/// The program and arguments of a tunnel command: where it sends the connection.
-fn tunnel_command(tunnel: Option<&TunnelConfig>) -> Option<(&str, &[String])> {
-    tunnel.map(|tunnel| (tunnel.program.as_str(), tunnel.args.as_slice()))
+fn forget_command(connections: &mut [ConnectionProfile], id: &str) {
+    for profile in connections.iter_mut().filter(|profile| profile.command.as_deref() == Some(id)) {
+        profile.command = None;
+    }
 }
 
 /// A trimmed, non-empty string, else `None`.
@@ -485,9 +477,24 @@ impl AppConfig {
 
     /// Places `profile` in `workspace_id`, replacing it in place when it is
     /// already there and removing it from any other workspace first.
+    /// Its command must be one of that workspace's; moving to another workspace drops the old workspace's command.
     pub fn put_connection(&mut self, workspace_id: &str, mut profile: ConnectionProfile) -> AppResult<()> {
-        self.workspace(workspace_id)?;
+        let target = self.workspace(workspace_id)?;
         profile.normalize();
+        if let Some(command) = profile.command.clone() {
+            if !target.tasks.iter().any(|task| task.id == command) {
+                let left_behind = self
+                    .connection_scope(&profile.id)
+                    .is_some_and(|(source, _)| source.id != workspace_id && source.tasks.iter().any(|task| task.id == command));
+                if !left_behind {
+                    return Err(AppError::new(format!(
+                        "The command of connection '{}' is not a command of workspace '{}'",
+                        profile.name, target.name
+                    )));
+                }
+                profile.command = None;
+            }
+        }
         if profile.safety.is_none() {
             // The connection dialog does not edit per-connection rules; saving keeps them.
             profile.safety = self.connection(&profile.id).and_then(|existing| existing.safety.clone());
@@ -509,16 +516,22 @@ impl AppConfig {
     pub fn put_task(&mut self, workspace_id: &str, task: TaskDef) -> AppResult<()> {
         self.workspace(workspace_id)?;
         for workspace in self.workspaces.iter_mut().filter(|workspace| workspace.id != workspace_id) {
-            workspace.tasks.retain(|item| item.id != task.id);
+            if workspace.tasks.iter().any(|item| item.id == task.id) {
+                // A command that moves away leaves the connections of its old workspace.
+                workspace.tasks.retain(|item| item.id != task.id);
+                forget_command(&mut workspace.connections, &task.id);
+            }
         }
         let target = self.workspace_mut(workspace_id)?;
         upsert(&mut target.tasks, task, |item| item.id.as_str());
         Ok(())
     }
 
+    /// Removes the command `id`; the connections that used it no longer use a command.
     pub fn remove_task(&mut self, id: &str) {
         for workspace in &mut self.workspaces {
             workspace.tasks.retain(|item| item.id != id);
+            forget_command(&mut workspace.connections, id);
         }
     }
 
@@ -1249,72 +1262,109 @@ mod tests {
         assert_eq!(config.ai_active.as_ref().unwrap().model, "gpt");
     }
 
-    fn port_forward() -> TunnelConfig {
-        TunnelConfig {
-            program: "kubectl".into(),
-            args: ["port-forward", "-n", "shop", "svc/mariadb", "13306:3306"]
-                .map(String::from)
-                .to_vec(),
-            ready_pattern: Some("Forwarding from".into()),
-            ready_timeout_secs: 45,
+    fn port_forward(id: &str) -> TaskDef {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": "MariaDB port-forward",
+            "program": "kubectl",
+            "args": ["port-forward", "-n", "shop", "svc/mariadb", "13306:3306"],
+            "readyPattern": "Forwarding from",
+        }))
+        .unwrap()
+    }
+
+    /// A config with workspaces "a" (command "pf-a") and "b" (command "pf-b").
+    fn two_workspaces() -> AppConfig {
+        let mut config = AppConfig::default();
+        for id in ["a", "b"] {
+            config.put_workspace(WorkspaceMeta {
+                id: id.into(),
+                name: id.to_uppercase(),
+                color: String::new(),
+                icon: "box".into(),
+                safety: None,
+                assistant_queries: None,
+            });
+            config.put_task(id, port_forward(&format!("pf-{id}"))).unwrap();
+        }
+        config
+    }
+
+    fn using(id: &str, command: Option<&str>) -> ConnectionProfile {
+        ConnectionProfile {
+            id: id.into(),
+            name: id.into(),
+            host: "127.0.0.1".into(),
+            port: 13306,
+            command: command.map(str::to_owned),
+            ..Default::default()
         }
     }
 
     #[test]
-    fn a_tunnel_command_round_trips_in_camel_case() {
-        let profile = ConnectionProfile {
-            id: "k".into(),
-            host: "127.0.0.1".into(),
-            port: 13306,
-            tunnel: Some(port_forward()),
-            ..Default::default()
-        };
-        let json = serde_json::to_value(&profile).unwrap();
-        assert_eq!(json["tunnel"]["program"], "kubectl");
-        assert_eq!(json["tunnel"]["readyPattern"], "Forwarding from");
-        assert_eq!(json["tunnel"]["readyTimeoutSecs"], 45);
+    fn a_command_reference_round_trips_as_command_id() {
+        let json = serde_json::to_value(using("k", Some("pf-a"))).unwrap();
+        assert_eq!(json["commandId"], "pf-a");
         let parsed: ConnectionProfile = serde_json::from_value(json).unwrap();
-        assert_eq!(parsed.tunnel, Some(port_forward()));
+        assert_eq!(parsed.command.as_deref(), Some("pf-a"));
         // Absent stays absent, and an older file without it still loads.
-        let plain = serde_json::to_value(ConnectionProfile::default()).unwrap();
-        assert!(plain.get("tunnel").is_none());
+        assert!(serde_json::to_value(ConnectionProfile::default())
+            .unwrap()
+            .get("commandId")
+            .is_none());
         let old: ConnectionProfile = serde_json::from_str(r#"{"id":"o","name":"Old","driver":"mysql"}"#).unwrap();
-        assert!(old.tunnel.is_none());
+        assert!(old.command.is_none());
+        // The 0.1.0 task shape loads with the default timeout.
+        assert_eq!(port_forward("x").ready_timeout_secs, 30);
     }
 
     #[test]
-    fn saving_drops_an_empty_tunnel_and_notices_a_changed_one() {
-        let mut config = AppConfig::default();
-        let workspace = config.workspaces[0].id.clone();
-        let mut profile = ConnectionProfile {
-            id: "k".into(),
-            tunnel: Some(TunnelConfig {
-                program: "  ".into(),
-                ..port_forward()
-            }),
-            ..Default::default()
-        };
-        config.put_connection(&workspace, profile.clone()).unwrap();
-        assert!(config.connection("k").unwrap().tunnel.is_none());
+    fn a_connection_uses_only_a_command_of_its_workspace() {
+        let mut config = two_workspaces();
+        config.put_connection("a", using("k", Some(" pf-a "))).unwrap();
+        assert_eq!(config.connection("k").unwrap().command.as_deref(), Some("pf-a"));
+        let error = config.put_connection("a", using("k", Some("pf-b"))).unwrap_err();
+        assert!(error.to_string().contains("not a command of workspace 'A'"), "{error}");
+        let error = config.put_connection("a", using("new", Some("missing"))).unwrap_err();
+        assert!(error.to_string().contains("not a command"), "{error}");
+        config.put_connection("a", using("blank", Some("  "))).unwrap();
+        assert_eq!(config.connection("blank").unwrap().command, None);
 
-        profile.tunnel = Some(port_forward());
-        let saved = config.connection("k").unwrap().clone();
-        assert!(saved.tunnel_changed(&profile));
-        assert!(!saved.same_target(&profile), "another tunnel command may reach another server");
-        config.put_connection(&workspace, profile.clone()).unwrap();
-        let saved = config.connection("k").unwrap().clone();
-        assert!(!saved.tunnel_changed(&profile));
-        assert!(saved.same_target(&profile));
-        let mut other = profile.clone();
-        other.tunnel.as_mut().unwrap().args[3] = "svc/postgres".into();
-        assert!(saved.tunnel_changed(&other));
-        assert!(!saved.same_target(&other));
-        let mut slower = profile.clone();
-        slower.tunnel.as_mut().unwrap().ready_timeout_secs = 90;
-        assert!(!saved.tunnel_changed(&slower), "the running command stays as it is");
-        assert!(saved.same_target(&slower), "the timeout does not change where the connection goes");
-        let mut removed = profile;
-        removed.tunnel = None;
-        assert!(saved.tunnel_changed(&removed));
+        // Moving to workspace b leaves workspace a's command behind; b's own may be picked in the same save.
+        config.put_connection("b", using("k", Some("pf-a"))).unwrap();
+        assert_eq!(config.connection("k").unwrap().command, None);
+        config.put_connection("a", using("k2", Some("pf-a"))).unwrap();
+        config.put_connection("b", using("k2", Some("pf-b"))).unwrap();
+        assert_eq!(config.connection("k2").unwrap().command.as_deref(), Some("pf-b"));
+    }
+
+    #[test]
+    fn deleting_or_moving_a_command_clears_it_from_its_connections() {
+        let mut config = two_workspaces();
+        config.put_connection("a", using("one", Some("pf-a"))).unwrap();
+        config.put_connection("a", using("two", Some("pf-a"))).unwrap();
+        config.put_connection("b", using("three", Some("pf-b"))).unwrap();
+        config.remove_task("pf-a");
+        assert_eq!(config.connection("one").unwrap().command, None);
+        assert_eq!(config.connection("two").unwrap().command, None);
+        assert_eq!(config.connection("three").unwrap().command.as_deref(), Some("pf-b"));
+        config.put_task("a", port_forward("pf-b")).unwrap();
+        assert_eq!(config.connection("three").unwrap().command, None);
+        config.put_task("a", port_forward("pf-b")).unwrap();
+        assert_eq!(config.workspace("a").unwrap().tasks.len(), 1);
+    }
+
+    #[test]
+    fn another_command_is_another_target() {
+        let saved = using("k", Some("pf-a"));
+        let mut renamed = saved.clone();
+        renamed.name = "renamed".into();
+        assert!(saved.same_target(&renamed));
+        assert!(
+            !saved.same_target(&using("k", Some("pf-b"))),
+            "another command may reach another server"
+        );
+        assert!(!saved.same_target(&using("k", None)));
+        assert!(using("k", None).same_target(&using("k", Some(" "))));
     }
 }
