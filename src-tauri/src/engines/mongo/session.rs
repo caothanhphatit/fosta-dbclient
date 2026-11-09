@@ -19,7 +19,7 @@ use serde_json::json;
 
 use super::values;
 use crate::{
-    contract::{Batcher, ResultSink, RunOptions, RunRequest, Session, StreamEvent},
+    contract::{classify::Category, Batcher, ResultSink, RunOptions, RunRequest, Session, StreamEvent},
     engines::common::sqlclassify::excerpt,
     error::{AppError, AppResult},
 };
@@ -194,6 +194,16 @@ impl Session for MongoSession {
             .or_else(|| self.database.clone())
             .filter(|name| !name.is_empty())
             .ok_or_else(|| AppError::new("Pick a database first: MongoDB commands run against one database."))?;
+        if options.read_only {
+            // MongoDB has no read-only session: the gateway's classification is the control, checked again here.
+            let worst = super::classify::classify_mongo(&request.text).worst();
+            if worst.is_some_and(|category| category > Category::Transaction) {
+                return Err(AppError::new(format!(
+                    "Refused: this session is read-only and the command is classified as {}.",
+                    worst.map(Category::label).unwrap_or("a change")
+                )));
+            }
+        }
         let mut command = parse_command(&request.text)?;
         let name = command.keys().next().cloned().unwrap_or_default();
         if let Some(timeout) = options.timeout {
@@ -231,6 +241,40 @@ impl Session for MongoSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The engine layer refuses anything but a read in a read-only run before the command reaches a server (the client
+    /// below never connects).
+    #[tokio::test]
+    async fn read_only_runs_refuse_everything_but_reads() {
+        let client = Client::with_uri_str("mongodb://127.0.0.1:9/?serverSelectionTimeoutMS=200")
+            .await
+            .unwrap();
+        let session = MongoSession::new(client, Some("shop".into()));
+        let read_only = RunOptions {
+            read_only: true,
+            ..RunOptions::default()
+        };
+        for text in [
+            r#"{ "insert": "c", "documents": [ { "a": 1 } ] }"#,
+            r#"{ "aggregate": "c", "pipeline": [ { "$out": "copy" } ], "cursor": {} }"#,
+            r#"{ "usersInfo": 1 }"#,
+            r#"{ "frobnicate": 1 }"#,
+        ] {
+            let request = RunRequest {
+                text: text.into(),
+                database: None,
+                offset: 0,
+            };
+            let error = session
+                .run(&request, &read_only, &mut crate::contract::CollectSink::default())
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().starts_with("Refused: this session is read-only"),
+                "{text}: {error}"
+            );
+        }
+    }
 
     #[test]
     fn malformed_commands_are_failed_to_parse_errors() {

@@ -175,7 +175,7 @@ fn request_info(classification: RequestClassification, excerpt: &str) -> Stateme
 }
 
 /// Console text: each request is classified from its method, path and body.
-fn classify_console(text: &str) -> Classification {
+pub(super) fn classify_console(text: &str) -> Classification {
     match console::parse(text) {
         Ok(requests) if requests.is_empty() => Classification::single(StatementInfo::new(Category::Read, "empty", text)),
         Ok(requests) => Classification {

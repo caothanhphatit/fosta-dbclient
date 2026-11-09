@@ -110,6 +110,43 @@ async fn transaction_state(client: &mut TdsClient) -> TransactionState {
     }
 }
 
+/// The savepoint a read-only run sets inside a transaction the tab already has open.
+const READ_ONLY_SAVEPOINT: &str = "fosta_read_only";
+
+/// SQL Server has no read-only session. A read-only run (the assistant, a Read-only workspace) is wrapped in a transaction
+/// that is rolled back afterwards, so anything the gateway let through by mistake (DML reached through a procedure or a
+/// function) is undone. Inside a transaction the tab already has open, a savepoint is used instead, so the user's own
+/// transaction survives. When the run is stopped or times out the connection is dropped and the server rolls back.
+///
+/// Limits: a COMMIT inside the batch ends the wrapper; work on a linked server (OPENQUERY, four-part names), mail,
+/// extended procedures and identity / sequence increments are not rolled back. Those are kept out by the classification
+/// (Admin / Write), not by this backstop.
+enum ReadOnlyGuard {
+    Transaction,
+    Savepoint,
+}
+
+impl ReadOnlyGuard {
+    async fn begin(client: &mut TdsClient) -> AppResult<Self> {
+        if transaction_state(client).await.open {
+            execute(client, &format!("SAVE TRANSACTION {READ_ONLY_SAVEPOINT}")).await?;
+            Ok(Self::Savepoint)
+        } else {
+            execute(client, "BEGIN TRANSACTION").await?;
+            Ok(Self::Transaction)
+        }
+    }
+
+    async fn end(self, client: &mut TdsClient) -> AppResult<()> {
+        let sql = match self {
+            Self::Transaction => "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION".to_owned(),
+            // XACT_STATE() -1 (doomed) cannot roll back to a savepoint; the tab reports the failed transaction.
+            Self::Savepoint => format!("IF XACT_STATE() = 1 ROLLBACK TRANSACTION {READ_ONLY_SAVEPOINT}"),
+        };
+        execute(client, &sql).await
+    }
+}
+
 /// A server error with the failing statement of the batch (from the error's line).
 fn map_error(error: tiberius::error::Error, text: &str) -> AppError {
     let line = match &error {
@@ -348,6 +385,10 @@ impl MssqlSession {
             state.database = Some(database.to_owned());
         }
         let timeout = options.timeout.filter(|timeout| !timeout.is_zero());
+        let guard = match options.read_only {
+            true => Some(ReadOnlyGuard::begin(Self::client(state)?).await?),
+            false => None,
+        };
         let client = Self::client(state)?;
         let outcome = tokio::select! {
             biased;
@@ -366,6 +407,18 @@ impl MssqlSession {
             }
             result = stream_batch(client, &request.text, options, sink) => result,
         };
+        let keeps_client = match &outcome {
+            Ok(()) => true,
+            Err(error) => is_statement_error(error) && !self.signal.requested.load(Ordering::Relaxed),
+        };
+        if let (Some(guard), true) = (guard, keeps_client) {
+            if let Err(error) = guard.end(Self::client(state)?).await {
+                // Closing the connection rolls back whatever the rollback could not.
+                state.client = None;
+                outcome?;
+                return Err(error);
+            }
+        }
         let Err(error) = outcome else { return Ok(()) };
         if self.signal.requested.load(Ordering::Relaxed) {
             state.client = None;

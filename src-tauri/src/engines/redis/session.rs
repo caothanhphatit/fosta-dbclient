@@ -20,6 +20,7 @@ use futures_util::future::BoxFuture;
 use tokio::sync::Mutex;
 
 use super::{
+    classify::CommandClass,
     connection::RedisEngine,
     console::{split_lines, tokenize, RedisConsole, RedisReply},
     types::as_i64,
@@ -193,6 +194,21 @@ impl Session for RedisSession {
         let wanted = database_number(request.database.as_deref())?;
         let mut guard = self.state.lock().await;
         let State { console, db } = &mut *guard;
+        if options.read_only {
+            // Redis has no read-only session: the gateway's classification is the control, checked again here for every
+            // line before any of them runs.
+            for (index, (line_number, line)) in lines.iter().enumerate() {
+                let classification = console.classify_line(line)?;
+                if !matches!(classification.class, CommandClass::Read | CommandClass::Session) {
+                    return Err(AppError::new(format!(
+                        "Refused: this session is read-only and {} is not a read.",
+                        classification.command
+                    ))
+                    .with_statement(index, line)
+                    .with_position(ErrorPosition::line(*line_number as u32)));
+                }
+            }
+        }
         self.shared.cancelled.store(false, Ordering::SeqCst);
         if self.shared.killed.swap(false, Ordering::SeqCst) {
             *console = self.engine.open_console().await?;
