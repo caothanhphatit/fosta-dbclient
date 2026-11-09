@@ -38,6 +38,7 @@ import type {
   HealthCheck,
   HistoryEntry,
   HistoryQuery,
+  InstallKind,
   KeyCell,
   RecallReport,
   SchemaGraph,
@@ -45,6 +46,7 @@ import type {
   TaskDef,
   TaskLogEvent,
   TaskStatus,
+  UpdateInfo,
   VectorInfo,
   VectorSearchRequest,
   VectorSearchResult,
@@ -191,6 +193,14 @@ export const api = {
   setDebugLogging: (enabled: boolean) => invoke<AppConfig>("set_debug_logging", { enabled }),
   /** Desktop only: opens the log folder in the file manager. */
   openLogFolder: () => invoke<void>("open_log_folder"),
+  /** The latest release compared with this build; without `force` at most one request a day. `null`: nothing to show. */
+  checkUpdate: (force: boolean) => invoke<UpdateInfo | null>("check_update", { force }),
+  installKind: () => invoke<InstallKind>("install_kind"),
+  setUpdateCheck: (enabled: boolean) => invoke<AppConfig>("set_update_check", { enabled }),
+  /** Once per update: the new version, to show "What's new". */
+  whatsNew: () => invoke<string | null>("whats_new"),
+  /** Desktop only: opens a GitHub release page in the default browser. */
+  openReleasePage: (url: string) => invoke<void>("open_release_page", { url }),
 };
 
 export function onTaskStatus(handler: (status: TaskStatus) => void): Promise<UnlistenFn> {

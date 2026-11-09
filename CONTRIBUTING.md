@@ -154,5 +154,8 @@ Fosta Studio follows [Semantic Versioning](https://semver.org/). `package.json` 
 4. The tag starts `.github/workflows/release.yml`: it checks that the tag matches the version files and that `CHANGELOG.md` has a section
    for it, builds the NSIS installer and the portable exe, and creates a **draft** GitHub Release with that section as its notes. When a
    `Dockerfile` exists, it also pushes `ghcr.io/caothanhphatit/fosta-studio` tagged `X.Y.Z`, `X.Y` and `latest`.
-5. Review the draft release (notes, assets), then publish it. A tag with a suffix such as `v0.2.0-rc.1` becomes a pre-release and does not
+   The installer is signed for the in-app updater with the `TAURI_SIGNING_PRIVATE_KEY` repository secret (the key matching
+   `plugins.updater.pubkey` in `tauri.conf.json`; `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` only if the key has a password), and
+   `latest.json` is attached for the updater. The workflow stops early when the key secret is missing.
+5. Review the draft release (notes, assets), then publish it. Installed apps see it once it is published. A tag with a suffix such as `v0.2.0-rc.1` becomes a pre-release and does not
    move the `X.Y` or `latest` image tags.

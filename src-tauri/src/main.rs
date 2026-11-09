@@ -60,7 +60,7 @@ macro_rules! desktop_commands {
         $(tauri_command!([$kind] $name ($($arg : $type),*) -> $output $(=> $event)? = $function);)*
 
         fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
-            tauri::generate_handler![$($name,)* ai_chat, save_download, reveal_file, open_log_folder]
+            tauri::generate_handler![$($name,)* ai_chat, save_download, reveal_file, open_log_folder, open_release_page]
         }
     };
 }
@@ -92,12 +92,21 @@ fn open_log_folder() -> AppResult<()> {
     commands::diagnostics::open_log_folder()
 }
 
+/// The update item's release link: the webview opens no browser windows itself.
+#[tauri::command]
+fn open_release_page(url: String) -> AppResult<()> {
+    commands::update::open_release_page(url)
+}
+
 fn main() {
     if let Ok(data_dir) = fosta_studio::config::data_dir() {
         fosta_studio::logging::init(&data_dir, fosta_studio::logging::LogLocation::Desktop);
     }
     fosta_studio::runtime::install_panic_hook();
     tauri::Builder::default()
+        // In-place updates of the installed app (src/app/update.ts); the endpoint and key are in tauri.conf.json.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let executor = tauri::async_runtime::handle().inner().clone();
             let events = Arc::new(TauriEvents(app.handle().clone()));

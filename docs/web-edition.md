@@ -23,8 +23,7 @@ To build the image yourself: `docker build -t fosta-studio .` and use `fosta-stu
 3. **Databases on your machine**: inside the container, `localhost` is the container itself. Use `host.docker.internal` as the
    host (Docker Desktop provides it; on Linux add `--add-host=host.docker.internal:host-gateway` to `docker run`). The connection
    dialog shows this hint when you type `localhost` or `127.0.0.1`.
-4. **Upgrading**: `docker pull` the new image, then remove and re-create the container with the same `-v fosta-studio-data:/data`;
-   everything in the volume is kept.
+4. **Updating**: see [Updating](#updating); everything in the volume is kept.
 
 `deploy/docker-compose.yml` runs the same container, optionally with a MariaDB to try it out
 (`docker compose -f deploy/docker-compose.yml --profile demo up -d`).
@@ -46,6 +45,26 @@ Differences from the desktop app: exports and diagram images are downloaded by t
 tasks are off unless `FOSTA_STUDIO_TASKS=on`, saved passwords are in the encrypted file instead of Windows Credential Manager, and
 assistant requests go from the server to the provider. There is one access token per server, not separate user accounts.
 For access over a network, put the server behind HTTPS (a reverse proxy) and set `FOSTA_STUDIO_SECURE_COOKIE=on`.
+
+## Updating
+
+The app checks GitHub for a new release once a day (Settings → Check for updates) and shows *Update X.Y.Z* in the status bar. It
+never touches Docker itself. To update by hand, pull the image and re-create the container on the same volume:
+
+```sh
+docker pull ghcr.io/caothanhphatit/fosta-studio
+docker rm -f fosta-studio
+docker run -d --name fosta-studio -p 127.0.0.1:8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio
+```
+
+With Compose: `docker compose -f deploy/docker-compose.yml pull` then `docker compose -f deploy/docker-compose.yml up -d`.
+
+To update automatically, the Compose file has an optional [Watchtower](https://containrrr.dev/watchtower/) service that updates only
+the `fosta-studio` container, once a day:
+
+```sh
+docker compose -f deploy/docker-compose.yml --profile autoupdate up -d
+```
 
 ## Oracle in the web edition
 

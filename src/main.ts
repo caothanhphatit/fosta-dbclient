@@ -12,7 +12,8 @@ import { welcomeScreen } from "./app/welcome";
 import { renderStatusContext } from "./app/statusBar";
 import { buildLayout, ASSISTANT_STORAGE_KEY } from "./app/layout";
 import { shellMenus } from "./app/menus";
-import { guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
+import { installOnExit, startUpdates } from "./app/update";
+import { confirmQuit, guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
 import { api } from "./core/api";
 import { hideUnsupported, loadCapabilities } from "./core/capabilities";
 import { loadEngines } from "./core/engines";
@@ -406,13 +407,14 @@ async function bootstrap(): Promise<void> {
     toggleAssistant,
   });
   suppressBrowserContextMenu();
-  guardWindowClose(tabs);
+  guardWindowClose(tabs, installOnExit);
   revealWindowAfterFirstPaint();
   preloadQueryView();
   try {
     const config = await api.getConfig();
     applyConfig(config);
     if (config.startupNotice) toast(config.startupNotice, "info");
+    void startUpdates({ confirmRestart: () => confirmQuit(tabs, "Restart") });
     if (supported.tasks) await tasksPanel.init();
   } catch (error) {
     showError(error, "Load the configuration");

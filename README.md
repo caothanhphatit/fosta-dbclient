@@ -32,7 +32,8 @@ All the details: [docs/features.md](docs/features.md).
 ### Windows
 
 Download the installer or the portable `.exe` from the [latest release](https://github.com/caothanhphatit/fosta-dbclient/releases/latest)
-and run it. The binaries are not code-signed yet, so Windows SmartScreen may ask you to confirm.
+and run it. The binaries are not code-signed yet, so Windows SmartScreen may ask you to confirm. The installed app updates itself
+(downloaded in the background, installed when you quit); the portable one shows when a new release is out.
 
 ### Run with Docker (web edition)
 

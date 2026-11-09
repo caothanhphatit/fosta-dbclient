@@ -13,7 +13,7 @@ default-run = "fosta-studio"
 # (`web`). Build the server alone with `cargo build --release --no-default-features --features web`.
 [features]
 default = ["desktop", "engines-all"]
-desktop = ["dep:tauri", "dep:tauri-build", "dep:keyring"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:keyring", "dep:tauri-plugin-updater", "dep:tauri-plugin-process"]
 web = [
     "dep:axum",
     "dep:tower-http",
@@ -114,6 +114,10 @@ tower-http = { version = "0.6", features = ["fs", "set-header"], optional = true
 chacha20poly1305 = { version = "0.10", optional = true }
 hmac = { version = "0.13", optional = true }
 sha2 = { version = "0.11", optional = true }
+# Update check (commands/update.rs, every edition) and in-place updates of the installed desktop app (feature `desktop`).
+semver = "1"
+tauri-plugin-updater = { version = "2", optional = true }
+tauri-plugin-process = { version = "2", optional = true }
 
 # TLS: Windows keeps the system stack (SChannel); elsewhere (the Linux server image) rustls, so no OpenSSL is needed.
 [target.'cfg(windows)'.dependencies]

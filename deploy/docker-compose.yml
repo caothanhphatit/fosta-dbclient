@@ -2,6 +2,7 @@
 #
 #   docker compose -f deploy/docker-compose.yml up -d                    # Fosta Studio only
 #   docker compose -f deploy/docker-compose.yml --profile demo up -d     # plus a demo MariaDB
+#   docker compose -f deploy/docker-compose.yml --profile autoupdate up -d   # plus Watchtower (daily image updates)
 #   docker compose -f deploy/docker-compose.yml logs fosta-studio        # the sign-in address
 #
 # With the demo profile, add a MariaDB connection with host `mariadb`, port 3306, user `root` and the
@@ -24,6 +25,22 @@ services:
     extra_hosts:
       # Lets connections use host.docker.internal for databases on this machine (built in on Docker Desktop).
       - "host.docker.internal:host-gateway"
+    labels:
+      # Opts this container in to the optional watchtower service below.
+      com.centurylinklabs.watchtower.enable: "true"
+    restart: unless-stopped
+
+  # Optional automatic updates: once a day, pulls the newer image and re-creates fosta-studio on the same volume.
+  # Only containers labelled above are touched (--label-enable); old images are removed (--cleanup).
+  watchtower:
+    image: containrrr/watchtower
+    profiles: [autoupdate]
+    command: --label-enable --cleanup --interval 86400
+    environment:
+      # Docker Engine 29 refuses Watchtower's default (older) API version; 1.44 works with Docker 25 and newer.
+      DOCKER_API_VERSION: "1.44"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
 
   mariadb:

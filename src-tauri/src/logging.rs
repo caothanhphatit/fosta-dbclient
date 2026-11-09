@@ -237,6 +237,7 @@ macro_rules! infallible_outcome {
 
 infallible_outcome!(
     (),
+    String,
     crate::config::AppConfig,
     crate::Capabilities,
     Vec<String>,
@@ -249,8 +250,13 @@ infallible_outcome!(
 fn log_command<T: Outcome>(name: &str, started: Instant, output: &T) {
     let ms = started.elapsed().as_millis() as u64;
     match output.failure() {
-        // Gateway confirmations are part of the normal flow; everything else is worth a warning.
-        Some((code, message)) if code == "CONFIRMATION_REQUIRED" || code == "PASSWORD_REQUIRED" => {
+        // Gateway confirmations and failed update checks (offline) are part of the normal flow; everything else is worth a warning.
+        Some((code, message))
+            if matches!(
+                code.as_str(),
+                "CONFIRMATION_REQUIRED" | "PASSWORD_REQUIRED" | crate::update::CHECK_FAILED
+            ) =>
+        {
             tracing::debug!(command = name, ms, code = code.as_str(), "{message}")
         }
         Some((code, message)) => tracing::warn!(command = name, ms, code = code.as_str(), "{message}"),

@@ -7,6 +7,8 @@ export interface TabContent {
   onActivate?(): void;
   dispose?(): void;
   canClose?(): boolean | Promise<boolean>;
+  /** Edits not saved yet; quitting (or restarting to update) asks first. */
+  hasUnsavedChanges?(): boolean;
 }
 
 export interface TabSpec {
