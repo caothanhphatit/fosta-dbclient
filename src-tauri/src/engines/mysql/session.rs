@@ -94,9 +94,11 @@ impl MySqlSession {
         Ok(true)
     }
 
-    /// Applies the read-only mode and the statement timeout of the rules.
+    /// Applies the read-only mode and the statement timeout of the rules. Read-only is set again before every read-only
+    /// run: a statement of an earlier run may have lifted it (`SET SESSION TRANSACTION READ WRITE`,
+    /// ``SET `transaction_read_only` = 0``), and the remembered state would not know.
     async fn apply_limits(&self, state: &mut SessionConn, options: &RunOptions) -> AppResult<()> {
-        if state.read_only != Some(options.read_only) {
+        if options.read_only || state.read_only != Some(options.read_only) {
             let mode = if options.read_only { "READ ONLY" } else { "READ WRITE" };
             state.conn()?.query_drop(format!("SET SESSION TRANSACTION {mode}")).await?;
             state.read_only = Some(options.read_only);

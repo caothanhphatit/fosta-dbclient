@@ -12,7 +12,9 @@
 
 use super::{map_err, types};
 use crate::engines::common::split::{self, Dialect};
-use crate::engines::common::{classify, Batcher, ColumnInfo, Flow, Result, ResultSink, RunOptions, StatementKind, StreamEvent, TxState};
+use crate::engines::common::{
+    classify, Batcher, ColumnInfo, EngineError, ErrorKind, Flow, Result, ResultSink, RunOptions, StatementKind, StreamEvent, TxState,
+};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio_postgres::{CancelToken, Client, SimpleQueryMessage};
@@ -133,6 +135,14 @@ impl PgSession {
                 start: 0,
             })
         };
+        // A failed transaction block rejects the read-only SET, so nothing would be re-asserted before what follows a
+        // ROLLBACK in the same script: a read-only run there may only roll back.
+        if opts.read_only && self.transaction_state() == TxState::Failed && !is_lone_rollback(sql) {
+            return Err(before(EngineError::new(
+                ErrorKind::Input,
+                "The transaction failed. Roll it back on its own before running anything else.",
+            )));
+        }
         self.apply_limits(opts).await.map_err(before)?;
         let mut result = Ok(());
         for (index, st) in split::split(Dialect::Postgres, sql).into_iter().enumerate() {
@@ -169,8 +179,33 @@ impl PgSession {
         Ok(())
     }
 
-    /// Sets the session's default for new transactions (the rules' read-only backstop) when it changes.
+    /// Sets the session's default for new transactions (the rules' read-only backstop).
+    ///
+    /// A read-only run never trusts what was applied before: a statement of an earlier run may have changed the default
+    /// (`SET default_transaction_read_only`, `RESET ALL`, `DISCARD ALL`, `SET SESSION CHARACTERISTICS`), so the default is set
+    /// again before every read-only run, and a read-write transaction left open (`BEGIN READ WRITE`, or one begun under
+    /// other rules) refuses the run until it is committed or rolled back.
     async fn apply_read_only(&self, read_only: bool) -> Result<()> {
+        if read_only {
+            // Two round trips: in one query string both statements would share an implicit transaction begun before the SET.
+            self.client
+                .batch_execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+                .await
+                .map_err(map_err)?;
+            *self.read_only.lock().unwrap_or_else(|p| p.into_inner()) = Some(true);
+            let messages = self.client.simple_query("SHOW transaction_read_only").await.map_err(map_err)?;
+            let current = messages.iter().find_map(|m| match m {
+                SimpleQueryMessage::Row(r) => r.get(0).map(str::to_owned),
+                _ => None,
+            });
+            if current.as_deref() != Some("on") {
+                return Err(EngineError::new(
+                    ErrorKind::Input,
+                    "A read-write transaction is open, and this connection's rules only allow reading. Commit or roll it back first.",
+                ));
+            }
+            return Ok(());
+        }
         let current = *self.read_only.lock().unwrap_or_else(|p| p.into_inner());
         if current != Some(read_only) {
             let mode = if read_only { "READ ONLY" } else { "READ WRITE" };
@@ -297,6 +332,18 @@ fn result_columns(cols: &[tokio_postgres::Column]) -> Vec<ColumnInfo> {
     cols.iter()
         .map(|c| ColumnInfo::result(c.name(), c.type_().name(), types::kind_of(c.type_())))
         .collect()
+}
+
+/// One `ROLLBACK`/`ABORT` (also `ROLLBACK TO SAVEPOINT`) and nothing else.
+fn is_lone_rollback(sql: &str) -> bool {
+    let statements = split::split(Dialect::Postgres, sql);
+    let [only] = statements.as_slice() else {
+        return false;
+    };
+    matches!(
+        split::words(Dialect::Postgres, &only.text).first().map(String::as_str),
+        Some("ROLLBACK" | "ABORT")
+    )
 }
 
 /// A read-only query a cursor can run: SELECT/WITH/VALUES/TABLE that the classifier calls Read (so no data-modifying CTE and

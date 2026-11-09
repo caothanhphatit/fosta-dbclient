@@ -490,3 +490,54 @@ async fn live_engine_postgres_transaction_state() {
     s.commit().await.unwrap();
     assert_eq!(s.transaction_state(), TxState::Idle);
 }
+
+#[tokio::test]
+#[ignore]
+async fn live_engine_postgres_read_only_backstop_is_reasserted() {
+    let e = engine().await;
+    let s = e.open_session().await.unwrap();
+    let ro = RunOptions {
+        read_only: true,
+        ..RunOptions::default()
+    };
+    let rw = RunOptions::default();
+    let probe = "CREATE TEMP TABLE fosta_ro_probe (a int)";
+    let refused = |err: crate::engines::common::EngineError| assert_eq!(err.code.as_deref(), Some("25006"), "{err}");
+
+    // A statement that switched the session default off (classified Admin; here run past the gateway) does not survive
+    // into the next read-only run, nor does RESET ALL or DISCARD ALL.
+    for lift in [
+        "SET default_transaction_read_only = off",
+        "SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE",
+        "RESET ALL",
+        "DISCARD ALL",
+    ] {
+        s.run(lift, &ro, &mut CollectSink::default()).await.unwrap();
+        refused(s.run(probe, &ro, &mut CollectSink::default()).await.unwrap_err());
+    }
+
+    // A read-write transaction left open refuses read-only runs until it ends.
+    s.run("BEGIN READ WRITE", &ro, &mut CollectSink::default()).await.unwrap();
+    assert_eq!(s.transaction_state(), TxState::Active);
+    for sql in [probe, "SELECT 1"] {
+        let err = s.run(sql, &ro, &mut CollectSink::default()).await.unwrap_err();
+        assert!(err.message.contains("read-write transaction is open"), "{err}");
+    }
+    s.rollback().await.unwrap();
+    s.run("SELECT 1", &ro, &mut CollectSink::default()).await.unwrap();
+
+    // In a failed transaction (where the SET cannot run) a read-only run may only roll back.
+    assert!(s.run("BEGIN; SELECT 1/0", &rw, &mut CollectSink::default()).await.is_err());
+    assert_eq!(s.transaction_state(), TxState::Failed);
+    let err = s.run("ROLLBACK; SELECT 1", &ro, &mut CollectSink::default()).await.unwrap_err();
+    assert!(err.message.contains("Roll it back on its own"), "{err}");
+    s.run("ROLLBACK", &ro, &mut CollectSink::default()).await.unwrap();
+    assert_eq!(s.transaction_state(), TxState::Idle);
+
+    // A read-only transaction is fine, and read-write runs still work afterwards.
+    s.run("BEGIN", &ro, &mut CollectSink::default()).await.unwrap();
+    s.run("SELECT 1", &ro, &mut CollectSink::default()).await.unwrap();
+    s.rollback().await.unwrap();
+    s.run(probe, &rw, &mut CollectSink::default()).await.unwrap();
+    s.run("DROP TABLE fosta_ro_probe", &rw, &mut CollectSink::default()).await.unwrap();
+}

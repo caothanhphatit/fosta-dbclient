@@ -460,6 +460,42 @@ async fn contract_mariadb_transactions_and_backstops() {
     tab.close().await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mariadb.yml"]
+async fn contract_mariadb_read_only_is_reasserted_every_run() {
+    let (_manager, handle) = shop().await;
+    let tab = session(&handle).await;
+    let read_only = RunOptions {
+        read_only: true,
+        ..RunOptions::default()
+    };
+    let session_read_only = |sink: CollectSink| sink.sets.last().unwrap().rows[0][0].clone();
+    // Statements that lift the session's read-only mode (classified Admin; here run past the gateway) do not survive into
+    // the next read-only run.
+    for lift in [
+        "SET SESSION TRANSACTION READ WRITE",
+        "SET SESSION `tx_read_only` = 0",
+        "SET @@session.tx_read_only = OFF",
+    ] {
+        run(&handle, &tab, lift, read_only.clone()).await.unwrap();
+        let after = run(&handle, &tab, "SELECT @@session.tx_read_only", read_only.clone())
+            .await
+            .unwrap();
+        assert_eq!(session_read_only(after), Value::Int(1), "after {lift}");
+    }
+    // Inside a read-only transaction the re-assertion is accepted.
+    assert!(tab.transaction(TransactionOp::Begin, &read_only).await.unwrap().open);
+    run(&handle, &tab, "SELECT 1", read_only.clone()).await.unwrap();
+    run(&handle, &tab, "SELECT 2", read_only.clone()).await.unwrap();
+    tab.transaction(TransactionOp::Rollback, &read_only).await.unwrap();
+    // Read-write runs switch it off again.
+    let back = run(&handle, &tab, "SELECT @@session.tx_read_only", RunOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(session_read_only(back), Value::Int(0));
+    tab.close().await;
+}
+
 /// The diagram's keys agree with `describe` (an independent catalog path): each table's primary key and each foreign key.
 async fn assert_graph_matches_descriptions(handle: &Handle, graph: &crate::contract::SchemaGraph, object: impl Fn(&str) -> ObjectRef) {
     for table in graph.tables.iter().filter(|table| table.kind == "table") {
