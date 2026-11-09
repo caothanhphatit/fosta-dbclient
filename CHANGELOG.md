@@ -51,6 +51,18 @@ First public release for Windows, plus a web edition for Docker.
   confirmation (even Open asks once before DROP, TRUNCATE or UPDATE/DELETE without WHERE, with a "Don't ask again" box), Guarded
   makes destructive ones ask you to type the object or workspace name, Production workspaces start read-only, and blocked,
   confirmed and relaxed operations go to a local audit log.
+  - Statements that run something else are rated by what they run: `EXPLAIN ANALYZE`/`ANALYSE`, `EXECUTE`/`EXEC`, `PREPARE`,
+    `sp_executesql` and `EXECUTE IMMEDIATE`. Switching a session or transaction to read-write, changing `sql_mode`, `SET ROLE`,
+    and SELECTs that call functions with side effects (`pg_terminate_backend`, `dblink`, `LOAD_FILE`, `OPENQUERY`, `UTL_HTTP`,
+    ClickHouse `url()`/`remote()`…) are administrative.
+  - Read-only runs are enforced by the database too: read-only sessions re-applied before every run on PostgreSQL, MySQL/MariaDB,
+    ClickHouse and SQLite, a read-only transaction on Oracle, a rolled-back transaction on SQL Server, and a session-level check on
+    MongoDB, Redis and Elasticsearch/OpenSearch.
+  - Making a Production workspace's rules looser always needs its name typed, including a connection's own rules, moving a
+    connection out of it, or removing the Production icon.
+- **Saved secrets stay with their server**: changing a connection's host, port, user, SSH route or TLS settings (or an AI or
+  embedding endpoint) without typing the password or key again forgets the saved one, so it is never sent to the new target.
+  Certificate pinning checks the server's own certificate only.
 - **AI agent** (`Ctrl+Shift+A`) with the provider of your choice (Fosta, OpenAI, Gemini, Claude or any OpenAI-compatible endpoint such
   as Ollama) and your own key. It looks up tables, columns and relations on every ready engine, writes and explains queries, fixes
   errors, reads task logs and opens tables, diagrams or query tabs.
