@@ -38,6 +38,18 @@ jobs:
           {
             echo "notes<<FOSTA_RELEASE_NOTES_EOF"
             node scripts/version.mjs changelog "$GITHUB_REF_NAME"
+            if [ -f Dockerfile ]; then
+              version="${GITHUB_REF_NAME#v}"
+              echo
+              echo "### Docker (web edition)"
+              echo
+              echo '```sh'
+              echo "docker run -d --name fosta-studio -p 127.0.0.1:8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio:$version"
+              echo "docker logs fosta-studio"
+              echo '```'
+              echo
+              echo "Open the sign-in address printed in the log. Image: [ghcr.io/caothanhphatit/fosta-studio](https://github.com/caothanhphatit/fosta-dbclient/pkgs/container/fosta-studio); settings in [docs/web-edition.md](https://github.com/caothanhphatit/fosta-dbclient/blob/$GITHUB_REF_NAME/docs/web-edition.md)."
+            fi
             echo "FOSTA_RELEASE_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
       - name: Is there a Docker web edition?
@@ -111,6 +123,10 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+          labels: |
+            org.opencontainers.image.title=Fosta Studio
+            org.opencontainers.image.description=Fosta Studio web edition: a database client for 11 engines in your browser
+            org.opencontainers.image.licenses=GPL-3.0-only
       # The root Dockerfile builds the UI and `fosta-studio-server` (feature `web`) from the whole repository.
       - uses: docker/build-push-action@v6
         with:

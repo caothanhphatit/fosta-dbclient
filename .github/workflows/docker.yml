@@ -47,6 +47,7 @@ jobs:
             latest=false
           labels: |
             org.opencontainers.image.title=Fosta Studio
+            org.opencontainers.image.description=Fosta Studio web edition: a database client for 11 engines in your browser
             org.opencontainers.image.licenses=GPL-3.0-only
 
       - name: Build${{ github.event_name != 'pull_request' && ' and push' || '' }}
