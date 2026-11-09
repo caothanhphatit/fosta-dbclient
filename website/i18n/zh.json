@@ -18,7 +18,7 @@
   "hero.download": "下载 Windows 版",
   "hero.docker": "用 Docker 运行",
   "hero.github": "在 GitHub 上查看",
-  "hero.note": "版本 0.1.0 · Windows 安装程序或便携版 .exe · Docker 网页版",
+  "hero.note": "版本 {version} · Windows 安装程序或便携版 .exe · Docker 网页版",
   "hero.dockerLabel": "Docker 命令",
   "hero.dockerTitle": "Docker 网页版",
   "hero.copy": "复制",

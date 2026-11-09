@@ -18,7 +18,7 @@
   "hero.download": "Tải cho Windows",
   "hero.docker": "Chạy bằng Docker",
   "hero.github": "Xem trên GitHub",
-  "hero.note": "Phiên bản 0.1.0 · Bộ cài Windows hoặc .exe portable · Bản web chạy bằng Docker",
+  "hero.note": "Phiên bản {version} · Bộ cài Windows hoặc .exe portable · Bản web chạy bằng Docker",
   "hero.dockerLabel": "Lệnh Docker",
   "hero.dockerTitle": "Bản web chạy bằng Docker",
   "hero.copy": "Sao chép",

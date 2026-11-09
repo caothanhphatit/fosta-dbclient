@@ -18,7 +18,7 @@
   "hero.download": "Windows 版をダウンロード",
   "hero.docker": "Docker で実行",
   "hero.github": "GitHub で見る",
-  "hero.note": "バージョン 0.1.0 · Windows インストーラー／ポータブル版 .exe · Docker 版 Web エディション",
+  "hero.note": "バージョン {version} · Windows インストーラー／ポータブル版 .exe · Docker 版 Web エディション",
   "hero.dockerLabel": "Docker コマンド",
   "hero.dockerTitle": "Docker で動く Web エディション",
   "hero.copy": "コピー",

@@ -18,7 +18,7 @@
   "hero.download": "Download for Windows",
   "hero.docker": "Run with Docker",
   "hero.github": "View on GitHub",
-  "hero.note": "Version 0.1.0 · Windows installer or portable .exe · Docker web edition",
+  "hero.note": "Version {version} · Windows installer or portable .exe · Docker web edition",
   "hero.dockerLabel": "Docker commands",
   "hero.dockerTitle": "Web edition in Docker",
   "hero.copy": "Copy",

@@ -14,6 +14,9 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+// The app version, from the repository's package.json: "{version}" in the page and its strings becomes this at build
+// time, so the page always names the version the release workflow builds.
+const APP_VERSION = JSON.parse(fs.readFileSync(path.join(HERE, "..", "package.json"), "utf8")).version;
 const ORIGIN = "https://dbcl.fosta.app";
 
 // The first locale is the default: served at the root, and the x-default alternate.
@@ -383,6 +386,9 @@ export function renderPage(html, loc, dicts) {
   // 5. Cache busting: the stylesheet and script URLs carry a hash of their content, so a CDN or browser cache never
   // pairs a new page with an old styles.css or main.js (that mix left the carousel slides stacked on phones).
   out = out.replace(/(\s(?:href|src)="(?:\.\.\/)?)(styles\.css|main\.js)"/g, (_, a, name) => `${a}${name}?v=${assetVersion(name)}"`);
+
+  // 6. The app version.
+  out = out.replaceAll("{version}", APP_VERSION);
 
   return out;
 }
