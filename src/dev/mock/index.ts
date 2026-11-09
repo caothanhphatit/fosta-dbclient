@@ -372,13 +372,24 @@ function saveWorkspace(meta: Workspace, relaxConfirmation: unknown) {
         ...config,
         workspaces: config.workspaces.map((item) =>
           item.id === meta.id
-            ? { ...item, name: meta.name, color: meta.color, icon: meta.icon, safety: after, assistantQueries: meta.assistantQueries ?? item.assistantQueries }
+            ? {
+                ...item,
+                name: meta.name,
+                color: meta.color,
+                icon: meta.icon,
+                safety: after,
+                assistantQueries: meta.assistantQueries ?? item.assistantQueries,
+                mcp: meta.mcp ?? item.mcp,
+              }
             : item,
         ),
       }
     : {
         ...config,
-        workspaces: [...config.workspaces, { ...meta, safety: after, assistantQueries: meta.assistantQueries ?? "default", connections: [], tasks: [] }],
+        workspaces: [
+          ...config.workspaces,
+          { ...meta, safety: after, assistantQueries: meta.assistantQueries ?? "default", mcp: meta.mcp ?? "off", connections: [], tasks: [] },
+        ],
       };
   return state.config;
 }

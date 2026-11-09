@@ -205,7 +205,7 @@ fn connect_error(error: &AppError) -> String {
         Some(code) if code.starts_with("SSH_HOST_KEY") => "The SSH server's host key is not trusted yet. Ask the user to \
              connect once in Fosta Studio and accept it."
             .to_owned(),
-        _ => format!("Could not connect: {error}"),
+        _ => crate::ai::framed("connect", &format!("Could not connect: {error}")),
     }
 }
 
