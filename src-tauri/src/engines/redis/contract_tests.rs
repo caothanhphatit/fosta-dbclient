@@ -583,3 +583,168 @@ async fn contract_redis_a_run_lands_in_the_database_it_names() {
         .await
         .unwrap();
 }
+
+// --- Vector suite --------------------------------------------------------------------------------------------------------
+
+/// Search indexes live in database 0 only, so the vector data is there, under its own prefix and index (never FLUSHDB).
+const VECTOR_INDEX: &str = "fosta_contract_vectors";
+const VECTOR_PREFIX: &str = "fosta_contract:vec:";
+const VECTOR_DOCS: u32 = 300;
+
+/// (Re)creates the vector documents and their HNSW cosine index in database 0; `None` without the Query Engine.
+async fn seed_vectors() -> Option<()> {
+    let url = format!(
+        "redis://:{}@{}:{}/0",
+        env("PASSWORD", "studio-redis"),
+        env("HOST", "127.0.0.1"),
+        env("PORT", "6379")
+    );
+    let client = ::redis::Client::open(url).expect("redis url");
+    let mut conn = client.get_multiplexed_async_connection().await.expect("connect to database 0");
+    let modules: String = format!(
+        "{:?}",
+        ::redis::cmd("MODULE").arg("LIST").query_async::<::redis::Value>(&mut conn).await
+    );
+    if !modules.contains("search") {
+        return None;
+    }
+    let _: ::redis::RedisResult<()> = ::redis::cmd("FT.DROPINDEX").arg(VECTOR_INDEX).query_async(&mut conn).await;
+    let mut pipe = ::redis::pipe();
+    for id in 1..=VECTOR_DOCS {
+        let n = id as f32;
+        let values = [
+            (id % 10 + 1) as f32 / 10.0,
+            ((id * 3) % 11 + 1) as f32 / 11.0,
+            ((id * 7) % 13 + 1) as f32 / 13.0,
+            ((id * 9) % 17 + 1) as f32 / 17.0,
+        ];
+        let blob: Vec<u8> = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+        let key = format!("{VECTOR_PREFIX}{id}");
+        pipe.cmd("DEL").arg(&key).ignore();
+        pipe.cmd("HSET")
+            .arg(&key)
+            .arg("label")
+            .arg(format!("vector {id}"))
+            .arg("rank")
+            .arg(n)
+            .arg("embedding")
+            .arg(blob)
+            .ignore();
+    }
+    let _: () = pipe.query_async(&mut conn).await.expect("seed vector documents");
+    let _: () = ::redis::cmd("FT.CREATE")
+        .arg(VECTOR_INDEX)
+        .arg(&[
+            "ON",
+            "HASH",
+            "PREFIX",
+            "1",
+            VECTOR_PREFIX,
+            "SCHEMA",
+            "label",
+            "TEXT",
+            "rank",
+            "NUMERIC",
+        ])
+        .arg(&[
+            "embedding",
+            "VECTOR",
+            "HNSW",
+            "8",
+            "TYPE",
+            "FLOAT32",
+            "DIM",
+            "4",
+            "DISTANCE_METRIC",
+            "COSINE",
+            "M",
+            "8",
+        ])
+        .query_async(&mut conn)
+        .await
+        .expect("FT.CREATE");
+    // Indexing existing documents runs in the background.
+    for _ in 0..50 {
+        let info: ::redis::Value = ::redis::cmd("FT.INFO")
+            .arg(VECTOR_INDEX)
+            .query_async(&mut conn)
+            .await
+            .expect("FT.INFO");
+        let indexed = super::types::as_pairs(info).into_iter().find_map(|(key, value)| {
+            (super::types::as_string(key).as_deref() == Some("num_docs")).then(|| super::types::as_i64(&value))?
+        });
+        if indexed == Some(i64::from(VECTOR_DOCS)) {
+            return Some(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("{VECTOR_INDEX} did not index its documents");
+}
+
+/// The shared vector suite on a Redis 8 search index (HASH documents, a FLOAT32 HNSW cosine field). Redis 7.4 without the
+/// search module skips it (and passes), so CI's Redis 7.4 job stays green.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/redis.yml"]
+async fn contract_redis_vector() {
+    if seed_vectors().await.is_none() {
+        println!("redis: no search module (Query Engine) on this server; vector suite skipped");
+        return;
+    }
+    let vectors = crate::contract::testing::vector::VectorFixture {
+        database: "0",
+        table: VECTOR_INDEX,
+        column: "embedding",
+        dims: 4,
+        key_column: super::vector::KEY_COLUMN,
+        key: 1,
+        indexed: true,
+    };
+    let Some(run) = crate::contract::testing::vector::suite_vector(&fixture(), &vectors).await else {
+        return;
+    };
+    assert_eq!(run.info["columns"][0]["typeName"], "VECTOR HNSW FLOAT32 DIM 4 COSINE");
+    let index = &run.info["indexes"][0];
+    assert_eq!(
+        (
+            index["name"].as_str(),
+            index["kind"].as_str(),
+            index["metric"].as_str(),
+            index["m"].as_u64()
+        ),
+        (Some(VECTOR_INDEX), Some("hnsw"), Some("cosine"), Some(8))
+    );
+    let search = &run.search;
+    assert_eq!(search["indexUsed"], VECTOR_INDEX, "{search}");
+    assert!(search["sql"].as_str().unwrap().contains("KNN 5 @embedding $vec"), "{search}");
+    assert!(search["runnableSql"].as_str().unwrap().contains("\\x"), "{search}");
+    let columns: Vec<&str> = search["result"]["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|column| column["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(columns, ["vec_distance", "__key", "label", "rank"]);
+    assert_eq!(search["result"]["rows"][0][1]["v"], format!("{VECTOR_PREFIX}1"), "{search}");
+
+    // Another metric than the field's scans the documents; a filter is a query the KNN runs within.
+    let (manager, handle) = suites::connect(&fixture()).await;
+    let args = |metric: &str, filter: Json| {
+        json!({ "database": "0", "table": VECTOR_INDEX, "column": "embedding", "k": 3, "metric": metric, "filter": filter,
+                "query": { "kind": "literal", "text": "[0.2, 0.4, 0.6, 0.8]" } })
+    };
+    let scanned = call(&handle, "vector.search", args("euclidean", Json::Null)).await.unwrap();
+    assert!(scanned["indexUsed"].is_null(), "{scanned}");
+    assert!(
+        scanned["plan"]["rows"][0][0]["v"].as_str().unwrap().starts_with("Exact scan"),
+        "{scanned}"
+    );
+    let filtered = call(&handle, "vector.search", args("auto", json!("@rank:[1 10]"))).await.unwrap();
+    let rows = filtered["result"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{filtered}");
+    assert!(rows.iter().all(|row| row[3]["v"].as_f64().unwrap() <= 10.0), "{filtered}");
+    let other_db = call(&handle, "vector.info", json!({ "database": "14", "table": VECTOR_INDEX }))
+        .await
+        .unwrap();
+    assert_eq!(other_db["supported"], false, "search indexes live in database 0");
+    manager.disconnect(suites::CONNECTION).await;
+}

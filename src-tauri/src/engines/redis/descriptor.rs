@@ -30,6 +30,8 @@ pub fn descriptor() -> EngineDescriptor {
             Capability::KeyValue,
             Capability::Console,
             Capability::ServerOverview,
+            // Vector fields of search indexes (FT.*), only when the server has the Query Engine (checked on connect).
+            Capability::Vector,
         ]),
         objects_label: "keys".into(),
         connection: ConnectionForm {

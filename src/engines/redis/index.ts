@@ -5,7 +5,8 @@
  * - `keys` on a database: the key browser (SCAN with a pattern, type, TTL, memory),
  * - `value` and `data` on a key: the typed value editor (string with a JSON pretty view, hash, list, set, sorted set,
  *   stream), TTL set and remove, edits guarded against concurrent changes,
- * - `server` on the connection: INFO and the slow log.
+ * - `server` on the connection: INFO and the slow log,
+ * - `vectorSearch` and `vectorHealth` on a search index with vector fields (Redis 8, database 0): the shared vector views.
  *
  * Each view is a chunk of its own; styles are `redis.css`, imported by the views.
  */
@@ -33,6 +34,25 @@ const views: ViewRegistration[] = [
     icon: "server",
     title: () => "Server info",
     load: async () => (await import("./serverView")).serverViewFactory,
+  },
+  // A search index with vector fields (database 0): the shared vector search and health views.
+  {
+    engine: ENGINE,
+    kinds: ["searchIndex"],
+    role: "vectorSearch",
+    icon: "vector",
+    requires: "vector",
+    title: (ctx) => `${ctx.object?.name ?? ""} · vector search`,
+    load: async () => (await import("./vectorViews")).vectorSearchViewFactory,
+  },
+  {
+    engine: ENGINE,
+    kinds: ["searchIndex"],
+    role: "vectorHealth",
+    icon: "health",
+    requires: "vector",
+    title: (ctx) => `${ctx.object?.name ?? ""} · vector health`,
+    load: async () => (await import("./vectorViews")).vectorHealthViewFactory,
   },
 ];
 
