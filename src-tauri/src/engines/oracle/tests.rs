@@ -177,9 +177,15 @@ async fn live_engine_oracle_browse_filters_and_keyset() {
 #[ignore]
 async fn live_engine_oracle_vector_columns_browse_and_select() {
     let Some(e) = engine().await else { return };
+    // The grid offers the vector tools on columns with the `vector_dims` hint.
+    let described = e.describe(&t("PRODUCTS")).await.unwrap();
+    let embedding = described.column("EMBEDDING").unwrap();
+    assert_eq!(embedding.type_name, "VECTOR(4, FLOAT32)");
+    assert_eq!(embedding.hints.vector_dims, Some(4));
     let page = e.browse(&BrowseRequest::new(t("PRODUCTS"), 5)).await.unwrap();
     assert_eq!(page.rows.len(), 5);
     let at = page.columns.iter().position(|c| c.name == "EMBEDDING").expect("EMBEDDING column");
+    assert_eq!(page.columns[at].hints.vector_dims, Some(4));
     assert!(
         matches!(&page.rows[0][at], Value::Text(text) if text.starts_with('[')),
         "{:?}",

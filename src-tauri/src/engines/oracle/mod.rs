@@ -264,7 +264,7 @@ impl SqlDialect for OraDialect {
             "JSON" => format!("JSON_SERIALIZE({q}) AS {q}"),
             "XMLTYPE" => format!("XMLSERIALIZE(CONTENT {q}) AS {q}"),
             // The `oracle` crate has no VECTOR type: vectors are read as text (`[1.0E+000,2.0E+000]`).
-            "VECTOR" => format!("FROM_VECTOR({q} RETURNING CLOB) AS {q}"),
+            t if t == "VECTOR" || t.starts_with("VECTOR(") => format!("FROM_VECTOR({q} RETURNING CLOB) AS {q}"),
             _ => q,
         }
     }
@@ -651,6 +651,7 @@ fn describe_relation(c: &Connection, d: &mut ObjectDescription, owner: &str) -> 
             generated: if virt { default } else { None },
         });
     }
+    vector::describe_columns(c, owner, &name, &mut d.columns);
     if let Some(r) = one(
         c,
         "SELECT comments FROM all_tab_comments WHERE owner = :1 AND table_name = :2",

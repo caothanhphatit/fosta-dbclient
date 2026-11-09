@@ -85,7 +85,8 @@ the prompt then lists the manual steps. The Windows client needs the Microsoft V
 The vector tools (search, health checks, index recall) appear on Oracle 23ai and newer.
 
 - **Columns**: dense `VECTOR` columns (`VECTOR(4, FLOAT32)`; dimensions from the type, or from a stored value for
-  `VECTOR(*)`). Sparse and `BINARY` vectors are not listed. The grid and query tabs read vectors as text through `FROM_VECTOR`.
+  `VECTOR(*)`). Sparse and `BINARY` vectors are not listed. The grid shows vectors as text (`FROM_VECTOR`) and offers *Find
+  similar* on them; query tabs read them as text too.
 - **Indexes**: IVF (`NEIGHBOR PARTITIONS`) and HNSW (`INMEMORY NEIGHBOR GRAPH`). The metric and build options are read from
   `VECSYS.VECTOR$INDEX` when the user may (DBAs); otherwise the metric is found from the plan (the metric whose
   `FETCH APPROX` search uses the index). HNSW needs `VECTOR_MEMORY_SIZE` (0 on the Free image, so the dev seed uses IVF).

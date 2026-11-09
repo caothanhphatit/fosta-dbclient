@@ -102,7 +102,8 @@ impl VectorType {
 
     fn type_name(&self) -> String {
         let dims = self.dims.map_or_else(|| "*".to_owned(), |dims| dims.to_string());
-        format!("VECTOR({dims}, {})", self.format)
+        let sparse = if self.sparse { ", SPARSE" } else { "" };
+        format!("VECTOR({dims}, {}{sparse})", self.format)
     }
 }
 
@@ -390,6 +391,37 @@ fn vector_columns(columns: &[OraColumn]) -> Vec<VectorColumn> {
             })
         })
         .collect()
+}
+
+/// Gives the VECTOR columns of a described table their type (`VECTOR(4, FLOAT32)`) and, for dense vectors with fixed
+/// dimensions, the `vector_dims` hint the grid offers the vector tools on. Best effort: an older release without
+/// `VECTOR_INFO` keeps the plain `VECTOR` type.
+pub(super) fn describe_columns(c: &Connection, owner: &str, table: &str, columns: &mut [ColumnInfo]) {
+    if !columns.iter().any(|column| column.type_name == "VECTOR") {
+        return;
+    }
+    let Ok(rows) = strings(
+        c,
+        "SELECT column_name, vector_info FROM all_tab_columns WHERE owner = :1 AND table_name = :2 AND data_type = 'VECTOR'",
+        &[&owner, &table],
+    ) else {
+        return;
+    };
+    for row in rows {
+        let (Some(Some(name)), Some(info)) = (row.first(), row.get(1)) else {
+            continue;
+        };
+        let Some(column) = columns.iter_mut().find(|column| &column.name == name) else {
+            continue;
+        };
+        let vector = VectorType::parse(info.as_deref());
+        if info.is_some() {
+            column.type_name = vector.type_name();
+        }
+        if vector.readable() {
+            column.hints.vector_dims = vector.dims;
+        }
+    }
 }
 
 fn find_vector<'a>(columns: &'a [OraColumn], name: &str) -> AppResult<&'a OraColumn> {
@@ -822,7 +854,9 @@ mod tests {
         let flexible = VectorType::parse(Some("VECTOR(*,*,DENSE)"));
         assert_eq!((flexible.dims, flexible.format.as_str()), (None, "*"));
         assert_eq!(flexible.type_name(), "VECTOR(*, *)");
-        assert!(!VectorType::parse(Some("VECTOR(1000,FLOAT32,SPARSE)")).readable());
+        let sparse = VectorType::parse(Some("VECTOR(1000,FLOAT32,SPARSE)"));
+        assert!(!sparse.readable());
+        assert_eq!(sparse.type_name(), "VECTOR(1000, FLOAT32, SPARSE)");
         assert!(!VectorType::parse(Some("VECTOR(64,BINARY,DENSE)")).readable());
         assert_eq!(VectorType::parse(None).dims, None);
     }
