@@ -15,6 +15,7 @@ use super::{
     edit::{engine_of, read_only_reason},
     ops::OPERATIONS,
     session::{ChCancel, ChSession},
+    vector::OPERATIONS as VECTOR_OPERATIONS,
     ChDialect, ChEngine, ChOptions,
 };
 use crate::{
@@ -45,6 +46,8 @@ fn classify_capability(name: &str, args: &serde_json::Value) -> StatementInfo {
             StatementInfo::new(Category::Read, name, &excerpt)
         }
         "clickhouse.kill" => StatementInfo::new(Category::Admin, name, &excerpt).with_reason("Stops a running query or mutation."),
+        // The vector operations only read (every statement runs with readonly = 2).
+        _ if VECTOR_OPERATIONS.contains(&name) => StatementInfo::new(Category::Read, name, &excerpt),
         _ => StatementInfo::refused(name, name, "unknown operation"),
     }
 }
@@ -183,6 +186,10 @@ impl Connection for ClickHouseConnection {
     }
 
     async fn invoke(&self, name: &str, args: serde_json::Value, _ctx: &CallContext) -> AppResult<serde_json::Value> {
+        if VECTOR_OPERATIONS.contains(&name) {
+            require(self.capabilities, Capability::Vector)?;
+            return self.engine.vector(name, args).await;
+        }
         if !OPERATIONS.contains(&name) {
             return Err(crate::contract::unsupported_capability(name));
         }
@@ -370,7 +377,8 @@ mod tests {
 
     #[test]
     fn engine_view_operations_are_classified_and_unknown_ones_refused() {
-        for name in OPERATIONS.iter().filter(|name| **name != "clickhouse.kill") {
+        let readers = OPERATIONS.iter().chain(VECTOR_OPERATIONS.iter());
+        for name in readers.filter(|name| **name != "clickhouse.kill") {
             assert_eq!(capability(name).worst(), Some(Category::Read), "{name}");
             assert_eq!(capability(name).refusal(), None);
         }

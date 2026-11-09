@@ -45,3 +45,23 @@ ORDER BY id
 GO
 INSERT INTO fosta_contract.contract_children
 SELECT toInt32(number + 1), toInt32(number % 1000 + 1), concat('child ', toString(number + 1)) FROM numbers(200)
+GO
+DROP TABLE IF EXISTS fosta_contract.contract_vectors SYNC
+GO
+CREATE TABLE fosta_contract.contract_vectors
+(
+    id Int32,
+    label String,
+    embedding Array(Float32),
+    INDEX embedding_idx embedding TYPE vector_similarity('hnsw', 'cosineDistance', 4),
+    CONSTRAINT embedding_dims CHECK length(embedding) = 4
+)
+ENGINE = MergeTree
+ORDER BY id
+GO
+INSERT INTO fosta_contract.contract_vectors
+SELECT toInt32(number + 1),
+       concat('vector ', toString(number + 1)),
+       [toFloat32(((number + 1) % 10 + 1) / 10), toFloat32(((number + 1) * 3 % 11 + 1) / 11),
+        toFloat32(((number + 1) * 7 % 13 + 1) / 13), toFloat32(((number + 1) * 9 % 17 + 1) / 17)]
+FROM numbers(300)

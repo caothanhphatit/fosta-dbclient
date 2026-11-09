@@ -37,6 +37,8 @@ pub fn descriptor() -> EngineDescriptor {
             Capability::Explain,
             // Parts, mutations and the query log (`clickhouse.*` operations).
             Capability::ServerOverview,
+            // Array(Float32) columns and the distance functions; vector_similarity indexes where tables have them.
+            Capability::Vector,
         ]),
         objects_label: "tables".into(),
         connection: ConnectionForm {

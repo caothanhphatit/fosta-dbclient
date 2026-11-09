@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use crate::{
     contract::{
-        testing::suites::*, BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Field, Filter, NodeKind,
-        ObjectRef, RawFilterLang, RowChange, RowChangeSet, RunOptions, RunRequest, Session, SessionOptions, TreeRequest, Value,
+        testing::{suites::*, vector::*},
+        BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Field, Filter, NodeKind, ObjectRef,
+        RawFilterLang, RowChange, RowChangeSet, RunOptions, RunRequest, Session, SessionOptions, TreeRequest, Value,
     },
     error::AppResult,
     runtime::{ConnectionManager, Handle},
@@ -607,4 +608,35 @@ async fn contract_clickhouse_creates_databases() {
     )
     .await
     .unwrap();
+}
+
+/// The shared vector suite on `fosta_contract.contract_vectors` (`Array(Float32)`, 4 dimensions, an HNSW cosine
+/// `vector_similarity` index), plus ClickHouse specifics.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/clickhouse.yml"]
+async fn contract_clickhouse_vector() {
+    let vectors = VectorFixture {
+        database: "fosta_contract",
+        table: "contract_vectors",
+        column: "embedding",
+        dims: 4,
+        key_column: "id",
+        key: 1,
+        indexed: true,
+    };
+    let run = suite_vector(&fixture(), &vectors).await.expect("ClickHouse has vector functions");
+    assert_eq!(run.info["columns"][0]["typeName"], "Array(Float32)");
+    let index = &run.info["indexes"][0];
+    assert_eq!(index["name"], "embedding_idx");
+    assert_eq!((index["kind"].as_str(), index["metric"].as_str()), (Some("hnsw"), Some("cosine")));
+    assert_eq!(run.info["metrics"], serde_json::json!(["cosine", "euclidean", "dot"]));
+    let search = &run.search;
+    let sql = search["sql"].as_str().unwrap();
+    assert!(sql.contains("cosineDistance(`embedding`, {query:Array(Float32)})"), "{search}");
+    assert_eq!(search["indexUsed"], "embedding_idx", "{search}");
+    let columns = search["result"]["columns"].as_array().unwrap();
+    assert!(
+        columns.iter().all(|column| column["name"] != "embedding"),
+        "vector columns are not selected"
+    );
 }
