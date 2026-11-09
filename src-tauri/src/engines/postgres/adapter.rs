@@ -19,10 +19,10 @@ use super::{
 };
 use crate::{
     contract::{
-        classify_common, require, tabular::ApplyResult, BrowseRequest, CallContext, Canceller, Capability, CapabilitySet, Category,
-        Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, DatabaseAdmin, Engine, EngineDescriptor, NodeKind,
-        ObjectDescription, ObjectRef, OpenedSession, Page, ParsedConnection, RowChangeSet, SchemaGraph, SchemaGraphSource, ServerInfo,
-        SessionOptions, StatementInfo, TabularData, TlsMode, TreeChildren, TreeRequest,
+        classify_common, require, tabular::ApplyResult, vector::OPERATIONS as VECTOR_OPERATIONS, BrowseRequest, CallContext, Canceller,
+        Capability, CapabilitySet, Category, Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, DatabaseAdmin,
+        Engine, EngineDescriptor, NodeKind, ObjectDescription, ObjectRef, OpenedSession, Page, ParsedConnection, RowChangeSet, SchemaGraph,
+        SchemaGraphSource, ServerInfo, SessionOptions, StatementInfo, TabularData, TlsMode, TreeChildren, TreeRequest,
     },
     engines::common::{adapt::tls_to_contract, classify, split::Dialect},
     error::{AppError, AppResult},
@@ -59,6 +59,10 @@ impl Engine for PostgresAdapter {
                 StatementInfo::new(Category::Unknown, language, text)
                     .with_reason(&format!("PostgreSQL sessions do not run the '{language}' language.")),
             ),
+            // The vector operations only read (each runs in a read-only transaction).
+            ClassifyInput::Capability { name, .. } if VECTOR_OPERATIONS.contains(name) => {
+                Classification::single(StatementInfo::new(Category::Read, name, name))
+            }
             ClassifyInput::Capability { name, args } => explain::classify_operation(name, args),
             _ => Classification::default(),
         }
@@ -132,12 +136,16 @@ impl Engine for PostgresAdapter {
         let options = connect::build_options(&request)?;
         let home = PgEngine::connect(options.clone()).await?;
         let info = connect::server_info(home.server_version());
+        let mut capabilities = self.descriptor().capabilities;
+        if !home.has_vector_extension().await.unwrap_or(false) {
+            capabilities = capabilities.without(Capability::Vector);
+        }
         let database = home.database().to_owned();
         let mut engines = HashMap::new();
         engines.insert(database.clone(), Arc::new(home));
         Ok(Arc::new(PostgresConnection {
             info,
-            capabilities: self.descriptor().capabilities,
+            capabilities,
             options,
             home: database,
             engines: Mutex::new(engines),
@@ -245,11 +253,15 @@ impl Connection for PostgresConnection {
     }
 
     async fn invoke(&self, name: &str, args: serde_json::Value, _ctx: &CallContext) -> AppResult<serde_json::Value> {
+        let database = args.get("database").and_then(|value| value.as_str()).map(str::to_owned);
+        if VECTOR_OPERATIONS.contains(&name) {
+            require(self.capabilities, Capability::Vector)?;
+            return self.engine(database.as_deref()).await?.vector(name, args).await;
+        }
         if !OPERATIONS.contains(&name) {
             return Err(crate::contract::unsupported_capability(name));
         }
         require(self.capabilities, Capability::Explain)?;
-        let database = args.get("database").and_then(|value| value.as_str()).map(str::to_owned);
         self.engine(database.as_deref()).await?.explain(&args).await
     }
 
@@ -371,6 +383,11 @@ mod tests {
         });
         assert_eq!(explain.worst(), Some(Category::Read));
         let args = serde_json::Value::Null;
+        for name in VECTOR_OPERATIONS {
+            let vector = POSTGRES.classify(&ClassifyInput::Capability { name, args: &args });
+            assert_eq!(vector.worst(), Some(Category::Read), "{name}");
+            assert!(vector.refusal().is_none());
+        }
         let unknown = POSTGRES.classify(&ClassifyInput::Capability {
             name: "pg.vacuum",
             args: &args,

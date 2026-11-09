@@ -12,7 +12,7 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
   - **MongoDB** (`mongodb`): collections as tables with BSON-typed columns and edits, JSON filters, Atlas URIs, query tabs that run
     database commands as JSON (`{ "find": "products", "filter": {...} }`).
   - **PostgreSQL**: schemas, materialized views, functions, sequences, types and extensions; arrays, `jsonb` and `uuid` values; Stop
-    cancels on the server; `postgres.explain`.
+    cancels on the server; `postgres.explain`; vector tools with pgvector.
   - **SQLite**: a database file (read-only, create, `:memory:`) with attached databases; edits by primary key or `rowid`.
   - **ClickHouse** (HTTP interface): streaming queries with `KILL QUERY`, edits as asynchronous mutations on MergeTree tables, a
     Parts and mutations view and a Server view with running queries and the query log.
@@ -56,7 +56,8 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     search; Insert or open an entry in a new tab. History stays on this machine, in `fosta-studio-history.jsonl` next to the `.exe` (newest
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
-- **Vector tools** (MariaDB 11.7+ only): embedding search, column/index health checks, ANN recall versus exact search.
+- **Vector tools** (MariaDB 11.7+, PostgreSQL with pgvector): embedding search, column/index health checks, ANN recall versus exact
+  search (seeded, so a run can be repeated).
 - **Safety rules per workspace**: a statement gateway on every engine. Every statement the app runs (query tabs, grid filters and
   edits, imports, console requests, new databases) is parsed and classified as read, write, DDL, destructive or administrative, then checked against the workspace's rules: _Open_ (everything runs;
   DROP, TRUNCATE and UPDATE/DELETE without WHERE ask once first), _Guarded_ (confirm writes and DDL, type the table or workspace name for destructive and administrative statements), _Read-only_ (reads only, with

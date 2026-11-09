@@ -48,3 +48,22 @@ CREATE TABLE shop.contract_children (
 GO
 INSERT INTO shop.contract_children (id, item_id, label)
 SELECT seq, seq, 'child ' || seq FROM generate_series(1, 200) AS seq;
+GO
+CREATE EXTENSION IF NOT EXISTS vector;
+GO
+DROP TABLE IF EXISTS shop.contract_vectors;
+GO
+CREATE TABLE shop.contract_vectors (
+  id integer NOT NULL PRIMARY KEY,
+  label varchar(50) NOT NULL,
+  embedding vector(4) NOT NULL
+);
+GO
+INSERT INTO shop.contract_vectors (id, label, embedding)
+SELECT seq,
+       'vector ' || seq,
+       ('[' || ((seq % 10) + 1) / 10.0 || ',' || ((seq * 3) % 11 + 1) / 11.0 || ',' || ((seq * 7) % 13 + 1) / 13.0 || ','
+            || ((seq * 9) % 17 + 1) / 17.0 || ']')::vector(4)
+FROM generate_series(1, 300) AS seq;
+GO
+CREATE INDEX contract_vectors_embedding_idx ON shop.contract_vectors USING hnsw (embedding vector_cosine_ops) WITH (m = 8);

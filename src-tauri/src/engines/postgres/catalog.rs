@@ -38,6 +38,10 @@ pub const TEXT_CAST: &[&str] = &[
     "tstzmultirange",
     "geometry",
     "geography",
+    // pgvector: `[1,2,3]` as text.
+    "vector",
+    "halfvec",
+    "sparsevec",
 ];
 
 pub(super) const USER_SCHEMAS: &str = "n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'";
@@ -310,10 +314,14 @@ async fn columns_of(c: &Client, relid: u32) -> Result<Vec<ColumnInfo>> {
                 None => kind_for(&base, &base_type, &base_cat),
             };
             let is_generated = generated == "s";
+            let type_name: String = r.get(1);
             ColumnInfo {
-                hints: Default::default(),
+                hints: crate::engines::common::ColumnHints {
+                    vector_dims: vector_dims(&base, &type_name),
+                    ..Default::default()
+                },
                 name: r.get(0),
-                type_name: r.get(1),
+                type_name,
                 kind,
                 nullable: !r.get::<_, bool>(2),
                 identity: match identity.as_str() {
@@ -328,6 +336,14 @@ async fn columns_of(c: &Client, relid: u32) -> Result<Vec<ColumnInfo>> {
             }
         })
         .collect())
+}
+
+/// The dimensions of a pgvector column (`vector(4)`, `halfvec(768)`), so the grid offers the vector tools on it.
+fn vector_dims(base: &str, type_name: &str) -> Option<u32> {
+    if !matches!(base, "vector" | "halfvec") {
+        return None;
+    }
+    type_name.split_once('(')?.1.strip_suffix(')')?.trim().parse().ok()
 }
 
 fn kind_for(name: &str, typtype: &str, category: &str) -> ValueKind {

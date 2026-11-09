@@ -37,6 +37,8 @@ pub fn descriptor() -> EngineDescriptor {
             Capability::SchemaGraph,
             Capability::CreateDatabase,
             Capability::Explain,
+            // Only with the pgvector extension in the profile's database (checked on connect).
+            Capability::Vector,
         ]),
         objects_label: "tables".into(),
         connection: ConnectionForm {

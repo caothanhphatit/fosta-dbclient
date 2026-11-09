@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use crate::{
     contract::{
-        testing::suites::*, BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Filter, NodeKind, ObjectRef,
-        RawFilterLang, RunOptions, RunRequest, Session, SessionOptions, TransactionOp, TreeRequest, Value, ValueKind,
+        testing::{suites::*, vector::*},
+        BrowseRequest, CallContext, Category, CollectSink, ConnectSecrets, ConnectionSpec, Filter, NodeKind, ObjectRef, RawFilterLang,
+        RunOptions, RunRequest, Session, SessionOptions, TransactionOp, TreeRequest, Value, ValueKind,
     },
     runtime::{ConnectionManager, Handle},
 };
@@ -353,4 +354,42 @@ async fn contract_postgres_error_positions_and_auto_commit() {
         .expect("auto-commit on");
     assert!(!on.open && on.auto_commit);
     tab.close().await;
+}
+
+/// The shared vector suite on `shop.contract_vectors` (pgvector `vector(4)`, HNSW cosine index), plus pgvector specifics.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/postgres.yml"]
+async fn contract_postgres_vector() {
+    // The capability is read on connect and the seed creates the extension, so seed once before the suite connects.
+    let (manager, _) = connected().await;
+    manager.disconnect(CONNECTION).await;
+    let vectors = VectorFixture {
+        database: "shop",
+        table: "shop.contract_vectors",
+        column: "embedding",
+        dims: 4,
+        key_column: "id",
+        key: 1,
+        indexed: true,
+    };
+    let run = suite_vector(&fixture(), &vectors).await.expect("pgvector is installed");
+    assert_eq!(run.info["columns"][0]["typeName"], "vector(4)");
+    let index = &run.info["indexes"][0];
+    assert_eq!(index["name"], "contract_vectors_embedding_idx");
+    assert_eq!(
+        (index["kind"].as_str(), index["metric"].as_str(), index["m"].as_u64()),
+        (Some("hnsw"), Some("cosine"), Some(8))
+    );
+    assert_eq!(run.info["metrics"], serde_json::json!(["cosine", "euclidean", "dot"]));
+    let search = &run.search;
+    assert!(search["sql"].as_str().unwrap().contains("<=> $1::vector"), "{search}");
+    assert!(search["runnableSql"].as_str().unwrap().contains("::vector"), "{search}");
+    assert_eq!(search["plan"]["columns"][0]["name"], "QUERY PLAN");
+    let columns = search["result"]["columns"].as_array().unwrap();
+    assert!(
+        columns.iter().all(|column| column["name"] != "embedding"),
+        "vector columns are not selected"
+    );
+    let id = columns.iter().position(|column| column["name"] == "id").unwrap();
+    assert_eq!(search["result"]["rows"][0][id]["t"], "int");
 }

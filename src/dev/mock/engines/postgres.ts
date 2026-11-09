@@ -10,6 +10,7 @@ import { DESCRIPTORS, ORDER } from "../descriptors";
 import { mockError } from "../errors";
 import { classifySql, runSql, type SqlDialectMock } from "../sqlRun";
 import type { EngineMock } from "../types";
+import { resultColumn, vectorOps } from "../vectors";
 
 const base = DESCRIPTORS.postgres;
 export const descriptor = {
@@ -92,6 +93,7 @@ const tables: TableSpec[] = [
       column("tags", "text[]", { kind: "array", of: { kind: "text" } }, {}),
       column("profile", "jsonb", "json", {}),
       column("external_id", "uuid", "uuid", {}),
+      column("embedding", "vector(4)", "other", { hints: { vectorDims: 4 } }),
     ],
     rows: () =>
       Array.from({ length: 80 }, (_, index) => {
@@ -106,6 +108,7 @@ const tables: TableSpec[] = [
           v.arr([v.text("web"), v.text(n % 2 ? "mobile" : "store")]),
           n % 5 === 0 ? v.null() : v.json({ plan: n % 3 === 0 ? "pro" : "free", seats: (n % 4) + 1 }),
           v.uuid(uuidOf(n)),
+          v.other("vector", `[${[n % 10, (n * 3) % 11, (n * 7) % 13, (n * 9) % 17].map((x) => ((x + 1) / 10).toFixed(1)).join(",")}]`),
         ];
       }),
     indexes: [
@@ -116,6 +119,14 @@ const tables: TableSpec[] = [
         primary: false,
         method: "btree",
         definition: "CREATE UNIQUE INDEX customers_email_key ON public.customers USING btree (email)",
+      },
+      {
+        name: "customers_embedding_idx",
+        columns: ["embedding"],
+        unique: false,
+        primary: false,
+        method: "hnsw",
+        definition: "CREATE INDEX customers_embedding_idx ON public.customers USING hnsw (embedding vector_cosine_ops)",
       },
     ],
     extra: [["Relation kind", "table"]],
@@ -393,8 +404,31 @@ export const run: NonNullable<EngineMock["run"]> = (request, emit, context) =>
   runSql(catalog, dialect, { ...request, text: request.text.replace(/pg_sleep\(/gi, "sleep(") }, emit, context);
 export const classify = (text: string) => classifySql(text, dialect.split);
 
-/** `postgres.explain`: a plan with one node per table in the statement. */
+/** pgvector on `public.customers.embedding`. */
+const vectors = vectorOps({
+  catalog,
+  object: { database: "shop", schema: "public", name: "customers", kind: "table" },
+  column: "embedding",
+  dims: 4,
+  typeName: "vector(4)",
+  index: { name: "customers_embedding_idx", kind: "hnsw", metric: "cosine", m: null, params: "defaults" },
+  metrics: ["cosine", "euclidean", "dot"],
+  quote: style.quote,
+  distance: (vector) => `"embedding" <=> ${vector}`,
+  placeholder: "$1::vector",
+  literal: (text) => `'${text}'::vector`,
+  plan: {
+    columns: [resultColumn("QUERY PLAN", "text", "text")],
+    rows: [
+      [{ t: "text", v: "Limit  (cost=12.10..13.40 rows=10 width=96)" }],
+      [{ t: "text", v: "  ->  Index Scan using customers_embedding_idx on customers  (cost=12.10..22.50 rows=80 width=96)" }],
+    ],
+  },
+});
+
+/** `postgres.explain`: a plan with one node per table in the statement; `vector.*` on the pgvector column. */
 export const invoke = (name: string, args: unknown): unknown => {
+  if (name.startsWith("vector.")) return vectors[name]?.((args ?? {}) as Record<string, unknown>);
   if (name !== "postgres.explain") return undefined;
   const sql = String((args as { sql?: string } | null)?.sql ?? "");
   const table = /\bfrom\s+"?([\w.]+)"?/i.exec(sql)?.[1] ?? "unknown";

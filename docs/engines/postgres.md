@@ -30,6 +30,21 @@ The driver is `tokio-postgres` with rustls (`net::tls::rustls_client_config`); S
   show a sequence's state, drop an extension (danger). They are query templates, so the gateway applies the safety rules.
 - **Definition view** for functions, sequences, types and extensions: comment, facts, enum labels, composite fields, DDL.
 
+## Vectors (pgvector)
+
+The vector tools (search, health checks, index recall) appear when the `vector` extension is installed in the connection's
+database (`CREATE EXTENSION vector`).
+
+- **Columns**: `vector(n)` and `halfvec(n)`. The dimensions come from the type modifier, or from a stored value when the column has
+  none. The grid shows vectors as `[1,2,3]` and offers *Find similar* on them.
+- **Indexes**: HNSW and IVFFlat. The metric comes from the operator class (`vector_cosine_ops` is cosine, `vector_l2_ops`
+  euclidean, `vector_ip_ops` inner product). The build options (`m`, `ef_construction`, `lists`) are shown with the index.
+- **Search** orders by the metric's operator (`<=>` cosine, `<->` L2, `<#>` negative inner product) with a `LIMIT`, which is
+  the form an index can serve. *Auto* uses the index's operator. It runs in a read-only transaction with
+  `hnsw.ef_search` raised to at least k, and shows the text `EXPLAIN` with the index it used. On small tables the planner may
+  prefer a sequential scan.
+- **Recall** compares top-k through the index (sequential scans off) with exact top-k (`enable_indexscan = off`).
+
 ## Connection
 
 Form: host, port (5432), user, password, database (`postgres` when empty), application name, connect timeout, TLS
@@ -50,5 +65,6 @@ cd src-tauri && cargo test contract_postgres -- --ignored --test-threads=1
 ```
 
 The suites use schema `shop` of database `shop` (`dev/seed/postgres/contract.sql`, loaded by the tests); the checks on the demo
-schemas use `dev/seed/postgres.sql`, which the compose file loads. Override the server with `FOSTA_CONTRACT_POSTGRES_HOST`,
+schemas use `dev/seed/postgres.sql`, which the compose file loads. The image is `pgvector/pgvector` (PostgreSQL with the
+extension); `shop.contract_vectors` backs the vector suite and `public.products.embedding` is the demo column. Override the server with `FOSTA_CONTRACT_POSTGRES_HOST`,
 `_PORT`, `_USER`, `_PASSWORD` and `_DATABASE`.

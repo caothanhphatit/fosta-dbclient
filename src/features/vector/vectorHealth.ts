@@ -139,9 +139,7 @@ function recallSummary(report: RecallReport): HTMLElement {
       metric("Speed-up", speedup ? `×${speedup.toFixed(1)}` : "n/a"),
       metric("Index", `${report.index} · ${report.metric}`),
     ),
-    status === "ok"
-      ? null
-      : h("p", { class: "muted-text" }, "Low recall: consider a larger M when creating the vector index, or raise mhnsw_ef_search for the session."),
+    status === "ok" ? null : h("p", { class: "muted-text" }, "Low recall: build the index with a larger M, or raise ef_search for the session."),
   );
 }
 
