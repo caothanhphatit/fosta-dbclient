@@ -15,8 +15,9 @@ import { shellMenus } from "./app/menus";
 import { installOnExit, startUpdates } from "./app/update";
 import { initMcpApprovals } from "./features/mcp/mcpApproval";
 import { initMcpStatus } from "./features/mcp/mcpSettings";
-import { confirmQuit, guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
-import { api } from "./core/api";
+import { TabPersistence } from "./app/tabPersistence";
+import { confirmQuit, guardPageUnload, guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
+import { api, onConnectionLost } from "./core/api";
 import { hideUnsupported, loadCapabilities } from "./core/capabilities";
 import { loadEngines } from "./core/engines";
 import { initDensity } from "./core/density";
@@ -83,6 +84,8 @@ const navigation = new AppNavigation(tabs, {
   connectionName: (connectionId) =>
     currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name ?? connectionId,
   historyEnabled: () => currentConfig?.queryHistory !== false,
+  ensureConnected: (connectionId): Promise<boolean> => tree.ensureConnected(connectionId),
+  taskOf: (taskId) => currentConfig?.workspaces.flatMap((item) => item.tasks).find((task) => task.id === taskId),
   writesBlocked: (connectionId) => writesBlocked(connectionSafety(currentConfig?.workspaces ?? [], connectionId)),
 });
 
@@ -126,7 +129,8 @@ const tree = new ConnectionTree({
     if (task) navigation.openLogs(task);
   },
   commandState: (commandId) => tasksPanel.stateOf(commandId),
-  connectionClosed: (connectionId) => navigation.closeConnectionTabs(connectionId),
+  connectionClosed: (connectionId) => void navigation.closeConnectionTabs(connectionId),
+  refreshed: (connectionId, database) => navigation.refreshQueryNames(connectionId, database),
   configChanged: applyConfig,
   status: setStatus,
   stateChanged: () => {
@@ -154,6 +158,11 @@ tabs.onActiveChange = () => {
   assistant.refreshContext();
   refreshStatusContext();
 };
+
+/** The open tabs of every workspace come back on the next start. */
+const persistence = new TabPersistence(tabs, navigation, () => currentConfig?.workspaces.map((item) => item.id) ?? []);
+tabs.onTabsChanged = () => persistence.schedule();
+navigation.onTabEdited = () => persistence.schedule();
 
 function refreshStatusContext(): void {
   renderStatusContext(statusContext, assistantContext(), tabs.activeContent());
@@ -360,7 +369,8 @@ async function offerProductionMove(profile: ConnectionProfile): Promise<void> {
 async function deleteConnection(profile: ConnectionProfile): Promise<void> {
   if (!(await confirmDialog(`Delete connection "${profile.name}"?`, "Delete"))) return;
   try {
-    navigation.closeConnectionTabs(profile.id);
+    // A tab the user keeps (its unsaved work) keeps the connection too.
+    if (!(await navigation.closeConnectionTabs(profile.id))) return;
     applyConfig(await api.deleteConnection(profile.id));
   } catch (error) {
     showError(error, "Delete connection");
@@ -397,8 +407,13 @@ async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
   const summary = `${target.connections.length} connection(s) and ${target.tasks.length} command(s) will be removed, and saved passwords forgotten.`;
   if (!(await confirmDialog(`Delete workspace "${target.name}"?\n${summary}`, "Delete"))) return;
   try {
-    navigation.closeWorkspaceTabs(target.id);
+    // A tab the user keeps (its unsaved work) keeps the workspace too: no tab is left in a deleted workspace.
+    if (!(await navigation.closeWorkspaceTabs(target.id))) {
+      setStatus(`Workspace ${target.name} was not deleted: its tabs stay open`);
+      return;
+    }
     applyConfig(await api.deleteWorkspace(target.id));
+    persistence.forget(target.id);
     setStatus(`Deleted workspace ${target.name}`);
   } catch (error) {
     showError(error, "Delete workspace");
@@ -407,6 +422,8 @@ async function deleteWorkspace(meta: WorkspaceMeta): Promise<void> {
 
 async function bootstrap(): Promise<void> {
   setConfirmationConfigSink(applyConfig);
+  // A call that finds its connection gone (the backend restarted) shows it as closed in the tree.
+  onConnectionLost((connectionId) => tree.connectionLost(connectionId));
   if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
     // Browser-only preview (`npm run dev`): a mock backend with sample data.
     const { installDevMock } = await import("./dev/mock");
@@ -453,17 +470,33 @@ async function bootstrap(): Promise<void> {
     toggleRail: () => rail.toggleHidden(),
   });
   suppressBrowserContextMenu();
-  guardWindowClose(tabs, installOnExit);
+  guardWindowClose(
+    tabs,
+    async () => {
+      await persistence.flush();
+      await installOnExit();
+    },
+    () => persistence.textLostKeys(),
+  );
+  guardPageUnload(tabs, () => persistence.saveOnLeave());
   revealWindowAfterFirstPaint();
   preloadQueryView();
   try {
     const config = await api.getConfig();
     applyConfig(config);
     if (config.startupNotice) toast(config.startupNotice, "info");
-    void startUpdates({ confirmRestart: () => confirmQuit(tabs, "Restart") });
+    void startUpdates({
+      confirmRestart: async () => {
+        const go = await confirmQuit(tabs, "Restart", persistence.textLostKeys());
+        // The tabs (and query text) come back after the update.
+        if (go) await persistence.flush();
+        return go;
+      },
+    });
     void initMcpStatus(applyConfig);
     void initMcpApprovals();
     if (supported.tasks) await tasksPanel.init();
+    await persistence.restore(config);
   } catch (error) {
     showError(error, "Load the configuration");
   }

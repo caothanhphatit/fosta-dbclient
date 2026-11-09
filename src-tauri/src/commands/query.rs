@@ -5,7 +5,7 @@ use crate::{
     contract::{Flow, RunRequest, RunSummary, SessionInfo, SessionOptions, StreamEvent, TransactionOp, TransactionState},
     error::AppResult,
     events::EventSink,
-    gateway::{self, Confirmation},
+    gateway::{self, classify::Category, Confirmation},
     AppState,
 };
 
@@ -55,6 +55,12 @@ pub async fn run(
 
 pub async fn cancel_run(state: &AppState, session_id: String) -> AppResult<()> {
     state.engines.cancel(&session_id).await
+}
+
+/// How the engine classifies `text` in the session's language, one category per statement (nothing runs). After a lost
+/// session the query tab runs again on its own only when every statement reads.
+pub fn classify_run(state: &AppState, session_id: String, text: String) -> AppResult<Vec<Category>> {
+    gateway::session_categories(&state.engines, &session_id, &text)
 }
 
 /// Begin / Commit / Rollback / auto-commit on / off / status.

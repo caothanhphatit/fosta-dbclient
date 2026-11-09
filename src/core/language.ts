@@ -14,7 +14,11 @@ export interface LanguageContext {
   language: LanguageSpec;
   connection?: ConnectionApi;
   database?: string | null;
+  /** Load the names again even when they were just loaded for this database (after DDL, or "Refresh names"). */
+  reload?: boolean;
 }
+
+let reloadSequence = 0;
 
 export interface TextRange {
   from: number;
@@ -147,7 +151,10 @@ export function sqlLanguageSupport(dialect: SqlDialectId | null, format?: (text:
     editorExtensions: async (ctx) => {
       const connection = ctx?.connection;
       const database = ctx?.database;
-      if (connection && database) void schema.load(() => connection.completionSchema(database));
+      if (connection && database) {
+        const key = ctx?.reload ? `${database}#${++reloadSequence}` : database;
+        void schema.load(() => connection.completionSchema(database), key);
+      }
       return (await load()).editorExtensions(ctx);
     },
     statementAt: (text, offset) => sqlStatementAt(langDialect, text, offset),

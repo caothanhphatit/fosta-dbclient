@@ -303,6 +303,10 @@ export class TableView implements TabContent {
     return !this.grid.hasChanges() || confirmDialog(`Discard unsaved changes in ${this.label}?`, "Discard");
   }
 
+  closeWarning(): string | null {
+    return this.grid.hasChanges() ? "unsaved edits" : null;
+  }
+
   /** Tables and collections are editable when the engine edits rows and the workspace's rules allow writes; views never. */
   private get editable(): boolean {
     return EDITABLE_KINDS.has(this.object.kind) && hasCapability(this.info, "editRows") && !this.writesBlocked;

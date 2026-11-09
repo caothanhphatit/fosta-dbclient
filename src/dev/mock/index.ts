@@ -64,7 +64,7 @@ import type {
 import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf, unmarksLooserThanReadOnly, withoutConfirmation } from "../../features/safety/safety";
 import { chatRuns, deleteAiConnection, draftKey, fetchModels, probeChat, saveAiConnection, setAiActive, streamChat } from "./ai";
 import { checkTestPassword, deleteConnection, parseConnectionString, profiles, saveConnection } from "./connections";
-import { mockError, NOT_CONNECTED } from "./errors";
+import { mockError, NOT_CONNECTED, SESSION_LOST } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
 import { mockCheckUpdate, mockInstallKind, mockRestart, mockUpdaterCheck, mockUpdaterDownload, mockWhatsNew, setInstallKind } from "./update";
 import { mockMcpAnswer, mockMcpStatus, mockMcpToken, mockRotateMcpToken, mockSetMcpSettings, simulateMcpApproval } from "./mcp";
@@ -98,6 +98,8 @@ interface Connection {
 
 const connections = new Map<string, Connection>();
 const sessions = new Map<string, MockSession>();
+/** Connections the "backend" dropped (`__fostaMock.restartBackend`): calls fail with `NOT_CONNECTED` until `connect`. */
+const dropped = new Set<string>();
 const recentErrors: Diagnostics["recentErrors"] = [];
 
 // --- Connections ----------------------------------------------------------------------------------------------------------
@@ -142,7 +144,7 @@ function connection(connectionId: string): Connection {
   const existing = connections.get(connectionId);
   if (existing) return existing;
   const profile = profiles().find((item) => item.id === connectionId);
-  if (!profile) throw mockError("ERROR", NOT_CONNECTED);
+  if (!profile || dropped.has(connectionId)) throw mockError("NOT_CONNECTED", NOT_CONNECTED);
   const opened = open(profile);
   connections.set(connectionId, opened);
   return opened;
@@ -154,11 +156,33 @@ function need<K extends keyof EngineMock>(engine: EngineMock, member: K, capabil
   return value as NonNullable<EngineMock[K]>;
 }
 
+// --- Open tabs (kept in localStorage, so a reload of the preview restores them like a restart of the app) ------------------
+
+const MOCK_TABS_KEY = "fosta-mock.openTabs";
+
+function readMockTabs(): { workspaces: Record<string, unknown>; revisions: Record<string, number> } {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(MOCK_TABS_KEY) ?? "{}") as { workspaces?: unknown; revisions?: unknown } | null;
+    const record = (value: unknown) => (typeof value === "object" && value !== null ? value : {});
+    return { workspaces: record(parsed?.workspaces) as Record<string, unknown>, revisions: record(parsed?.revisions) as Record<string, number> };
+  } catch {
+    return { workspaces: {}, revisions: {} };
+  }
+}
+
+function writeMockTabs(stored: { workspaces: Record<string, unknown>; revisions: Record<string, number> }): void {
+  try {
+    localStorage.setItem(MOCK_TABS_KEY, JSON.stringify(stored));
+  } catch {
+    // Storage full or unavailable: the preview then starts without tabs.
+  }
+}
+
 // --- Sessions and streaming -----------------------------------------------------------------------------------------------
 
 function session(sessionId: string): MockSession {
   const found = sessions.get(sessionId);
-  if (!found) throw mockError("ERROR", "This query tab lost its session. Close it and open a new query.");
+  if (!found) throw mockError("SESSION_LOST", SESSION_LOST);
   return found;
 }
 
@@ -486,6 +510,31 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       state.history = state.history.filter((entry) => !ids.has(entry.id));
       return before - state.history.length;
     }
+    case "load_open_tabs":
+      return readMockTabs();
+    case "save_open_tabs": {
+      // Like the backend: a save based on another revision writes nothing and gets the stored tabs back.
+      const stored = readMockTabs();
+      const id = str("workspaceId");
+      const current = stored.revisions[id] ?? 0;
+      if (typeof payload.revision === "number" && payload.revision !== current) {
+        return { saved: false, revision: current, current: stored.workspaces[id] ?? null };
+      }
+      const known = new Set(state.config.workspaces.map((workspace) => workspace.id));
+      for (const key of Object.keys(stored.workspaces)) if (!known.has(key)) delete stored.workspaces[key];
+      for (const key of Object.keys(stored.revisions)) if (!known.has(key)) delete stored.revisions[key];
+      let revision = 0;
+      if (payload.tabs === null || payload.tabs === undefined || !known.has(id)) {
+        delete stored.workspaces[id];
+        delete stored.revisions[id];
+      } else {
+        revision = current + 1;
+        stored.workspaces[id] = payload.tabs;
+        stored.revisions[id] = revision;
+      }
+      writeMockTabs(stored);
+      return { saved: true, revision, current: null };
+    }
     case "history_clear":
       state.history = [];
       return null;
@@ -571,6 +620,7 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     }
     case "connect": {
       const profile = savedProfile(str("id"));
+      dropped.delete(profile.id);
       const connectNow = () => {
         try {
           const opened = open(profile);
@@ -641,6 +691,10 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
         (payload.onEvent as Channel<StreamEvent> | undefined) ?? null,
         (payload.maxRows as number | null | undefined) ?? null,
       );
+    case "classify_run": {
+      const current = session(str("sessionId"));
+      return classify(connection(current.connectionId).engine, str("text")).map((statement) => statement.category);
+    }
     case "cancel_run":
       sessions.get(str("sessionId"))?.running?.abort();
       return null;
@@ -692,6 +746,8 @@ declare global {
       setTreePageSize(size: number | null): void;
       setInstallKind(kind: InstallKind): void;
       mcpApproval(level?: "confirm" | "typed"): string;
+      /** Drops every session and open connection, like a restart of the backend (lost sessions, NOT_CONNECTED). */
+      restartBackend(): void;
     };
   }
 }
@@ -721,5 +777,11 @@ export function installDevMock(): void {
     },
     setInstallKind,
     mcpApproval: simulateMcpApproval,
+    restartBackend: () => {
+      // Like a restart of the app's backend or the web server: every session and open connection is gone.
+      for (const id of connections.keys()) dropped.add(id);
+      connections.clear();
+      sessions.clear();
+    },
   };
 }

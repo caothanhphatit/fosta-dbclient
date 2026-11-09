@@ -65,27 +65,71 @@ export function revealWindowAfterFirstPaint(): void {
 
 /**
  * Asks before quitting (closing, or restarting to update) when open transactions would be rolled back or unsaved edits
- * lost; true to go ahead. `action` is the button, "Close" or "Restart".
+ * lost; true to go ahead. `action` is the button, "Close" or "Restart". Query text not run is named once: a restored
+ * tab whose text is still what came back was named when the app last quit, and comes back again.
  */
-export async function confirmQuit(tabs: TabManager, action: "Close" | "Restart"): Promise<boolean> {
+export async function confirmQuit(tabs: TabManager, action: "Close" | "Restart", textLost: ReadonlySet<string> = new Set()): Promise<boolean> {
   const contents = tabs.contents();
   const open = contents.filter((content) => isQueryView(content) && content.hasOpenTransaction()).length;
   const edited = contents.filter((content) => content.hasUnsavedChanges?.() === true).length;
-  if (open === 0 && edited === 0) return true;
+  const unrun = unsavedQueryTabs(tabs);
+  const kept = unrun.filter((tab) => !textLost.has(tab.key) && tab.changedSinceRestore).map((tab) => tab.title);
+  const dropped = unrun.filter((tab) => textLost.has(tab.key)).map((tab) => tab.title);
+  if (open === 0 && edited === 0 && kept.length === 0 && dropped.length === 0) return true;
   const doing = action === "Close" ? "Closing" : "Restarting";
   const lost = [
     open > 0 ? `${open} query tab(s) have an open transaction. ${doing} Fosta Studio rolls them back, so uncommitted changes are lost.` : "",
     edited > 0 ? `${edited} tab(s) have unsaved edits, which are lost.` : "",
+    kept.length > 0 ? `Query text not run yet: ${kept.join(", ")}. It is kept and comes back with its tabs the next time Fosta Studio starts.` : "",
+    dropped.length > 0 ? `Query text too large to keep: ${dropped.join(", ")}. It is lost; save it to a file first.` : "",
   ];
-  return confirmDialog(`${lost.filter(Boolean).join(" ")} ${action} anyway?`, action);
+  return confirmDialog(`${lost.filter(Boolean).join("\n")}\n${action} now?`, action);
+}
+
+/**
+ * The query tabs (restored ones too) whose text was edited and not run since: tab key, shown title, and whether the
+ * text changed since the tab was restored (always for a tab that was not restored).
+ */
+export function unsavedQueryTabs(tabs: TabManager): { key: string; title: string; changedSinceRestore: boolean }[] {
+  return tabs.contents().flatMap((content) => {
+    const view = content as { hasUnsavedText?: () => boolean; changedSinceRestore?: () => boolean };
+    if (typeof view.hasUnsavedText !== "function" || !view.hasUnsavedText()) return [];
+    const key = tabs.keyOf(content);
+    return key ? [{ key, title: tabs.titleOf(key), changedSinceRestore: view.changedSinceRestore?.() ?? true }] : [];
+  });
+}
+
+/**
+ * The web edition: leaving or reloading the page asks first while a transaction is open, edits are unsaved or query
+ * text changed and has not been saved yet. `leaving` saves the open tabs on the way out; the page's hide, unload and
+ * close events all call it, and it sends only what changed.
+ */
+export function guardPageUnload(tabs: TabManager, leaving: () => void): void {
+  if (isTauri()) return;
+  window.addEventListener("pagehide", leaving);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") leaving();
+  });
+  window.addEventListener("beforeunload", (event) => {
+    leaving();
+    const contents = tabs.contents();
+    const risky =
+      contents.some((content) => (isQueryView(content) && content.hasOpenTransaction()) || content.hasUnsavedChanges?.() === true) ||
+      unsavedQueryTabs(tabs).some((tab) => tab.changedSinceRestore);
+    if (risky) event.preventDefault();
+  });
 }
 
 /** Closing the window rolls back open transactions and drops unsaved edits; ask first. `beforeExit` runs once agreed. */
-export function guardWindowClose(tabs: TabManager, beforeExit: () => Promise<void> = async () => {}): void {
+export function guardWindowClose(
+  tabs: TabManager,
+  beforeExit: () => Promise<void> = async () => {},
+  textLost: () => ReadonlySet<string> = () => new Set(),
+): void {
   // The browser preview (dev mock) has no window to guard.
   if (!("__TAURI_INTERNALS__" in window)) return;
   void getCurrentWindow().onCloseRequested(async (event) => {
-    if (!(await confirmQuit(tabs, "Close"))) {
+    if (!(await confirmQuit(tabs, "Close", textLost()))) {
       event.preventDefault();
       return;
     }

@@ -10,7 +10,7 @@
  */
 import type { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
-import { api, errorText } from "../../core/api";
+import { api, errorCode, errorText, NOT_CONNECTED, reportConnectionLost } from "../../core/api";
 import { databaseName, databaseNodes, type ConnectionApi } from "../../core/connectionApi";
 import type {
   ConnectInfo,
@@ -28,6 +28,7 @@ import { confirmDialog, toast } from "../../core/dialogs";
 import { clamp, formatNumber, h, icon, iconOrDefault, secondaryTool, separator, spacer, toolButton } from "../../core/dom";
 import { defaultLanguage, hasCapability } from "../../core/engines";
 import { renderError, showError } from "../../core/errorPanel";
+import { isCancelError } from "../../core/errors";
 import { statementAt, type LanguageSupport } from "../../core/language";
 import { currentStatement, formatInEditor } from "../../lang/editor";
 import { makeSplitter } from "../../core/splitter";
@@ -35,12 +36,15 @@ import { dialectOf } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
 import type { HistoryEntry } from "../../core/types";
 import { openColumnsPopover } from "../grid/columnsPopover";
-import { DataGrid, gridSetup } from "../grid/grid";
+
 import { withConfirmation } from "../safety/confirmationDialog";
 import { commitsOpenTransaction, IDLE_TRANSACTION_MINUTES, idleReminderDue, transactionButtons, transactionLabel } from "../safety/safety";
 import { AttemptTimer } from "./attemptTimer";
 import { HistoryPanel } from "./historyPanel";
-import { describeResult, editorOffset, RunResults, statementExcerpt, type StatementResult } from "./runResults";
+import { changesSchema, defaultDatabase, hasUnsavedText } from "./queryRules";
+import { lostSessionMessage, recoverLostSession, sessionGone } from "./lostSession";
+import { ResultArea, type Message } from "./resultArea";
+import { editorOffset, RunResults } from "./runResults";
 import { createSqlEditor, selectedOrAllText, setEditorLanguage } from "./sqlEditor";
 import "./query-run.css";
 
@@ -50,6 +54,8 @@ export interface QueryHost {
   /** The `queryHistory` setting. */
   historyEnabled(): boolean;
   openQuery(connectionId: string, database: string | null, sql: string): void;
+  /** Connects again a connection the backend lost; true once it is connected. */
+  reconnect?(connectionId: string): Promise<boolean>;
 }
 
 /** Everything a query tab is built from (the view registry fills it from the `ViewContext`). */
@@ -60,6 +66,12 @@ export interface QueryViewOptions {
   info: ConnectInfo | null;
   database: string | null;
   text: string;
+  /** Text that counts as saved (a restored tab: what had run there); default `text`, so a generated SELECT is not "unsaved". */
+  baseline?: string;
+  /** A tab of the last session: its text was kept, so quitting with that text unchanged does not ask again. */
+  restored?: boolean;
+  /** The language to start in (a restored tab); default: the connection's default language. */
+  languageId?: string | null;
   host: QueryHost;
   /** The editor support for one of the connection's languages (`src/engines/index.ts` `languageSupport`). */
   languageSupport(languageId: string): Promise<LanguageSupport>;
@@ -68,23 +80,6 @@ export interface QueryViewOptions {
 const HISTORY_PANEL_KEY = "db-studio.queryHistoryPanel";
 /** Reported once per session so a read-only disk does not flood the user with toasts. */
 let historyFailureReported = false;
-
-interface Message {
-  text: string;
-  kind: "info" | "error" | "muted" | "notice";
-}
-
-interface ResultPanel {
-  title: string;
-  count: string;
-  element: HTMLElement;
-  /** The grid of a result set; the Columns and Cell editor buttons act on it. */
-  grid?: DataGrid;
-  entry?: StatementResult;
-  /** Rows loaded into the grid, and when. */
-  loadedRows: number;
-  loadedAt: number;
-}
 
 /** The text a run sends and where it starts in the editor (`RunRequest.offset`). */
 interface RunTarget {
@@ -95,8 +90,6 @@ interface RunTarget {
 const MIN_EDITOR_HEIGHT = 80;
 const IDLE_CHECK_MS = 30_000;
 const MIN_RESULTS_HEIGHT = 120;
-/** While rows stream in, a grid is reloaded at most this often (its count label updates every frame). */
-const GRID_RELOAD_MS = 1000;
 
 /** Live state a query tab reports to the status bar (read from what the tab already shows). */
 export interface QueryStatus {
@@ -115,6 +108,8 @@ export class QueryView implements TabContent {
   lastError: string | null = null;
   /** Called when the database selection or the run outcome changes. */
   onChanged: (() => void) | null = null;
+  /** Called when the editor text changes (the open tabs are saved, debounced). */
+  onEdited: (() => void) | null = null;
   private readonly connection: ConnectionApi;
   private readonly engine: EngineDescriptor;
   private readonly host: QueryHost;
@@ -123,6 +118,11 @@ export class QueryView implements TabContent {
   private language: LanguageSpec;
   private support: LanguageSupport | null = null;
   private languageGeneration = 0;
+  /** The text as it last ran (or as the tab opened); closing with other text asks first. */
+  private baseline: string;
+  /** A restored tab's text as it came back (null: not restored). */
+  private readonly restoredText: string | null;
+  private readonly multipleDatabases: boolean;
   private extensionGeneration = 0;
   private sessionId = crypto.randomUUID();
   private session: SessionInfo | null = null;
@@ -131,9 +131,8 @@ export class QueryView implements TabContent {
   private readonly editor: EditorView;
   private readonly databaseSelect = h("select", { class: "input database-select", title: "Database used by this query" });
   private readonly languageSelect = h("select", { class: "input language-select", title: "Query language of this tab" });
-  private readonly resultTabs = h("div", { class: "result-tabs" });
   private readonly runStatus = h("span", { class: "run-status", role: "status" });
-  private readonly resultBody = h("div", { class: "result-body" });
+  private readonly resultArea = new ResultArea(() => dialectOf(this.dialect()));
   private readonly runButton: HTMLButtonElement;
   private readonly statementButton: HTMLButtonElement;
   private readonly stopButton: HTMLButtonElement;
@@ -141,13 +140,9 @@ export class QueryView implements TabContent {
   private readonly columnsButton: HTMLButtonElement;
   private readonly cellButton: HTMLButtonElement;
   private readonly historyButton: HTMLButtonElement;
+  private readonly refreshNamesButton: HTMLButtonElement;
   private readonly history: HistoryPanel;
-  private panels: ResultPanel[] = [];
-  private activePanel: ResultPanel | null = null;
-  private messagesPanel: ResultPanel | null = null;
   private renderFrame: number | null = null;
-  /** Whether this run already brought a result tab forward. */
-  private resultShown = false;
   private running = false;
   private cancelRequested = false;
   private disposed = false;
@@ -171,14 +166,18 @@ export class QueryView implements TabContent {
     this.loadSupport = options.languageSupport;
     const source = options.info && options.info.languages.length > 0 ? options.info : options.engine;
     this.languages = source.languages.length > 0 ? source.languages : [fallbackLanguage(options.engine)];
-    this.language = defaultLanguage(source) ?? this.languages[0];
+    this.language = this.languages.find((spec) => spec.id === options.languageId) ?? defaultLanguage(source) ?? this.languages[0];
     const capabilities = options.info ?? options.engine;
     this.transactionsSupported = hasCapability(capabilities, "transactions");
+    this.multipleDatabases = hasCapability(capabilities, "multipleDatabases");
+    this.baseline = options.baseline ?? options.text;
+    this.restoredText = options.restored ? options.text : null;
 
     this.editor = createSqlEditor(this.editorHost, options.text, {
       run: () => void this.run("selection"),
       runStatement: () => void this.run("statement"),
       format: () => void this.format(),
+      changed: () => this.onEdited?.(),
     });
     this.runButton = toolButton("play", "Run", () => void this.run("selection"), "Run the selection, or everything when nothing is selected (Ctrl+Enter)");
     this.statementButton = secondaryTool(
@@ -192,14 +191,25 @@ export class QueryView implements TabContent {
       toolButton(
         "columns",
         "Columns",
-        () => this.activePanel?.grid && openColumnsPopover(this.activePanel.grid, this.columnsButton),
+        () => {
+          const grid = this.resultArea.activeGrid();
+          if (grid) openColumnsPopover(grid, this.columnsButton);
+        },
         "Show or hide columns of this result",
       ),
     );
     this.cellButton = secondaryTool(
-      toolButton("expand", "Cell editor", () => this.activePanel?.grid?.openSelectedInEditor(), "Open the selected cell in a larger viewer (Shift+Enter)"),
+      toolButton(
+        "expand",
+        "Cell editor",
+        () => this.resultArea.activeGrid()?.openSelectedInEditor(),
+        "Open the selected cell in a larger viewer (Shift+Enter)",
+      ),
     );
     this.historyButton = secondaryTool(toolButton("history", "History", () => this.toggleHistory(), "Show or hide the query history"));
+    this.refreshNamesButton = secondaryTool(
+      toolButton("refresh", "Refresh names", () => this.refreshNames(), "Load the table and column names for completion again"),
+    );
     this.transactionButtons = [
       toolButton("bolt", "Begin", () => void this.transactionControl("begin"), "Start a transaction in this tab"),
       toolButton("check", "Commit", () => void this.transactionControl("commit"), "Commit the open transaction"),
@@ -243,7 +253,7 @@ export class QueryView implements TabContent {
         ...this.transactionButtons,
         this.transactionIndicator,
         spacer(),
-        h("div", { class: "toolbar-group toolbar-end" }, this.columnsButton, this.cellButton, separator(), this.historyButton),
+        h("div", { class: "toolbar-group toolbar-end" }, this.columnsButton, this.cellButton, separator(), this.refreshNamesButton, this.historyButton),
       ),
       h(
         "div",
@@ -253,11 +263,12 @@ export class QueryView implements TabContent {
           { class: "query-main" },
           this.editorHost,
           splitter,
-          h("div", { class: "results" }, h("div", { class: "result-bar" }, this.resultTabs, this.runStatus), this.resultBody),
+          h("div", { class: "results" }, h("div", { class: "result-bar" }, this.resultArea.tabs, this.runStatus), this.resultArea.body),
         ),
         this.history.element,
       ),
     );
+    this.resultArea.onActiveChange = () => this.syncResultTools();
     this.showHint();
     this.toggleHistory(readHistoryPanelOpen(), false);
     this.showTransactionControls(this.transactionsSupported);
@@ -271,9 +282,57 @@ export class QueryView implements TabContent {
     return this.transaction?.open === true;
   }
 
+  /** Text typed (or edited) since it last ran: closing the tab asks first. */
+  hasUnsavedText(): boolean {
+    return hasUnsavedText(this.editor.state.doc.toString(), this.baseline);
+  }
+
   canClose(): boolean | Promise<boolean> {
-    if (!this.hasOpenTransaction()) return true;
-    return confirmDialog("This tab has an open transaction. Closing the tab rolls it back, so uncommitted changes are lost. Close anyway?", "Close tab");
+    const open = this.hasOpenTransaction();
+    const unsaved = this.hasUnsavedText();
+    if (!open && !unsaved) return true;
+    const reasons = [
+      open ? "This tab has an open transaction. Closing the tab rolls it back, so uncommitted changes are lost." : "",
+      unsaved ? `${open ? "Its" : "This tab's"} query text was edited and not run since; closing the tab discards it.` : "",
+    ];
+    return confirmDialog(`${reasons.filter(Boolean).join(" ")} Close anyway?`, "Close tab");
+  }
+
+  /** What closing this tab loses, for one question about several tabs ("Close all"); null when nothing. */
+  closeWarning(): string | null {
+    const open = this.hasOpenTransaction();
+    const unsaved = this.hasUnsavedText();
+    if (open && unsaved) return "an open transaction and query text not run";
+    if (open) return "an open transaction";
+    return unsaved ? "query text not run" : null;
+  }
+
+  /** False for a restored tab whose text is still the text it came back with (quitting keeps it, as before). */
+  changedSinceRestore(): boolean {
+    return this.restoredText === null || this.editor.state.doc.toString() !== this.restoredText;
+  }
+
+  /** Everything in the editor (what a restored tab gets back). */
+  editorText(): string {
+    return this.editor.state.doc.toString();
+  }
+
+  /** The text that counts as saved (see `hasUnsavedText`). */
+  savedText(): string {
+    return this.baseline;
+  }
+
+  languageId(): string {
+    return this.language.id;
+  }
+
+  /**
+   * Loads the completion names again (the toolbar's "Refresh names", a tree Refresh of the connection, DDL run here).
+   * `database`: only when the tab works in that database (null: any).
+   */
+  refreshNames(database: string | null = null): void {
+    if (database !== null && database !== this.currentDatabase()) return;
+    void this.applyEditorLanguage(true);
   }
 
   onActivate(): void {
@@ -315,7 +374,7 @@ export class QueryView implements TabContent {
     window.clearInterval(this.idleTimer);
     if (this.renderFrame !== null) cancelAnimationFrame(this.renderFrame);
     this.editor.destroy();
-    this.disposePanels();
+    this.resultArea.dispose();
     this.closeSession();
   }
 
@@ -327,7 +386,7 @@ export class QueryView implements TabContent {
   }
 
   private showHint(): void {
-    this.showMessages([{ text: this.language.hint || "Ctrl+Enter runs the query.", kind: "muted" }]);
+    this.resultArea.showMessages([{ text: this.language.hint || "Ctrl+Enter runs the query.", kind: "muted" }]);
     this.runStatus.textContent = "";
   }
 
@@ -345,13 +404,13 @@ export class QueryView implements TabContent {
   }
 
   /** Asks the language for its editor extensions for the current database (completion names) and installs them. */
-  private async applyEditorLanguage(): Promise<void> {
+  private async applyEditorLanguage(reload = false): Promise<void> {
     const support = this.support;
     if (!support) return;
     const generation = ++this.extensionGeneration;
     let extensions: Extension[];
     try {
-      extensions = await support.editorExtensions({ language: this.language, connection: this.connection, database: this.currentDatabase() });
+      extensions = await support.editorExtensions({ language: this.language, connection: this.connection, database: this.currentDatabase(), reload });
     } catch (error) {
       showError(error, "Load names for completion");
       extensions = await support.editorExtensions({ language: this.language }).catch(() => []);
@@ -403,11 +462,13 @@ export class QueryView implements TabContent {
 
   private async loadDatabases(preferred: string | null): Promise<void> {
     try {
-      const databases = (await databaseNodes(this.connection)).map(databaseName);
-      if (preferred && !databases.includes(preferred)) databases.unshift(preferred);
+      const listed = (await databaseNodes(this.connection)).map(databaseName);
+      // SQLite opens in `main`, a server with one database in that one.
+      const choice = defaultDatabase(preferred, listed, this.multipleDatabases);
+      const databases = choice && !listed.includes(choice) ? [choice, ...listed] : listed;
       this.databaseSelect.replaceChildren(
         h("option", { value: "" }, "(no database)"),
-        ...databases.map((name) => h("option", { value: name, selected: name === preferred }, name)),
+        ...databases.map((name) => h("option", { value: name, selected: name === choice }, name)),
       );
       this.onChanged?.();
       await this.applyEditorLanguage();
@@ -433,6 +494,34 @@ export class QueryView implements TabContent {
     } finally {
       this.sessionOpening = null;
     }
+  }
+
+  /**
+   * After `SESSION_LOST` / `NOT_CONNECTED`: connects again when the connection is gone too, and opens a new session
+   * (with auto-commit off again when it was off). Whether the run then goes again is `recoverLostSession`'s call.
+   */
+  private async reopenSession(error: unknown): Promise<void> {
+    // Auto-commit was off: the new session must not run the statements one commit each.
+    const manualCommit = this.transactionsSupported && !this.autoCommit.checked;
+    this.session = null;
+    this.sessionOpening = null;
+    this.sessionId = crypto.randomUUID();
+    this.showTransaction(this.transactionsSupported ? { supported: true, open: false, autoCommit: this.autoCommit.checked, failed: false } : null);
+    let reason = error;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (errorCode(reason) === NOT_CONNECTED) {
+        reportConnectionLost(this.connectionId);
+        if (!(await this.host.reconnect?.(this.connectionId))) throw reason;
+      }
+      try {
+        await this.ensureSession();
+        break;
+      } catch (next) {
+        if (attempt > 0 || errorCode(next) !== NOT_CONNECTED) throw next;
+        reason = next;
+      }
+    }
+    if (manualCommit) this.showTransaction(await this.connection.transaction(this.sessionId, "autoCommitOff"));
   }
 
   private closeSession(): void {
@@ -465,6 +554,11 @@ export class QueryView implements TabContent {
       const done: Partial<Record<TransactionOp, string>> = { begin: "Transaction started", commit: "Committed", rollback: "Rolled back" };
       if (op !== "status") toast(done[op] ?? transactionLabel(state), "success");
     } catch (error) {
+      if (sessionGone(error)) {
+        // The next run opens a new session (and connects again when needed).
+        this.session = null;
+        this.sessionId = crypto.randomUUID();
+      }
       showError(error, "Transaction");
       this.showTransaction(this.transaction);
       void this.refreshTransaction();
@@ -585,6 +679,10 @@ export class QueryView implements TabContent {
     }
     const database = this.currentDatabase();
     const request: RunRequest = { text, database, offset };
+    // What ran no longer counts as unsaved.
+    const previousBaseline = this.baseline;
+    this.baseline = this.editor.state.doc.toString();
+    this.onEdited?.();
     const startedAt = Date.now();
     // Time spent in the confirmation dialog is not query time, and Stop is only usable while a statement runs.
     const timer = new AttemptTimer();
@@ -592,9 +690,9 @@ export class QueryView implements TabContent {
     let results = new RunResults();
     this.cancelRequested = false;
     this.setRunning(true);
-    try {
+    const execute = async () => {
       await this.ensureSession();
-      const summary = await withConfirmation((confirmation) => {
+      return withConfirmation((confirmation) => {
         // A retry after a confirmation starts over.
         results = this.startResults();
         const current = results;
@@ -612,8 +710,34 @@ export class QueryView implements TabContent {
           inFlight,
         );
       });
+    };
+    try {
+      let summary: RunSummary | null;
+      try {
+        summary = await execute();
+      } catch (error) {
+        // The backend lost the session (or the connection) before anything ran: open a new one. The run goes again only
+        // when it just reads, since the new session lost what the old one had set (see `lostSession.ts`).
+        const outcome = await recoverLostSession(error, {
+          received: results.entries.length > 0,
+          hadTransaction: this.hasOpenTransaction(),
+          reopen: () => this.reopenSession(error),
+          classify: () => this.connection.classifyRun(this.sessionId, text),
+        });
+        if (outcome === "rethrow") throw error;
+        if (outcome !== "retry") {
+          // Nothing ran, so the text still counts as not run.
+          this.baseline = previousBaseline;
+          this.onEdited?.();
+          this.resultArea.showMessages([{ text: lostSessionMessage(outcome), kind: "error" }]);
+          this.runStatus.textContent = "Session reset";
+          return;
+        }
+        toast("This tab's session was lost (a restart); it was reopened and the query, which only reads, ran again", "info");
+        summary = await execute();
+      }
       if (summary === null) {
-        this.showMessages([{ text: "Cancelled; nothing ran.", kind: "muted" }]);
+        this.resultArea.showMessages([{ text: "Cancelled; nothing ran.", kind: "muted" }]);
         this.runStatus.textContent = "Cancelled";
         return;
       }
@@ -622,6 +746,14 @@ export class QueryView implements TabContent {
       if (this.transactionsSupported) this.showTransaction(summary.transaction);
       this.record({ sql: text, database, startedAt, durationMs: summary.elapsedMs, results: results.history(), error: null });
     } catch (error) {
+      if (this.cancelRequested || isCancelError(error)) {
+        // Stopped by the user: not an error. The rows received so far stay in front.
+        this.lastError = null;
+        this.finishResults(results, null, null, timer.elapsed(), true);
+        this.record({ sql: text, database, startedAt, durationMs: timer.elapsed(), results: results.history(), error: errorText(error) });
+        void this.refreshTransaction();
+        return;
+      }
       this.lastError = errorText(error);
       const block = renderError(error, { onJump: (position) => this.jumpTo(text, offset, position) });
       this.finishResults(results, null, block, timer.elapsed());
@@ -631,6 +763,8 @@ export class QueryView implements TabContent {
     } finally {
       this.setRunning(false);
       this.onChanged?.();
+      // New or changed tables and columns complete right away.
+      if (changesSchema(text) && results.entries.length > 0) this.refreshNames();
     }
   }
 
@@ -692,132 +826,56 @@ export class QueryView implements TabContent {
     const results = new RunResults();
     if (this.renderFrame !== null) cancelAnimationFrame(this.renderFrame);
     this.renderFrame = null;
-    this.resultShown = false;
-    this.showMessages([{ text: "Running…", kind: "muted" }]);
+    this.resultArea.start(results);
     this.runStatus.textContent = "Running…";
     return results;
-  }
-
-  /** Only the Messages tab, with `lines`. */
-  private showMessages(lines: Message[]): void {
-    const panel = this.messages(lines);
-    this.showPanels([panel], panel);
   }
 
   private scheduleRender(results: RunResults): void {
     if (this.renderFrame !== null) return;
     this.renderFrame = requestAnimationFrame(() => {
       this.renderFrame = null;
-      if (!this.disposed && this.running) this.renderResults(results, false);
+      if (this.disposed || !this.running) return;
+      this.resultArea.update(results, false);
+      this.runStatus.textContent = `Running… ${formatNumber(results.rowCount())} row(s)`;
     });
   }
 
-  /** Brings the result tabs up to date: a tab per result set (with its live row count), then Messages. */
-  private renderResults(results: RunResults, final: boolean, unfinished = "running…"): void {
-    const now = performance.now();
-    const existing = new Map(this.panels.flatMap((panel) => (panel.entry ? [[panel.entry, panel] as const] : [])));
-    const sets = results.resultSets();
-    const resultPanels = sets.map((entry, index) => {
-      const panel = existing.get(entry) ?? this.resultPanel(entry);
-      panel.title = sets.length > 1 ? `Result ${index + 1}` : "Result";
-      const rows = entry.done?.rows ?? entry.rows.length;
-      panel.count = `${formatNumber(rows)}${entry.done?.truncated ? "+" : ""}`;
-      const stale = entry.rows.length !== panel.loadedRows;
-      if (panel.grid && stale && (final || entry.done !== null || panel.loadedRows === 0 || now - panel.loadedAt > GRID_RELOAD_MS)) {
-        panel.grid.load({ ...gridSetup(entry.columns ?? [], entry.rows.slice(), dialectOf(this.dialect())), clientFilter: true });
-        panel.loadedRows = entry.rows.length;
-        panel.loadedAt = now;
-      }
-      return panel;
-    });
-    const messages = this.messagesPanel ?? this.messages([]);
-    const lines = runMessages(results, unfinished);
-    messages.element.replaceChildren(...messageLines(lines.length > 0 || final ? lines : [{ text: "Running…", kind: "muted" }]));
-    // The first result set takes the stage when it arrives; later ones wait behind their tabs, and a tab the user picked stays.
-    let active = this.activePanel && (this.activePanel === messages || resultPanels.includes(this.activePanel)) ? this.activePanel : messages;
-    if (!this.resultShown && resultPanels.length > 0) {
-      active = resultPanels[0];
-      this.resultShown = true;
-    }
-    this.showPanels([...resultPanels, messages], active);
-    if (!final) this.runStatus.textContent = `Running… ${formatNumber(results.rowCount())} row(s)`;
-  }
-
-  /** The end of a run: the last rows, the summary line, and the error block when it failed. */
-  private finishResults(results: RunResults, summary: RunSummary | null, error: HTMLElement | null, elapsed: number): void {
+  /**
+   * The end of a run: the last rows, the summary line, and the error block when it failed. `stopped`: the user stopped
+   * it (Stop, or a stopped summary), which is not an error: the rows received so far stay in front.
+   */
+  private finishResults(results: RunResults, summary: RunSummary | null, error: HTMLElement | null, elapsed: number, stopped = false): void {
     if (this.renderFrame !== null) {
       cancelAnimationFrame(this.renderFrame);
       this.renderFrame = null;
     }
-    this.renderResults(results, true, summary?.stopped ? "stopped" : this.cancelRequested ? "cancelled" : "failed");
-    const messages = this.messagesPanel;
+    const halted = stopped || summary?.stopped === true;
+    // A run that failed before its first attempt (opening the session) still replaces the previous results.
+    this.resultArea.begin(results);
+    this.resultArea.update(results, true, halted ? "stopped" : "failed");
     const ms = Math.round(summary?.elapsedMs ?? elapsed);
     const statements = summary?.statements ?? results.entries.length;
-    const end: Message = summary?.stopped
-      ? { text: `Stopped after ${formatNumber(ms)} ms`, kind: "muted" }
+    const rows = results.rowCount();
+    const end: Message = halted
+      ? { text: `Stopped after ${formatNumber(ms)} ms · ${formatNumber(rows)} row(s) received`, kind: "info" }
       : summary
         ? { text: `Finished in ${formatNumber(ms)} ms · ${formatNumber(statements)} statement(s)`, kind: "muted" }
-        : this.cancelRequested
-          ? { text: `Cancelled after ${formatNumber(ms)} ms`, kind: "muted" }
-          : { text: `Failed after ${formatNumber(ms)} ms`, kind: "error" };
-    if (messages) {
-      messages.element.append(...messageLines([end]));
-      if (error) messages.element.append(error);
-    }
-    const rows = results.rowCount();
-    this.runStatus.textContent = summary?.stopped
+        : { text: `Failed after ${formatNumber(ms)} ms`, kind: "error" };
+    // A failure shows Messages (the error and how far the script got); the result sets that arrived stay in their tabs.
+    this.resultArea.finish(end, error, error !== null);
+    this.runStatus.textContent = halted
       ? "Stopped"
       : summary
         ? `${formatNumber(statements)} statement(s) · ${formatNumber(rows)} row(s) · ${formatNumber(ms)} ms`
-        : this.cancelRequested
-          ? "Cancelled"
-          : "Failed";
-    // A failure shows Messages (the error and how far the script got); the result sets that arrived stay in their tabs.
-    if (error && messages) this.activate(messages);
+        : "Failed";
   }
 
-  private resultPanel(entry: StatementResult): ResultPanel {
-    const grid = new DataGrid();
-    return { title: "Result", count: "", element: grid.element, grid, entry, loadedRows: 0, loadedAt: 0 };
-  }
-
-  private messages(lines: Message[]): ResultPanel {
-    const panel: ResultPanel = { title: "Messages", count: "", element: h("div", { class: "messages" }, ...messageLines(lines)), loadedRows: 0, loadedAt: 0 };
-    this.messagesPanel = panel;
-    return panel;
-  }
-
-  private showPanels(panels: ResultPanel[], active: ResultPanel): void {
-    // Grids of panels that are gone stop observing their size.
-    for (const panel of this.panels) if (!panels.includes(panel)) panel.grid?.dispose();
-    this.panels = panels;
-    this.resultTabs.replaceChildren(
-      ...panels.map((panel) => {
-        const button = h(
-          "button",
-          { class: "result-tab", type: "button", title: panel.entry ? statementExcerpt(panel.entry.sql, 200) : undefined },
-          panel.title,
-          panel.count ? h("span", { class: "result-count" }, panel.count) : null,
-        );
-        button.addEventListener("click", () => this.activate(panel));
-        return button;
-      }),
-    );
-    this.activate(active);
-  }
-
-  private activate(panel: ResultPanel): void {
-    const index = this.panels.indexOf(panel);
-    Array.from(this.resultTabs.children).forEach((button, position) => button.classList.toggle("active", position === index));
-    if (this.activePanel !== panel || this.resultBody.firstChild !== panel.element) this.resultBody.replaceChildren(panel.element);
-    this.activePanel = panel;
-    this.columnsButton.disabled = !panel.grid;
-    this.cellButton.disabled = !panel.grid;
-  }
-
-  private disposePanels(): void {
-    for (const panel of this.panels) panel.grid?.dispose();
-    this.panels = [];
+  /** The Columns and Cell editor buttons act on the grid of the active result tab. */
+  private syncResultTools(): void {
+    const grid = this.resultArea.activeGrid();
+    this.columnsButton.disabled = !grid;
+    this.cellButton.disabled = !grid;
   }
 
   private toggleHistory(open = this.history.element.hidden, remember = true): void {
@@ -833,20 +891,6 @@ export class QueryView implements TabContent {
     const height = clamp(this.editorHost.offsetHeight + delta, MIN_EDITOR_HEIGHT, maximum);
     this.editorHost.style.height = `${height}px`;
   }
-}
-
-/** The Messages panel lines of a run so far: each statement's outcome and its notices. */
-function runMessages(results: RunResults, unfinished: string): Message[] {
-  const lines: Message[] = [];
-  results.entries.forEach((entry, position) => {
-    lines.push({ text: describeResult(entry, position, unfinished), kind: "info" });
-    for (const notice of entry.notices) lines.push({ text: notice, kind: "notice" });
-  });
-  return lines;
-}
-
-function messageLines(messages: Message[]): HTMLElement[] {
-  return messages.map((message) => h("div", { class: `message ${message.kind}` }, message.text));
 }
 
 /** A language for an engine whose descriptor lists none (an unknown engine id): plain text. */

@@ -3,6 +3,7 @@
  * Show all / Hide all. At least one column always stays visible.
  */
 import { h, icon } from "../../core/dom";
+import { placeInViewport } from "../../core/placement";
 import type { ColumnInfo } from "../../core/contract";
 import { hideAllButFirst, matchColumns, setColumnHidden, visibleColumnIndexes } from "./columnVisibility";
 
@@ -121,15 +122,16 @@ export function openColumnsPopover(target: ColumnsTarget, anchor: Anchor): void 
 
 function place(popover: HTMLElement, anchor: Anchor): void {
   const point = anchor instanceof HTMLElement ? anchorPoint(anchor, popover) : anchor;
-  const bounds = popover.getBoundingClientRect();
-  popover.style.left = `${Math.max(4, Math.min(point.x, window.innerWidth - bounds.width - 4))}px`;
-  popover.style.top = `${Math.max(4, Math.min(point.y, window.innerHeight - bounds.height - 4))}px`;
+  // Untransformed size: the opening animation scales the popover, so its bounding box is a few percent short.
+  const placed = placeInViewport(point.x, point.y, popover.offsetWidth, popover.offsetHeight, window.innerWidth, window.innerHeight);
+  popover.style.left = `${placed.left}px`;
+  popover.style.top = `${placed.top}px`;
 }
 
 /** Below the button, right-aligned with it when it sits near the right edge. */
 function anchorPoint(anchor: HTMLElement, popover: HTMLElement): { x: number; y: number } {
   const rect = anchor.getBoundingClientRect();
-  const width = popover.getBoundingClientRect().width;
+  const width = popover.offsetWidth;
   const x = rect.left + width > window.innerWidth - 4 ? rect.right - width : rect.left;
   return { x, y: rect.bottom + 4 };
 }

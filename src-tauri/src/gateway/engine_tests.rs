@@ -224,3 +224,19 @@ async fn runs_stream_through_the_gateway_and_writes_need_confirmation() {
         .unwrap_err();
     assert_eq!(error.code(), Some(CONFIRMATION_REQUIRED));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_classifies_text_without_running_it() {
+    let manager = ConnectionManager::default();
+    let engine = FakeEngine::leak();
+    manager.insert("c", engine, engine.connection());
+    manager.open_session("c", "tab".into(), Default::default()).await.unwrap();
+    assert_eq!(session_categories(&manager, "tab", "SELECT 1").unwrap(), [Category::Read]);
+    assert_eq!(
+        session_categories(&manager, "tab", "UPDATE t SET a = 1").unwrap(),
+        [Category::Write]
+    );
+    // A session the backend no longer has says so by code (the query tab reopens it first).
+    let error = session_categories(&manager, "gone", "SELECT 1").unwrap_err();
+    assert_eq!(error.code(), Some("SESSION_LOST"));
+}

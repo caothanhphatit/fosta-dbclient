@@ -35,6 +35,8 @@ export interface GridSetup {
   /** Set while the column filters do not apply (the raw filter box is in use); the boxes are shown disabled with it. */
   filtersPaused: string | null;
   clientFilter: boolean;
+  /** The header sorts the loaded rows in the browser (the query result grid) instead of calling `onSort`. */
+  clientSort?: boolean;
   /** Column names not drawn; their data, filters and edits are kept. */
   hiddenColumns: string[];
   /** Called when the user hides or shows columns (the table view saves the choice). */
@@ -113,6 +115,7 @@ export function gridSetup(columns: ColumnInfo[], rows: Value[][], dialect: SqlDi
     onColumnFilter: null,
     filtersPaused: null,
     clientFilter: false,
+    clientSort: false,
     hiddenColumns: [],
     onHiddenColumns: null,
     loadVector: null,

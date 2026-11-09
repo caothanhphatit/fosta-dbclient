@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import conflictFixture from "./__fixtures__/contract/conflict-error.json";
-import { describePosition, errorCode, errorText, formatError, positionOffset, toAppError } from "./errors";
+import { describePosition, errorCode, errorText, formatError, isCancelError, positionOffset, toAppError } from "./errors";
 import type { Diagnostics } from "./types";
 
 describe("toAppError", () => {
@@ -115,5 +115,14 @@ describe("positions", () => {
     expect(positionOffset(text, { line: 2, column: 99 })).toBe(text.length);
     expect(positionOffset(text, { line: 5, column: 1 })).toBeNull();
     expect(positionOffset(text, { offset: 99 })).toBeNull();
+  });
+});
+
+describe("isCancelError", () => {
+  it("knows a cancelled statement by its code or kind", () => {
+    expect(isCancelError({ code: "CANCELLED", message: "The statement was cancelled." })).toBe(true);
+    expect(isCancelError({ code: "ENGINE_ERROR", message: "interrupted", kind: "cancelled" })).toBe(true);
+    expect(isCancelError({ code: "ENGINE_ERROR", message: "syntax error" })).toBe(false);
+    expect(isCancelError("Cancelled")).toBe(false);
   });
 });

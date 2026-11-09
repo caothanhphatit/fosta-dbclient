@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ColumnInfo, StreamEvent, Value } from "../../core/contract";
-import { describeResult, editorOffset, RunResults, statementExcerpt } from "./runResults";
+import { describeResult, editorOffset, RESULT_TABS_MAX, resultLayout, RunResults, statementExcerpt } from "./runResults";
 
 const column = (name: string): ColumnInfo => ({
   name,
@@ -95,6 +95,26 @@ describe("run results", () => {
     const unfinished = accumulate([{ event: "statement", index: 0, sql: "X" }]).entries[0];
     expect(describeResult(unfinished, 0)).toBe("#1: running…");
     expect(describeResult(unfinished, 0, "failed")).toBe("#1: failed");
+  });
+
+  it("reports only the entries changed since the last frame", () => {
+    const results = accumulate([
+      { event: "statement", index: 0, sql: "SELECT 1" },
+      { event: "columns", index: 0, columns: [column("x")] },
+    ]);
+    expect(results.takeChanged().map((entry) => entry.sql)).toEqual(["SELECT 1"]);
+    expect(results.takeChanged()).toEqual([]);
+    results.apply({ event: "statement", index: 1, sql: "SELECT 2" });
+    results.apply({ event: "rows", index: 0, rows: [[int(1)]] });
+    expect(results.takeChanged().map((entry) => entry.position)).toEqual([1, 0]);
+    expect(results.resultSets()).toHaveLength(1);
+  });
+
+  it("collapses many result sets into a list", () => {
+    expect(resultLayout(1)).toBe("tabs");
+    expect(resultLayout(RESULT_TABS_MAX)).toBe("tabs");
+    expect(resultLayout(RESULT_TABS_MAX + 1)).toBe("list");
+    expect(resultLayout(15_000)).toBe("list");
   });
 
   it("cuts statement excerpts to their first line", () => {

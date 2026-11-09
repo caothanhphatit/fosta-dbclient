@@ -15,6 +15,7 @@ pub mod history;
 pub mod lang;
 pub mod mcp;
 pub mod objects;
+pub mod open_tabs;
 pub mod query;
 pub mod tasks;
 pub mod update;
@@ -102,6 +103,8 @@ macro_rules! for_each_command {
             [stream] run(session_id: String, request: $crate::contract::RunRequest, confirmation: Option<$crate::gateway::Confirmation>, max_rows: Option<usize>)
                 -> $crate::error::AppResult<$crate::contract::RunSummary> => $crate::contract::StreamEvent = $crate::commands::query::run;
             [async] cancel_run(session_id: String) -> $crate::error::AppResult<()> = $crate::commands::query::cancel_run;
+            [sync] classify_run(session_id: String, text: String)
+                -> $crate::error::AppResult<Vec<$crate::gateway::classify::Category>> = $crate::commands::query::classify_run;
             [async] transaction(session_id: String, op: $crate::contract::TransactionOp)
                 -> $crate::error::AppResult<$crate::contract::TransactionState> = $crate::commands::query::transaction;
             [async] invoke_capability(connection_id: String, name: String, args: Option<serde_json::Value>,
@@ -161,6 +164,10 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<Vec<$crate::history::HistoryEntry>> = $crate::commands::history::history_list;
             [async] history_delete(ids: Vec<String>) -> $crate::error::AppResult<usize> = $crate::commands::history::history_delete;
             [async] history_clear() -> $crate::error::AppResult<()> = $crate::commands::history::history_clear;
+            [async] load_open_tabs() -> $crate::error::AppResult<$crate::open_tabs::LoadedTabs>
+                = $crate::commands::open_tabs::load_open_tabs;
+            [async] save_open_tabs(workspace_id: String, tabs: Option<serde_json::Value>, revision: Option<u64>)
+                -> $crate::error::AppResult<$crate::open_tabs::SaveOutcome> = $crate::commands::open_tabs::save_open_tabs;
             [sync] set_query_history(enabled: bool) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::history::set_query_history;
 
             [sync] diagnostics() -> $crate::commands::diagnostics::Diagnostics = $crate::commands::diagnostics::diagnostics;
