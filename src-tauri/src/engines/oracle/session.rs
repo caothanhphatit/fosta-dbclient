@@ -361,6 +361,29 @@ fn run_read_only(conn: &Connection, index: usize, sql: &str, opts: &RunOptions, 
     } else {
         "SET TRANSACTION READ ONLY"
     };
+    for attempt in 0.. {
+        begin_read_only(conn, begin)?;
+        let outcome = run_statement(conn, index, sql, opts, false, sink);
+        let end = if explain && outcome.is_ok() {
+            conn.commit()
+        } else {
+            conn.rollback()
+        };
+        // A read-only transaction cannot read a table whose definition changed after its snapshot; Oracle tracks DDL times
+        // to a few seconds, so a table created or altered just before fails with ORA-01466 until that window has passed.
+        let changed = matches!(&outcome, Err(error) if error.code.as_deref() == Some(TABLE_DEFINITION_CHANGED));
+        if changed && attempt < READ_ONLY_RETRIES {
+            end.map_err(map_err)?;
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            continue;
+        }
+        return outcome.and(end.map_err(map_err));
+    }
+    unreachable!("the retry loop returns")
+}
+
+/// Starts the read-only (or, for a plain EXPLAIN PLAN, read-write) transaction of one read-only statement.
+fn begin_read_only(conn: &Connection, begin: &str) -> Result<()> {
     if let Err(error) = conn.execute(begin, &[]) {
         let error = map_err(error);
         if error.code.as_deref() == Some(NOT_FIRST_IN_TRANSACTION) {
@@ -372,14 +395,13 @@ fn run_read_only(conn: &Connection, index: usize, sql: &str, opts: &RunOptions, 
         }
         return Err(error);
     }
-    let outcome = run_statement(conn, index, sql, opts, false, sink);
-    let end = if explain && outcome.is_ok() {
-        conn.commit()
-    } else {
-        conn.rollback()
-    };
-    outcome.and(end.map_err(map_err))
+    Ok(())
 }
+
+/// Oracle's code for a read-only transaction reading a table whose definition changed after the transaction began.
+const TABLE_DEFINITION_CHANGED: &str = "ORA-01466";
+/// Retries (one second apart) of a read-only statement that hit ORA-01466 right after DDL on its table.
+const READ_ONLY_RETRIES: u32 = 4;
 
 /// `EXPLAIN PLAN [SET STATEMENT_ID = '…'] FOR …`: writes plan rows into PLAN_TABLE and runs nothing. With `INTO` it could
 /// write into any table, so a statement with the word INTO anywhere (also `… FOR INSERT INTO`) is not plain.
