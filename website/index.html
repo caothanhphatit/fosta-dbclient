@@ -116,6 +116,18 @@
       </symbol>
       <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></symbol>
       <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z" /></symbol>
+      <!-- Platform logos for the download buttons (filled, from Simple Icons, CC0; Windows drawn as four panes). -->
+      <symbol id="i-windows" viewBox="0 0 24 24"><path d="M3 5.6 10.4 4.6v6.9H3zM11.4 4.4 21 3v8.5h-9.6zM3 12.5h7.4v6.9L3 18.4zM11.4 12.5H21V21l-9.6-1.4z" /></symbol>
+      <symbol id="i-apple" viewBox="0 0 24 24">
+        <path
+          d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"
+        />
+      </symbol>
+      <symbol id="i-docker" viewBox="0 0 24 24">
+        <path
+          d="M13.983 11.078h2.119a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.119a.185.185 0 0 0-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 0 0 .186-.186V3.574a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 0 0 .186-.186V6.29a.186.186 0 0 0-.186-.185h-2.118a.185.185 0 0 0-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 0 0 .184-.186V6.29a.185.185 0 0 0-.185-.185H8.1a.185.185 0 0 0-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 0 0 .185-.186V6.29a.185.185 0 0 0-.185-.185H5.136a.186.186 0 0 0-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 0 0 .186-.185V9.006a.186.186 0 0 0-.186-.186h-2.118a.185.185 0 0 0-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 0 0 .185-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.186.186 0 0 0-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 0 0 .184-.185V9.006a.185.185 0 0 0-.184-.186h-2.12a.185.185 0 0 0-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 0 0-.75.748 11.376 11.376 0 0 0 .692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 0 0 3.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"
+        />
+      </symbol>
       <symbol id="i-box" viewBox="0 0 24 24">
         <path d="M21 8l-9-5-9 5v8l9 5 9-5z" />
         <path d="M3 8l9 5 9-5M12 13v8" />
@@ -232,16 +244,19 @@
           <p class="lede" data-i18n="hero.lede">A small, fast database client for <strong>11 engines: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch, OpenSearch, ClickHouse and Oracle</strong>, with workspaces that bring their own tunnels and a built-in AI agent that knows your schema.</p>
           <div class="cta-row">
             <a class="btn btn-primary" href="https://github.com/caothanhphatit/fosta-dbclient/releases/latest">
-              <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg><span data-i18n="hero.download">Download for Windows</span>
+              <svg class="icon icon-brand" aria-hidden="true"><use href="#i-windows" /></svg><span data-i18n="hero.download">Download for Windows</span>
+            </a>
+            <a class="btn btn-secondary" href="#docker" data-docker-toggle="mac" aria-controls="docker" aria-expanded="false">
+              <svg class="icon icon-brand" aria-hidden="true"><use href="#i-apple" /></svg><span data-i18n="hero.mac">Download for macOS</span>
             </a>
             <a class="btn btn-secondary" href="#docker" data-docker-toggle aria-controls="docker" aria-expanded="false">
-              <svg class="icon" aria-hidden="true"><use href="#i-box" /></svg><span data-i18n="hero.docker">Run with Docker</span>
+              <svg class="icon icon-brand" aria-hidden="true"><use href="#i-docker" /></svg><span data-i18n="hero.docker">Run with Docker</span>
             </a>
             <a class="btn btn-secondary" href="https://github.com/caothanhphatit/fosta-dbclient">
               <svg class="icon" aria-hidden="true"><use href="#i-code" /></svg><span data-i18n="hero.github">View on GitHub</span>
             </a>
           </div>
-          <p class="cta-note" data-i18n="hero.note">Version {version} · Windows installer or portable .exe · Docker web edition</p>
+          <p class="cta-note" data-i18n="hero.note">Version {version} · Windows installer or portable .exe · macOS and Linux through the Docker web edition</p>
           <p class="cta-note cta-fineprint" data-i18n="hero.smartscreen">Windows may show a SmartScreen warning because the app is not code-signed yet: choose <b>More info</b> → <b>Run anyway</b>.</p>
           <div class="docker-panel" id="docker">
             <div class="docker-panel-head">
@@ -253,6 +268,9 @@
                 ><span data-copy-label data-i18n-attr="data-label-copied:hero.copied" data-label-copied="Copied" data-i18n="hero.copy">Copy</span>
               </button>
             </div>
+            <p class="docker-panel-mac" data-i18n="hero.macNote">
+              <strong>On a Mac?</strong> There is no native macOS app yet, but the web edition runs on your Mac: install Docker Desktop, run these commands, then use Fosta Studio in your browser.
+            </p>
             <pre
               class="docker-commands"
               tabindex="0"
@@ -1415,7 +1433,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
-                <h3>MariaDB</h3>
+                <h3><a class="engine-link" href="databases/#mariadb">MariaDB</a></h3>
                 <p data-i18n="engines.mariadb">Including vector tools on 11.7+</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1425,7 +1443,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
-                <h3>MySQL</h3>
+                <h3><a class="engine-link" href="databases/#mysql">MySQL</a></h3>
                 <p data-i18n="engines.mysql">Stop a running query from the editor</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1435,7 +1453,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
-                <h3>SQL Server</h3>
+                <h3><a class="engine-link" href="databases/#sqlserver">SQL Server</a></h3>
                 <p data-i18n="engines.mssql">Schemas, TLS on by default</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1445,7 +1463,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
-                <h3>MongoDB</h3>
+                <h3><a class="engine-link" href="databases/#mongodb">MongoDB</a></h3>
                 <p data-i18n="engines.mongodb">JSON filters, Atlas URIs, inferred diagram links, commands in the query tab</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1455,7 +1473,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
-                <h3>PostgreSQL</h3>
+                <h3><a class="engine-link" href="databases/#postgresql">PostgreSQL</a></h3>
                 <p data-i18n="engines.postgres">Schemas, jsonb and arrays, Stop on the server, EXPLAIN</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1465,7 +1483,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
-                <h3>SQLite</h3>
+                <h3><a class="engine-link" href="databases/#sqlite">SQLite</a></h3>
                 <p data-i18n="engines.sqlite">Open a file, attach databases, edit by primary key or rowid</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1475,7 +1493,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
-                <h3>ClickHouse</h3>
+                <h3><a class="engine-link" href="databases/#clickhouse">ClickHouse</a></h3>
                 <p data-i18n="engines.clickhouse">Streaming queries, edits as mutations, parts and query log</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1485,7 +1503,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-db" /></svg
               ></span>
               <div>
-                <h3>Oracle</h3>
+                <h3><a class="engine-link" href="databases/#oracle">Oracle</a></h3>
                 <p data-i18n="engines.oracle">PL/SQL and packages; Instant Client is downloaded for you</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1495,7 +1513,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-key" /></svg
               ></span>
               <div>
-                <h3>Redis</h3>
+                <h3><a class="engine-link" href="databases/#redis">Redis</a></h3>
                 <p data-i18n="engines.redis">Key browser with an editor for each data type, console with completion; also Valkey</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1505,7 +1523,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg
               ></span>
               <div>
-                <h3>Elasticsearch</h3>
+                <h3><a class="engine-link" href="databases/#elasticsearch">Elasticsearch</a></h3>
                 <p data-i18n="engines.elastic">Mapping-typed grid, Dev Tools console, ES|QL and SQL</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
@@ -1515,14 +1533,16 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-search" /></svg
               ></span>
               <div>
-                <h3>OpenSearch</h3>
+                <h3><a class="engine-link" href="databases/#opensearch">OpenSearch</a></h3>
                 <p data-i18n="engines.opensearch">The same grid and console, SQL plugin, point-in-time paging</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
           </ul>
           <p class="section-more">
-            <a href="databases/"><span data-i18n="engines.all">All databases and features</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg></a>
+            <a class="btn btn-secondary" href="databases/"
+              ><span data-i18n="engines.all">View details for every database</span><svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg
+            ></a>
           </p>
         </div>
       </section>

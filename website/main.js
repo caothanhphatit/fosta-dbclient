@@ -37,21 +37,30 @@
   if (media && media.addEventListener) media.addEventListener("change", sync);
   else if (media && media.addListener) media.addListener(sync); // Safari before 14
 
-  // "Run with Docker" opens the command panel under the hero buttons; the panel is always shown without JavaScript.
+  // "Run with Docker" and "Download for macOS" open the command panel under the hero buttons; the macOS button also
+  // shows the note for Mac users. A second click on the same button closes it. Without JavaScript the panel and the
+  // note are always shown.
   function initDocker() {
-    var toggle = document.querySelector("[data-docker-toggle]");
+    var toggles = document.querySelectorAll("[data-docker-toggle]");
     var panel = document.getElementById("docker");
-    if (!toggle || !panel) return;
+    if (!toggles.length || !panel) return;
     root.classList.add("js-docker");
-    function set(open) {
-      panel.classList.toggle("is-open", open);
-      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    var current = null;
+    function set(toggle) {
+      current = toggle;
+      panel.classList.toggle("is-open", !!toggle);
+      panel.classList.toggle("is-mac", !!toggle && toggle.getAttribute("data-docker-toggle") === "mac");
+      Array.prototype.forEach.call(toggles, function (t) {
+        t.setAttribute("aria-expanded", t === toggle ? "true" : "false");
+      });
     }
-    toggle.addEventListener("click", function (event) {
-      event.preventDefault();
-      set(!panel.classList.contains("is-open"));
+    Array.prototype.forEach.call(toggles, function (toggle) {
+      toggle.addEventListener("click", function (event) {
+        event.preventDefault();
+        set(current === toggle ? null : toggle);
+      });
     });
-    if (window.location.hash === "#docker") set(true);
+    if (window.location.hash === "#docker") set(document.querySelector('[data-docker-toggle=""]') || toggles[0]);
   }
 
   // Copy buttons: copy the commands without their "$" prompts. Hidden without the clipboard API.
