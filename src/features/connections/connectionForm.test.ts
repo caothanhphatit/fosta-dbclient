@@ -2,7 +2,18 @@ import { describe, expect, it } from "vitest";
 import type { ConnectionSpec, EngineDescriptor, TlsConfig } from "../../core/contract";
 import type { ConnectionProfile } from "../../core/types";
 import { DESCRIPTORS } from "../../dev/mock/descriptors";
-import { applySpec, authInputs, defaultName, formFromProfile, formLayout, formSecrets, newForm, profileFromForm, switchEngine } from "./connectionForm";
+import {
+  applySpec,
+  authInputs,
+  defaultName,
+  formFromProfile,
+  formLayout,
+  formSecrets,
+  newForm,
+  profileFromForm,
+  sameTarget,
+  switchEngine,
+} from "./connectionForm";
 import { sshFromValues, sshValues } from "./sshSection";
 import { fallbackMode, tlsFromValues, tlsValues } from "./tlsSection";
 
@@ -210,5 +221,44 @@ describe("TLS and SSH sections", () => {
     });
     const saved = { ...on!, jumpHosts: [{ host: "j", port: 22, user: "u" }], keepaliveSecs: 30 };
     expect(sshFromValues({ ...sshValues(saved), enabled: false }, saved)).toEqual({ ...saved, enabled: false });
+  });
+});
+
+describe("sameTarget", () => {
+  const saved: ConnectionProfile = {
+    id: "c",
+    name: "Orders",
+    driver: "postgres",
+    host: "db.internal",
+    port: 5432,
+    user: "app",
+    database: null,
+    savePassword: true,
+    options: {},
+    tls: { ...TLS, mode: "verifyFull", acceptInvalidCerts: false, caFile: "ca.pem" },
+    ssh: { enabled: true, host: "bastion", port: 22, user: "me", auth: { method: "password" }, jumpHosts: [], hostKey: "acceptNew", keepaliveSecs: null },
+  };
+
+  it("ignores the name, database, keepalive and blanks", () => {
+    expect(sameTarget(saved, { ...saved, name: "Renamed", database: "other", ssh: { ...saved.ssh!, keepaliveSecs: 30, host: " bastion " } })).toBe(true);
+    const plain = { ...saved, tls: undefined, ssh: undefined };
+    expect(sameTarget(plain, { ...plain, ssh: { ...saved.ssh!, enabled: false } })).toBe(true);
+  });
+
+  it("notices a new server, tunnel or TLS check", () => {
+    const changed: Partial<ConnectionProfile>[] = [
+      { host: "evil" },
+      { port: 1 },
+      { user: "root" },
+      { ssh: { ...saved.ssh!, host: "evil" } },
+      { ssh: { ...saved.ssh!, enabled: false } },
+      { ssh: { ...saved.ssh!, hostKey: "off" } },
+      { ssh: { ...saved.ssh!, jumpHosts: [{ host: "j", port: 22, user: "u" }] } },
+      { tls: { ...saved.tls!, mode: "disable" } },
+      { tls: { ...saved.tls!, acceptInvalidCerts: true } },
+      { tls: { ...saved.tls!, pinnedSha256: "ab:cd" } },
+      { tls: undefined },
+    ];
+    for (const change of changed) expect(sameTarget(saved, { ...saved, ...change }), JSON.stringify(change)).toBe(false);
   });
 });

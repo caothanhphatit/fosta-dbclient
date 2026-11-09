@@ -1,23 +1,34 @@
 //! LLM provider connections and the assistant chat.
 
 use crate::{
-    ai::{self, AiConnection, AiSettings, ChatRequest, ChatSink},
+    ai::{self, AiConnection, AiProvider, AiSettings, ChatRequest, ChatSink},
     config::AppConfig,
     error::{AppError, AppResult, PASSWORD_REQUIRED},
     gateway::{assistant::reads_allowed, Context},
     secrets, AppState,
 };
 
-/// Adds or updates an LLM connection; an empty key keeps the saved one.
+/// Adds or updates an LLM connection; an empty key keeps the saved one, unless the provider or endpoint changed:
+/// then the saved key is forgotten, so it is never sent to an endpoint it was not saved for.
 pub fn save_ai_connection(state: &AppState, connection: AiConnection, api_key: Option<String>) -> AppResult<AppConfig> {
     let connection = connection.normalized()?;
-    if let Some(key) = api_key.as_deref().filter(|key| !key.is_empty()) {
-        secrets::save_ai_key(&connection.id, key)?;
-    }
+    let saved = state.config.read(|config| config.ai_connection(&connection.id).ok().cloned());
+    remember_ai_key(saved.as_ref(), &connection, api_key)?;
     state.config.update(|config| {
         config.put_ai_connection(connection);
         Ok(())
     })
+}
+
+/// Stores a typed key, or forgets the saved one when `connection` no longer uses the `saved` provider and endpoint.
+fn remember_ai_key(saved: Option<&AiConnection>, connection: &AiConnection, api_key: Option<String>) -> AppResult<()> {
+    match api_key.filter(|key| !key.is_empty()) {
+        Some(key) => secrets::save_ai_key(&connection.id, &key),
+        None if saved.is_some_and(|saved| !same_endpoint(saved, connection.provider, &connection.base_url)) => {
+            secrets::forget_ai_key(&connection.id)
+        }
+        None => Ok(()),
+    }
 }
 
 pub fn delete_ai_connection(state: &AppState, id: String) -> AppResult<AppConfig> {
@@ -99,7 +110,7 @@ fn draft_key(state: &AppState, settings: &AiSettings, supplied: Option<String>, 
     };
     let saved = state.config.read(|config| config.ai_connection(id).ok().cloned());
     match saved {
-        Some(saved) if same_endpoint(&saved, settings) => secrets::load_ai_key(id),
+        Some(saved) if same_endpoint(&saved, settings.provider, &settings.base_url) => secrets::load_ai_key(id),
         Some(_) if secrets::contains(&secrets::SecretKey::AiKey(id.to_owned()))? => Err(AppError::coded(
             PASSWORD_REQUIRED,
             "The endpoint differs from the saved one: enter the API key again",
@@ -108,9 +119,9 @@ fn draft_key(state: &AppState, settings: &AiSettings, supplied: Option<String>, 
     }
 }
 
-fn same_endpoint(saved: &AiConnection, draft: &AiSettings) -> bool {
+fn same_endpoint(saved: &AiConnection, provider: AiProvider, base_url: &str) -> bool {
     let url = |text: &str| text.trim().trim_end_matches('/').to_owned();
-    saved.provider == draft.provider && url(&saved.base_url) == url(&draft.base_url)
+    saved.provider == provider && url(&saved.base_url) == url(base_url)
 }
 
 /// Provider, endpoint, model and key for a chat request: the request's own
@@ -177,13 +188,49 @@ mod tests {
             base_url: "https://api.example.com/v1".into(),
             default_model: "m".into(),
         };
-        let draft = |provider, base_url: &str| AiSettings {
+        assert!(same_endpoint(&saved, AiProvider::Openai, " https://api.example.com/v1/ "));
+        assert!(!same_endpoint(&saved, AiProvider::Openai, "https://evil.example.com/v1"));
+        assert!(!same_endpoint(&saved, AiProvider::Anthropic, "https://api.example.com/v1"));
+    }
+
+    #[test]
+    fn saving_another_endpoint_without_a_key_forgets_the_saved_key() {
+        const KEY: &str = "ai:a";
+        let saved = AiConnection {
+            id: "a".into(),
+            name: "A".into(),
+            provider: AiProvider::Openai,
+            base_url: "https://api.example.com/v1".into(),
+            default_model: "m".into(),
+        };
+        let with = |provider, base_url: &str| AiConnection {
             provider,
             base_url: base_url.into(),
-            model: "m".into(),
+            name: "Renamed".into(),
+            ..saved.clone()
         };
-        assert!(same_endpoint(&saved, &draft(AiProvider::Openai, " https://api.example.com/v1/ ")));
-        assert!(!same_endpoint(&saved, &draft(AiProvider::Openai, "https://evil.example.com/v1")));
-        assert!(!same_endpoint(&saved, &draft(AiProvider::Anthropic, "https://api.example.com/v1")));
+        // Same endpoint, no key: kept.
+        let store = secrets::testing::memory_store(&[(KEY, "sk")]);
+        remember_ai_key(Some(&saved), &with(AiProvider::Openai, "https://api.example.com/v1/"), None).unwrap();
+        remember_ai_key(Some(&saved), &saved, Some(String::new())).unwrap();
+        assert_eq!(store.accounts(), [KEY]);
+        // Another endpoint or provider without a key: forgotten.
+        for moved in [
+            with(AiProvider::Openai, "https://evil.example.com/v1"),
+            with(AiProvider::Anthropic, "https://api.example.com/v1"),
+        ] {
+            let store = secrets::testing::memory_store(&[(KEY, "sk")]);
+            remember_ai_key(Some(&saved), &moved, None).unwrap();
+            assert!(store.accounts().is_empty(), "{moved:?}");
+        }
+        // Another endpoint with a new key: the new key is saved.
+        let store = secrets::testing::memory_store(&[(KEY, "sk")]);
+        remember_ai_key(
+            Some(&saved),
+            &with(AiProvider::Openai, "https://other.example.com"),
+            Some("new".into()),
+        )
+        .unwrap();
+        assert_eq!(store.secrets.lock().unwrap()[KEY], "new");
     }
 }

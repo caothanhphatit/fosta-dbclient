@@ -95,7 +95,17 @@ pub fn install(store: Box<dyn SecretStore>) -> AppResult<()> {
     STORE.set(store).map_err(|_| AppError::new("The secret store is already set up"))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The store of the current test thread (see [`testing::memory_store`]); the global one otherwise.
+    static TEST_STORE: std::cell::Cell<Option<&'static dyn SecretStore>> = const { std::cell::Cell::new(None) };
+}
+
 fn store() -> AppResult<&'static dyn SecretStore> {
+    #[cfg(test)]
+    if let Some(store) = TEST_STORE.with(std::cell::Cell::get) {
+        return Ok(store);
+    }
     #[cfg(feature = "desktop")]
     let store = STORE.get_or_init(|| Box::new(KeyringStore));
     #[cfg(not(feature = "desktop"))]
@@ -266,21 +276,23 @@ mod keyring_store {
     }
 }
 
+/// An in-memory secret store for tests.
 #[cfg(test)]
-mod tests {
+pub(crate) mod testing {
     use std::{collections::BTreeMap, sync::Mutex};
 
-    use super::*;
+    use super::{SecretStore, TEST_STORE};
+    use crate::error::{AppError, AppResult};
 
     /// An in-memory store; `fail_set` makes every write fail.
     #[derive(Default)]
-    struct MemoryStore {
-        secrets: Mutex<BTreeMap<String, String>>,
-        fail_set: bool,
+    pub(crate) struct MemoryStore {
+        pub(crate) secrets: Mutex<BTreeMap<String, String>>,
+        pub(crate) fail_set: bool,
     }
 
     impl MemoryStore {
-        fn with(entries: &[(&str, &str)]) -> Self {
+        pub(crate) fn with(entries: &[(&str, &str)]) -> Self {
             let store = Self::default();
             for (account, secret) in entries {
                 store.secrets.lock().unwrap().insert((*account).to_owned(), (*secret).to_owned());
@@ -288,9 +300,16 @@ mod tests {
             store
         }
 
-        fn accounts(&self) -> Vec<String> {
+        pub(crate) fn accounts(&self) -> Vec<String> {
             self.secrets.lock().unwrap().keys().cloned().collect()
         }
+    }
+
+    /// Makes `secrets::get` / `set` / `delete` on this test's thread use a fresh in-memory store, holding `entries`.
+    pub(crate) fn memory_store(entries: &[(&str, &str)]) -> &'static MemoryStore {
+        let store: &'static MemoryStore = Box::leak(Box::new(MemoryStore::with(entries)));
+        TEST_STORE.with(|cell| cell.set(Some(store)));
+        store
     }
 
     impl SecretStore for MemoryStore {
@@ -311,6 +330,12 @@ mod tests {
             Ok(())
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::MemoryStore;
+    use super::*;
 
     #[test]
     fn account_names_are_namespaced() {

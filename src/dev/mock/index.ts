@@ -53,7 +53,7 @@ import type {
   StatementCategory,
   Workspace,
 } from "../../core/types";
-import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf, withoutConfirmation } from "../../features/safety/safety";
+import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf, unmarksLooserThanReadOnly, withoutConfirmation } from "../../features/safety/safety";
 import { chatRuns, deleteAiConnection, draftKey, fetchModels, probeChat, saveAiConnection, setAiActive, streamChat } from "./ai";
 import { checkTestPassword, deleteConnection, parseConnectionString, profiles, saveConnection } from "./connections";
 import { mockError, NOT_CONNECTED } from "./errors";
@@ -339,7 +339,8 @@ function saveWorkspace(meta: Workspace, relaxConfirmation: unknown) {
   const after = meta.safety ?? before;
   const production = existing?.icon === PRODUCTION_ICON || meta.icon === PRODUCTION_ICON;
   const name = existing?.name ?? meta.name;
-  if (production && relaxations(before, after).length > 0 && String(relaxConfirmation ?? "").trim() !== name.trim()) {
+  const relaxing = relaxations(before, after).length > 0 || unmarksLooserThanReadOnly(existing?.icon, meta.icon, after);
+  if (production && relaxing && String(relaxConfirmation ?? "").trim() !== name.trim()) {
     throw mockError("RELAX_CONFIRMATION_REQUIRED", `Relaxing the rules of the Production workspace needs its name typed: "${name}".`, { expected: name });
   }
   state.config = existing
@@ -405,6 +406,7 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
         (payload.password as string | null) ?? null,
         (payload.workspaceId as string | null) ?? null,
         (payload.secrets as Partial<Record<SecretSlot, string>> | null) ?? null,
+        (payload.relaxConfirmation as string | null) ?? null,
       );
     case "delete_connection":
       connections.delete(str("id"));

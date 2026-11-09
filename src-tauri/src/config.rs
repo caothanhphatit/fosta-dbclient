@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ai::{AiActive, AiConnection, AiSettings},
-    contract::{AuthMethodId, ConnectionSpec, SshConfig, TlsConfig, TlsMode},
+    contract::{
+        spec::{SshAuth, SshHop},
+        AuthMethodId, ConnectionSpec, SshConfig, TlsConfig, TlsMode,
+    },
     embedding::EmbeddingSettings,
     error::{AppError, AppResult},
     gateway::{assistant::AssistantQueries, rules::SafetySettings},
@@ -122,19 +125,71 @@ impl ConnectionProfile {
         }
     }
 
-    /// Whether `other` points at the same server as this saved profile, so this profile's saved secrets may be
-    /// sent there.
+    /// Whether `other` points at the same server, through the same SSH route and with the same TLS checks, as this
+    /// saved profile, so this profile's saved secrets may be sent there. Name, database, options and safety rules do
+    /// not matter; any change to the SSH or TLS settings does (a new bastion or a weaker certificate check could
+    /// harvest the saved passwords).
     pub fn same_target(&self, other: &ConnectionProfile) -> bool {
         let (mut saved, mut draft) = (self.clone(), other.clone());
         saved.normalize();
         draft.normalize();
-        let blank = |value: &Option<String>| value.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned);
         saved.engine == draft.engine
             && saved.host.trim() == draft.host.trim()
             && saved.port == draft.port
             && saved.user.trim() == draft.user.trim()
             && blank(&saved.url) == blank(&draft.url)
             && blank(&saved.file) == blank(&draft.file)
+            && ssh_route(saved.ssh.as_ref()) == ssh_route(draft.ssh.as_ref())
+            && tls_checks(saved.tls.as_ref()) == tls_checks(draft.tls.as_ref())
+    }
+}
+
+/// A trimmed, non-empty string, else `None`.
+fn blank(value: &Option<String>) -> Option<String> {
+    value.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned)
+}
+
+/// The parts of an SSH tunnel that decide where the secrets go; `None` when no tunnel is used (absent or disabled).
+fn ssh_route(ssh: Option<&SshConfig>) -> Option<SshConfig> {
+    let ssh = ssh.filter(|ssh| ssh.enabled)?;
+    let auth = match &ssh.auth {
+        SshAuth::PrivateKey { key_file } => SshAuth::PrivateKey {
+            key_file: key_file.trim().to_owned(),
+        },
+        auth => auth.clone(),
+    };
+    Some(SshConfig {
+        enabled: true,
+        host: ssh.host.trim().to_owned(),
+        port: ssh.port,
+        user: ssh.user.trim().to_owned(),
+        auth,
+        jump_hosts: ssh
+            .jump_hosts
+            .iter()
+            .map(|hop| SshHop {
+                host: hop.host.trim().to_owned(),
+                port: hop.port,
+                user: hop.user.trim().to_owned(),
+            })
+            .collect(),
+        host_key: ssh.host_key,
+        // Keepalive does not change where the secrets go.
+        keepalive_secs: None,
+    })
+}
+
+/// The TLS settings with blank paths as unset; no settings compare as the default ("prefer", nothing else).
+fn tls_checks(tls: Option<&TlsConfig>) -> TlsConfig {
+    let tls = tls.cloned().unwrap_or_default();
+    TlsConfig {
+        mode: tls.mode,
+        ca_file: blank(&tls.ca_file),
+        client_cert_file: blank(&tls.client_cert_file),
+        client_key_file: blank(&tls.client_key_file),
+        server_name: blank(&tls.server_name),
+        accept_invalid_certs: tls.accept_invalid_certs,
+        pinned_sha256: blank(&tls.pinned_sha256),
     }
 }
 
@@ -858,6 +913,102 @@ mod tests {
             change(&mut moved);
             assert!(!saved.same_target(&moved), "{moved:?}");
         }
+    }
+
+    fn tunnelled() -> ConnectionProfile {
+        ConnectionProfile {
+            id: "t".into(),
+            engine: "postgres".into(),
+            host: "db.internal".into(),
+            port: 5432,
+            user: "app".into(),
+            ssh: Some(SshConfig {
+                enabled: true,
+                host: "bastion".into(),
+                port: 22,
+                user: "me".into(),
+                auth: SshAuth::PrivateKey {
+                    key_file: "~/.ssh/id_ed25519".into(),
+                },
+                jump_hosts: vec![SshHop {
+                    host: "jump".into(),
+                    port: 22,
+                    user: "hop".into(),
+                }],
+                host_key: Default::default(),
+                keepalive_secs: None,
+            }),
+            tls: Some(TlsConfig {
+                mode: TlsMode::VerifyFull,
+                ca_file: Some("ca.pem".into()),
+                server_name: Some("db.example.com".into()),
+                pinned_sha256: Some("ab:cd".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn saved_secrets_are_bound_to_the_ssh_route_and_tls_checks() {
+        let saved = tunnelled();
+        let mut same = saved.clone();
+        same.name = "renamed".into();
+        same.ssh.as_mut().unwrap().keepalive_secs = Some(30);
+        same.ssh.as_mut().unwrap().host = " bastion ".into();
+        same.tls.as_mut().unwrap().client_cert_file = Some(String::new());
+        assert!(saved.same_target(&same), "keepalive, blanks and whitespace do not matter");
+        type Change = fn(&mut ConnectionProfile);
+        let changes: [Change; 15] = [
+            |p| p.ssh.as_mut().unwrap().enabled = false,
+            |p| p.ssh = None,
+            |p| p.ssh.as_mut().unwrap().host = "evil".into(),
+            |p| p.ssh.as_mut().unwrap().port = 2222,
+            |p| p.ssh.as_mut().unwrap().user = "root".into(),
+            |p| p.ssh.as_mut().unwrap().auth = SshAuth::Password,
+            |p| p.ssh.as_mut().unwrap().auth = SshAuth::PrivateKey { key_file: "other".into() },
+            |p| p.ssh.as_mut().unwrap().jump_hosts[0].host = "evil".into(),
+            |p| p.ssh.as_mut().unwrap().jump_hosts[0].port = 2,
+            |p| p.ssh.as_mut().unwrap().jump_hosts[0].user = "x".into(),
+            |p| p.ssh.as_mut().unwrap().host_key = crate::contract::spec::HostKeyPolicy::Off,
+            |p| p.tls.as_mut().unwrap().mode = TlsMode::Disable,
+            |p| p.tls.as_mut().unwrap().accept_invalid_certs = true,
+            |p| p.tls.as_mut().unwrap().ca_file = None,
+            |p| p.tls.as_mut().unwrap().pinned_sha256 = Some("ef:01".into()),
+        ];
+        for change in changes {
+            let mut moved = saved.clone();
+            change(&mut moved);
+            assert!(!saved.same_target(&moved), "{moved:?}");
+        }
+        let mut renamed_sni = saved.clone();
+        renamed_sni.tls.as_mut().unwrap().server_name = None;
+        assert!(!saved.same_target(&renamed_sni));
+        let mut no_tls = saved.clone();
+        no_tls.tls = None;
+        assert!(!saved.same_target(&no_tls));
+    }
+
+    #[test]
+    fn absent_and_default_ssh_and_tls_compare_equal() {
+        // A version-1 profile (no ssh, no tls) re-sent by the dialog with a disabled tunnel and "prefer" TLS.
+        let saved = migrate(V1_FIXTURE).connection("g1").unwrap().clone();
+        let mut draft = saved.clone();
+        draft.ssh = Some(SshConfig {
+            enabled: false,
+            host: "ignored".into(),
+            port: 22,
+            user: String::new(),
+            auth: SshAuth::Agent,
+            jump_hosts: Vec::new(),
+            host_key: Default::default(),
+            keepalive_secs: None,
+        });
+        draft.tls = Some(TlsConfig::default());
+        assert!(saved.same_target(&draft));
+        draft.tls = None;
+        draft.ssh = None;
+        assert!(saved.same_target(&draft));
     }
 
     #[test]

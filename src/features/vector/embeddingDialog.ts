@@ -20,7 +20,7 @@ export function embeddingDialog(existing: EmbeddingSettings | null): Promise<App
       { class: "input" },
       ...AUTH_OPTIONS.map((option) => h("option", { value: option.value, selected: option.value === (existing?.auth ?? "bearer") }, option.label)),
     );
-    const apiKey = textInput("", { type: "password", placeholder: existing ? "Saved, leave empty to keep" : "" });
+    const apiKey = textInput("", { type: "password", placeholder: existing ? "Saved, leave empty to keep (same URL only)" : "" });
     const dimensions = textInput(existing?.dimensions ? String(existing.dimensions) : "", { type: "number", min: 1, placeholder: "optional, e.g. 1024" });
 
     const readSettings = (): EmbeddingSettings => {

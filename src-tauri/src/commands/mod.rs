@@ -59,7 +59,7 @@ macro_rules! for_each_command {
             [sync] get_config() -> $crate::config::AppConfig = $crate::commands::get_config;
             [sync] capabilities() -> $crate::Capabilities = $crate::commands::capabilities;
 
-            [sync] save_connection(profile: $crate::config::ConnectionProfile, password: Option<String>, workspace_id: Option<String>, secrets: Option<std::collections::HashMap<$crate::contract::SecretSlot, String>>)
+            [sync] save_connection(profile: $crate::config::ConnectionProfile, password: Option<String>, workspace_id: Option<String>, secrets: Option<std::collections::HashMap<$crate::contract::SecretSlot, String>>, relax_confirmation: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::connections::save_connection;
             [async] delete_connection(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::connections::delete_connection;
             [async] test_connection(profile: $crate::config::ConnectionProfile, password: Option<String>,

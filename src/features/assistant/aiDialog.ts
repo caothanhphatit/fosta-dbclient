@@ -15,7 +15,7 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
     let preset = providerPreset(existing?.provider ?? "fosta");
     const name = textInput(existing?.name ?? preset.label, { placeholder: "e.g. Work OpenAI" });
     const baseUrl = textInput(existing?.provider === "custom" ? existing.baseUrl : "", { class: "input mono", placeholder: "http://localhost:11434/v1" });
-    const apiKey = textInput("", { type: "password", placeholder: existing ? "Saved, leave empty to keep" : "" });
+    const apiKey = textInput("", { type: "password", placeholder: existing ? "Saved, leave empty to keep (same provider and URL only)" : "" });
     /** The saved key only belongs to the provider it was saved for. */
     const savedKeyOwner = () => (existing !== null && existing.provider === preset.value ? existing.id : null);
     const hint = h("p", { class: "form-intro provider-hint" });

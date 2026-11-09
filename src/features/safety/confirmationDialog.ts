@@ -9,6 +9,7 @@ import { checkbox, field, openModal, textInput, toast } from "../../core/dialogs
 import { h } from "../../core/dom";
 import { errorText } from "../../core/errors";
 import type { AppConfig, Confirmation, GatewayProblem } from "../../core/types";
+import { withRelaxConfirmation, type RelaxProblem } from "./relaxConfirmation";
 import { askedCategories, CATEGORY_LABELS, confirmationReason, gatewayProblem, typedMatches } from "./safety";
 
 const MAX_LISTED = 12;
@@ -118,4 +119,45 @@ export class ConfirmationSession {
 /** One gateway call with a confirmation dialog when needed; null when cancelled. */
 export function withConfirmation<T>(call: (confirmation: Confirmation | null) => Promise<T>): Promise<T | null> {
   return new ConfirmationSession().run(call);
+}
+
+/** Asks for the Production workspace name a save that relaxes its rules needs; null when cancelled. */
+export function promptRelaxConfirmation(problem: RelaxProblem): Promise<string | null> {
+  return new Promise((resolve) => {
+    let typed: string | null = null;
+    const input = textInput("", { class: "input mono", placeholder: problem.expected });
+    const body = h(
+      "div",
+      { class: "form-grid" },
+      h("p", { class: "confirm-text" }, problem.message),
+      problem.changes.length > 0 ? h("ul", { class: "relax-examples" }, ...problem.changes.map((change) => h("li", {}, change))) : null,
+      field(`Type ${problem.expected} to confirm`, input),
+    );
+    openModal(
+      "Relax Production rules",
+      body,
+      [
+        { label: "Cancel", run: () => undefined },
+        {
+          label: "Relax rules",
+          primary: true,
+          danger: true,
+          run: () => {
+            if (input.value.trim() !== problem.expected.trim()) {
+              input.focus();
+              throw new Error(`Type ${problem.expected} to confirm`);
+            }
+            typed = input.value.trim();
+          },
+        },
+      ],
+      { width: 440, onClose: () => resolve(typed) },
+    );
+    requestAnimationFrame(() => input.focus());
+  });
+}
+
+/** A save that may relax a Production workspace's rules, asking for its name when needed; null when cancelled. */
+export function withRelaxPrompt<T>(save: (relaxConfirmation: string | null) => Promise<T>): Promise<T | null> {
+  return withRelaxConfirmation(save, promptRelaxConfirmation);
 }

@@ -7,6 +7,8 @@
  */
 import type { ConnectionSpec, EngineDescriptor, SecretSlot, TlsConfig, TlsMode } from "../../core/contract";
 import type { AppConfig, ConnectionProfile } from "../../core/types";
+import { sameTarget } from "../../features/connections/connectionForm";
+import { PRODUCTION_ICON, relaxations, safetyOf } from "../../features/safety/safety";
 import { mockError } from "./errors";
 import { state } from "./state";
 
@@ -19,13 +21,21 @@ export function profiles(): ConnectionProfile[] {
   return state.config.workspaces.flatMap((workspace) => workspace.connections);
 }
 
-/** Like the backend's `put_connection`: replaces the profile where it is, or adds it to the workspace. */
+/**
+ * Like the backend's `save_connection`: replaces the profile where it is, or adds it to the workspace. A profile that
+ * points at another server, tunnel or TLS setting loses its saved password unless one is typed. Making the rules of a
+ * Production workspace's connection looser (an override, or a move out) needs the workspace name.
+ */
 export function saveConnection(
   profile: ConnectionProfile,
   password: string | null,
   workspaceId: string | null,
   secrets: Partial<Record<SecretSlot, string>> | null,
+  relaxConfirmation: string | null = null,
 ): AppConfig {
+  checkConnectionRelax(profile, workspaceId, relaxConfirmation);
+  const saved = profiles().find((item) => item.id === profile.id);
+  if (saved && !sameTarget(saved, profile)) savedPasswords.delete(profile.id);
   if (!profile.savePassword) savedPasswords.delete(profile.id);
   else if (password !== null || secrets?.password !== undefined) savedPasswords.add(profile.id);
   const target = workspaceId ?? state.config.workspaces.find((workspace) => workspace.connections.some((item) => item.id === profile.id))?.id;
@@ -43,6 +53,37 @@ export function saveConnection(
   return state.config;
 }
 
+/** `RELAX_CONFIRMATION_REQUIRED` unless the save keeps a Production connection's rules (or the name is typed). */
+function checkConnectionRelax(profile: ConnectionProfile, workspaceId: string | null, typed: string | null): void {
+  const workspaces = state.config.workspaces;
+  const source = workspaces.find((workspace) => workspace.connections.some((item) => item.id === profile.id));
+  const saved = source?.connections.find((item) => item.id === profile.id);
+  const target = workspaces.find((workspace) => workspace.id === (workspaceId ?? source?.id ?? state.config.activeWorkspace));
+  if (!target) return;
+  const after = profile.safety ?? saved?.safety ?? safetyOf(target);
+  const changes: string[] = [];
+  let production: string | null = null;
+  if (source && saved) {
+    const looser = relaxations(saved.safety ?? safetyOf(source), after);
+    changes.push(...looser.map((change) => change.text));
+    if (looser.length > 0 && source.icon === PRODUCTION_ICON) production = source.name;
+  }
+  if (source?.id !== target.id) {
+    const looser = relaxations(safetyOf(target), after);
+    changes.push(...looser.map((change) => change.text).filter((text) => !changes.includes(text)));
+    if (looser.length > 0 && production === null && target.icon === PRODUCTION_ICON) production = target.name;
+  }
+  if (production !== null && (typed ?? "").trim() !== production.trim())
+    throw mockError(
+      "RELAX_CONFIRMATION_REQUIRED",
+      `This makes the rules of a connection in the Production workspace less strict: type "${production}" to confirm.`,
+      {
+        expected: production,
+        changes,
+      },
+    );
+}
+
 export function deleteConnection(id: string): AppConfig {
   savedPasswords.delete(id);
   state.config = {
@@ -50,20 +91,6 @@ export function deleteConnection(id: string): AppConfig {
     workspaces: state.config.workspaces.map((workspace) => ({ ...workspace, connections: workspace.connections.filter((item) => item.id !== id) })),
   };
   return state.config;
-}
-
-const blank = (value: string | null | undefined) => (value ?? "").trim();
-
-/** Same server as the saved profile (engine, host, port, user, url, file), as `ConnectionProfile::same_target`. */
-function sameTarget(saved: ConnectionProfile, draft: ConnectionProfile): boolean {
-  return (
-    saved.driver === draft.driver &&
-    blank(saved.host) === blank(draft.host) &&
-    saved.port === draft.port &&
-    blank(saved.user) === blank(draft.user) &&
-    blank(saved.url) === blank(draft.url) &&
-    blank(saved.file) === blank(draft.file)
-  );
 }
 
 /** The backend's secret binding: without a typed password, the saved one is used only for the saved server. */

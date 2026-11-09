@@ -98,8 +98,8 @@ still verify against the right name.
 
 The certificate is trusted by the first rule that applies:
 
-1. `pinnedSha256`: some certificate in the chain the server sends has this fingerprint. Chain, expiry and
-   name are not checked. Pin the leaf, or a CA the server includes in its chain.
+1. `pinnedSha256`: the server's own (leaf) certificate has this fingerprint. Chain, expiry and
+   name are not checked. Only the leaf counts: a CA fingerprint never matches (use `caFile` to trust a CA).
 2. `acceptInvalidCerts`: any certificate.
 3. Otherwise the chain must lead to `caFile` (only that file) or to the system and Mozilla roots.
    `require`, `verifyFull` and `prefer` also check the host name. `verifyCa` does not.

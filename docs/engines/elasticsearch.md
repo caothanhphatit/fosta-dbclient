@@ -12,7 +12,7 @@ Elasticsearch 8.19 and OpenSearch 2.19 (`dev/compose/elasticsearch.yml`, `dev/co
 | Node URLs | Advanced: several nodes, comma separated (`https://es1:9200, https://es2:9200`); later ones are failover. A path prefix (a proxy) is kept. |
 | Cloud ID | Elasticsearch only; replaces host and port. |
 | Auth | Basic (user and password; also the OpenSearch security plugin), API key (Elasticsearch: the encoded value), bearer token, or none. |
-| TLS | CA file, client certificate, accept invalid certificates, or the SHA-256 fingerprint Elasticsearch prints on first start (`pinnedSha256`). Built with the shared rustls helpers (`net::tls`). |
+| TLS | CA file, client certificate, accept invalid certificates, or the SHA-256 fingerprint of the node's own HTTP certificate (`pinnedSha256`, leaf only). The fingerprint Elasticsearch prints on first start belongs to its HTTP CA: use `config/certs/http_ca.crt` as the CA file instead. Built with the shared rustls helpers (`net::tls`). |
 | SSH | The tunnel forwards one node: requests go to its local end, so a node list is not used through a tunnel. Set the TLS server name when the certificate is for the real host. |
 
 Connection strings: `https://elastic:secret@es1:9243, https://es2:9243` (the password goes to the secret store, never into the

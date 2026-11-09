@@ -2,39 +2,78 @@
 
 use crate::{
     audit::{AuditEntry, Outcome},
-    config::{AppConfig, WorkspaceMeta},
+    config::{AppConfig, Workspace, WorkspaceMeta},
     error::{AppError, AppResult},
     gateway::{
         classify::Category,
-        rules::{relaxations, SafetySettings, PRODUCTION_ICON},
+        rules::{relaxations, Preset, SafetySettings, PRODUCTION_ICON},
     },
     secrets, AppState,
 };
 
 pub const RELAX_CONFIRMATION_REQUIRED: &str = "RELAX_CONFIRMATION_REQUIRED";
 
+/// Refuses with [`RELAX_CONFIRMATION_REQUIRED`] (detail: `expected`, `changes`) unless `typed` is the Production
+/// workspace name `expected`. `message` says what is being relaxed.
+pub fn require_relax_confirmation(typed: Option<&str>, expected: &str, changes: &[String], message: String) -> AppResult<()> {
+    if typed.map(str::trim).unwrap_or_default() == expected.trim() {
+        return Ok(());
+    }
+    Err(AppError::structured(
+        message,
+        serde_json::json!({ "code": RELAX_CONFIRMATION_REQUIRED, "expected": expected, "changes": changes }),
+    ))
+}
+
+/// How saving `workspace` over `previous` (None for a new workspace) makes the rules less strict, the rules before and
+/// after, and whether a Production workspace is involved (then the name must be typed). Removing the Production
+/// marking counts as relaxing when the rules are then looser than Read-only, since only Production pins Read-only.
+fn workspace_relaxations(previous: Option<&Workspace>, workspace: &WorkspaceMeta) -> (Vec<String>, SafetySettings, SafetySettings, bool) {
+    let (before, was_production) = match previous {
+        Some(previous) => (previous.safety(), previous.icon == PRODUCTION_ICON),
+        None => (SafetySettings::for_new_workspace(&workspace.icon), false),
+    };
+    let after = workspace.safety.clone().unwrap_or_else(|| before.clone());
+    let mut changes = relaxations(&before.effective(), &after.effective());
+    if was_production && workspace.icon != PRODUCTION_ICON {
+        let unmarked = relaxations(&SafetySettings::preset(Preset::ReadOnly).effective(), &after.effective());
+        if !unmarked.is_empty() {
+            changes.insert(0, "no longer marked Production".to_owned());
+            for change in unmarked {
+                if !changes.contains(&change) {
+                    changes.push(change);
+                }
+            }
+        }
+    }
+    let production = was_production || workspace.icon == PRODUCTION_ICON;
+    (changes, before, after, production)
+}
+
 /// Creates or edits a workspace. Making its safety rules less strict is recorded in the audit
 /// log; for a Production workspace it also needs `relax_confirmation` = the workspace name.
+/// Removing the Production marking (shield icon) counts as relaxing when the rules are then looser than Read-only.
 pub fn save_workspace(state: &AppState, workspace: WorkspaceMeta, relax_confirmation: Option<String>) -> AppResult<AppConfig> {
     if workspace.name.trim().is_empty() {
         return Err(AppError::new("Workspace name is required"));
     }
     let previous = state.config.read(|config| config.workspace(&workspace.id).ok().cloned());
-    let (before, name, was_production) = match &previous {
-        Some(previous) => (previous.safety(), previous.name.clone(), previous.icon == PRODUCTION_ICON),
-        None => (SafetySettings::for_new_workspace(&workspace.icon), workspace.name.clone(), false),
-    };
-    let after = workspace.safety.clone().unwrap_or_else(|| before.clone());
-    let changes = relaxations(&before.effective(), &after.effective());
-    let production = was_production || workspace.icon == PRODUCTION_ICON;
+    let name = previous
+        .as_ref()
+        .map_or_else(|| workspace.name.clone(), |previous| previous.name.clone());
+    let (changes, before, after, production) = workspace_relaxations(previous.as_ref(), &workspace);
     if !changes.is_empty() && production {
-        let typed = relax_confirmation.as_deref().map(str::trim).unwrap_or_default();
-        if typed != name.trim() {
-            return Err(AppError::structured(
-                format!("Relaxing the rules of the Production workspace needs its name typed: \"{name}\"."),
-                serde_json::json!({ "code": RELAX_CONFIRMATION_REQUIRED, "expected": name, "changes": changes }),
-            ));
-        }
+        require_relax_confirmation(
+            relax_confirmation.as_deref(),
+            &name,
+            &changes,
+            format!("Relaxing the rules of the Production workspace needs its name typed: \"{name}\"."),
+        )?;
+    }
+    // Pin the rules: a workspace without saved rules would otherwise get the default of its new icon.
+    let mut workspace = workspace;
+    if previous.is_some() {
+        workspace.safety = Some(after.clone());
     }
     let workspace_id = workspace.id.clone();
     let workspace_name = workspace.name.clone();
@@ -122,4 +161,70 @@ pub async fn delete_workspace(state: &AppState, id: String) -> AppResult<AppConf
         secrets::delete_connection(&profile.id)?;
     }
     state.config.update(|config| config.remove_workspace(&id).map(|_| ()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace(icon: &str, preset: Preset) -> Workspace {
+        Workspace {
+            id: "w".into(),
+            name: "Prod".into(),
+            color: String::new(),
+            icon: icon.into(),
+            safety: Some(SafetySettings::preset(preset)),
+            assistant_queries: Default::default(),
+            connections: Vec::new(),
+            tasks: Vec::new(),
+        }
+    }
+
+    fn meta(icon: &str, preset: Option<Preset>) -> WorkspaceMeta {
+        WorkspaceMeta {
+            id: "w".into(),
+            name: "Prod".into(),
+            color: String::new(),
+            icon: icon.into(),
+            safety: preset.map(SafetySettings::preset),
+            assistant_queries: None,
+        }
+    }
+
+    #[test]
+    fn removing_the_production_marking_counts_as_relaxing_unless_read_only() {
+        let production = workspace(PRODUCTION_ICON, Preset::ReadOnly);
+        // Same rules, shield removed, still Read-only: nothing is looser.
+        let (changes, _, _, guarded) = workspace_relaxations(Some(&production), &meta("laptop", None));
+        assert!(changes.is_empty(), "{changes:?}");
+        assert!(guarded);
+        // A Production workspace on Guarded rules (relaxed earlier, with the name) loses the shield: relaxing.
+        let relaxed = workspace(PRODUCTION_ICON, Preset::Guarded);
+        let (changes, _, _, guarded) = workspace_relaxations(Some(&relaxed), &meta("laptop", None));
+        assert_eq!(changes[0], "no longer marked Production");
+        assert!(changes.len() > 1 && guarded);
+        // Shield removed and rules opened in the same save.
+        let (changes, _, after, _) = workspace_relaxations(Some(&production), &meta("laptop", Some(Preset::Open)));
+        assert_eq!(after.preset, Preset::Open);
+        assert_eq!(changes.iter().filter(|change| *change == "no longer marked Production").count(), 1);
+        let unique: std::collections::HashSet<_> = changes.iter().collect();
+        assert_eq!(unique.len(), changes.len(), "no duplicates: {changes:?}");
+        // Keeping the shield and the rules changes nothing; a non-Production workspace is not guarded.
+        assert!(workspace_relaxations(Some(&production), &meta(PRODUCTION_ICON, None)).0.is_empty());
+        let local = workspace("laptop", Preset::Guarded);
+        let (changes, _, _, guarded) = workspace_relaxations(Some(&local), &meta("server", Some(Preset::Open)));
+        assert!(!changes.is_empty() && !guarded);
+    }
+
+    #[test]
+    fn the_typed_name_must_match() {
+        let changes = vec!["x".to_owned()];
+        assert!(require_relax_confirmation(Some(" Prod "), "Prod", &changes, String::new()).is_ok());
+        for typed in [None, Some(""), Some("prod")] {
+            let error = require_relax_confirmation(typed, "Prod", &changes, "typed".into()).unwrap_err();
+            let detail = serde_json::to_value(&error).unwrap();
+            assert!(detail.to_string().contains(RELAX_CONFIRMATION_REQUIRED), "{detail}");
+            assert!(detail.to_string().contains("\"expected\":\"Prod\""), "{detail}");
+        }
+    }
 }
