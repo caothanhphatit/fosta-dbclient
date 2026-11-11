@@ -13,9 +13,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   Its Documents section has a query bar with Filter, Project, Sort, Collation, Skip and Limit in mongosh syntax
   (`ObjectId("…")`, `ISODate("…")`, unquoted keys, braces optional), errors underlined where they are, and completion
   of field paths, query operators, BSON constructors and the field's own values. Ctrl+Enter runs; ArrowUp / ArrowDown
-  and the history button recall recent filters of the collection. Documents show as expandable cards or as JSON, paged
-  by `_id` where the sort allows it, with the matching count (estimated without a filter) and the server time. Every
-  read goes through the safety gateway, and the filter, sort and view are kept with the open tabs.
+  and the history button recall recent filters of the collection. Documents show as a List (a virtualised tree whose
+  fields expand on demand), as JSON, or as a read-only Table (nested fields as dotted-path columns, arrays as
+  "[n items]" that open in a side panel, mixed types flagged), paged by `_id` where the sort allows it, with the matching
+  count (estimated without a filter, counted on views) and the server time. Switching modes keeps the document at the
+  top. BSON values read as what they are: ObjectId with its creation time on hover, dates in local time with UTC on
+  hover, Decimal128, Long, Binary/UUID, Regex and Timestamp, and any value copies as shell syntax. Fields like
+  `customerId` / `customer_id` holding an ObjectId that matches a document of another collection show as inferred
+  references (probed in the background, bounded and cached); opening one shows the document in a side panel with a link
+  to its collection filtered by `_id`. Views open in the workspace too. When a field does not parse, the documents shown
+  are dimmed and marked as the previous query's. Every read goes through the safety gateway, and the filter, sort and
+  view are kept with the open tabs.
 
 ### Changed
 

@@ -43,6 +43,19 @@ export interface GridSetup {
   onHiddenColumns: ((hidden: string[]) => void) | null;
   /** Loads all components of a vector cell for the cell editor (table views only). */
   loadVector: ((row: Value[], column: ColumnInfo) => Promise<number[]>) | null;
+  /** How a cell reads instead of its value's text (a document view's readable values); null keeps the default. */
+  cellView?: ((row: number, column: number, value: Value) => CellView | null) | null;
+  /** Double-click or Enter on a cell; true when it was handled (the cell then is not edited). */
+  onCellOpen?: ((row: number, column: number) => boolean) | null;
+  /** Items put first in a cell's context menu. */
+  cellMenu?: ((row: number, column: number) => MenuItem[]) | null;
+}
+
+/** A cell drawn by `GridSetup.cellView`: its text, what hovering shows, and classes added to the cell. */
+export interface CellView {
+  text: string;
+  title?: string | null;
+  className?: string;
 }
 
 export interface GridRow extends PendingRow {

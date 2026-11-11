@@ -131,7 +131,7 @@
   position: relative;
   display: flex;
   flex: 1 1 auto;
-  flex-direction: column;
+  flex-direction: row;
   min-height: 0;
 }
 
@@ -169,34 +169,74 @@
   height: 22px;
 }
 
-/* --- List mode: one card per document ---------------------------------------------------------------------------- */
+/* --- List mode: the virtualised document tree (docTree.ts), one card per document -------------------------------- */
 
 .md-list {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dt-tree {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 10px 12px 24px;
-}
-
-.md-card {
-  position: relative;
-  margin-bottom: 8px;
-  padding: 8px 12px 8px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  padding: 10px 0 24px;
+  outline: none;
   font-family: var(--font-mono);
   font-size: 12.5px;
-  line-height: 1.6;
 }
 
-.md-card:hover {
-  border-color: var(--border-strong);
+.dt-sizer {
+  position: relative;
+  min-width: 100%;
 }
 
-.md-card-tools {
+/* Lines are placed by top; their heights match HEIGHTS in docTree.ts (head 6, field 21, more 22, foot 14). */
+.dt-line {
   position: absolute;
-  top: 4px;
+  right: 12px;
+  left: 12px;
+  box-sizing: border-box;
+}
+
+.dt-head {
+  z-index: 1;
+  height: 6px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface);
+}
+
+.dt-field {
+  height: 21px;
+  border-right: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.dt-field.dt-more-line {
+  height: 22px;
+}
+
+.dt-foot {
+  height: 14px;
+}
+
+.dt-foot-box {
+  height: 6px;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--surface);
+}
+
+.dt-tools {
+  position: absolute;
+  top: 3px;
   right: 6px;
   display: flex;
   align-items: center;
@@ -204,27 +244,36 @@
   font-family: var(--font-ui);
 }
 
+.dt-tools .icon-button {
+  opacity: 0.35;
+}
+
+.dt-tools .icon-button:hover,
+.dt-tools .icon-button:focus-visible {
+  opacity: 1;
+}
+
+.dt-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  min-width: 0;
+  padding-right: 56px;
+  margin-left: 8px;
+  overflow: hidden;
+  line-height: 21px;
+  white-space: nowrap;
+}
+
+.dt-field:hover {
+  background: color-mix(in srgb, var(--hover) 70%, var(--surface));
+}
+
 .md-index {
   color: var(--fg-3);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-}
-
-.md-card-tools .icon-button {
-  opacity: 0;
-}
-
-.md-card:hover .md-card-tools .icon-button,
-.md-card-tools .icon-button:focus-visible {
-  opacity: 1;
-}
-
-.md-field {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-  min-width: 0;
-  padding-right: 48px;
 }
 
 .md-toggle,
@@ -238,7 +287,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  align-self: center;
   padding: 0;
   border: none;
   border-radius: 3px;
@@ -285,8 +333,8 @@
 
 .md-value {
   min-width: 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .md-string {
@@ -315,20 +363,49 @@
   color: var(--fg-3);
 }
 
-.md-children {
-  margin-left: 7px;
-  padding-left: 12px;
-  border-left: 1px solid var(--grid-line);
-}
-
-.md-children[hidden] {
-  display: none;
-}
-
-.md-more {
-  margin: 2px 0 0 20px;
+.dt-more {
   font-family: var(--font-ui);
   font-size: 12px;
+}
+
+/* An inferred reference: the collection the ObjectId points at, labelled as inferred. */
+.dt-ref {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 17px;
+  margin-left: 4px;
+  padding: 0 6px 0 3px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dt-ref:hover {
+  border-color: var(--accent);
+}
+
+.dt-ref:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.dt-ref-icon {
+  width: 10px;
+  height: 10px;
+}
+
+.dt-inferred {
+  color: var(--fg-3);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-style: italic;
+  font-weight: 400;
 }
 
 /* --- JSON mode ---------------------------------------------------------------------------------------------------- */
@@ -340,4 +417,180 @@
 
 .md-json .cm-editor {
   height: 100%;
+}
+
+/* --- Table mode (flatten.ts in the shared grid) ------------------------------------------------------------------- */
+
+.mt-table {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mt-table > .grid {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.mt-table .cell.mt-value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mt-table .cell.mt-missing {
+  background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--grid-line) 70%, transparent) 5px 6px);
+}
+
+.mt-table .cell.mt-nested {
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: zoom-in;
+}
+
+.mt-table .cell.mt-nested::before {
+  content: "\25B8\00a0";
+  color: var(--fg-3);
+}
+
+.mt-table .cell.mt-ref {
+  text-decoration: underline dotted color-mix(in srgb, var(--accent) 60%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* A value of another type than most of its column ("Mixed" under the column name). */
+.mt-table .cell.mt-odd {
+  box-shadow: inset 3px 0 0 var(--warning);
+  background: color-mix(in srgb, var(--warning) 9%, transparent);
+}
+
+.mt-note {
+  flex: none;
+  padding: 4px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.mt-note[hidden] {
+  display: none;
+}
+
+/* --- Results body: the documents and the side panel -------------------------------------------------------------- */
+
+.mq-main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.mq-results.mq-stale {
+  opacity: 0.45;
+  filter: grayscale(0.6);
+}
+
+.mq-stale-note {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.mq-stale-note[hidden] {
+  display: none;
+}
+
+.mq-stale-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--warning);
+}
+
+.mq-side {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: min(440px, 42%);
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.mq-side[hidden] {
+  display: none;
+}
+
+.mq-side-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 4px 0 12px;
+}
+
+.mq-side-title {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mq-side-name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mq-side-sub {
+  padding: 0 12px 6px;
+  overflow: hidden;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mq-side-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.mq-side-body .dt-tree {
+  padding-top: 8px;
+}
+
+.mq-side-body .dt-line {
+  right: 8px;
+  left: 8px;
+}
+
+.mq-side-message {
+  padding: 16px 12px;
+  color: var(--fg-2);
+}
+
+.mq-side-foot {
+  flex: none;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.mq-side-foot[hidden] {
+  display: none;
 }

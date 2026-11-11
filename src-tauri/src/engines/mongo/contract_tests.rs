@@ -612,13 +612,21 @@ async fn contract_mongo_schema_graph() {
 }
 
 /// The engine operations the MongoDB views invoke, through the gateway in a Read-only workspace: find with keyset pages
-/// by `_id`, computed projections, collations and hints; exact, estimated and limited counts; capped distinct values;
+/// by `_id`, computed projections, collations and hints; exact, estimated and limited counts (a view counted, having no
+/// metadata count); capped distinct values;
 /// references resolved by `_id`; server-side JavaScript, credential collections and unknown names refused.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs dev/compose/mongo.yml"]
 async fn contract_mongo_engine_operations() {
     let f = fixture();
-    let (manager, _handle) = connect(&f).await;
+    let (manager, handle) = connect(&f).await;
+    // A view of the active items (set up outside the Read-only gateway): views have no metadata count.
+    let tab = session(&handle).await;
+    run(&handle, &tab, r#"{ "drop": "contract_active_items" }"#, "fosta_contract")
+        .await
+        .unwrap();
+    let view = r#"{ "create": "contract_active_items", "viewOn": "contract_items", "pipeline": [{ "$match": { "active": true } }] }"#;
+    run(&handle, &tab, view, "fosta_contract").await.unwrap();
     let context = Context {
         workspace_id: "contract".into(),
         workspace_name: "Contract".into(),
@@ -708,6 +716,11 @@ async fn contract_mongo_engine_operations() {
     );
     let limited = invoke("mongo.count", json!({ "filter": {}, "limit": 10 })).await.unwrap();
     assert_eq!(limited["count"].as_u64(), Some(10));
+    let on_view = invoke("mongo.count", json!({ "collection": "contract_active_items", "estimated": true }))
+        .await
+        .unwrap();
+    // Servers that answer the metadata count on a view run the view (an exact count); others refuse it and it is counted.
+    assert_eq!(on_view["count"].as_u64(), Some(500), "{on_view}");
 
     // Distinct values: array elements, capped.
     let tags = invoke("mongo.distinct", json!({ "field": "meta.tags" })).await.unwrap();

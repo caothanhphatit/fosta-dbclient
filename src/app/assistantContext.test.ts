@@ -20,6 +20,7 @@ function workspaceTab(sections: { title: string; text: string; active: boolean }
     object: { database: "shop", schema: null, name: "orders", kind: "collection" },
     activeSection: () => "documents",
     show: async () => undefined,
+    deliver: async () => undefined,
     viewState: () => ({ section: "documents", state: {} }),
     workspaceContext: () => workspaceContextText("MongoDB workspace of collection shop.orders", sections),
     onViewChanged: null,

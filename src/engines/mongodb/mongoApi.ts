@@ -2,9 +2,10 @@
  * Typed calls of the `mongo.*` operations (src-tauri/src/engines/mongo/ops.rs) over the injected `ConnectionApi`. Every
  * call goes through the gateway, which classifies it; `find` and `count` go through `withConfirmation`, so a workspace
  * that asks before reads still asks (null: the user declined). `distinct` serves completion and never asks: it
- * resolves [] instead of failing.
+ * resolves [] instead of failing. `resolveRef` asks only when the user opened the reference (probing never asks).
  */
 import type { ConnectionApi } from "../../core/connectionApi";
+import type { Confirmation } from "../../core/types";
 import { withConfirmation } from "../../features/safety/confirmationDialog";
 import type { CountArgs, FindArgs, FindPage, Target } from "./queryModel";
 
@@ -32,6 +33,12 @@ const DISTINCT_LIMIT = 50;
 const DISTINCT_TTL_MS = 60_000;
 /** The bound of a completion request: a slow `distinct` must not hold the editor. */
 const DISTINCT_MAX_TIME_MS = 3000;
+/** The bound of reading one referenced document. */
+const RESOLVE_MAX_TIME_MS = 5000;
+
+interface ResolveResult {
+  document: Record<string, unknown> | null;
+}
 
 export class MongoApi {
   private readonly distinctCache = new Map<string, { at: number; values: Promise<unknown[]> }>();
@@ -47,6 +54,17 @@ export class MongoApi {
 
   count(args: CountArgs): Promise<CountResult | null> {
     return withConfirmation((confirmation) => this.connection.invokeCapability<CountResult>("mongo.count", args, confirmation));
+  }
+
+  /**
+   * The document with `_id` `id` in `collection` of the same database; null when there is none. `ask`: a workspace that
+   * asks before reads asks (the user opened it); without it a read that needs asking fails (probing references).
+   */
+  async resolveRef(collection: string, id: unknown, ask: boolean): Promise<Record<string, unknown> | null> {
+    const args = { database: this.target.database, collection, id, maxTimeMS: RESOLVE_MAX_TIME_MS };
+    const call = (confirmation: Confirmation | null) => this.connection.invokeCapability<ResolveResult>("mongo.resolveRef", args, confirmation);
+    const result = ask ? await withConfirmation(call) : await call(null);
+    return result?.document ?? null;
   }
 
   /** Whether `distinct(field)` answers from the cache (no request, so no need to wait for typing to settle). */

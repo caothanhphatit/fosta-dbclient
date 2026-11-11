@@ -36,7 +36,7 @@ import {
   type Position,
   type SortState,
 } from "./gridModel";
-export { gridSetup, type GridSetup, type SortState } from "./gridModel";
+export { gridSetup, type CellView, type GridSetup, type SortState } from "./gridModel";
 import "./grid-virtual.css";
 import "./grid-tools.css";
 
@@ -400,6 +400,20 @@ export class DataGrid {
     this.restoreFilterFocus();
   }
 
+  /** The data index of the first row in view (under the header); -1 without rows. */
+  topRow(): number {
+    if (this.visible.length === 0) return -1;
+    return this.visible[clamp(Math.floor(this.element.scrollTop / rowHeight), 0, this.visible.length - 1)];
+  }
+
+  /** Scrolls so the row at data index `index` is the first in view. */
+  scrollToRow(index: number): void {
+    const position = this.visiblePosition.get(index);
+    if (position === undefined) return;
+    this.element.scrollTop = position * rowHeight;
+    this.updateWindow(false);
+  }
+
   /** Stops observing the grid's size; call when the view that owns the grid closes or replaces it. */
   dispose(): void {
     this.disposed = true;
@@ -575,7 +589,7 @@ export class DataGrid {
       "tr",
       { class: `state-${rowState(row)}${current}`, "data-row": index },
       h("td", { class: "row-number" }, label),
-      ...this.displayed.map((column) => this.renderCell(row, row.current[column] ?? NULL, column)),
+      ...this.displayed.map((column) => this.renderCell(row, row.current[column] ?? NULL, column, index)),
     );
     row.element = element;
     const selected = current ? this.displayed.indexOf(this.selection!.column) : -1;
@@ -583,7 +597,12 @@ export class DataGrid {
     return element;
   }
 
-  private renderCell(row: GridRow, value: Value, column: number): HTMLTableCellElement {
+  private renderCell(row: GridRow, value: Value, column: number, index: number): HTMLTableCellElement {
+    const view = this.setup.cellView?.(index, column, value) ?? null;
+    if (view) {
+      const title = view.title ?? (view.text.length > TOOLTIP_THRESHOLD ? preview(view.text) : null);
+      return h("td", { class: ["cell", view.className ?? ""].filter(Boolean).join(" "), title }, preview(view.text));
+    }
     const modified = row.edited && row.original !== null && !valuesEqual(row.original[column] ?? NULL, value);
     const meta = this.setup.columns[column];
     const text = displayValue(value);
@@ -656,7 +675,7 @@ export class DataGrid {
 
   private handleDoubleClick(event: MouseEvent): void {
     const position = this.positionOf(event.target);
-    if (position) this.beginEdit(position);
+    if (position && !this.setup.onCellOpen?.(position.row, position.column)) this.beginEdit(position);
   }
 
   private handleContextMenu(event: MouseEvent): void {
@@ -705,7 +724,7 @@ export class DataGrid {
         run: () => void this.copyExport(format),
       })),
     ];
-    const extra = this.setup.extraMenu?.(row.current) ?? [];
+    const extra = [...(this.setup.cellMenu?.(position.row, position.column) ?? []), ...(this.setup.extraMenu?.(row.current) ?? [])];
     const readOnlyItems: MenuItem[] = extra.length ? [...extra, "separator", ...copyItems] : copyItems;
     if (!this.setup.editable) return readOnlyItems;
     const locked = row.deleted || !column || !isEditableColumn(column);
@@ -798,6 +817,7 @@ export class DataGrid {
       this.openEditor(this.selection);
     } else if (event.key === "Enter" || event.key === "F2") {
       event.preventDefault();
+      if (event.key === "Enter" && this.setup.onCellOpen?.(this.selection.row, this.selection.column)) return;
       this.beginEdit(this.selection);
     } else if (event.key.length === 1 && !command && !event.altKey) {
       event.preventDefault();

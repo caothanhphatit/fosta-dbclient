@@ -118,7 +118,8 @@ describe("saved state and recent filters", () => {
       options: true,
       recent: ["x"],
     });
-    expect(readSavedState({ mode: "table", filter: "x".repeat(5000) })).toMatchObject({ mode: "list", filter: "" });
+    expect(readSavedState({ mode: "grid", filter: "x".repeat(5000) })).toMatchObject({ mode: "list", filter: "" });
+    expect(readSavedState({ mode: "table" }).mode).toBe("table");
   });
 
   it("keeps recent filters newest first without repeats", () => {

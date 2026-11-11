@@ -180,7 +180,16 @@ export class FieldEditor {
 }
 
 /** A read-only JSON viewer with line numbers (the documents' JSON mode). */
-export function createJsonViewer(parent: HTMLElement): { set(text: string): void; destroy(): void } {
+export interface JsonViewer {
+  set(text: string): void;
+  /** The 0-based line at the top of the view. */
+  topLine(): number;
+  /** Scrolls so the 0-based `line` is at the top. */
+  scrollToLine(line: number): void;
+  destroy(): void;
+}
+
+export function createJsonViewer(parent: HTMLElement): JsonViewer {
   const extensions: Extension[] = [
     EditorState.readOnly.of(true),
     EditorView.editable.of(true),
@@ -198,6 +207,15 @@ export function createJsonViewer(parent: HTMLElement): { set(text: string): void
   return {
     set(text: string) {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+    },
+    topLine() {
+      const block = view.lineBlockAtHeight(Math.max(0, view.scrollDOM.getBoundingClientRect().top - view.documentTop));
+      return view.state.doc.lineAt(block.from).number - 1;
+    },
+    scrollToLine(line: number) {
+      const doc = view.state.doc;
+      const target = doc.line(Math.max(1, Math.min(doc.lines, line + 1)));
+      view.dispatch({ effects: EditorView.scrollIntoView(target.from, { y: "start" }) });
     },
     destroy: () => view.destroy(),
   };

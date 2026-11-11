@@ -279,6 +279,14 @@ export class AppNavigation implements Navigator {
     void this.openObject(profile, object, "data", { columnFilters });
   }
 
+  openWorkspace(connectionId: string, object: ObjectRef, section: string, request: unknown): void {
+    const profile = this.profile(connectionId);
+    if (!profile) return;
+    void this.openObject(profile, object, "workspace", { section }).then((content) => {
+      if (isWorkspaceTab(content)) void content.deliver(section, request);
+    });
+  }
+
   openDesign(target: TableTarget): void {
     const profile = this.profile(target.connectionId);
     if (!profile) return;

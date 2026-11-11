@@ -25,6 +25,8 @@ export interface SectionContent extends TabContent {
   saveState?(): unknown;
   /** What the assistant should know about this section now (the filter, the active stage, sampled fields, the last error). */
   assistantContext?(): string | null;
+  /** A request from outside the tab (another tab's link, e.g. a filter to run); see `WorkspaceTab.deliver`. */
+  receive?(request: unknown): void;
 }
 
 export interface SectionContext {
@@ -59,6 +61,8 @@ export interface WorkspaceTab extends TabContent {
   /** The id of the section shown. */
   activeSection(): string;
   show(sectionId: string): Promise<void>;
+  /** Shows a section (loading it first) and hands it `request` (`SectionContent.receive`). */
+  deliver(sectionId: string, request: unknown): Promise<void>;
   /** What is saved with the open tabs. */
   viewState(): WorkspaceViewState;
   /** The tab's context for the assistant (bounded). */
@@ -160,6 +164,12 @@ class SectionWorkspace implements WorkspaceTab {
     if (changed && notify) this.onViewChanged?.();
     if (entry.pending) await entry.pending;
     if (this.active === sectionId && !this.element.hidden) entry.content?.onActivate?.();
+  }
+
+  async deliver(sectionId: string, request: unknown): Promise<void> {
+    await this.show(sectionId);
+    if (this.disposed || this.active !== sectionId) return;
+    this.loaded.get(sectionId)?.content?.receive?.(request);
   }
 
   onActivate(): void {

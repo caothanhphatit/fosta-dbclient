@@ -8,6 +8,11 @@ export interface Navigator {
    * foreign-key navigation from the record panel and the grid's "Open related" items.
    */
   openData(connectionId: string, object: ObjectRef, columnFilters: Record<string, string>): void;
+  /**
+   * Opens the engine workspace of an object (or selects its tab) on `section` and hands that section `request`
+   * (e.g. a filter to run): a link from one collection's document to another collection.
+   */
+  openWorkspace(connectionId: string, object: ObjectRef, section: string, request: unknown): void;
   /** True when the connection's safety rules block every write (a Read-only workspace): grids then offer no editing. */
   writesBlocked(connectionId: string): boolean;
   openVectorSearch(target: TableTarget, column: string, seed?: KeyCell[]): void;

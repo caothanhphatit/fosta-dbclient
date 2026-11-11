@@ -12,7 +12,8 @@
 //!   documents follow `_id`, so pages are stable; when the sort is `_id` alone, `nextAfter` (canonical Extended JSON of
 //!   the last `_id`) passed back as `after` reads the next page.
 //! - `mongo.count { database, collection, filter?, estimated?, limit?, skip?, collation?, hint?, maxTimeMS? }` →
-//!   `{ count, estimated, elapsedMs }`. `estimated` reads the collection's metadata and applies only without a filter.
+//!   `{ count, estimated, elapsedMs }`. `estimated` reads the collection's metadata and applies only without a filter (a view,
+//!   which has none, is counted).
 //! - `mongo.distinct { database, collection, field, filter?, limit?, collation?, maxTimeMS? }` →
 //!   `{ values, truncated, elapsedMs }`: at most `limit` values (array fields give their elements, like `distinct`),
 //!   sorted, for value completion.
@@ -294,8 +295,12 @@ async fn count(coll: &Collection<Document>, args: &Json, max_time: Duration) -> 
     let filter = document_arg(args, "filter")?.unwrap_or_default();
     let started = Instant::now();
     if bool_arg(args, "estimated") && filter.is_empty() {
-        let count = coll.estimated_document_count().max_time(max_time).await?;
-        return Ok(json!({ "count": count, "estimated": true, "elapsedMs": elapsed_ms(started) }));
+        // A view has no metadata count (CommandNotSupportedOnView): it is counted instead.
+        match coll.estimated_document_count().max_time(max_time).await {
+            Ok(count) => return Ok(json!({ "count": count, "estimated": true, "elapsedMs": elapsed_ms(started) })),
+            Err(error) if is_view_error(&error) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     let mut action = coll.count_documents(filter).max_time(max_time);
     if let Some(limit) = u64_arg(args, "limit")?.filter(|limit| *limit > 0) {
@@ -312,6 +317,11 @@ async fn count(coll: &Collection<Document>, args: &Json, max_time: Duration) -> 
     }
     let count = action.await?;
     Ok(json!({ "count": count, "estimated": false, "elapsedMs": elapsed_ms(started) }))
+}
+
+/// The server's answer to a command a view does not support (code 166, `CommandNotSupportedOnView`).
+fn is_view_error(error: &mongodb::error::Error) -> bool {
+    matches!(error.kind.as_ref(), mongodb::error::ErrorKind::Command(command) if command.code == 166)
 }
 
 /// A field path for `distinct`: dotted names, no `$` at the start of a part (that would be an expression or a variable).

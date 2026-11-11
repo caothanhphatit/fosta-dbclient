@@ -1,19 +1,26 @@
 /**
  * The Documents section of a collection workspace: the query bar, then one page of the matching documents in the mode
- * picked (List or JSON; Table and the tree come with step M4), paged by `_id` when the sort allows it (`nextAfter`) and
- * by skip otherwise, with the count (estimated from metadata without a filter) and the server time of the page.
- * Every read goes through `mongo.find` / `mongo.count` (`invoke`), so the gateway classifies and may refuse it; its
- * errors are shown in place of the documents. Each run is added to the query history as a shell command.
+ * picked (List, JSON or Table, `documentModes.ts`), paged by `_id` when the sort allows it (`nextAfter`) and by skip
+ * otherwise, with the count (estimated from metadata without a filter, exact on a view) and the server time of the
+ * page. Switching modes keeps the document at the top (`anchor.ts`). Inferred references (`refs.ts`) are probed in
+ * the background; opening one shows the referenced document in the side panel, with a link to its collection.
+ * Every read goes through `mongo.find` / `mongo.count` / `mongo.resolveRef` (`invoke`), so the gateway classifies and
+ * may refuse it; its errors are shown in place of the documents. Each run is added to the query history as a shell
+ * command.
  */
 import { api } from "../../core/api";
+import type { ObjectRef } from "../../core/contract";
 import { formatNumber, h, icon, iconButton } from "../../core/dom";
 import { renderError } from "../../core/errorPanel";
 import { errorText } from "../../core/errors";
 import type { HistoryEntry } from "../../core/types";
 import type { SectionContent, SectionContext } from "../../features/objectWorkspace/sectionWorkspace";
 import { SchemaCache } from "../../lang/schemaCache";
-import { documentPaths, type Doc } from "./documents";
-import { MODES, type DocumentsRenderer } from "./documentModes";
+import { anchorAt, indexOfAnchor, type Anchor } from "./anchor";
+import { readable, shellText } from "./bson";
+import { DocTree } from "./docTree";
+import { documentPaths, type Doc, type Json } from "./documents";
+import { MODES, type DocumentsRenderer, type RendererContext } from "./documentModes";
 import { MongoApi, type FindResult } from "./mongoApi";
 import { QueryBar } from "./queryBar";
 import {
@@ -32,11 +39,17 @@ import {
   type DocumentsSavedState,
   type PageCursor,
 } from "./queryModel";
+import { refFields, RefResolver } from "./refs";
 import "./mongodb.css";
 
 /** Store keys other sections read (the query of this tab, the field paths seen). */
 export const STORE_QUERY = "mongo.query";
 export const STORE_FIELD_PATHS = "mongo.fieldPaths";
+
+/** What another tab hands the section (`receive`): a filter to run, e.g. `{ _id: ObjectId('…') }`. */
+export interface DocumentsRequest {
+  filter: string;
+}
 
 export function documentsSectionFactory(ctx: SectionContext): SectionContent {
   return new DocumentsSection(ctx);
@@ -47,16 +60,26 @@ class DocumentsSection implements SectionContent {
   private readonly api: MongoApi;
   private readonly bar: QueryBar;
   private readonly schema = new SchemaCache();
+  private readonly schemaReady: Promise<unknown>;
   private readonly database: string;
   private readonly collection: string;
+  /** A view has no metadata count: its total is counted. */
+  private readonly isView: boolean;
   private readonly modeButtons = new Map<DocumentsMode, HTMLButtonElement>();
   private readonly renderers = new Map<DocumentsMode, DocumentsRenderer>();
+  /** The page each renderer shows now (switching back to a mode does not draw it again). */
+  private readonly shown = new Map<DocumentsMode, FindResult>();
   private readonly results = h("div", { class: "mq-results" });
   private readonly message = h("div", { class: "mq-message", hidden: true });
+  private readonly staleNote = h("div", { class: "mq-stale-note", role: "status", hidden: true });
+  private readonly side: SidePanel;
   private readonly range = h("span", { class: "pager-info mq-range" });
   private readonly timing = h("span", { class: "mq-timing" });
   private readonly prev: HTMLButtonElement;
   private readonly next: HTMLButtonElement;
+  private readonly refs: RefResolver;
+  private readonly rendererContext: RendererContext;
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private mode: DocumentsMode;
   private recent: string[];
   private query: BuiltQuery | null = null;
@@ -67,17 +90,49 @@ class DocumentsSection implements SectionContent {
   private total: { count: number; estimated: boolean } | null = null;
   private lastError: string | null = null;
   private generation = 0;
+  /** The document the current mode was brought to when it was shown (`setMode`), and whether the user moved since. */
+  private anchor: Anchor | null = null;
+  private userMoved = false;
   private disposed = false;
 
   constructor(private readonly ctx: SectionContext) {
     const object = ctx.view.object;
     this.database = object?.database ?? "";
     this.collection = object?.name ?? "";
+    this.isView = object?.kind === "view";
     this.api = new MongoApi(ctx.view.connection, { database: this.database, collection: this.collection });
     const saved: DocumentsSavedState = readSavedState(ctx.savedState);
     this.mode = saved.mode;
     this.recent = saved.recent;
-    void this.schema.load(() => ctx.view.connection.completionSchema(this.database || null), this.database);
+    this.schemaReady = this.schema.load(() => ctx.view.connection.completionSchema(this.database || null), this.database);
+    this.refs = new RefResolver(
+      (collection, id) => this.api.resolveRef(collection, id, false),
+      async () => {
+        await this.schemaReady.catch(() => undefined);
+        return this.collectionsOfDatabase().map((table) => table.name);
+      },
+      this.collection,
+    );
+    this.rendererContext = {
+      refs: {
+        targetOf: (path) => this.refs.known(path) ?? null,
+        open: (collection, id, path) => void this.side.openRef(collection, id, path),
+      },
+      inspect: (title, value) => this.side.inspect(title, value),
+    };
+    this.side = new SidePanel({
+      resolve: async (collection, id) => {
+        try {
+          const cached = await this.refs.document(collection, id);
+          if (cached) return cached;
+        } catch {
+          // Probing does not ask; opening may (a workspace that asks before reads).
+        }
+        return this.api.resolveRef(collection, id, true);
+      },
+      openCollection: (collection, id) => this.openCollection(collection, id),
+      refs: this.rendererContext.refs,
+    });
 
     this.bar = new QueryBar({
       connectionId: ctx.view.connection.connectionId,
@@ -112,7 +167,10 @@ class DocumentsSection implements SectionContent {
       modes,
       h("div", { class: "toolbar-end" }, this.timing, this.range, this.prev, this.next, refresh),
     );
-    this.element = h("div", { class: "view mq-documents" }, this.bar.element, toolbar, h("div", { class: "mq-body" }, this.message, this.results));
+    const main = h("div", { class: "mq-main" }, this.staleNote, this.message, this.results);
+    // What the user does in the documents (not the scrolling a mode switch does) moves the anchor.
+    for (const type of ["wheel", "keydown", "pointerdown"]) this.results.addEventListener(type, () => (this.userMoved = true), { passive: true });
+    this.element = h("div", { class: "view mq-documents" }, this.bar.element, toolbar, h("div", { class: "mq-body" }, main, this.side.element));
     this.setMode(this.mode, false);
     this.updatePager();
     void this.run(false);
@@ -120,7 +178,9 @@ class DocumentsSection implements SectionContent {
 
   dispose(): void {
     this.disposed = true;
+    if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
     this.bar.dispose();
+    this.side.dispose();
     for (const renderer of this.renderers.values()) renderer.dispose?.();
     this.renderers.clear();
   }
@@ -129,9 +189,18 @@ class DocumentsSection implements SectionContent {
     return { ...this.bar.state(), mode: this.mode, options: this.bar.optionsOpen(), recent: this.recent };
   }
 
+  /** Runs a filter handed over by another tab (a reference opened in its collection). */
+  receive(request: unknown): void {
+    const filter = typeof request === "object" && request !== null ? (request as Partial<DocumentsRequest>).filter : undefined;
+    if (typeof filter !== "string") return;
+    this.bar.setState({ ...EMPTY_QUERY, limit: this.bar.state().limit, filter });
+    this.ctx.stateChanged();
+    void this.run();
+  }
+
   assistantContext(): string | null {
     const state = this.bar.state();
-    const lines = [`Collection ${this.database}.${this.collection}.`];
+    const lines = [`${this.isView ? "View" : "Collection"} ${this.database}.${this.collection}.`];
     lines.push(`Filter: ${state.filter.trim() || "{} (none)"}`);
     if (state.project.trim()) lines.push(`Project: ${state.project.trim()}`);
     if (state.sort.trim()) lines.push(`Sort: ${state.sort.trim()}`);
@@ -146,16 +215,22 @@ class DocumentsSection implements SectionContent {
     return lines.join("\n");
   }
 
+  private collectionsOfDatabase(): { name: string; kind: string }[] {
+    return this.schema.get().tables.filter((table) => table.kind === "collection" || table.kind === "view" || table.kind === "table");
+  }
+
   /** Runs the bar's query from its first page; `record` adds it to the recent filters and the query history. */
   private async run(record = true): Promise<void> {
     const state = this.bar.state();
-    const built = buildQuery(state, { database: this.database, collection: this.collection });
+    const built = buildQuery(state, { database: this.database, collection: this.collection }, { exactCount: this.isView });
     if (!built.ok) {
       this.bar.showError(built.error);
       this.bar.focusError(built.error);
       this.lastError = `${FIELD_LABELS[built.error.field]}: ${built.error.message}`;
+      this.markStale(FIELD_LABELS[built.error.field]);
       return;
     }
+    this.markStale(null);
     this.bar.showError(null);
     this.bar.ran();
     this.query = built.query;
@@ -171,6 +246,21 @@ class DocumentsSection implements SectionContent {
     const started = Date.now();
     const page = await this.load(this.cursors[0], generation);
     if (record && page !== undefined) this.record(commandText(state, this.collection), started, page);
+  }
+
+  /** Dims the documents shown and says they answer the previous query (a field does not parse); null clears it. */
+  private markStale(field: string | null): void {
+    const stale = field !== null && this.page !== null;
+    this.results.classList.toggle("mq-stale", stale);
+    this.staleNote.hidden = !stale;
+    this.staleNote.replaceChildren(
+      ...(stale
+        ? [
+            icon("history", "mq-stale-icon"),
+            h("span", {}, `These results are from the previous query: the ${field.toLowerCase()} does not parse, so it was not run.`),
+          ]
+        : []),
+    );
   }
 
   private async count(query: BuiltQuery, generation: number): Promise<void> {
@@ -206,7 +296,10 @@ class DocumentsSection implements SectionContent {
       const paths = documentPaths(page.documents);
       const known = this.ctx.store.get<string[]>(STORE_FIELD_PATHS) ?? [];
       this.ctx.store.set(STORE_FIELD_PATHS, [...new Set([...known, ...paths])].slice(0, 600));
-      this.draw();
+      this.anchor = null;
+      this.userMoved = false;
+      this.draw(null);
+      this.probeRefs(page.documents as Doc[]);
       return page;
     } catch (error) {
       if (this.disposed || generation !== this.generation) return undefined;
@@ -226,6 +319,24 @@ class DocumentsSection implements SectionContent {
     }
   }
 
+  /** Probes the reference-like fields of a page (bounded, cached per field); the views are drawn again as targets are found. */
+  private probeRefs(documents: Doc[]): void {
+    for (const [path, sample] of refFields(documents)) {
+      if (this.refs.known(path) !== undefined) continue;
+      void this.refs.target(path, sample).then((target) => {
+        if (target && !this.disposed) this.scheduleRefresh();
+      });
+    }
+  }
+
+  private scheduleRefresh(): void {
+    if (this.refreshTimer !== null) return;
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      for (const [mode, renderer] of this.renderers) if (this.shown.get(mode) === this.page) renderer.refresh?.();
+    }, 60);
+  }
+
   private async forward(): Promise<void> {
     if (!this.nextPage) return;
     const cursor = this.nextPage;
@@ -240,7 +351,8 @@ class DocumentsSection implements SectionContent {
     await this.load(this.cursors[this.cursors.length - 1]);
   }
 
-  private draw(): void {
+  /** Shows the page in the current mode; `anchor`: the document to bring to the top (a mode switch). */
+  private draw(anchor: Anchor | null): void {
     const page = this.page;
     if (!page) return;
     const documents = page.documents as Doc[];
@@ -265,8 +377,20 @@ class DocumentsSection implements SectionContent {
     this.message.hidden = true;
     this.message.replaceChildren();
     const renderer = this.renderer(this.mode);
-    renderer.show(documents, this.cursors[this.cursors.length - 1]?.offset ?? 0);
-    this.results.replaceChildren(renderer.element);
+    const fresh = this.shown.get(this.mode) !== page;
+    if (fresh) {
+      renderer.show(documents, this.cursors[this.cursors.length - 1]?.offset ?? 0);
+      this.shown.set(this.mode, page);
+    }
+    if (this.results.firstChild !== renderer.element) this.results.replaceChildren(renderer.element);
+    if (anchor) {
+      const index = indexOfAnchor(documents, anchor);
+      renderer.scrollToDocument(index);
+      // A mode just attached may lay out later (the JSON editor measures on the next frame).
+      requestAnimationFrame(() => {
+        if (!this.disposed && this.renderers.get(this.mode) === renderer) renderer.scrollToDocument(index);
+      });
+    }
   }
 
   private showMessage(text: string, offerReset = false): void {
@@ -284,19 +408,27 @@ class DocumentsSection implements SectionContent {
     let renderer = this.renderers.get(mode);
     if (!renderer) {
       const spec = MODES.find((item) => item.id === mode) ?? MODES[0];
-      renderer = spec.create();
+      renderer = spec.create(this.rendererContext);
       this.renderers.set(mode, renderer);
     }
     return renderer;
   }
 
   private setMode(mode: DocumentsMode, notify = true): void {
+    const current = this.renderers.get(this.mode);
+    const documents = (this.page?.documents ?? []) as Doc[];
+    // The document at the top of the mode left; when the user did not move in it since it was shown (a page that fits
+    // without scrolling cannot reach the anchor), the anchor it was shown at.
+    const moved = this.userMoved || !this.anchor;
+    const anchor = current && this.page && this.shown.get(this.mode) === this.page ? (moved ? anchorAt(documents, current.topDocument()) : this.anchor) : null;
+    this.anchor = anchor;
+    this.userMoved = false;
     this.mode = mode;
     for (const [id, button] of this.modeButtons) {
       button.classList.toggle("active", id === mode);
       button.setAttribute("aria-pressed", String(id === mode));
     }
-    if (this.page && this.page.documents.length > 0) this.draw();
+    if (this.page && this.page.documents.length > 0) this.draw(anchor);
     if (notify) this.ctx.stateChanged();
   }
 
@@ -308,6 +440,14 @@ class DocumentsSection implements SectionContent {
     else if (this.total) this.range.title = "";
     this.prev.disabled = this.cursors.length < 2;
     this.next.disabled = !this.nextPage;
+  }
+
+  /** Opens `collection`'s workspace (or its tab) filtered to the document `id`. */
+  private openCollection(collection: string, id: Json): void {
+    const kind = this.collectionsOfDatabase().find((table) => table.name === collection)?.kind === "view" ? "view" : "collection";
+    const object: ObjectRef = { database: this.database, schema: null, name: collection, kind };
+    const request: DocumentsRequest = { filter: `{ _id: ${shellText(id)} }` };
+    this.ctx.view.navigator.openWorkspace(this.ctx.view.connection.connectionId, object, "documents", request);
   }
 
   /** Adds the run to the query history in the background (turned off: the backend keeps nothing). */
@@ -329,5 +469,88 @@ class DocumentsSection implements SectionContent {
     api.historyAppend(entry).catch(() => {
       // The documents are shown either way; a history that cannot be written is not worth an error per run.
     });
+  }
+}
+
+interface SidePanelOptions {
+  resolve(collection: string, id: Json): Promise<Doc | null>;
+  openCollection(collection: string, id: Json): void;
+  refs: RendererContext["refs"];
+}
+
+/** The panel beside the documents: a referenced document, or an array / document opened from a Table cell. */
+class SidePanel {
+  readonly element = h("aside", { class: "mq-side", hidden: true, "aria-label": "Details" });
+  private readonly title = h("div", { class: "mq-side-title" });
+  private readonly subtitle = h("div", { class: "mq-side-sub" });
+  private readonly body = h("div", { class: "mq-side-body" });
+  private readonly foot = h("div", { class: "mq-side-foot", hidden: true });
+  private readonly tree: DocTree;
+  private request = 0;
+
+  constructor(private readonly options: SidePanelOptions) {
+    this.tree = new DocTree({ numbered: false, refs: options.refs, limits: { topFields: 500, childItems: 200 }, label: "Document" });
+    const close = iconButton("x", "Close the panel", () => this.close());
+    this.element.append(h("div", { class: "mq-side-head" }, this.title, close), this.subtitle, this.body, this.foot);
+    this.element.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") this.close();
+    });
+  }
+
+  inspect(title: string, value: Json): void {
+    this.request++;
+    this.open(
+      h("span", { class: "mq-side-name" }, title),
+      Array.isArray(value) ? `${value.length} ${value.length === 1 ? "item" : "items"}` : "Embedded document",
+    );
+    this.foot.hidden = true;
+    this.showTree(value as Doc);
+  }
+
+  async openRef(collection: string, id: Json, path: string): Promise<void> {
+    const request = ++this.request;
+    this.open(
+      h("span", { class: "mq-side-name" }, collection),
+      `${readable(id).text} · referenced by ${path}`,
+      h("span", { class: "dt-inferred", title: "Found by matching the field's name and value, not declared in MongoDB" }, "inferred"),
+    );
+    const link = h("button", { class: "link-button", type: "button" }, `Open ${collection} filtered by this _id`);
+    link.addEventListener("click", () => this.options.openCollection(collection, id));
+    this.foot.replaceChildren(link);
+    this.foot.hidden = false;
+    this.body.replaceChildren(h("div", { class: "mq-side-message" }, "Loading…"));
+    try {
+      const document = await this.options.resolve(collection, id);
+      if (request !== this.request) return;
+      if (!document) {
+        this.body.replaceChildren(h("div", { class: "mq-side-message" }, `No document with this _id in ${collection} (any more).`));
+        return;
+      }
+      this.showTree(document);
+    } catch (error) {
+      if (request !== this.request) return;
+      this.body.replaceChildren(renderError(error, { context: `Read the document in ${collection}` }));
+    }
+  }
+
+  dispose(): void {
+    this.tree.dispose();
+  }
+
+  private open(title: HTMLElement, subtitle: string, badge: HTMLElement | null = null): void {
+    this.title.replaceChildren(title, ...(badge ? [badge] : []));
+    this.subtitle.textContent = subtitle;
+    this.subtitle.title = subtitle;
+    this.element.hidden = false;
+  }
+
+  private showTree(document: Doc): void {
+    this.body.replaceChildren(this.tree.element);
+    this.tree.show([document], 0);
+  }
+
+  private close(): void {
+    this.request++;
+    this.element.hidden = true;
   }
 }

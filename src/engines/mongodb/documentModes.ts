@@ -1,129 +1,279 @@
 /**
  * The ways the Documents section shows a page of documents. Each mode is a renderer the section creates on first use
- * and keeps while the tab is open; switching modes shows the same page. List (expandable cards) and JSON (read-only
- * editor) are here; Table and the virtualised tree plug in as more `DocumentsRenderer`s (step M4).
+ * and keeps while the tab is open; switching modes shows the same page at the same document (each mode tells the
+ * index of its top document and scrolls to one; the section anchors it by `_id`, `anchor.ts`).
+ *
+ * - List: the virtualised document tree (`docTree.ts`), readable BSON, inferred references.
+ * - JSON: the page as Extended JSON in a read-only editor.
+ * - Table: the page flattened to dotted-path columns (`flatten.ts`) in the shared grid, read-only; arrays and deep
+ *   documents are one cell that opens in the side panel.
  */
-import { toast } from "../../core/dialogs";
-import { copyText, h, icon, iconButton } from "../../core/dom";
-import { documentJson, foldedText, isNested, scalarText, type Doc, type Json } from "./documents";
+import type { ColumnInfo, Value, ValueKind as GridKind } from "../../core/contract";
+import type { MenuItem } from "../../core/contextMenu";
+import { h } from "../../core/dom";
+import { DataGrid, gridSetup, type CellView } from "../../features/grid/grid";
+import { documentAtLine, jsonDocumentLines } from "./anchor";
+import { bsonType, readable, shellText, type BsonType } from "./bson";
+import { DocTree, type TreeRefs } from "./docTree";
+import { foldedText, isNested, type Doc, type Json } from "./documents";
+import { columnTypeText, flatten, isOddCell, MAX_COLUMNS, type FlatTable } from "./flatten";
 import { createJsonViewer } from "./queryEditor";
 import type { DocumentsMode } from "./queryModel";
+import { isRefName } from "./refs";
 
 export interface DocumentsRenderer {
   readonly element: HTMLElement;
   /** Shows a page; `offset` is the position of its first document among all matches. */
   show(documents: Doc[], offset: number): void;
+  /** The index (in the page) of the document at the top of the view. */
+  topDocument(): number;
+  scrollToDocument(index: number): void;
+  /** Draws again what depends on the section (an inferred reference became known). */
+  refresh?(): void;
   dispose?(): void;
+}
+
+/** What a mode needs from the section. */
+export interface RendererContext {
+  refs: TreeRefs;
+  /** Opens a value (an array, a document) in the side panel. */
+  inspect(title: string, value: Json): void;
 }
 
 export interface ModeSpec {
   id: DocumentsMode;
   label: string;
   title: string;
-  create(): DocumentsRenderer;
+  create(ctx: RendererContext): DocumentsRenderer;
 }
 
-/** Top-level fields a card shows before "Show N more fields", and items an opened array shows at first. */
-const CARD_FIELDS = 12;
-const NESTED_ITEMS = 50;
-
 export const MODES: ModeSpec[] = [
-  { id: "list", label: "List", title: "Documents as cards with fields to expand", create: () => new ListRenderer() },
+  { id: "list", label: "List", title: "Documents as cards with fields to expand", create: (ctx) => new ListRenderer(ctx) },
   { id: "json", label: "JSON", title: "The page as Extended JSON", create: () => new JsonRenderer() },
+  { id: "table", label: "Table", title: "Fields as columns (nested fields as dotted paths)", create: (ctx) => new TableRenderer(ctx) },
 ];
 
 class ListRenderer implements DocumentsRenderer {
-  readonly element = h("div", { class: "md-list", role: "list" });
+  private readonly tree: DocTree;
+  readonly element: HTMLElement;
+
+  constructor(ctx: RendererContext) {
+    this.tree = new DocTree({ refs: ctx.refs, numbered: true });
+    this.element = h("div", { class: "md-list" }, this.tree.element);
+  }
 
   show(documents: Doc[], offset: number): void {
-    this.element.replaceChildren(...documents.map((document, index) => card(document, offset + index)));
-    this.element.scrollTop = 0;
+    this.tree.show(documents, offset);
   }
-}
 
-function card(document: Doc, position: number): HTMLElement {
-  const copy = iconButton("copy", "Copy as JSON", () => {
-    copyText(documentJson(document)).then(
-      () => toast("Document copied", "success"),
-      () => toast("Could not write to the clipboard"),
-    );
-  });
-  const body = h("div", { class: "md-fields" });
-  fillFields(body, Object.entries(document), CARD_FIELDS);
-  return h(
-    "article",
-    { class: "md-card", role: "listitem", "aria-label": `Document ${position + 1}` },
-    h("div", { class: "md-card-tools" }, h("span", { class: "md-index" }, String(position + 1)), copy),
-    body,
-  );
-}
-
-/** Appends `entries` as field rows, the first `limit` of them, then a button for the rest. */
-function fillFields(host: HTMLElement, entries: [string, Json][], limit: number, array = false): void {
-  const shown = entries.slice(0, limit);
-  host.append(...shown.map(([key, value]) => fieldRow(key, value, array)));
-  const rest = entries.length - shown.length;
-  if (rest <= 0) return;
-  const more = h(
-    "button",
-    { class: "link-button md-more", type: "button" },
-    `Show ${rest} more ${array ? (rest === 1 ? "item" : "items") : rest === 1 ? "field" : "fields"}`,
-  );
-  more.addEventListener("click", () => {
-    more.remove();
-    fillFields(host, entries.slice(limit), Number.POSITIVE_INFINITY, array);
-  });
-  host.append(more);
-}
-
-function fieldRow(key: string, value: Json, inArray: boolean): HTMLElement {
-  const keyElement = h("span", { class: inArray ? "md-key md-index-key" : "md-key" }, key);
-  if (!isNested(value)) {
-    const { text, kind } = scalarText(value);
-    return h(
-      "div",
-      { class: "md-field" },
-      h("span", { class: "md-toggle-space" }),
-      keyElement,
-      h("span", { class: "md-colon" }, ":"),
-      h("span", { class: `md-value md-${kind}` }, text),
-    );
+  topDocument(): number {
+    return this.tree.topDocument();
   }
-  const entries: [string, Json][] = Array.isArray(value) ? value.map((item, index) => [String(index), item]) : Object.entries(value);
-  const folded = h("span", { class: "md-folded" }, foldedText(value));
-  if (entries.length === 0) {
-    return h("div", { class: "md-field" }, h("span", { class: "md-toggle-space" }), keyElement, h("span", { class: "md-colon" }, ":"), folded);
+
+  scrollToDocument(index: number): void {
+    this.tree.scrollToDocument(index);
   }
-  const toggle = h("button", { class: "md-toggle", type: "button", "aria-expanded": "false", "aria-label": `Expand ${key}` }, icon("chevron"));
-  const head = h("div", { class: "md-field md-nested" }, toggle, keyElement, h("span", { class: "md-colon" }, ":"), folded);
-  const row = h("div", { class: "md-node" }, head);
-  let children: HTMLElement | null = null;
-  const flip = () => {
-    const open = toggle.getAttribute("aria-expanded") !== "true";
-    toggle.setAttribute("aria-expanded", String(open));
-    toggle.setAttribute("aria-label", `${open ? "Collapse" : "Expand"} ${key}`);
-    if (!children) {
-      children = h("div", { class: "md-children" });
-      fillFields(children, entries, NESTED_ITEMS, Array.isArray(value));
-      row.append(children);
-    }
-    children.hidden = !open;
-  };
-  toggle.addEventListener("click", flip);
-  keyElement.addEventListener("click", flip);
-  keyElement.classList.add("md-clickable");
-  return row;
+
+  refresh(): void {
+    this.tree.refresh();
+  }
+
+  dispose(): void {
+    this.tree.dispose();
+  }
 }
 
 class JsonRenderer implements DocumentsRenderer {
   readonly element = h("div", { class: "md-json" });
   private readonly viewer = createJsonViewer(this.element);
+  private starts: number[] = [];
 
   show(documents: Doc[]): void {
     this.viewer.set(JSON.stringify(documents, null, 2));
+    this.starts = jsonDocumentLines(documents);
+    this.viewer.scrollToLine(0);
+  }
+
+  topDocument(): number {
+    return Math.max(0, documentAtLine(this.starts, this.viewer.topLine()));
+  }
+
+  scrollToDocument(index: number): void {
+    this.viewer.scrollToLine(index <= 0 ? 0 : (this.starts[index] ?? 0));
   }
 
   dispose(): void {
     this.viewer.destroy();
+  }
+}
+
+const NULL: Value = { t: "null", v: null };
+
+/** The grid kind of a column: numbers right-aligned, dates and ids with their badge, anything mixed as text. */
+function gridKind(types: BsonType[]): GridKind {
+  if (types.length !== 1) return { kind: types.length === 0 ? "text" : "other" };
+  switch (types[0]) {
+    case "number":
+    case "long":
+    case "decimal":
+      return { kind: "float" };
+    case "bool":
+      return { kind: "bool" };
+    case "date":
+      return { kind: "timestampTz" };
+    case "objectId":
+      return { kind: "objectId" };
+    case "array":
+    case "object":
+      return { kind: "json" };
+    default:
+      return { kind: "text" };
+  }
+}
+
+/** The grid value of a cell: what Copy and the header sort see (mongosh syntax; plain numbers stay numbers). */
+function gridValue(value: Json): Value {
+  if (value === null || value === undefined) return NULL;
+  if (typeof value === "number") return { t: "float", v: value };
+  if (typeof value === "boolean") return { t: "bool", v: value };
+  if (typeof value === "string") return { t: "text", v: value };
+  return { t: "text", v: shellText(value) };
+}
+
+class TableRenderer implements DocumentsRenderer {
+  readonly element: HTMLElement;
+  private readonly grid = new DataGrid();
+  private readonly note = h("div", { class: "mt-note", hidden: true });
+  private documents: Doc[] = [];
+  private table: FlatTable = { columns: [], rows: [], hiddenPaths: 0 };
+  private offset = 0;
+
+  constructor(private readonly ctx: RendererContext) {
+    this.element = h("div", { class: "mt-table" }, this.grid.element, this.note);
+  }
+
+  show(documents: Doc[], offset: number): void {
+    this.documents = documents;
+    this.offset = offset;
+    this.table = flatten(documents);
+    this.load();
+    this.grid.element.scrollTop = 0;
+    this.grid.element.scrollLeft = 0;
+    const hidden = this.table.hiddenPaths;
+    this.note.hidden = hidden === 0;
+    this.note.textContent = hidden
+      ? `${hidden} more ${hidden === 1 ? "field is" : "fields are"} not shown as columns (at most ${MAX_COLUMNS}, the fields most documents have). List and JSON show every field.`
+      : "";
+  }
+
+  topDocument(): number {
+    return Math.max(0, this.grid.topRow());
+  }
+
+  scrollToDocument(index: number): void {
+    this.grid.scrollToRow(index);
+  }
+
+  refresh(): void {
+    const top = this.grid.element.scrollTop;
+    const left = this.grid.element.scrollLeft;
+    this.load();
+    this.grid.element.scrollTop = top;
+    this.grid.element.scrollLeft = left;
+  }
+
+  dispose(): void {
+    this.grid.dispose();
+  }
+
+  private load(): void {
+    const table = this.table;
+    const columns: ColumnInfo[] = table.columns.map((column) => ({
+      name: column.path,
+      typeName: columnTypeText(column),
+      kind: gridKind(column.types),
+      nullable: true,
+      default: null,
+      comment: null,
+      identity: null,
+      generated: null,
+      hints: { primary: column.path === "_id", readOnly: true },
+    }));
+    const rows = table.rows.map((row) => row.map((cell) => (cell.missing ? NULL : gridValue(cell.value))));
+    const setup = gridSetup(columns, rows);
+    setup.rowOffset = this.offset;
+    setup.clientSort = true;
+    setup.readOnlyReason = "Documents are read-only in the Table mode for now.";
+    setup.cellView = (row, column) => this.cellView(row, column);
+    setup.onCellOpen = (row, column) => this.open(row, column);
+    setup.cellMenu = (row, column) => this.menu(row, column);
+    this.grid.load(setup);
+  }
+
+  private cell(row: number, column: number): { path: string; value: Json } | null {
+    const cell = this.table.rows[row]?.[column];
+    const meta = this.table.columns[column];
+    if (!cell || !meta || cell.missing) return null;
+    return { path: meta.path, value: cell.value };
+  }
+
+  private refTarget(path: string, value: Json): string | null {
+    return bsonType(value) === "objectId" && isRefName(path) ? this.ctx.refs.targetOf(path) : null;
+  }
+
+  private cellView(row: number, column: number): CellView {
+    const meta = this.table.columns[column];
+    const cell = this.table.rows[row]?.[column];
+    if (!meta || !cell || cell.missing) return { text: "", title: "No such field in this document", className: "mt-missing" };
+    const odd = isOddCell(meta, cell) ? " mt-odd" : "";
+    const value = cell.value;
+    if (isNested(value)) {
+      const what = Array.isArray(value) ? "the items" : "the document";
+      return { text: foldedText(value), title: `Double-click to open ${what} in the side panel`, className: `mt-nested${odd}` };
+    }
+    const shown = readable(value);
+    const target = this.refTarget(meta.path, value);
+    const oddTitle = odd ? ` · ${shown.type} in a column of mostly ${meta.types[0]}` : "";
+    if (target) {
+      return {
+        text: shown.text,
+        title: `${shown.title ?? ""}\nInferred reference to ${target}: double-click to open it${oddTitle}`.trim(),
+        className: `mt-value md-${shown.kind} mt-ref${odd}`,
+      };
+    }
+    const numeric = shown.kind === "number" ? " numeric" : "";
+    const title = shown.title ? `${shown.title}${oddTitle}` : odd ? oddTitle.slice(3) : null;
+    return { text: shown.kind === "null" ? "null" : shown.text, title, className: `mt-value md-${shown.kind}${numeric}${odd}` };
+  }
+
+  private open(row: number, column: number): boolean {
+    const cell = this.cell(row, column);
+    if (!cell) return false;
+    if (isNested(cell.value)) {
+      this.ctx.inspect(`${cell.path} · document ${this.offset + row + 1}`, cell.value);
+      return true;
+    }
+    const target = this.refTarget(cell.path, cell.value);
+    if (target) {
+      this.ctx.refs.open(target, cell.value, cell.path);
+      return true;
+    }
+    return false;
+  }
+
+  private menu(row: number, column: number): MenuItem[] {
+    const items: MenuItem[] = [];
+    const cell = this.cell(row, column);
+    if (cell && isNested(cell.value)) {
+      items.push({ label: Array.isArray(cell.value) ? "Open items" : "Open document", icon: "expand", run: () => void this.open(row, column) });
+    }
+    const target = cell ? this.refTarget(cell.path, cell.value) : null;
+    if (cell && target)
+      items.push({ label: `Open referenced document in ${target}`, icon: "expand", run: () => this.ctx.refs.open(target, cell.value, cell.path) });
+    const document = this.documents[row];
+    if (document) {
+      items.push({ label: "Open whole document", run: () => this.ctx.inspect(`Document ${this.offset + row + 1}`, document) });
+    }
+    return items;
   }
 }

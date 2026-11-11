@@ -1,5 +1,6 @@
 /**
- * MongoDB 8.0 mock: shop (products, customers, orders with nested documents and arrays) and events databases.
+ * MongoDB 8.0 mock: shop (products, customers, orders with nested documents and arrays, reviews with deep documents,
+ * large arrays, thousands of fields, mixed types and BSON values, references to products and customers) and events.
  * The console takes database commands as JSON (`find`, `aggregate`, `count`, `distinct`, `insert`, `update`, `delete`,
  * `listCollections`, `ping`, `buildInfo`, …); raw filters are query documents.
  */
@@ -62,6 +63,7 @@ const NAMES = ["Bamboo lamp", "Cork board", "Felt basket", "Linen pillow", "Cera
 const CITIES = ["Lisbon", "Berlin", "Toronto", "Melbourne", "Osaka", "Dublin", "Oslo", "Austin"];
 const pad = (n: number, width = 2) => String(n).padStart(width, "0");
 const oid = (collection: number, n: number) => v.oid(objectIdFor(1_760_000_000 + collection * 1000, n));
+const uuidBase64 = (uuid: string) => btoa(String.fromCharCode(...(uuid.replace(/-/g, "").match(/../g) ?? []).map((byte) => parseInt(byte, 16))));
 
 const tables: TableSpec[] = [
   {
@@ -155,12 +157,91 @@ const tables: TableSpec[] = [
             Array.from({ length: (n % 3) + 1 }, (_, line) =>
               v.doc([
                 ["sku", v.text(`MG-${pad(((n + line) % 320) + 1, 4)}`)],
+                ["productId", oid(1, ((n + line) % 320) + 1)],
                 ["qty", v.int(line + 1)],
               ]),
             ),
           ),
           v.dec((20 + ((n * 41) % 400) + 0.5).toFixed(2)),
           v.tstz(`2026-${pad((n % 10) + 1)}-${pad((n % 28) + 1)} 15:${pad(n % 60)}:00+00:00`),
+        ];
+      }),
+  },
+  {
+    database: "shop",
+    name: "reviews",
+    kind: "collection",
+    key: ["_id"],
+    columns: [
+      column("_id", "objectId", "objectId", { primary: true }),
+      column("productId", "objectId", "objectId"),
+      column("customerId", "objectId", "objectId"),
+      column("rating", "mixed", "other"),
+      column("title", "string", "text"),
+      column("meta", "object", "document"),
+      column("votes", "array", { kind: "array", of: { kind: "document" } }),
+      column("attributes", "object", "document"),
+      column("createdAt", "date", "timestampTz"),
+    ],
+    rows: () =>
+      Array.from({ length: 60 }, (_, index) => {
+        const n = index + 1;
+        const uuid = `${pad(n, 8)}-7d3c-4e1a-9b2f-${pad(n * 7919, 12)}`;
+        return [
+          oid(5, n),
+          oid(1, ((n * 13) % 320) + 1),
+          oid(2, ((n * 11) % 150) + 1),
+          // Mixed on purpose: a number for most reviews, a string where the rating was not given.
+          n % 7 === 0 ? v.text("n/a") : v.int((n % 5) + 1),
+          v.text(`${["Great", "Fine", "Broken on arrival", "Exactly as pictured", "Would buy again"][n % 5]} (${n})`),
+          v.doc([
+            ["sessionId", v.json({ $binary: { base64: uuidBase64(uuid), subType: "04" } })],
+            [
+              "source",
+              v.doc([
+                [
+                  "app",
+                  v.doc([
+                    ["name", v.text(n % 2 ? "web" : "ios")],
+                    [
+                      "build",
+                      v.doc([
+                        ["number", v.json({ $numberLong: String(9_007_199_254_740_000 + n) })],
+                        ["channel", v.text("stable")],
+                        ["flags", v.doc([["beta", v.bool(n % 3 === 0)]])],
+                      ]),
+                    ],
+                  ]),
+                ],
+              ]),
+            ],
+            [
+              "moderation",
+              v.doc([
+                ["checkedAt", v.json({ $timestamp: { t: 1_762_000_000 + n * 60, i: n } })],
+                ["pattern", v.json({ $regularExpression: { pattern: "^spam", options: "i" } })],
+                ["score", v.dec((n / 7).toFixed(4))],
+              ]),
+            ],
+            [
+              "thumbnail",
+              v.json({
+                $binary: { base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", subType: "00" },
+              }),
+            ],
+          ]),
+          // Large arrays: every 20th review has thousands of votes.
+          v.arr(
+            Array.from({ length: n % 20 === 1 ? 5000 : (n % 4) + 1 }, (_, vote) =>
+              v.doc([
+                ["customerId", oid(2, ((n + vote) % 150) + 1)],
+                ["up", v.bool((n + vote) % 3 !== 0)],
+              ]),
+            ),
+          ),
+          // The first review has thousands of attribute fields.
+          v.doc(Array.from({ length: n === 1 ? 2500 : 3 }, (_, field) => [`attr${pad(field + 1, 4)}`, field % 2 ? v.int(field) : v.text(`value ${field}`)])),
+          v.tstz(`2026-11-${pad((n % 10) + 1)} ${pad(n % 24)}:${pad(n % 60)}:00+00:00`),
         ];
       }),
   },

@@ -85,8 +85,15 @@ export function parseField(field: QueryField, text: string): { ok: true; json: s
   return { ok: true, json: result.json === "{}" ? null : result.json };
 }
 
-/** The `mongo.find` and `mongo.count` arguments of the bar's state, or the first field that does not parse. */
-export function buildQuery(state: QueryState, target: Target): { ok: true; query: BuiltQuery } | { ok: false; error: FieldError } {
+/**
+ * The `mongo.find` and `mongo.count` arguments of the bar's state, or the first field that does not parse. `exactCount`:
+ * the count is never read from metadata (a view has none, so its estimate would fail).
+ */
+export function buildQuery(
+  state: QueryState,
+  target: Target,
+  options: { exactCount?: boolean } = {},
+): { ok: true; query: BuiltQuery } | { ok: false; error: FieldError } {
   const parsed: Partial<Record<QueryField, string | null>> = {};
   for (const field of QUERY_FIELDS) {
     const result = parseField(field, state[field]);
@@ -101,7 +108,7 @@ export function buildQuery(state: QueryState, target: Target): { ok: true; query
   if (parsed.sort) find.sort = parsed.sort;
   if (parsed.collation) find.collation = parsed.collation;
   if (skip > 0) find.skip = skip;
-  const count: CountArgs = { ...target, estimated: !parsed.filter };
+  const count: CountArgs = { ...target, estimated: !parsed.filter && !options.exactCount };
   if (parsed.filter) count.filter = parsed.filter;
   if (parsed.collation) count.collation = parsed.collation;
   return { ok: true, query: { find, count, filtered: !!parsed.filter } };
@@ -244,9 +251,9 @@ export function parseCommandText(text: string, collection: string): QueryState |
 
 // --- Saved section state ---------------------------------------------------------------------------------------------
 
-export type DocumentsMode = "list" | "json";
+export type DocumentsMode = "list" | "json" | "table";
 
-export const DOCUMENT_MODES: readonly DocumentsMode[] = ["list", "json"];
+export const DOCUMENT_MODES: readonly DocumentsMode[] = ["list", "json", "table"];
 
 export interface DocumentsSavedState extends QueryState {
   mode: DocumentsMode;
