@@ -1,7 +1,9 @@
 //! MongoDB database commands written as JSON (the query tab's input), classified by the command name: the first key
 //! of the object. Aggregations with `$out` / `$merge` write; deletes and multi-updates with an empty filter are
-//! destructive.
+//! destructive. The engine operations (`mongo.find` …) are classified by name: they read, refuse server-side JavaScript
+//! and refuse names they do not know.
 
+use super::ops::{denied_operator, OPERATIONS};
 use crate::{
     contract::classify::{Category, Classification, StatementInfo},
     engines::common::sqlclassify::excerpt,
@@ -86,6 +88,30 @@ pub fn classify_mongo(text: &str) -> Classification {
         reason,
         refused: None,
     })
+}
+
+/// Classifies an engine operation (`mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`): every one reads,
+/// unless it targets credentials (administration); server-side JavaScript in any query document and unknown names are
+/// refused.
+pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo {
+    if !OPERATIONS.contains(&name) {
+        return StatementInfo::refused(name, name, "unknown operation");
+    }
+    let excerpt = format!("{name} {args}");
+    if let Some(operator) = denied_operator(args) {
+        return StatementInfo::refused(name, &excerpt, &format!("{operator} runs JavaScript on the server"));
+    }
+    let tables = args
+        .get("collection")
+        .and_then(|collection| collection.as_str())
+        .map(|collection| vec![collection.to_owned()])
+        .unwrap_or_default();
+    let info = if touches_secrets(args) {
+        StatementInfo::new(Category::Admin, name, &excerpt).with_reason(SENSITIVE_READ_REASON)
+    } else {
+        StatementInfo::new(Category::Read, name, &excerpt)
+    };
+    info.with_tables(tables)
 }
 
 /// A flag such as `showPrivileges` that is set: anything but absent, false, 0 or null.
@@ -279,5 +305,57 @@ mod tests {
         ] {
             assert_eq!(category(read), Category::Read, "{read}");
         }
+    }
+
+    #[test]
+    fn engine_operations_read_and_refuse_server_javascript() {
+        use serde_json::json;
+        let base = json!({ "database": "shop", "collection": "orders" });
+        let with = |extra: serde_json::Value| {
+            let mut args = base.clone();
+            args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            args
+        };
+        for (name, args) in [
+            (
+                "mongo.find",
+                with(json!({ "filter": { "status": "paid" }, "sort": { "_id": -1 }, "limit": 20 })),
+            ),
+            (
+                "mongo.count",
+                with(json!({ "filter": "{ \"status\": \"paid\" }", "estimated": false })),
+            ),
+            ("mongo.distinct", with(json!({ "field": "status" }))),
+            ("mongo.resolveRef", with(json!({ "id": { "$oid": "65f1a2b3c4d5e6f708192a3b" } }))),
+        ] {
+            let info = classify_operation(name, &args);
+            assert_eq!(info.category, Category::Read, "{name}");
+            assert_eq!(info.refused, None, "{name}");
+            assert_eq!(info.tables, ["orders"], "{name}");
+        }
+        let unknown = classify_operation("mongo.dropEverything", &base);
+        assert_eq!(unknown.refused.as_deref(), Some("unknown operation"));
+        for (name, args) in [
+            ("mongo.find", with(json!({ "filter": { "$where": "sleep(100) || true" } }))),
+            ("mongo.find", with(json!({ "filter": "{ \"$or\": [ { \"$where\": \"true\" } ] }" }))),
+            (
+                "mongo.find",
+                with(json!({ "projection": { "x": { "$function": { "body": "f", "args": [], "lang": "js" } } } })),
+            ),
+            (
+                "mongo.count",
+                with(json!({ "filter": { "$expr": { "$function": { "body": "f", "args": [], "lang": "js" } } } })),
+            ),
+            ("mongo.distinct", with(json!({ "field": "a", "filter": { "$where": "true" } }))),
+        ] {
+            let info = classify_operation(name, &args);
+            assert!(
+                info.refused.as_deref().is_some_and(|why| why.contains("JavaScript")),
+                "{name}: {args}"
+            );
+        }
+        let secret = classify_operation("mongo.find", &json!({ "database": "admin", "collection": "system.users" }));
+        assert_eq!(secret.category, Category::Admin);
+        assert_eq!(secret.refused, None);
     }
 }

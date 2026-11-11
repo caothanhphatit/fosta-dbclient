@@ -610,3 +610,226 @@ async fn contract_mongo_schema_graph() {
     assert!(graph.tables.iter().flat_map(|t| &t.columns).any(|c| c.primary && c.name == "_id"));
     manager.disconnect("graph").await;
 }
+
+/// The engine operations the MongoDB views invoke, through the gateway in a Read-only workspace: find with keyset pages
+/// by `_id`, computed projections, collations and hints; exact, estimated and limited counts; capped distinct values;
+/// references resolved by `_id`; server-side JavaScript, credential collections and unknown names refused.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mongo.yml"]
+async fn contract_mongo_engine_operations() {
+    let f = fixture();
+    let (manager, _handle) = connect(&f).await;
+    let context = Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: CONNECTION.into(),
+        connection_name: CONNECTION.into(),
+        safety: SafetySettings::preset(Preset::ReadOnly),
+    };
+    let invoke = |name: &'static str, extra: serde_json::Value| {
+        let mut args = json!({ "database": "fosta_contract", "collection": "contract_items" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let (manager, context) = (&manager, &context);
+        async move { gateway::invoke(manager, context, gateway::Caller::EngineView, name, args, None).await }
+    };
+    let ids = |page: &serde_json::Value| -> Vec<i64> {
+        page["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|doc| doc["_id"].as_i64().unwrap())
+            .collect()
+    };
+
+    // Pages follow `_id` without a sort; `nextAfter` reads the next one.
+    let first = invoke("mongo.find", json!({ "filter": { "active": true }, "limit": 10 }))
+        .await
+        .unwrap();
+    assert_eq!(ids(&first), (1..=10).map(|i| i * 2).collect::<Vec<_>>());
+    assert_eq!((first["hasMore"].as_bool(), first["keyset"].as_bool()), (Some(true), Some(true)));
+    assert_eq!(first["nextAfter"], json!({ "$numberInt": "20" }));
+    assert_eq!(first["documents"][0]["price"], json!({ "$numberDecimal": "2.50" }), "{first}");
+    assert!(first["statement"]
+        .as_str()
+        .unwrap()
+        .starts_with("db.getCollection(\"contract_items\").find("));
+    let second = invoke(
+        "mongo.find",
+        json!({ "filter": "{ \"active\": true }", "limit": 10, "after": first["nextAfter"].clone() }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ids(&second)[0], 22);
+    let descending = invoke("mongo.find", json!({ "sort": { "_id": -1 }, "limit": 2, "after": 500 }))
+        .await
+        .unwrap();
+    assert_eq!(ids(&descending), [499, 498]);
+    // Other sorts page by skip only.
+    let by_name = invoke("mongo.find", json!({ "sort": { "name": -1 }, "skip": 1, "limit": 3 }))
+        .await
+        .unwrap();
+    assert_eq!(ids(&by_name), [999, 998, 997]);
+    assert_eq!((by_name["keyset"].as_bool(), by_name["nextAfter"].is_null()), (Some(false), true));
+    assert!(invoke("mongo.find", json!({ "sort": { "name": 1 }, "after": 3 })).await.is_err());
+    // Limits are capped.
+    let capped = invoke("mongo.find", json!({ "limit": 100_000 })).await.unwrap();
+    assert_eq!(capped["documents"].as_array().unwrap().len(), 1000);
+    // Computed projection, collation, hint.
+    let computed = invoke(
+        "mongo.find",
+        json!({ "filter": { "_id": 5 }, "projection": { "name": 1, "twice": { "$multiply": ["$meta.n", 2] } } }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(computed["documents"][0], json!({ "_id": 5, "name": "item 0005", "twice": 10 }));
+    let collated = invoke(
+        "mongo.find",
+        json!({ "filter": { "name": "ITEM 0005" }, "collation": { "locale": "en", "strength": 2 } }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ids(&collated), [5]);
+    let hinted = invoke(
+        "mongo.find",
+        json!({ "filter": { "name": "item 0007" }, "hint": "uq_contract_items_name", "maxTimeMS": 5000 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ids(&hinted), [7]);
+    assert!(invoke("mongo.find", json!({ "hint": "no_such_index" })).await.is_err());
+
+    // Counts.
+    let count = invoke("mongo.count", json!({ "filter": { "active": true } })).await.unwrap();
+    assert_eq!((count["count"].as_u64(), count["estimated"].as_bool()), (Some(500), Some(false)));
+    let estimated = invoke("mongo.count", json!({ "estimated": true })).await.unwrap();
+    assert_eq!(
+        (estimated["count"].as_u64(), estimated["estimated"].as_bool()),
+        (Some(1000), Some(true))
+    );
+    let limited = invoke("mongo.count", json!({ "filter": {}, "limit": 10 })).await.unwrap();
+    assert_eq!(limited["count"].as_u64(), Some(10));
+
+    // Distinct values: array elements, capped.
+    let tags = invoke("mongo.distinct", json!({ "field": "meta.tags" })).await.unwrap();
+    assert_eq!(tags["values"], json!(["a", "b"]));
+    assert_eq!(tags["truncated"], json!(false));
+    let some = invoke(
+        "mongo.distinct",
+        json!({ "field": "_id", "filter": { "_id": { "$lte": 10 } }, "limit": 5 }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(some["values"], json!([1, 2, 3, 4, 5]));
+    assert_eq!(some["truncated"], json!(true));
+
+    // References by `_id`.
+    let found = invoke("mongo.resolveRef", json!({ "id": { "$numberInt": "42" } })).await.unwrap();
+    assert_eq!(found["document"]["name"], json!("item 0042"));
+    let missing = invoke("mongo.resolveRef", json!({ "id": 99_999 })).await.unwrap();
+    assert!(missing["document"].is_null());
+
+    // Refused whatever the rules: server-side JavaScript and unknown names; credentials are administration.
+    for (name, extra) in [
+        ("mongo.find", json!({ "filter": { "$where": "sleep(100) || true" } })),
+        (
+            "mongo.count",
+            json!({ "filter": "{ \"$expr\": { \"$function\": { \"body\": \"f\", \"args\": [], \"lang\": \"js\" } } }" }),
+        ),
+        ("mongo.nope", json!({})),
+    ] {
+        let error = invoke(name, extra).await.expect_err(name);
+        assert_eq!(error.code(), Some(gateway::BLOCKED), "{name}: {error}");
+    }
+    let secrets = gateway::invoke(
+        &manager,
+        &context,
+        gateway::Caller::EngineView,
+        "mongo.find",
+        json!({ "database": "admin", "collection": "system.users" }),
+        None,
+    )
+    .await
+    .expect_err("credentials");
+    assert_eq!(secrets.code(), Some(gateway::BLOCKED), "{secrets}");
+    manager.disconnect(CONNECTION).await;
+}
+
+/// The canonical Extended JSON v2 wrappers the query bar's shell parser (`src/lang/mongo/shell.ts`) emits parse to
+/// the right BSON types, through the filter check, `values::parse_document` and the operations' own argument path.
+#[test]
+fn shell_parser_wrappers_parse_to_their_bson_types() {
+    use mongodb::bson::{spec::BinarySubtype, spec::ElementType};
+    let text = r#"{
+        "oid": { "$oid": "65f1a2b3c4d5e6f708192a3b" },
+        "date": { "$date": { "$numberLong": "1735689600000" } },
+        "long": { "$numberLong": "9007199254740993" },
+        "int": { "$numberInt": "42" },
+        "decimal": { "$numberDecimal": "12.50" },
+        "double": { "$numberDouble": "1.0" },
+        "infinity": { "$numberDouble": "Infinity" },
+        "binary": { "$binary": { "base64": "AAECAw==", "subType": "00" } },
+        "uuid": { "$binary": { "base64": "q83vEjRWeJCrze8SNFZ4kA==", "subType": "04" } },
+        "timestamp": { "$timestamp": { "t": 1735689600, "i": 3 } },
+        "regex": { "$regularExpression": { "pattern": "^a.c$", "options": "imsx" } },
+        "min": { "$minKey": 1 },
+        "max": { "$maxKey": 1 },
+        "plainInt": 7,
+        "plainDouble": 2.5,
+        "text": "x",
+        "flag": true,
+        "nothing": null
+    }"#;
+    assert!(gateway::filter::validate_mongo_filter(text).is_ok());
+    let parsed = super::values::parse_document(text).unwrap();
+    let from_arg = super::ops::document_arg(
+        &json!({ "filter": serde_json::from_str::<serde_json::Value>(text).unwrap() }),
+        "filter",
+    )
+    .unwrap()
+    .unwrap();
+    let from_text = super::ops::document_arg(&json!({ "filter": text }), "filter").unwrap().unwrap();
+    assert_eq!(parsed, from_arg);
+    assert_eq!(parsed, from_text);
+    for (key, expected) in [
+        ("oid", ElementType::ObjectId),
+        ("date", ElementType::DateTime),
+        ("long", ElementType::Int64),
+        ("int", ElementType::Int32),
+        ("decimal", ElementType::Decimal128),
+        ("double", ElementType::Double),
+        ("infinity", ElementType::Double),
+        ("binary", ElementType::Binary),
+        ("uuid", ElementType::Binary),
+        ("timestamp", ElementType::Timestamp),
+        ("regex", ElementType::RegularExpression),
+        ("min", ElementType::MinKey),
+        ("max", ElementType::MaxKey),
+        ("plainInt", ElementType::Int32),
+        ("plainDouble", ElementType::Double),
+        ("text", ElementType::String),
+        ("flag", ElementType::Boolean),
+        ("nothing", ElementType::Null),
+    ] {
+        assert_eq!(parsed.get(key).map(mongodb::bson::Bson::element_type), Some(expected), "{key}");
+    }
+    assert_eq!(parsed.get_i64("long").unwrap(), 9_007_199_254_740_993);
+    assert_eq!(parsed.get_datetime("date").unwrap().timestamp_millis(), 1_735_689_600_000);
+    assert_eq!(parsed.get_f64("infinity").unwrap(), f64::INFINITY);
+    match parsed.get("uuid") {
+        Some(mongodb::bson::Bson::Binary(binary)) => assert_eq!(binary.subtype, BinarySubtype::Uuid),
+        other => panic!("uuid: {other:?}"),
+    }
+    match parsed.get("timestamp") {
+        Some(mongodb::bson::Bson::Timestamp(ts)) => assert_eq!((ts.time, ts.increment), (1_735_689_600, 3)),
+        other => panic!("timestamp: {other:?}"),
+    }
+    match parsed.get("regex") {
+        Some(mongodb::bson::Bson::RegularExpression(regex)) => {
+            assert_eq!((regex.pattern.as_str(), regex.options.as_str()), ("^a.c$", "imsx"))
+        }
+        other => panic!("regex: {other:?}"),
+    }
+    // A wrapper used as a query value still passes the check, server-side JavaScript next to it does not.
+    assert!(gateway::filter::validate_mongo_filter(r#"{ "_id": { "$gt": { "$oid": "65f1a2b3c4d5e6f708192a3b" } } }"#).is_ok());
+    assert!(gateway::filter::validate_mongo_filter(r#"{ "d": { "$date": { "$numberLong": "0" } }, "$where": "true" }"#).is_err());
+}

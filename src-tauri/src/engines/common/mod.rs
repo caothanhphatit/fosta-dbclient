@@ -5,6 +5,7 @@
 
 pub mod adapt;
 pub mod classify;
+pub mod serverjs;
 pub mod split;
 pub mod sqlbuild;
 pub mod sqlclassify;

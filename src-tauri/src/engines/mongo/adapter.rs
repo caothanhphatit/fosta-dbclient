@@ -8,9 +8,9 @@ use mongodb::{bson::doc, Client};
 
 use super::{
     catalog,
-    classify::classify_mongo,
+    classify::{classify_mongo, classify_operation},
     connect::{self, Topology},
-    descriptor,
+    descriptor, ops,
     session::{MongoSession, LANGUAGE},
     tabular, url,
 };
@@ -45,8 +45,8 @@ impl Engine for MongoAdapter {
                 StatementInfo::new(Category::Unknown, language, text)
                     .with_reason(&format!("MongoDB sessions do not run the '{language}' language.")),
             ),
-            // MongoDB has no engine operations.
-            ClassifyInput::Capability { name, .. } => Classification::single(StatementInfo::refused(name, name, "unknown operation")),
+
+            ClassifyInput::Capability { name, args } => Classification::single(classify_operation(name, args)),
             _ => Classification::default(),
         }
     }
@@ -154,6 +154,10 @@ impl Connection for MongoConnection {
         })
     }
 
+    async fn invoke(&self, name: &str, args: serde_json::Value, ctx: &CallContext) -> AppResult<serde_json::Value> {
+        ops::invoke(&self.client, name, &args, ctx).await
+    }
+
     fn tabular(&self) -> Option<&dyn TabularData> {
         Some(self)
     }
@@ -243,6 +247,17 @@ mod tests {
             args: &serde_json::Value::Null,
         });
         assert_eq!(unknown.refusal(), Some("unknown operation"));
+        let find = MONGODB.classify(&ClassifyInput::Capability {
+            name: "mongo.find",
+            args: &serde_json::json!({ "database": "shop", "collection": "orders", "filter": { "status": "paid" } }),
+        });
+        assert_eq!(find.worst(), Some(Category::Read));
+        assert_eq!(find.refusal(), None);
+        let javascript = MONGODB.classify(&ClassifyInput::Capability {
+            name: "mongo.count",
+            args: &serde_json::json!({ "database": "shop", "collection": "orders", "filter": { "$where": "true" } }),
+        });
+        assert!(javascript.refusal().is_some());
     }
 
     #[test]

@@ -6,7 +6,19 @@
 import type { ColumnInfo, ConnectInfo, RunRequest, StreamEvent, Value } from "../../../core/contract";
 import type { StatementInfo } from "../../../core/types";
 import { valueToJson } from "../../../core/values";
-import { builtin, column, mongoFilter, MockCatalog, objectIdFor, queryAction, v, viewAction, type CatalogStyle, type TableSpec } from "../catalog";
+import {
+  builtin,
+  column,
+  mongoFilter,
+  MockCatalog,
+  objectIdFor,
+  queryAction,
+  v,
+  viewAction,
+  type CatalogStyle,
+  type MockTable,
+  type TableSpec,
+} from "../catalog";
 import { DESCRIPTORS, ORDER } from "../descriptors";
 import { mockError, positionAt } from "../errors";
 import { pause } from "../sqlRun";
@@ -223,7 +235,215 @@ export const createDatabase = (name: string, firstCollection: string | null) =>
       : [],
   );
 export const touchRow = (table: string, key: unknown, remove: boolean, column?: string) => catalog.touch(table, key, remove, column);
-export const invoke = (): unknown => undefined;
+
+// --- Engine operations (`invoke_capability`), like src-tauri/src/engines/mongo/ops.rs ------------------------------------
+
+const JS_OPERATORS = ["$where", "$function", "$accumulator"];
+const MAX_FIND_LIMIT = 1000;
+const MAX_DISTINCT_LIMIT = 1000;
+type Json = unknown;
+type Doc = Record<string, Json>;
+
+function deniedOperator(value: Json): string | null {
+  if (Array.isArray(value)) return value.map(deniedOperator).find((found) => found !== null) ?? null;
+  if (typeof value !== "object" || value === null) return null;
+  for (const [key, inner] of Object.entries(value)) {
+    if (JS_OPERATORS.includes(key)) return key;
+    const found = deniedOperator(inner);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** A query-document argument: a JSON value as given, JSON text parsed (empty text is absent). */
+function jsonArg(args: Doc, key: string): Json {
+  const value = args[key];
+  if (typeof value !== "string") return value ?? undefined;
+  if (!value.trim()) return undefined;
+  try {
+    return JSON.parse(value) as Json;
+  } catch (error) {
+    throw mockError("ENGINE_ERROR", `${key} must be a JSON document (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
+
+/** Canonical number wrappers as the plain values the mock's rows compare with (decimals are text there). */
+function plain(value: Json): Json {
+  if (Array.isArray(value)) return value.map(plain);
+  if (typeof value !== "object" || value === null) return value;
+  const object = value as Doc;
+  for (const key of ["$numberInt", "$numberLong", "$numberDouble"]) if (key in object) return Number(object[key]);
+  if ("$numberDecimal" in object) return String(object.$numberDecimal);
+  return Object.fromEntries(Object.entries(object).map(([key, inner]) => [key, plain(inner)]));
+}
+
+/** Relaxed Extended JSON of a mock value. */
+function ejson(value: Value): Json {
+  switch (value.t) {
+    case "objectId":
+      return { $oid: value.v };
+    case "decimal":
+      return { $numberDecimal: value.v };
+    case "timestamptz":
+    case "timestamp":
+    case "date":
+      return { $date: new Date(value.v.replace(" ", "T")).toISOString() };
+    case "array":
+      return value.v.map(ejson);
+    case "doc":
+      return Object.fromEntries(value.v.map(([key, item]) => [key, ejson(item)]));
+    default:
+      return valueToJson(value);
+  }
+}
+
+function documentOf(table: MockTable, row: Value[]): Doc {
+  return Object.fromEntries(table.spec.columns.flatMap((spec, index) => (row[index].t === "null" ? [] : [[spec.name, ejson(row[index])]])));
+}
+
+/** The values at a dotted path, through arrays (like a query path). */
+function pathOf(document: Json, path: string): Json[] {
+  let current: Json[] = [document];
+  for (const part of path.split(".")) {
+    current = current
+      .flatMap((item) => (Array.isArray(item) ? item : [item]))
+      .filter((item): item is Doc => typeof item === "object" && item !== null)
+      .map((item) => item[part])
+      .filter((item) => item !== undefined);
+  }
+  return current.flatMap((item) => (Array.isArray(item) ? item : [item]));
+}
+
+function sortKey(value: Json): string | number {
+  if (typeof value === "number") return value;
+  if (typeof value === "object" && value !== null) {
+    const object = value as Doc;
+    if ("$oid" in object) return String(object.$oid);
+    if ("$date" in object) return String(object.$date);
+    if ("$numberDecimal" in object) return Number(object.$numberDecimal);
+  }
+  return typeof value === "string" ? value : JSON.stringify(value ?? null);
+}
+
+function compare(a: Json, b: Json): number {
+  const [x, y] = [sortKey(a), sortKey(b)];
+  return typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y));
+}
+
+/** Inclusion or exclusion projections; computed fields are not evaluated by the mock. */
+function project(document: Doc, projection: Json): Doc {
+  if (typeof projection !== "object" || projection === null) return document;
+  const entries = Object.entries(projection as Doc);
+  const included = entries.filter(([, flag]) => flag === 1 || flag === true).map(([key]) => key);
+  const excluded = entries.filter(([, flag]) => flag === 0 || flag === false).map(([key]) => key);
+  if (included.length > 0) {
+    const keep = new Set(excluded.includes("_id") ? included : ["_id", ...included]);
+    return Object.fromEntries(Object.entries(document).filter(([key]) => keep.has(key)));
+  }
+  return Object.fromEntries(Object.entries(document).filter(([key]) => !excluded.includes(key)));
+}
+
+/** The collection the arguments name; null when it does not exist (MongoDB reads it as empty). */
+function operationTable(args: Doc): MockTable | null {
+  const database = String(args.database ?? "");
+  const name = String(args.collection ?? "");
+  if (!database || !name) throw mockError("ENGINE_ERROR", "database and collection are required");
+  const table = catalog.resolve(name, database);
+  return table && table.spec.database === database ? table : null;
+}
+
+function matching(table: MockTable | null, args: Doc): Doc[] {
+  if (!table) return [];
+  const filter = plain(jsonArg(args, "filter"));
+  const predicate = filter === undefined ? () => true : mongoFilter(table, JSON.stringify(filter));
+  return table.rows.filter(predicate).map((row) => documentOf(table, row));
+}
+
+const bounded = (value: Json, fallback: number, max: number) => Math.min(Math.max(Number(value ?? fallback) || fallback, 1), max);
+
+function find(args: Doc): Json {
+  const table = operationTable(args);
+  const sortArg = jsonArg(args, "sort") as Doc | undefined;
+  const sort: [string, number][] =
+    sortArg && Object.keys(sortArg).length > 0 ? Object.entries(sortArg).map(([key, way]) => [key, Number(plain(way)) < 0 ? -1 : 1]) : [["_id", 1]];
+  const keyset = sort.length === 1 && sort[0][0] === "_id";
+  const limit = bounded(args.limit, 50, MAX_FIND_LIMIT);
+  const skip = Math.max(0, Number(args.skip ?? 0) || 0);
+  let documents = matching(table, args).sort((a, b) => {
+    for (const [key, way] of sort) {
+      const order = compare(pathOf(a, key)[0], pathOf(b, key)[0]) * way;
+      if (order !== 0) return order;
+    }
+    return 0;
+  });
+  const after = jsonArg(args, "after");
+  if (after !== undefined) {
+    if (!keyset) throw mockError("ENGINE_ERROR", "after pages by _id, so it needs the sort to be _id alone");
+    documents = documents.filter((document) => compare(document._id, plain(after)) * sort[0][1] > 0);
+  }
+  const page = documents.slice(skip, skip + limit + 1);
+  const hasMore = page.length > limit;
+  const shown = page.slice(0, limit).map((document) => project(document, jsonArg(args, "projection")));
+  const last = shown[shown.length - 1];
+  const sortDoc = Object.fromEntries(sort);
+  const filterText = JSON.stringify(jsonArg(args, "filter") ?? {});
+  return {
+    documents: shown,
+    hasMore,
+    keyset,
+    nextAfter: keyset && hasMore && last?._id !== undefined ? last._id : null,
+    sort: sortDoc,
+    elapsedMs: 3,
+    statement: `db.getCollection(${JSON.stringify(String(args.collection))}).find(${filterText}).sort(${JSON.stringify(sortDoc)})${skip ? `.skip(${skip})` : ""}.limit(${limit})`,
+  };
+}
+
+function count(args: Doc): Json {
+  const table = operationTable(args);
+  const filter = jsonArg(args, "filter");
+  const unfiltered = filter === undefined || (typeof filter === "object" && filter !== null && Object.keys(filter).length === 0);
+  if (args.estimated === true && unfiltered) return { count: table?.rows.length ?? 0, estimated: true, elapsedMs: 1 };
+  let n = matching(table, args).length - Math.max(0, Number(args.skip ?? 0) || 0);
+  if (Number(args.limit) > 0) n = Math.min(n, Number(args.limit));
+  return { count: Math.max(0, n), estimated: false, elapsedMs: 2 };
+}
+
+function distinct(args: Doc): Json {
+  const field = String(args.field ?? "").trim();
+  if (!field || field.split(".").some((part) => !part || part.startsWith("$"))) throw mockError("ENGINE_ERROR", `'${field}' is not a field path`);
+  const limit = bounded(args.limit, 100, MAX_DISTINCT_LIMIT);
+  const seen = new Map<string, Json>();
+  for (const document of matching(operationTable(args), args)) {
+    for (const value of pathOf(document, field)) if (value !== null) seen.set(JSON.stringify(value), value);
+  }
+  const values = [...seen.values()].sort(compare);
+  return { values: values.slice(0, limit), truncated: values.length > limit, elapsedMs: 2 };
+}
+
+function resolveRef(args: Doc): Json {
+  if (!("id" in args)) throw mockError("ENGINE_ERROR", "id is required");
+  const id = JSON.stringify(plain(args.id));
+  const table = operationTable(args);
+  const found = table?.rows.map((row) => documentOf(table, row)).find((document) => JSON.stringify(document._id) === id);
+  return { document: found ? project(found, jsonArg(args, "projection")) : null };
+}
+
+const OPERATIONS: Record<string, (args: Doc) => Json> = {
+  "mongo.find": find,
+  "mongo.count": count,
+  "mongo.distinct": distinct,
+  "mongo.resolveRef": resolveRef,
+};
+
+/** `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`; undefined (refused) for any other name. */
+export const invoke: NonNullable<EngineMock["invoke"]> = (name, raw) => {
+  const operation = Object.hasOwn(OPERATIONS, name) ? OPERATIONS[name] : undefined;
+  if (!operation) return undefined;
+  const args = (raw ?? {}) as Doc;
+  const operator = deniedOperator(args) ?? ["filter", "projection", "sort"].map((key) => deniedOperator(jsonArg(args, key))).find(Boolean);
+  if (operator) throw mockError("BLOCKED", `Refused: ${operator} runs JavaScript on the server.`);
+  return operation(args);
+};
 
 const READ = new Set([
   "find",

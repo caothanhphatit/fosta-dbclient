@@ -14,16 +14,13 @@ use sqlparser::{
 };
 
 use super::classify::{dialect_for, parse};
-use crate::engines::common::sqlclassify::side_effect_call;
+use crate::engines::common::{serverjs::find_denied_operator, sqlclassify::side_effect_call};
 use crate::{
     contract::{RawFilterLang, SqlDialectId},
     error::{AppError, AppResult},
 };
 
 pub const INVALID_FILTER: &str = "INVALID_FILTER";
-
-/// MongoDB operators that run JavaScript on the server.
-const DENIED_MONGO_OPERATORS: [&str; 3] = ["$where", "$function", "$accumulator"];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -159,20 +156,6 @@ pub fn validate_mongo_filter(filter: &str) -> AppResult<()> {
         ));
     }
     Ok(())
-}
-
-fn find_denied_operator(value: &serde_json::Value) -> Option<&'static str> {
-    match value {
-        serde_json::Value::Object(map) => map.iter().find_map(|(key, inner)| {
-            DENIED_MONGO_OPERATORS
-                .iter()
-                .find(|operator| **operator == key)
-                .copied()
-                .or_else(|| find_denied_operator(inner))
-        }),
-        serde_json::Value::Array(items) => items.iter().find_map(find_denied_operator),
-        _ => None,
-    }
 }
 
 /// Checks a raw filter in the engine's filter language: SQL must be one condition (parsed in the engine's dialect),
