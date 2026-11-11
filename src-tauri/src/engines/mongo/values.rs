@@ -369,6 +369,11 @@ fn typed_from_text(template: &Bson, text: &str) -> Option<Bson> {
 /// Whether a stored field still holds what the user read (`original`): equal as typed values, or the original coerced
 /// to the stored type equals it.
 pub fn matches_original(stored: Option<&Bson>, original: &Value) -> bool {
+    if let Some(loaded) = exact_json(original) {
+        // A value the document views loaded as relaxed Extended JSON: compared in that form, so what the view showed is
+        // what is checked (a missing field reads as null).
+        return loaded.is_some_and(|loaded| json_equal(&relaxed_or_null(stored), &loaded));
+    }
     let current = stored.map(to_value).unwrap_or(Value::Null);
     if &current == original {
         return true;
@@ -378,6 +383,71 @@ pub fn matches_original(stored: Option<&Bson>, original: &Value) -> bool {
             coerce("", original, Some(stored)).is_ok_and(|coerced| &coerced == stored)
         }
         _ => false,
+    }
+}
+
+/// A stored value as relaxed Extended JSON; null when missing.
+pub fn relaxed_or_null(stored: Option<&Bson>) -> serde_json::Value {
+    stored.map_or(serde_json::Value::Null, |stored| stored.clone().into_relaxed_extjson())
+}
+
+/// The `Value::Other` type name of an exact value from the document views: Extended JSON text (canonical or relaxed),
+/// written as it is (not coerced to the stored type) and compared as loaded.
+pub const EXACT_TYPE: &str = "bson";
+/// The `Value::Other` type name of a field the document views remove (`$unset`).
+pub const UNSET_TYPE: &str = "unset";
+
+/// An exact value: `Value::Other { type_name: "bson", text }`.
+pub fn exact(text: impl Into<String>) -> Value {
+    Value::Other {
+        type_name: EXACT_TYPE.to_owned(),
+        text: text.into(),
+    }
+}
+
+/// The marker of a removed field.
+pub fn unset() -> Value {
+    Value::Other {
+        type_name: UNSET_TYPE.to_owned(),
+        text: String::new(),
+    }
+}
+
+pub fn is_unset(value: &Value) -> bool {
+    matches!(value, Value::Other { type_name, .. } if type_name == UNSET_TYPE)
+}
+
+pub fn is_exact(value: &Value) -> bool {
+    matches!(value, Value::Other { type_name, .. } if type_name == EXACT_TYPE)
+}
+
+/// The JSON of an exact value (`Some(None)` when its text is not JSON); `None` for any other value.
+fn exact_json(value: &Value) -> Option<Option<serde_json::Value>> {
+    match value {
+        Value::Other { type_name, text } if type_name == EXACT_TYPE => Some(serde_json::from_str(text.trim()).ok()),
+        _ => None,
+    }
+}
+
+/// An exact value as BSON; `None` for any other value.
+pub fn exact_bson(value: &Value) -> Option<AppResult<Bson>> {
+    exact_json(value).map(|json| {
+        let json = json.ok_or_else(|| AppError::new("The value is not valid Extended JSON"))?;
+        Bson::try_from(json).map_err(|error| AppError::new(format!("The value is not valid Extended JSON ({error})")))
+    })
+}
+
+/// JSON equality where numbers compare by value (relaxed Extended JSON writes a whole double as `10.0`, a browser sends
+/// it back as `10`). Key order is not compared (the JSON maps here are sorted).
+pub fn json_equal(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    use serde_json::Value as J;
+    match (left, right) {
+        (J::Number(a), J::Number(b)) => a == b || a.as_f64().zip(b.as_f64()).is_some_and(|(a, b)| a == b),
+        (J::Array(a), J::Array(b)) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| json_equal(a, b)),
+        (J::Object(a), J::Object(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|((key_a, a), (key_b, b))| key_a == key_b && json_equal(a, b))
+        }
+        _ => left == right,
     }
 }
 

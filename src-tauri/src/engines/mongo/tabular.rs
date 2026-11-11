@@ -460,9 +460,51 @@ fn guard(change: &RowChange, current: &Document) -> Document {
 }
 
 /// The `$set` of an update: each value coerced to the type the field has now (or had when read).
+#[cfg(test)]
 fn set_document(values: &[Field], original: &[Field], current: &Document) -> AppResult<Document> {
+    let update = update_document(values, original, current)?;
+    Ok(update.get_document("$set").cloned().unwrap_or_default())
+}
+
+/// Whether one dotted path is the other or lies inside it (`a` and `a.b`): one update cannot touch both.
+fn overlaps(left: &str, right: &str) -> bool {
+    let inside = |outer: &str, inner: &str| inner.len() > outer.len() && inner.starts_with(outer) && inner.as_bytes()[outer.len()] == b'.';
+    left == right || inside(left, right) || inside(right, left)
+}
+
+/// A field path an update may name: dotted parts, none empty or starting with `$` (positional operators and
+/// expressions are not field edits).
+fn check_path(path: &str) -> AppResult<()> {
+    if path.is_empty() || path.split('.').any(|part| part.is_empty() || part.starts_with('$')) || path.contains('\0') {
+        return Err(AppError::new(format!("'{path}' is not a field path that can be edited")));
+    }
+    Ok(())
+}
+
+/// The update of a change, by dotted path so a nested edit leaves the rest of its top-level field alone: `$set` for
+/// new values, `$unset` for removed fields ([`values::unset`]). Values are coerced to the type the field has now (or
+/// had when read); exact values ([`values::exact`]) are written as given, a document or array keeping the stored types
+/// of its numbers (relaxed JSON cannot tell an int from a long). Paths that overlap are refused.
+fn update_document(values: &[Field], original: &[Field], current: &Document) -> AppResult<Document> {
     let mut set = Document::new();
-    for field in values {
+    let mut unset = Document::new();
+    for (index, field) in values.iter().enumerate() {
+        check_path(&field.column)?;
+        if field.column == ID_FIELD || field.column.starts_with("_id.") {
+            return Err(AppError::new(
+                "_id cannot be changed; insert a copy with the new _id and delete this document",
+            ));
+        }
+        if let Some(other) = values[..index].iter().find(|other| overlaps(&other.column, &field.column)) {
+            return Err(AppError::new(format!(
+                "One change cannot edit both {} and {}; save one of them first",
+                other.column, field.column
+            )));
+        }
+        if values::is_unset(&field.value) {
+            unset.insert(field.column.clone(), "");
+            continue;
+        }
         let template = match get_path(current, &field.column) {
             Some(stored) => Some(stored.clone()),
             None => original
@@ -471,16 +513,66 @@ fn set_document(values: &[Field], original: &[Field], current: &Document) -> App
                 .map(|before| from_value(&before.value))
                 .transpose()?,
         };
-        set.insert(field.column.clone(), coerce(&field.column, &field.value, template.as_ref())?);
+        let value = match values::exact_bson(&field.value) {
+            Some(bson) => match (bson?, template.as_ref()) {
+                (bson @ (Bson::Document(_) | Bson::Array(_)), Some(template @ (Bson::Document(_) | Bson::Array(_)))) => {
+                    values::match_types(bson, template)
+                }
+                (bson, _) => bson,
+            },
+            None => coerce(&field.column, &field.value, template.as_ref())?,
+        };
+        set.insert(field.column.clone(), value);
     }
-    Ok(set)
+    let mut update = Document::new();
+    if !set.is_empty() {
+        update.insert("$set", set);
+    }
+    if !unset.is_empty() {
+        update.insert("$unset", unset);
+    }
+    Ok(update)
+}
+
+/// The document as it is now for the conflict dialog: its top-level fields, plus every dotted path the change touched
+/// (in the form the change's original used, so "When opened" and "Now" compare like for like).
+fn current_fields(change: &RowChange, document: &Document) -> Vec<Field> {
+    let mut fields = fields_of(document);
+    let (values, original): (&[Field], &[Field]) = match change {
+        RowChange::Update { values, original, .. } => (values, original),
+        RowChange::Delete { original, .. } => (&[], original),
+        RowChange::Insert { .. } => (&[], &[]),
+    };
+    for column in values.iter().chain(original).map(|field| field.column.as_str()) {
+        let exact = original
+            .iter()
+            .any(|field| field.column == column && values::is_exact(&field.value));
+        if fields.iter().any(|field| field.column == column) && !exact {
+            continue;
+        }
+        let stored = get_path(document, column);
+        let value = if exact {
+            values::exact(values::relaxed_or_null(stored).to_string())
+        } else {
+            stored.map(to_value).unwrap_or(Value::Null)
+        };
+        match fields.iter_mut().find(|field| field.column == column) {
+            Some(field) => field.value = value,
+            None => fields.push(Field::new(column, value)),
+        }
+    }
+    fields
 }
 
 /// A new document from an insert's fields (dotted columns nest), with an `_id` so it can be removed again.
 fn insert_document(values: &[Field]) -> AppResult<Document> {
     let mut document = Document::new();
     for field in values {
-        set_path(&mut document, &field.column, from_value(&field.value)?);
+        let value = match values::exact_bson(&field.value) {
+            Some(bson) => bson?,
+            None => from_value(&field.value)?,
+        };
+        set_path(&mut document, &field.column, value);
     }
     if !document.contains_key(ID_FIELD) {
         let mut with_id = doc! { ID_FIELD: ObjectId::new() };
@@ -551,7 +643,13 @@ impl Applier<'_> {
             by_text.entry(text).or_default().push(position);
         }
         for (index, value) in wanted {
-            let text = value.display().unwrap_or_default();
+            // An exact `_id` (Extended JSON from the document views) is looked up by the text of the value it holds.
+            let text = if values::is_exact(value) {
+                key_to_bson(ID_FIELD, value).ok().and_then(|id| to_value(&id).display())
+            } else {
+                value.display()
+            }
+            .unwrap_or_default();
             current[index] = by_text.get(&text).and_then(|positions| {
                 positions
                     .iter()
@@ -594,7 +692,7 @@ impl Applier<'_> {
                 change @ RowChange::Update { values, original, .. } => {
                     let document = current[index].as_ref().ok_or(Stop::Conflict(index))?;
                     if !values.is_empty() {
-                        let update = doc! { "$set": set_document(values, original, document)? };
+                        let update = update_document(values, original, document)?;
                         let outcome = in_session!(self.session.as_mut(), self.coll.update_one(guard(change, document), update))?;
                         if outcome.matched_count == 0 {
                             return Err(Stop::Conflict(index));
@@ -646,7 +744,10 @@ impl Applier<'_> {
             Ok(query) => self.coll.find_one(query).await.ok().flatten(),
             Err(_) => None,
         };
-        conflict_error(&self.set.object, vec![RowConflict::new(index, change, now.as_ref().map(fields_of))])
+        conflict_error(
+            &self.set.object,
+            vec![RowConflict::new(index, change, now.as_ref().map(|now| current_fields(change, now)))],
+        )
     }
 }
 
@@ -686,7 +787,7 @@ pub async fn apply(client: &Client, transactions: bool, set: &RowChangeSet, _ctx
         .iter()
         .enumerate()
         .filter(|(index, change)| !matches!(change, RowChange::Insert { .. }) && !still_matches(change, current[*index].as_ref()))
-        .map(|(index, change)| RowConflict::new(index, change, current[index].as_ref().map(fields_of)))
+        .map(|(index, change)| RowConflict::new(index, change, current[index].as_ref().map(|now| current_fields(change, now))))
         .collect();
     if !conflicts.is_empty() {
         abort(&mut applier).await;
@@ -889,5 +990,104 @@ mod tests {
         let inserted = insert_document(&[Field::new("a.b", Value::Int(1))]).unwrap();
         assert!(matches!(inserted.get("_id"), Some(Bson::ObjectId(_))));
         assert_eq!(inserted.get_document("a").unwrap(), &doc! { "b": 1 });
+    }
+
+    fn update(values: Vec<Field>, original: Vec<Field>) -> RowChange {
+        RowChange::Update {
+            key: vec![Field::new("_id", values::exact(r#"{"$oid":"65f0c0ffee0000000000abcd"}"#))],
+            values,
+            original,
+            version: None,
+            force: false,
+        }
+    }
+
+    #[test]
+    fn nested_edits_build_dotted_set_and_unset() {
+        let current = doc! {
+            "_id": ObjectId::parse_str("65f0c0ffee0000000000abcd").unwrap(),
+            "address": { "city": "Oslo", "zip": "0150", "geo": { "lat": 59.9, "n": 5_i64 } },
+            "tags": ["a", "b"],
+            "stock": 3,
+        };
+        let values = vec![
+            Field::new("address.city", values::exact(r#""Bergen""#)),
+            Field::new("address.zip", values::unset()),
+            Field::new("address.geo", values::exact(r#"{ "lat": 60, "n": 6 }"#)),
+            Field::new("tags.1", values::exact(r#"{"$numberLong":"7"}"#)),
+            Field::new("stock", Value::Int(4)),
+            Field::new("added.deep", values::exact(r#"{"$date":"2026-01-02T00:00:00Z"}"#)),
+        ];
+        let update = update_document(&values, &[], &current).unwrap();
+        let set = update.get_document("$set").unwrap();
+        assert_eq!(set.get("address.city"), Some(&Bson::String("Bergen".into())));
+        // Numbers of an edited document keep their stored types: a double stays a double, a long a long.
+        assert_eq!(set.get("address.geo"), Some(&Bson::Document(doc! { "lat": 60.0, "n": 6_i64 })));
+        assert_eq!(set.get("tags.1"), Some(&Bson::Int64(7)));
+        assert_eq!(set.get("stock"), Some(&Bson::Int32(4)));
+        assert!(matches!(set.get("added.deep"), Some(Bson::DateTime(_))));
+        assert!(!set.contains_key("address"), "the top-level field is not rewritten: {set}");
+        assert_eq!(update.get_document("$unset").unwrap(), &doc! { "address.zip": "" });
+
+        let only_unset = update_document(&[Field::new("stock", values::unset())], &[], &current).unwrap();
+        assert_eq!(only_unset, doc! { "$unset": { "stock": "" } });
+        for bad in [
+            vec![
+                Field::new("address", values::unset()),
+                Field::new("address.city", values::exact("1")),
+            ],
+            vec![Field::new("_id", values::exact("1"))],
+            vec![Field::new("a.$.b", values::exact("1"))],
+            vec![Field::new("a..b", values::exact("1"))],
+            vec![Field::new("a", values::exact("{ nope"))],
+        ] {
+            assert!(update_document(&bad, &[], &current).is_err(), "{bad:?}");
+        }
+        assert!(overlaps("a", "a.b") && overlaps("a.b", "a") && overlaps("a", "a"));
+        assert!(!overlaps("a", "ab") && !overlaps("a.b", "a.c"));
+    }
+
+    #[test]
+    fn exact_originals_compare_as_loaded_and_conflict_on_changed_paths() {
+        let current = doc! { "_id": 1, "address": { "city": "Oslo", "zip": "0150" }, "price": 10.0 };
+        let loaded = |path: &str, json: &str| Field::new(path, values::exact(json));
+        let edit = |original: Vec<Field>| update(vec![Field::new("address.city", values::exact(r#""Bergen""#))], original);
+        // The value read before still holds: a whole double sent back as 10 matches 10.0, a missing field matches null.
+        assert!(still_matches(
+            &edit(vec![loaded("address.city", r#""Oslo""#), loaded("price", "10")]),
+            Some(&current)
+        ));
+        assert!(still_matches(&edit(vec![loaded("added", "null")]), Some(&current)));
+        // Someone changed the edited path since: a conflict.
+        let stale = edit(vec![loaded("address.city", r#""Lisbon""#)]);
+        assert!(!still_matches(&stale, Some(&current)));
+        // Another field of the same document changed: no conflict on this path.
+        assert!(still_matches(
+            &edit(vec![loaded("address.city", r#""Oslo""#)]),
+            Some(&doc! { "_id": 1, "address": { "city": "Oslo", "zip": "9999" } })
+        ));
+        // The guard of the write repeats the paths with the values just read.
+        assert_eq!(
+            guard(&edit(vec![loaded("address.city", r#""Oslo""#)]), &current),
+            doc! { "_id": { "$eq": 1 }, "address.city": { "$eq": "Oslo" } }
+        );
+        // The conflict shows the path as it is now, in the form it was loaded.
+        let fields = current_fields(&stale, &current);
+        let city = fields.iter().find(|field| field.column == "address.city").unwrap();
+        assert_eq!(city.value, values::exact(r#""Oslo""#));
+        assert!(fields.iter().any(|field| field.column == "address"));
+        // Exact keys find their document.
+        let key = values::exact(r#"{"$oid":"65f0c0ffee0000000000abcd"}"#);
+        assert_eq!(
+            key_query(&[Field::new("_id", key)]).unwrap(),
+            doc! { "_id": ObjectId::parse_str("65f0c0ffee0000000000abcd").unwrap() }
+        );
+        let inserted = insert_document(&[
+            loaded("n", r#"{"$numberLong":"5"}"#),
+            loaded("at", r#"{"$date":"2026-01-02T00:00:00Z"}"#),
+        ])
+        .unwrap();
+        assert_eq!(inserted.get("n"), Some(&Bson::Int64(5)));
+        assert!(insert_document(&[loaded("n", "{ nope")]).is_err());
     }
 }
