@@ -743,7 +743,8 @@ mod tests {
             assert!(pack.sections.iter().any(|section| section.source == source), "{source}");
         }
         let changelog: Vec<&HelpSection> = pack.sections.iter().filter(|section| section.source == "CHANGELOG.md").collect();
-        assert!(changelog.iter().any(|section| section.title.contains("[Unreleased]")));
+        // [Unreleased] is empty right after a release, so only the latest release is certain to be there.
+        assert!(!changelog.is_empty());
         let releases: std::collections::HashSet<&str> = changelog
             .iter()
             .filter_map(|section| section.title.split(": ").nth(1))
