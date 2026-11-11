@@ -804,6 +804,50 @@ pub async fn suite_assistant(f: &Fixture) {
     manager.disconnect(CONNECTION).await;
 }
 
+/// "Learn this database" through the contract: a structural profile of the seeded database lists the seeded table
+/// (described, with its key column) unless the engine is a key-value store, reads no rows, and its fingerprints are
+/// stable across two builds of an unchanged database.
+pub async fn suite_profile(f: &Fixture) {
+    use crate::{ai::profile::build::build, contract::CancellationToken};
+    let (manager, handle) = connect(f).await;
+    let database = f
+        .table
+        .database
+        .clone()
+        .or_else(|| f.seed_database.map(str::to_owned))
+        .unwrap_or_default();
+    let quiet = |_: crate::ai::profile::Progress| {};
+    let first = build(&handle, CONNECTION, &database, &CancellationToken::new(), &quiet)
+        .await
+        .unwrap_or_else(|error| panic!("{}: profile build: {error}", f.engine));
+    assert_eq!(first.engine, f.engine);
+    assert!(!first.data_read);
+    assert!(first.detailed_objects <= first.objects.len());
+    if registry().get(f.engine).unwrap().descriptor().family != crate::contract::EngineFamily::KeyValue {
+        let table = first
+            .object(&f.table.name)
+            .unwrap_or_else(|| panic!("{}: {} not in the profile", f.engine, f.table.name));
+        assert!(table.detailed, "{}: {} not described", f.engine, f.table.name);
+        assert!(
+            table.column(f.key_column).is_some() || table.columns.is_empty(),
+            "{}: {} has no {} column",
+            f.engine,
+            f.table.name,
+            f.key_column
+        );
+    }
+    let second = build(&handle, CONNECTION, &database, &CancellationToken::new(), &quiet)
+        .await
+        .unwrap_or_else(|error| panic!("{}: second profile build: {error}", f.engine));
+    assert_eq!(
+        first.checks.listing, second.checks.listing,
+        "{}: listing fingerprint moved",
+        f.engine
+    );
+    assert_eq!(first.fingerprint, second.fingerprint, "{}: database fingerprint moved", f.engine);
+    manager.disconnect(CONNECTION).await;
+}
+
 /// Generates the tests of one engine as a module named `contract_<engine>`, so `cargo test contract_<engine>` selects
 /// them. The classification test always runs; the live suites are ignored by default: start the engine's compose file,
 /// then `cargo test contract_<engine> -- --ignored --test-threads=1`.
@@ -827,7 +871,7 @@ macro_rules! contract_tests {
 
             $crate::contract_tests!(@live $fixture;
                 suite_connect suite_tree suite_describe suite_browse suite_edit suite_query suite_cancel suite_transactions
-                suite_assistant);
+                suite_assistant suite_profile);
         }
     };
     (@live $fixture:expr; $($suite:ident)*) => {

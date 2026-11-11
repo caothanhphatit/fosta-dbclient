@@ -16,6 +16,7 @@ pub(crate) mod catalog;
 mod collections;
 mod http;
 mod openai;
+pub mod profile;
 mod prompt;
 mod tools;
 
