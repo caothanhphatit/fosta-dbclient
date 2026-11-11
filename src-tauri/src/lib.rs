@@ -35,6 +35,7 @@ pub mod open_tabs;
 #[cfg(test)]
 mod perf_tests;
 pub mod runtime;
+pub mod saved_queries;
 pub mod secrets;
 pub mod tasks;
 pub mod update;

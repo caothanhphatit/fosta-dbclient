@@ -196,6 +196,7 @@ mod tests {
             mcp: Default::default(),
             connections: Vec::new(),
             tasks: Vec::new(),
+            saved_queries: Vec::new(),
         }
     }
 

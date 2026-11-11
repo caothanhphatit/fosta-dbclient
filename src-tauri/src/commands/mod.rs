@@ -18,6 +18,7 @@ pub mod mcp;
 pub mod objects;
 pub mod open_tabs;
 pub mod query;
+pub mod saved_queries;
 pub mod tasks;
 pub mod update;
 pub mod vector;
@@ -125,6 +126,15 @@ macro_rules! for_each_command {
             [sync] save_task(task: $crate::tasks::TaskDef, workspace_id: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::tasks::save_task;
             [sync] delete_task(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::tasks::delete_task;
+
+            [sync] list_saved_queries(connection_id: Option<String>, workspace_id: Option<String>)
+                -> $crate::error::AppResult<Vec<$crate::saved_queries::SavedQuery>> = $crate::commands::saved_queries::list_saved_queries;
+            [sync] save_saved_query(query: $crate::saved_queries::SavedQuery, workspace_id: Option<String>)
+                -> $crate::error::AppResult<Vec<$crate::saved_queries::SavedQuery>> = $crate::commands::saved_queries::save_saved_query;
+            [sync] rename_saved_query(id: String, name: String)
+                -> $crate::error::AppResult<Vec<$crate::saved_queries::SavedQuery>> = $crate::commands::saved_queries::rename_saved_query;
+            [sync] delete_saved_query(id: String)
+                -> $crate::error::AppResult<Vec<$crate::saved_queries::SavedQuery>> = $crate::commands::saved_queries::delete_saved_query;
 
             [sync] save_workspace(workspace: $crate::config::WorkspaceMeta, relax_confirmation: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::workspaces::save_workspace;

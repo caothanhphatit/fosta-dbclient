@@ -18,6 +18,7 @@ use crate::{
     gateway::{assistant::AssistantQueries, rules::SafetySettings},
     lock::lock,
     mcp::{McpAccess, McpSettings},
+    saved_queries::{self, SavedQuery, MAX_SAVED_QUERIES},
     secrets::LEGACY_AI_CONNECTION,
     tasks::TaskDef,
 };
@@ -250,6 +251,9 @@ pub struct Workspace {
     pub connections: Vec<ConnectionProfile>,
     #[serde(default)]
     pub tasks: Vec<TaskDef>,
+    /// Named query-bar states of the engine workspaces (`crate::saved_queries`); left out of the file while empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub saved_queries: Vec<SavedQuery>,
 }
 
 impl Workspace {
@@ -265,6 +269,7 @@ impl Workspace {
             mcp: meta.mcp.unwrap_or_default(),
             connections: Vec::new(),
             tasks: Vec::new(),
+            saved_queries: Vec::new(),
         }
     }
 
@@ -373,6 +378,7 @@ impl From<StoredConfig> for AppConfig {
                 mcp: McpAccess::Off,
                 connections: stored.connections,
                 tasks: stored.tasks,
+                saved_queries: Vec::new(),
             }),
         }
         for workspace in &mut workspaces {
@@ -534,6 +540,59 @@ impl AppConfig {
         }
     }
 
+    /// The workspace saved queries are kept in: the one holding `connection_id` (when it is saved), else
+    /// `workspace_id`, else the active one.
+    pub fn saved_query_scope(&self, connection_id: Option<&str>, workspace_id: Option<&str>) -> AppResult<&Workspace> {
+        if let Some((workspace, _)) = connection_id.and_then(|id| self.connection_scope(id)) {
+            return Ok(workspace);
+        }
+        match workspace_id {
+            Some(id) => self.workspace(id),
+            None => Ok(self.active()),
+        }
+    }
+
+    /// Adds or replaces the saved query `query.id` in `workspace_id` (moving it there from another workspace).
+    pub fn put_saved_query(&mut self, workspace_id: &str, query: SavedQuery) -> AppResult<()> {
+        let query = query.validated()?;
+        let target = self.workspace(workspace_id)?;
+        if target.saved_queries.len() >= MAX_SAVED_QUERIES && !target.saved_queries.iter().any(|item| item.id == query.id) {
+            return Err(AppError::new(format!(
+                "Workspace '{}' already keeps {MAX_SAVED_QUERIES} saved queries; delete some first",
+                target.name
+            )));
+        }
+        for workspace in self.workspaces.iter_mut().filter(|workspace| workspace.id != workspace_id) {
+            workspace.saved_queries.retain(|item| item.id != query.id);
+        }
+        let target = self.workspace_mut(workspace_id)?;
+        upsert(&mut target.saved_queries, query, |item| item.id.as_str());
+        Ok(())
+    }
+
+    /// Renames the saved query `id`; returns the id of its workspace.
+    pub fn rename_saved_query(&mut self, id: &str, name: &str, updated_at: i64) -> AppResult<String> {
+        let name = saved_queries::valid_name(name)?;
+        for workspace in &mut self.workspaces {
+            if let Some(query) = workspace.saved_queries.iter_mut().find(|item| item.id == id) {
+                query.name = name;
+                query.updated_at = updated_at;
+                return Ok(workspace.id.clone());
+            }
+        }
+        Err(AppError::new("The saved query no longer exists"))
+    }
+
+    /// Deletes the saved query `id`; returns the id of the workspace that held it.
+    pub fn remove_saved_query(&mut self, id: &str) -> Option<String> {
+        let workspace = self
+            .workspaces
+            .iter_mut()
+            .find(|workspace| workspace.saved_queries.iter().any(|item| item.id == id))?;
+        workspace.saved_queries.retain(|item| item.id != id);
+        Some(workspace.id.clone())
+    }
+
     pub fn put_workspace(&mut self, meta: WorkspaceMeta) {
         match self.workspaces.iter_mut().find(|workspace| workspace.id == meta.id) {
             Some(existing) => existing.apply(meta),
@@ -645,6 +704,12 @@ impl ConfigStore {
             path,
             current: Mutex::new(config),
         }
+    }
+
+    /// The file this store writes (tests).
+    #[cfg(test)]
+    pub(crate) fn path_for_tests(&self) -> &Path {
+        &self.path
     }
 
     pub fn snapshot(&self) -> AppConfig {
@@ -908,6 +973,89 @@ mod tests {
             parsed.connection("s1").unwrap().tls,
             migrate(V1_FIXTURE).connection("s1").unwrap().tls
         );
+    }
+
+    fn saved_query(id: &str) -> SavedQuery {
+        SavedQuery {
+            id: id.into(),
+            name: format!("Query {id}"),
+            engine: "mongodb".into(),
+            connection_id: Some("g1".into()),
+            database: "app".into(),
+            collection: "orders".into(),
+            query: crate::saved_queries::SavedQueryState {
+                filter: "{ status: 'paid', at: ISODate('2026-01-01') }".into(),
+                project: "{ total: 1 }".into(),
+                sort: "{ total: -1 }".into(),
+                collation: "{ locale: 'en' }".into(),
+                skip: 5,
+                limit: 50,
+            },
+            pipeline: Some(vec!["{ $match: { status: 'paid' } }".into(), "{ $limit: 5 }".into()]),
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn files_without_saved_queries_load_and_leave_them_out() {
+        let config = migrate(V1_FIXTURE);
+        assert!(config.workspaces[0].saved_queries.is_empty());
+        let written = serde_json::to_value(&config).unwrap();
+        assert!(written["workspaces"][0].get("savedQueries").is_none(), "no empty list in the file");
+    }
+
+    #[test]
+    fn saved_queries_round_trip_through_the_file() {
+        let directory = scratch("saved-queries");
+        let path = directory.join(CONFIG_FILE);
+        let mut config = migrate(V1_FIXTURE);
+        config.put_saved_query("default", saved_query("a")).unwrap();
+        config.put_saved_query("default", saved_query("b")).unwrap();
+        let mut replaced = saved_query("a");
+        replaced.name = "Paid orders".into();
+        config.put_saved_query("default", replaced).unwrap();
+        write_config(&path, &config).unwrap();
+        let reloaded = load_file(&path).unwrap();
+        let saved = &reloaded.workspaces[0].saved_queries;
+        assert_eq!(saved.len(), 2, "same id replaces");
+        assert_eq!(saved[0].name, "Paid orders");
+        assert_eq!(saved[1], saved_query("b"));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"savedQueries\""));
+        assert!(text.contains("\"pipeline\""));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saved_query_scope_rename_and_remove() {
+        let mut config = migrate(V1_FIXTURE);
+        config.put_workspace(WorkspaceMeta {
+            id: "w2".into(),
+            name: "Two".into(),
+            color: String::new(),
+            icon: String::new(),
+            safety: None,
+            assistant_queries: None,
+            mcp: None,
+        });
+        assert_eq!(
+            config.saved_query_scope(Some("g1"), Some("w2")).unwrap().id,
+            "default",
+            "the connection's workspace wins"
+        );
+        assert_eq!(config.saved_query_scope(Some("gone"), Some("w2")).unwrap().id, "w2");
+        assert_eq!(config.saved_query_scope(None, None).unwrap().id, "default");
+        assert!(config.saved_query_scope(None, Some("missing")).is_err());
+
+        config.put_saved_query("default", saved_query("a")).unwrap();
+        config.put_saved_query("w2", saved_query("a")).unwrap();
+        assert!(config.workspace("default").unwrap().saved_queries.is_empty(), "moved, not copied");
+        assert_eq!(config.rename_saved_query("a", " New ", 7).unwrap(), "w2");
+        let renamed = &config.workspace("w2").unwrap().saved_queries[0];
+        assert_eq!((renamed.name.as_str(), renamed.updated_at), ("New", 7));
+        assert!(config.rename_saved_query("a", "", 8).is_err());
+        assert_eq!(config.remove_saved_query("a").as_deref(), Some("w2"));
+        assert_eq!(config.remove_saved_query("a"), None);
     }
 
     #[test]

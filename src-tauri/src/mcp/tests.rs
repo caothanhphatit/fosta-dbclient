@@ -48,6 +48,7 @@ fn workspace(id: &str, icon: &str, safety: SafetySettings, mcp: McpAccess, conne
         mcp,
         connections: connections.iter().map(|id| profile(id)).collect(),
         tasks: Vec::new(),
+        saved_queries: Vec::new(),
     }
 }
 
