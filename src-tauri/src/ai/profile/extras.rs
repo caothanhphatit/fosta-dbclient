@@ -372,6 +372,9 @@ fn apply(profile: &mut DatabaseProfile, enrichment: ProfileEnrichment, keep_valu
         profile.relations.push(relation);
         outcome.references += 1;
     }
+    if outcome.skipped.is_none() {
+        outcome.skipped = enrichment.note;
+    }
     merge_extras(&mut profile.extras, enrichment.extras);
 }
 

@@ -21,7 +21,7 @@ use super::{
     store::ProfileStore,
     values::strip_value_hints,
 };
-use crate::runtime::Handle;
+use crate::{contract::KEY_PATTERN, runtime::Handle};
 
 /// The digest's size in characters (about 3,000 tokens).
 pub const DIGEST_BUDGET: usize = 12_000;
@@ -30,6 +30,7 @@ const MAX_SUMMARY_CHARS: usize = 1_500;
 const MAX_EDGES_CHARS: usize = 1_500;
 const MAX_NOTES_CHARS: usize = 1_500;
 const MAX_NOTE_IN_DIGEST: usize = 300;
+const MAX_ENGINE_CHARS: usize = 800;
 /// One signature line.
 const MAX_COLUMNS_IN_SIGNATURE: usize = 40;
 const MAX_DESCRIPTION_IN_SIGNATURE: usize = 160;
@@ -128,6 +129,14 @@ pub fn digest(chat: &ChatProfile, focus: &Focus, budget: usize) -> String {
         "Signatures: pk primary key, a→t.c foreign key, a→?t.c inferred from the name, enum[…] values seen, \
          fmt:… value format, ~rows from statistics.\n",
     );
+    if let Some(legend) = engine_legend(profile) {
+        out.push_str(&legend);
+        out.push('\n');
+    }
+    if let Some(knowledge) = engine_knowledge(profile) {
+        out.push_str(&flat(&cut(&knowledge, MAX_ENGINE_CHARS)));
+        out.push('\n');
+    }
 
     let order = rank(profile, focus);
     // The relations and notes keep their share of the budget; the signatures get the rest.
@@ -352,9 +361,15 @@ pub fn signature(profile: &DatabaseProfile, object: &ObjectProfile) -> String {
     }
     let kind = match object.kind.as_str() {
         "table" | "collection" => String::new(),
+        "keyPattern" => String::from(" [key pattern]"),
         other => format!(" [{other}]"),
     };
     let mut text = format!("{name}{kind}");
+    if object.kind == KEY_PATTERN {
+        if let Some((_, types)) = object.extra.iter().find(|(key, _)| key == "Types") {
+            text.push_str(&format!(" keys: {}", cut(types, MAX_DESCRIPTION_IN_SIGNATURE)));
+        }
+    }
     if object.detailed && !object.columns.is_empty() {
         let mut columns: Vec<String> = object
             .columns
@@ -404,7 +419,80 @@ fn column_text(object: &ObjectProfile, column: &ColumnProfile, target: Option<&(
     if let Some(format) = hint.and_then(|hint| hint.format.as_deref()) {
         text.push_str(&format!(" fmt:{}", cut(format, MAX_HINT_VALUE_CHARS)));
     }
+    if let Some(presence) = column.presence.filter(|presence| *presence < 100.0) {
+        text.push_str(&format!(" {}", percent(presence)));
+    }
     text
+}
+
+/// A share of documents: `50%`, `0.4%`, `<0.1%`.
+fn percent(presence: f32) -> String {
+    if presence >= 1.0 {
+        format!("{:.0}%", presence.floor())
+    } else if presence >= 0.1 {
+        format!("{presence:.1}%")
+    } else {
+        String::from("<0.1%")
+    }
+}
+
+/// How to read what the engine's extras added, when the profile has any of it.
+fn engine_legend(profile: &DatabaseProfile) -> Option<String> {
+    let mut parts = Vec::new();
+    if profile
+        .objects
+        .iter()
+        .any(|object| object.columns.iter().any(|column| column.presence.is_some()))
+    {
+        parts.push("a.b is a field path inside documents (arrays included), 40% the share of sampled documents holding it");
+    }
+    if profile.objects.iter().any(|object| object.kind == KEY_PATTERN) {
+        parts.push("[key pattern] names a family of keys: {id}, {name}, {uuid}… stand for the varying part (match them with SCAN MATCH)");
+    }
+    if profile.relations.iter().any(|relation| relation.source == RelationSource::MongoRef) {
+        parts.push("a→?t._id is also a reference matched on sampled values");
+    }
+    (!parts.is_empty()).then(|| format!("Also: {}.", parts.join("; ")))
+}
+
+/// The engine's own knowledge (aliases, data streams, the key sample), in one line.
+fn engine_knowledge(profile: &DatabaseProfile) -> Option<String> {
+    let extras = &profile.extras;
+    let mut parts = Vec::new();
+    if let Some(aliases) = extras.get("aliases").and_then(|aliases| aliases.as_object()) {
+        let listed: Vec<String> = aliases
+            .iter()
+            .map(|(alias, indices)| {
+                let indices: Vec<&str> = indices
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|index| index.as_str())
+                    .collect();
+                format!("{alias} → {}", indices.join(", "))
+            })
+            .collect();
+        parts.push(format!("Aliases: {}", listed.join("; ")));
+    }
+    if let Some(streams) = extras.get("dataStreams").and_then(|streams| streams.as_object()) {
+        let listed: Vec<String> = streams
+            .iter()
+            .map(|(name, stream)| match stream["backingIndices"].as_u64() {
+                Some(count) => format!("{name} ({count} backing indices)"),
+                None => name.clone(),
+            })
+            .collect();
+        parts.push(format!("Data streams: {}", listed.join("; ")));
+    }
+    if let Some(sample) = extras.get("keyPatterns") {
+        let sampled = sample["sampledKeys"].as_u64().unwrap_or(0);
+        let total = sample["databaseKeys"]
+            .as_u64()
+            .map(|total| format!(" of {}", count(total as i64)))
+            .unwrap_or_default();
+        parts.push(format!("Key patterns from a sample of {sampled}{total} keys"));
+    }
+    (!parts.is_empty()).then(|| format!("{}.", parts.join(". ")))
 }
 
 /// What the object is for: its description, else the engine's comment.
@@ -528,6 +616,12 @@ pub fn get_object_profile(chat: &ChatProfile, name: &str) -> Result<String, Stri
             "Only the name and kind were learned (past the detail cap); describe_table reads its columns.",
         ));
     }
+    if object.kind == KEY_PATTERN {
+        lines.push(String::from(
+            "A pattern of key names from a sample, not one key: {id}, {name}, {uuid}… stand for the varying part; \
+             SCAN with MATCH (the placeholders as *) lists the keys. Values were never read.",
+        ));
+    }
     if !object.columns.is_empty() {
         lines.push(String::from("Columns:"));
         for column in &object.columns {
@@ -542,6 +636,9 @@ pub fn get_object_profile(chat: &ChatProfile, name: &str) -> Result<String, Stri
             }
             if let Some(default) = &column.default {
                 line.push_str(&format!(" default {default}"));
+            }
+            if let Some(presence) = column.presence {
+                line.push_str(&format!(" (in {} of sampled documents)", percent(presence)));
             }
             if column.sensitive {
                 line.push_str(" (sensitive: values never read)");
@@ -1111,6 +1208,51 @@ mod tests {
             missing.contains("not in the profile") && missing.contains("describe_table"),
             "{missing}"
         );
+    }
+
+    #[test]
+    fn engine_extras_read_well() {
+        let mut profile = shop();
+        let mut email = column("contact.email", "string", false);
+        email.presence = Some(40.0);
+        let mut rare = column("legacy.code", "int | string", false);
+        rare.presence = Some(0.04);
+        let mut events = object("events", vec![column("_id", "objectId", true), email, rare], None);
+        events.kind = crate::contract::NodeKind::COLLECTION;
+        let mut pattern = object("session:{id}:token", Vec::new(), None);
+        pattern.kind = KEY_PATTERN;
+        pattern.extra = vec![("Types".into(), "string 12".into())];
+        profile.objects.push(events);
+        profile.objects.push(pattern);
+        profile
+            .relations
+            .push(relation("events", "customerId", "customers", RelationSource::MongoRef));
+        profile
+            .extras
+            .insert("aliases".into(), serde_json::json!({ "logs": ["logs-1", "logs-2"] }));
+        let learned = ChatProfile::new(profile, false, true);
+        let text = digest(&learned, &Focus::default(), DIGEST_BUDGET);
+        assert!(text.contains("contact.email string 40%"), "{text}");
+        assert!(text.contains("legacy.code int | string <0.1%"), "{text}");
+        assert!(text.contains("- session:{id}:token [key pattern] keys: string 12"), "{text}");
+        assert!(
+            text.contains("Also: a.b is a field path") && text.contains("[key pattern] names a family"),
+            "{text}"
+        );
+        assert!(text.contains("Aliases: logs → logs-1, logs-2."), "{text}");
+        let events = get_object_profile(&learned, "events").unwrap();
+        assert!(
+            events.contains("- contact.email string NULL (in 40% of sampled documents)"),
+            "{events}"
+        );
+        let pattern = get_object_profile(&learned, "session:{id}:token").unwrap();
+        assert!(
+            pattern.contains("A pattern of key names") && pattern.contains("- Types: string 12"),
+            "{pattern}"
+        );
+        // Without extras the digest has no extra legend.
+        let plain = digest(&chat(true), &Focus::default(), DIGEST_BUDGET);
+        assert!(!plain.contains("Also:") && !plain.contains("Aliases:"));
     }
 
     #[test]
