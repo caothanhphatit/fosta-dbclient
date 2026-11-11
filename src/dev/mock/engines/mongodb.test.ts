@@ -66,4 +66,43 @@ describe("dev mock: document edits and bulk operations", () => {
     expect(classifyOperation!("mongo.nope", {})).toBeNull();
     expect(() => call("mongo.updateMany", { filter: '{"$where":"true"}', update: '{"$set":{"a":1}}' })).toThrow();
   });
+
+  it("previews an aggregation stage by stage on a sample and runs it", () => {
+    const orders = (args: Doc) => invoke(args.name as string, { database: "shop", collection: "orders", ...args }) as Doc;
+    type Stage = { index: number; operator: string; count: number | null; documents: Doc[]; error: string | null };
+    const pipeline = [
+      { $match: { status: "paid" } },
+      { $lookup: { from: "customers", localField: "customerId", foreignField: "_id", as: "customer" } },
+      '{ "$unwind": "$customer" }',
+      { $group: { _id: "$status", n: { $sum: 1 }, top: { $max: "$total" } } },
+    ];
+    const preview = orders({ name: "mongo.aggregatePreview", pipeline, sampleSize: 100, limit: 2 });
+    expect(preview.sample).toEqual({ mode: "first", size: 100, count: 100 });
+    const stages = preview.stages as Stage[];
+    expect(stages.map((stage) => stage.count)).toEqual([25, 25, 25, 1]);
+    expect(stages[0].documents).toHaveLength(2);
+    expect(((stages[1].documents[0].customer as Doc[])[0] as Doc).name).toMatch(/^Customer /);
+    expect(stages[3].documents[0]).toMatchObject({ _id: "paid", n: 25 });
+    expect((orders({ name: "mongo.aggregatePreview", pipeline, sampleSize: 100, upTo: 0 }).stages as Stage[]).length).toBe(1);
+    expect((orders({ name: "mongo.aggregatePreview", pipeline: [], sampleSize: 1e9 }).sample as Doc).size).toBe(10_000);
+    // The failing stage carries the error and stops the preview; unsupported stages fail clearly.
+    const failing = orders({ name: "mongo.aggregatePreview", pipeline: [{ $set: { x: { $divide: [1, 0] } } }, { $limit: 1 }], sampleSize: 5 })
+      .stages as Stage[];
+    expect(failing).toHaveLength(1);
+    expect(failing[0]).toMatchObject({ count: null, error: expect.stringContaining("divide") });
+    const bucket = orders({ name: "mongo.aggregatePreview", pipeline: [{ $match: {} }, { $bucket: {} }] }).stages as Stage[];
+    expect(bucket[1].error).toContain("$bucket");
+    expect(() => orders({ name: "mongo.aggregatePreview", pipeline: [{ $out: "copy" }] })).toThrow();
+    expect(() => orders({ name: "mongo.aggregatePreview", pipeline: ['{ "$match": { "$where": "true" } }'] })).toThrow();
+    // The full run, capped.
+    const run = orders({ name: "mongo.aggregate", pipeline: [{ $sort: { total: -1 } }, { $project: { total: 1 } }], limit: 3 });
+    expect(run.documents as Doc[]).toHaveLength(3);
+    expect(run).toMatchObject({ hasMore: true, wrote: null });
+    // Classified like the backend.
+    const category = (name: string, pipeline: unknown) => classifyOperation!(name, { ...target, pipeline })?.[0];
+    expect(category("mongo.aggregatePreview", pipeline)).toMatchObject({ category: "read", tables: ["customers"] });
+    expect(category("mongo.aggregate", [{ $merge: { into: "totals" } }])).toMatchObject({ category: "write", tables: ["customers", "totals"] });
+    expect(category("mongo.aggregate", [{ $out: "copy" }])?.category).toBe("ddl");
+    expect(category("mongo.aggregatePreview", [{ $unionWith: "system.users" }])?.category).toBe("admin");
+  });
 });

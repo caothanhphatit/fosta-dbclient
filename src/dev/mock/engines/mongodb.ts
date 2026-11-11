@@ -747,6 +747,409 @@ function deleteMany(args: Doc): Json {
   return { deleted, elapsedMs: 5 };
 }
 
+// --- Aggregations, like src-tauri/src/engines/mongo/aggregate.rs (a simplified evaluation) ------------------------------
+
+const DEFAULT_SAMPLE = 1000;
+const MAX_SAMPLE = 10_000;
+const WRITE_STAGES = ["$out", "$merge"];
+const LOOKUP_STAGES: Record<string, string> = { $lookup: "from", $graphLookup: "from", $unionWith: "coll" };
+const SECRET_COLLECTIONS = ["system.users", "system.roles", "system.keys"];
+const SENSITIVE_STAGES = ["$currentOp", "$listSessions", "$listLocalSessions"];
+
+const isDoc = (value: Json): value is Doc => typeof value === "object" && value !== null && !Array.isArray(value);
+const stageOperator = (stage: Doc) => Object.keys(stage)[0] ?? "";
+const sameValue = (a: Json, b: Json) => JSON.stringify(plain(a)) === JSON.stringify(plain(b));
+
+/** The `pipeline` argument: an array of stage documents (values or JSON text), or the whole pipeline as text. */
+function pipelineOf(args: Doc): Doc[] {
+  let items = args.pipeline;
+  if (items === undefined || items === null) return [];
+  if (typeof items === "string") items = items.trim() ? jsonArg({ pipeline: items }, "pipeline") : [];
+  if (!Array.isArray(items)) throw mockError("ENGINE_ERROR", "The pipeline must be an array of stages");
+  return items.map((item: Json, index) => {
+    const stage = typeof item === "string" ? jsonArg({ stage: item }, "stage") : item;
+    if (!isDoc(stage) || Object.keys(stage).length !== 1 || !stageOperator(stage).startsWith("$")) {
+      throw mockError("ENGINE_ERROR", `Stage ${index + 1} must be a document with one stage operator, e.g. { "$match": {} }`);
+    }
+    return stage;
+  });
+}
+
+/** The first `$out` / `$merge` at any depth. */
+function writeStage(value: Json): string | null {
+  if (Array.isArray(value)) return value.map(writeStage).find((found) => found !== null) ?? null;
+  if (!isDoc(value)) return null;
+  for (const [key, inner] of Object.entries(value)) {
+    if (WRITE_STAGES.includes(key)) return key;
+    const found = writeStage(inner);
+    if (found) return found;
+  }
+  return null;
+}
+
+const collectionName = (value: Json, key: string): string | null =>
+  typeof value === "string" ? value : isDoc(value) && typeof value[key] === "string" ? (typeof value.db === "string" ? `${value.db}.` : "") + value[key] : null;
+
+/** The other collections the stages read (`$lookup`, `$graphLookup`, `$unionWith`) and the one a final `$out` / `$merge` writes. */
+function pipelineTables(stages: Doc[]): string[] {
+  const found: string[] = [];
+  const walk = (value: Json) => {
+    if (Array.isArray(value)) return value.forEach(walk);
+    if (!isDoc(value)) return;
+    for (const [key, inner] of Object.entries(value)) {
+      const nameKey = LOOKUP_STAGES[key];
+      const name = !nameKey ? null : key === "$unionWith" ? collectionName(inner, nameKey) : isDoc(inner) ? collectionName(inner[nameKey], "coll") : null;
+      if (name && !found.includes(name)) found.push(name);
+      walk(inner);
+    }
+  };
+  walk(stages);
+  const last = stages[stages.length - 1];
+  const target = !last
+    ? null
+    : "$out" in last
+      ? collectionName(last.$out, "coll")
+      : "$merge" in last
+        ? typeof last.$merge === "string"
+          ? last.$merge
+          : isDoc(last.$merge)
+            ? collectionName(last.$merge.into, "coll")
+            : null
+        : null;
+  if (target && !found.includes(target)) found.push(target);
+  return found;
+}
+
+function touchesSecrets(value: Json): boolean {
+  if (typeof value === "string") return SECRET_COLLECTIONS.some((name) => value === name || value.endsWith(`.${name}`));
+  if (Array.isArray(value)) return value.some(touchesSecrets);
+  if (!isDoc(value)) return false;
+  return Object.entries(value).some(([key, inner]) => SENSITIVE_STAGES.includes(key) || touchesSecrets(inner));
+}
+
+const unsupported = (what: string): never => {
+  throw mockError("ENGINE_ERROR", `The dev mock does not evaluate ${what}; the real server would.`);
+};
+
+/** A value at a dotted path, without array expansion beyond the arrays it meets (like an aggregation path). */
+function fieldValue(document: Json, path: string): Json {
+  let current: Json = document;
+  for (const part of path.split(".")) {
+    if (Array.isArray(current)) current = current.map((item) => (isDoc(item) ? item[part] : undefined)).filter((item) => item !== undefined);
+    else if (isDoc(current)) current = current[part];
+    else return undefined;
+  }
+  return current;
+}
+
+const number = (value: Json) => Number(plain(value));
+
+/** Aggregation expressions: field paths, `$$ROOT`, literals, documents, and a few operators. */
+function evaluate(expression: Json, document: Doc): Json {
+  if (typeof expression === "string") {
+    if (expression === "$$ROOT" || expression === "$$CURRENT") return document;
+    if (expression.startsWith("$$")) return unsupported(`the variable ${expression}`);
+    return expression.startsWith("$") ? fieldValue(document, expression.slice(1)) : expression;
+  }
+  if (Array.isArray(expression)) return expression.map((item) => evaluate(item, document));
+  if (!isDoc(expression)) return expression;
+  const keys = Object.keys(expression);
+  if (keys.length === 1 && keys[0].startsWith("$") && !/^\$(oid|date|numberDecimal|numberLong|numberInt|numberDouble|binary)$/.test(keys[0])) {
+    const operator = keys[0];
+    const raw = expression[operator];
+    const operands = () => (Array.isArray(raw) ? raw : [raw]).map((item) => evaluate(item, document));
+    switch (operator) {
+      case "$literal":
+        return raw;
+      case "$add":
+        return operands().reduce<number>((sum, item) => sum + number(item), 0);
+      case "$multiply":
+        return operands().reduce<number>((product, item) => product * number(item), 1);
+      case "$subtract": {
+        const [a, b] = operands();
+        return number(a) - number(b);
+      }
+      case "$divide": {
+        const [a, b] = operands();
+        if (number(b) === 0) throw mockError("ENGINE_ERROR", "can't $divide by zero (BadValue)");
+        return number(a) / number(b);
+      }
+      case "$concat":
+        return operands().some((item) => item === null || item === undefined) ? null : operands().map(String).join("");
+      case "$toUpper":
+        return String(operands()[0] ?? "").toUpperCase();
+      case "$toLower":
+        return String(operands()[0] ?? "").toLowerCase();
+      case "$size": {
+        const [items] = operands();
+        if (!Array.isArray(items)) throw mockError("ENGINE_ERROR", "The argument to $size must be an array");
+        return items.length;
+      }
+      case "$ifNull":
+        return operands().find((item) => item !== null && item !== undefined) ?? null;
+      default:
+        return unsupported(`the expression operator ${operator}`);
+    }
+  }
+  return Object.fromEntries(keys.map((key) => [key, evaluate(expression[key], document)]));
+}
+
+/** Query documents on any document: comparisons, `$in`, `$exists`, `$regex`, `$and` / `$or` / `$nor`, `$expr` is not evaluated. */
+function matches(document: Doc, filter: Json): boolean {
+  if (!isDoc(filter)) throw mockError("ENGINE_ERROR", "$match takes a query document");
+  return Object.entries(filter).every(([key, condition]) => {
+    if (key === "$and") return (condition as Json[]).every((part) => matches(document, part));
+    if (key === "$or") return (condition as Json[]).some((part) => matches(document, part));
+    if (key === "$nor") return !(condition as Json[]).some((part) => matches(document, part));
+    if (key.startsWith("$")) return unsupported(`the query operator ${key}`);
+    const value = fieldValue(document, key);
+    const candidates = Array.isArray(value) ? [value, ...value] : [value];
+    const operators = isDoc(condition) && Object.keys(condition).some((name) => name.startsWith("$")) && !("$oid" in condition) && !("$date" in condition);
+    if (!operators) return candidates.some((item) => sameValue(item ?? null, condition));
+    return Object.entries(condition as Doc).every(([operator, operand]) => {
+      const some = (test: (item: Json) => boolean) => candidates.some((item) => item !== undefined && test(item));
+      switch (operator) {
+        case "$eq":
+          return candidates.some((item) => sameValue(item ?? null, operand));
+        case "$ne":
+          return !candidates.some((item) => sameValue(item ?? null, operand));
+        case "$gt":
+          return some((item) => compare(plain(item), plain(operand)) > 0);
+        case "$gte":
+          return some((item) => compare(plain(item), plain(operand)) >= 0);
+        case "$lt":
+          return some((item) => compare(plain(item), plain(operand)) < 0);
+        case "$lte":
+          return some((item) => compare(plain(item), plain(operand)) <= 0);
+        case "$in":
+          return (operand as Json[]).some((option) => candidates.some((item) => sameValue(item ?? null, option)));
+        case "$nin":
+          return !(operand as Json[]).some((option) => candidates.some((item) => sameValue(item ?? null, option)));
+        case "$exists":
+          return (value !== undefined) === Boolean(operand);
+        case "$regex": {
+          const options = typeof (condition as Doc).$options === "string" ? String((condition as Doc).$options) : "";
+          return some((item) => typeof item === "string" && new RegExp(String(operand), options).test(item));
+        }
+        case "$options":
+          return true;
+        default:
+          return unsupported(`the query operator ${operator}`);
+      }
+    });
+  });
+}
+
+const ACCUMULATORS = ["$sum", "$avg", "$min", "$max", "$push", "$first", "$last", "$count"];
+
+function accumulate(operator: string, operand: Json, group: Doc[]): Json {
+  const values = () => group.map((document) => evaluate(operand, document)).filter((item) => item !== undefined);
+  const numbers = () =>
+    values()
+      .filter((item) => item !== null && !Number.isNaN(number(item)) && typeof plain(item) !== "string")
+      .map(number);
+  switch (operator) {
+    case "$sum":
+      return numbers().reduce((sum, item) => sum + item, 0);
+    case "$count":
+      return group.length;
+    case "$avg": {
+      const items = numbers();
+      return items.length ? items.reduce((sum, item) => sum + item, 0) / items.length : null;
+    }
+    case "$min":
+    case "$max": {
+      const items = values().filter((item) => item !== null);
+      if (!items.length) return null;
+      return items.reduce((best, item) => ((operator === "$min" ? compare(item, best) < 0 : compare(item, best) > 0) ? item : best));
+    }
+    case "$push":
+      return values();
+    case "$first":
+      return group.length ? (evaluate(operand, group[0]) ?? null) : null;
+    case "$last":
+      return group.length ? (evaluate(operand, group[group.length - 1]) ?? null) : null;
+    default:
+      return unsupported(`the accumulator ${operator}`);
+  }
+}
+
+function projectStage(documents: Doc[], spec: Json): Doc[] {
+  if (!isDoc(spec)) throw mockError("ENGINE_ERROR", "$project takes a document");
+  const entries = Object.entries(spec);
+  const excluded = entries.filter(([, value]) => value === 0 || value === false).map(([key]) => key);
+  const shaped =
+    entries.filter(([key, value]) => !(value === 0 || value === false) && key !== "_id").length > 0 || (entries.length > 0 && excluded.length === 0);
+  return documents.map((document) => {
+    if (!shaped) {
+      let result: Json = document;
+      for (const key of excluded) result = removeAt(result, key.split("."));
+      return result as Doc;
+    }
+    let result: Json = excluded.includes("_id") || document._id === undefined ? {} : { _id: document._id };
+    for (const [key, value] of entries) {
+      if (value === 0 || value === false) continue;
+      const computed = value === 1 || value === true ? fieldValue(document, key) : evaluate(value, document);
+      if (computed !== undefined) result = setAt(result, key.split("."), computed);
+    }
+    return result as Doc;
+  });
+}
+
+function lookup(documents: Doc[], spec: Json, database: string): Doc[] {
+  if (!isDoc(spec) || typeof spec.from !== "string" || typeof spec.as !== "string") throw mockError("ENGINE_ERROR", "$lookup needs from and as");
+  if (typeof spec.localField !== "string" || typeof spec.foreignField !== "string" || spec.pipeline !== undefined) {
+    return unsupported("$lookup with a pipeline (only localField / foreignField)");
+  }
+  const table = catalog.resolve(spec.from, database);
+  const foreign = table && table.spec.database === database ? table.rows.map((row) => documentOf(table, row)) : [];
+  const [localField, foreignField, as] = [spec.localField, spec.foreignField, spec.as];
+  return documents.map((document) => {
+    const local = fieldValue(document, localField);
+    const keys = Array.isArray(local) ? local : [local ?? null];
+    const joined = foreign.filter((other) => {
+      const value = fieldValue(other, foreignField);
+      const values = Array.isArray(value) ? value : [value ?? null];
+      return values.some((item) => keys.some((key) => sameValue(item, key)));
+    });
+    return setAt(document, as.split("."), joined) as Doc;
+  });
+}
+
+/** One stage on its input documents. */
+function runStage(stage: Doc, documents: Doc[], database: string): Doc[] {
+  const operator = stageOperator(stage);
+  const spec = stage[operator];
+  switch (operator) {
+    case "$match":
+      return documents.filter((document) => matches(document, plain(spec)));
+    case "$project":
+      return projectStage(documents, spec);
+    case "$addFields":
+    case "$set":
+      if (!isDoc(spec)) throw mockError("ENGINE_ERROR", `${operator} takes a document`);
+      return documents.map((document) =>
+        Object.entries(spec).reduce<Json>((result, [key, value]) => setAt(result, key.split("."), evaluate(value, document)), document),
+      ) as Doc[];
+    case "$unset": {
+      const fields = Array.isArray(spec) ? spec.map(String) : [String(spec)];
+      return documents.map((document) => fields.reduce<Json>((result, field) => removeAt(result, field.split(".")), document)) as Doc[];
+    }
+    case "$sort": {
+      if (!isDoc(spec)) throw mockError("ENGINE_ERROR", "$sort takes a document");
+      const keys = Object.entries(spec).map(([key, way]) => [key, number(way) < 0 ? -1 : 1] as const);
+      return [...documents].sort((a, b) => {
+        for (const [key, way] of keys) {
+          const order = compare(fieldValue(a, key) ?? null, fieldValue(b, key) ?? null) * way;
+          if (order !== 0) return order;
+        }
+        return 0;
+      });
+    }
+    case "$limit":
+      return documents.slice(0, Math.max(0, number(spec)));
+    case "$skip":
+      return documents.slice(Math.max(0, number(spec)));
+    case "$count":
+      if (typeof spec !== "string" || !spec) throw mockError("ENGINE_ERROR", "$count takes a field name");
+      return documents.length ? [{ [spec]: documents.length }] : [];
+    case "$unwind": {
+      const options = typeof spec === "string" ? { path: spec } : isDoc(spec) ? spec : unsupported("this $unwind");
+      const path = String(options.path ?? "");
+      if (!path.startsWith("$")) throw mockError("ENGINE_ERROR", "$unwind takes a field path starting with $");
+      const parts = path.slice(1).split(".");
+      return documents.flatMap((document) => {
+        const value = getAt(document, parts).value;
+        if (Array.isArray(value)) {
+          if (value.length === 0) return options.preserveNullAndEmptyArrays ? [removeAt(document, parts) as Doc] : [];
+          return value.map((item) => setAt(document, parts, item) as Doc);
+        }
+        if (value === undefined || value === null) return options.preserveNullAndEmptyArrays ? [document] : [];
+        return [document];
+      });
+    }
+    case "$group": {
+      if (!isDoc(spec) || !("_id" in spec)) throw mockError("ENGINE_ERROR", "a group specification must include an _id");
+      const groups = new Map<string, { id: Json; members: Doc[] }>();
+      for (const document of documents) {
+        const id = evaluate(spec._id, document) ?? null;
+        const key = JSON.stringify(id);
+        const group = groups.get(key) ?? { id, members: [] };
+        group.members.push(document);
+        groups.set(key, group);
+      }
+      return [...groups.values()].map(({ id, members }) => {
+        const result: Doc = { _id: id };
+        for (const [field, accumulator] of Object.entries(spec)) {
+          if (field === "_id") continue;
+          if (!isDoc(accumulator) || Object.keys(accumulator).length !== 1 || !ACCUMULATORS.includes(Object.keys(accumulator)[0])) {
+            return unsupported(`the accumulator of ${field}`);
+          }
+          const [name] = Object.keys(accumulator);
+          result[field] = accumulate(name, accumulator[name], members);
+        }
+        return result;
+      });
+    }
+    case "$lookup":
+      return lookup(documents, spec, database);
+    default:
+      return unsupported(`the stage ${operator}`);
+  }
+}
+
+function aggregatePreview(args: Doc): Json {
+  const stages = pipelineOf(args);
+  const writes = writeStage(stages);
+  if (writes) throw mockError("BLOCKED", `Refused: ${writes} writes into a collection; a preview only reads.`);
+  const size = bounded(args.sampleSize, DEFAULT_SAMPLE, MAX_SAMPLE);
+  const limit = bounded(args.limit, 20, 100);
+  const mode = args.sampleMode ?? "first";
+  if (mode !== "first" && mode !== "random") throw mockError("ENGINE_ERROR", `sampleMode is "first" or "random", not "${String(mode)}"`);
+  const upTo = args.upTo === undefined || args.upTo === null ? stages.length - 1 : Math.min(Number(args.upTo), stages.length - 1);
+  const all = matching(operationTable(args), {});
+  const sample =
+    mode === "random"
+      ? [...all]
+          .sort(() => Math.random() - 0.5)
+          .slice(0, size)
+          .sort((a, b) => compare(a._id, b._id))
+      : all.slice(0, size);
+  const database = String(args.database);
+  const results: Json[] = [];
+  let documents = sample;
+  for (let index = 0; index <= upTo; index++) {
+    const operator = stageOperator(stages[index]);
+    try {
+      documents = runStage(stages[index], documents, database);
+      results.push({ index, operator, count: documents.length, elapsedMs: 1, documents: documents.slice(0, limit), error: null });
+    } catch (error) {
+      results.push({
+        index,
+        operator,
+        count: null,
+        elapsedMs: 1,
+        documents: [],
+        error: error instanceof Error ? error.message : String((error as { message?: string }).message ?? error),
+      });
+      break;
+    }
+  }
+  return { stages: results, sample: { mode, size, count: sample.length }, elapsedMs: results.length + 1 };
+}
+
+function aggregate(args: Doc): Json {
+  const stages = pipelineOf(args);
+  const writes = writeStage(stages);
+  const limit = bounded(args.limit, 50, MAX_FIND_LIMIT);
+  const database = String(args.database);
+  const statement = `db.getCollection(${JSON.stringify(String(args.collection))}).aggregate(${JSON.stringify(stages)})`;
+  const reading = writes ? stages.slice(0, -1) : stages;
+  const documents = reading.reduce((input, stage) => runStage(stage, input, database), matching(operationTable(args), {}));
+  if (!writes) return { documents: documents.slice(0, limit), hasMore: documents.length > limit, elapsedMs: 5, statement, wrote: null };
+  return unsupported(`${writes} (writing the result into a collection)`);
+}
+
 const OPERATIONS: Record<string, (args: Doc) => Json> = {
   "mongo.find": find,
   "mongo.count": count,
@@ -755,6 +1158,8 @@ const OPERATIONS: Record<string, (args: Doc) => Json> = {
   "mongo.updatePreview": updatePreview,
   "mongo.updateMany": updateMany,
   "mongo.deleteMany": deleteMany,
+  "mongo.aggregatePreview": aggregatePreview,
+  "mongo.aggregate": aggregate,
 };
 
 /** How the gateway classifies an operation (classify.rs `classify_operation`); null for an unknown name. */
@@ -771,18 +1176,44 @@ export const classifyOperation: NonNullable<EngineMock["classifyOperation"]> = (
   }
   const empty = filter === undefined || (typeof filter === "object" && filter !== null && Object.keys(filter).length === 0);
   const info = (category: StatementInfo["category"], reason: string | null = null): StatementInfo[] => [{ category, kind: name, tables, excerpt, reason }];
+  if (name === "mongo.aggregatePreview" || name === "mongo.aggregate") {
+    let stages: Doc[];
+    try {
+      stages = pipelineOf(args);
+    } catch {
+      return info(name === "mongo.aggregate" ? "write" : "read", "The pipeline could not be read");
+    }
+    const all = [...tables, ...pipelineTables(stages).filter((table) => !tables.includes(table))];
+    const of = (category: StatementInfo["category"], reason: string | null = null): StatementInfo[] => [{ category, kind: name, tables: all, excerpt, reason }];
+    if (touchesSecrets(args) || touchesSecrets(stages))
+      return of("admin", "Shows users, credentials, other sessions' operations, server logs or the host; treated as administration");
+    const writes = name === "mongo.aggregate" ? writeStage(stages) : null;
+    if (writes === "$out") return of("ddl", "$out creates or replaces the target collection with the result");
+    if (writes) return of("write", "$merge writes the result into a collection");
+    return of("read");
+  }
   if (name === "mongo.updateMany") return empty ? info("destructive", "An empty filter updates every document in the collection") : info("write");
   if (name === "mongo.deleteMany")
     return info("destructive", empty ? "An empty filter deletes every document in the collection" : "Deletes every matching document");
   return info("read");
 };
 
-/** `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef` and the bulk operations; undefined (refused) for any other name. */
+/** Server-side JavaScript in pipeline stages given as text. */
+function pipelineDenied(args: Doc): string | null {
+  try {
+    return deniedOperator(pipelineOf(args));
+  } catch {
+    return null;
+  }
+}
+
+/** `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`, the bulk operations and the aggregations; undefined (refused) for any other name. */
 export const invoke: NonNullable<EngineMock["invoke"]> = (name, raw) => {
   const operation = Object.hasOwn(OPERATIONS, name) ? OPERATIONS[name] : undefined;
   if (!operation) return undefined;
   const args = (raw ?? {}) as Doc;
-  const operator = deniedOperator(args) ?? ["filter", "projection", "sort", "update"].map((key) => deniedOperator(jsonArg(args, key))).find(Boolean);
+  const operator =
+    deniedOperator(args) ?? ["filter", "projection", "sort", "update"].map((key) => deniedOperator(jsonArg(args, key))).find(Boolean) ?? pipelineDenied(args);
   if (operator) throw mockError("BLOCKED", `Refused: ${operator} runs JavaScript on the server.`);
   return operation(args);
 };
