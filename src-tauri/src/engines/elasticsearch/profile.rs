@@ -1,7 +1,8 @@
 //! What Elasticsearch and OpenSearch add to the assistant's learned profile (`ProfileExtras`), from metadata only (no
 //! document is read): every mapped field of an index, alias or data stream as a dotted path with its type (objects and
 //! nested fields, multi-fields such as `title.keyword`, runtime fields; types that differ across the indices behind an
-//! alias listed together), the indices behind aliases and data streams, and the aliases and data streams of the cluster.
+//! alias listed together), the indices behind aliases and data streams, and the aliases and data streams of the cluster
+//! (hidden and system ones, such as `.security` or `.kibana`, left out).
 
 use std::collections::BTreeMap;
 
@@ -94,6 +95,27 @@ fn named(names: &[String]) -> String {
     shown.join(", ")
 }
 
+/// A hidden or system name (`.security-7`, `.kibana`); the backing indices of a visible data stream (`.ds-logs-…`)
+/// are not hidden.
+fn hidden_name(name: &str) -> bool {
+    match name.strip_prefix(".ds-") {
+        Some(stream) => stream.starts_with('.'),
+        None => name.starts_with('.'),
+    }
+}
+
+/// Aliases with their indices, leaving out hidden aliases and aliases whose indices are all hidden or system ones
+/// (`.security`, `.kibana_7.17`), and the hidden indices of the others.
+pub fn visible_aliases(aliases: impl IntoIterator<Item = (String, String)>) -> BTreeMap<String, Vec<String>> {
+    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (alias, index) in aliases {
+        if !hidden_name(&alias) && !hidden_name(&index) {
+            grouped.entry(alias).or_default().push(index);
+        }
+    }
+    grouped
+}
+
 /// The mappings of every learned object, and the cluster's aliases and data streams.
 pub async fn metadata(engine: &EsEngine, objects: &[ObjectRef]) -> AppResult<ProfileEnrichment> {
     let wanted: Vec<ObjectRef> = objects
@@ -125,10 +147,7 @@ pub async fn metadata(engine: &EsEngine, objects: &[ObjectRef]) -> AppResult<Pro
         ..ProfileEnrichment::default()
     };
     let (aliases, streams) = futures_util::join!(engine.list_aliases(false), engine.list_data_streams(false));
-    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for alias in aliases.unwrap_or_default() {
-        grouped.entry(alias.alias).or_default().push(alias.index);
-    }
+    let grouped = visible_aliases(aliases.unwrap_or_default().into_iter().map(|alias| (alias.alias, alias.index)));
     if !grouped.is_empty() {
         let aliases: Map<String, Json> = grouped.into_iter().map(|(alias, indices)| (alias, json!(indices))).collect();
         enrichment.extras.insert("aliases".into(), Json::Object(aliases));
@@ -136,6 +155,7 @@ pub async fn metadata(engine: &EsEngine, objects: &[ObjectRef]) -> AppResult<Pro
     let streams: Map<String, Json> = streams
         .unwrap_or_default()
         .into_iter()
+        .filter(|stream| !stream.hidden && !hidden_name(&stream.name))
         .map(|stream| {
             (
                 stream.name,
@@ -210,6 +230,26 @@ mod tests {
         let code = merged.iter().find(|field| field.path == "code").unwrap();
         assert_eq!(code.type_name, "keyword | long");
         assert!(merged.iter().any(|field| field.path == "extra"));
+    }
+
+    #[test]
+    fn hidden_aliases_and_system_indices_are_left_out() {
+        let pairs = [
+            (".security", ".security-7"),
+            (".kibana", ".kibana_7.17.0_001"),
+            ("audit", ".internal-audit"),
+            ("logs", "logs-1"),
+            ("logs", ".hidden-logs"),
+            ("events", ".ds-events-2026.11.12-000001"),
+            ("secret-stream", ".ds-.hidden-stream-000001"),
+        ];
+        let visible = visible_aliases(pairs.iter().map(|(alias, index)| ((*alias).to_owned(), (*index).to_owned())));
+        let shown: Vec<(&str, Vec<&str>)> = visible
+            .iter()
+            .map(|(alias, indices)| (alias.as_str(), indices.iter().map(String::as_str).collect()))
+            .collect();
+        assert_eq!(shown, [("events", vec![".ds-events-2026.11.12-000001"]), ("logs", vec!["logs-1"])]);
+        assert!(hidden_name(".geoip_databases") && !hidden_name("orders"));
     }
 
     #[test]
