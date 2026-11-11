@@ -813,6 +813,7 @@ pub(crate) mod fixtures {
             comment: None,
             default: None,
             sensitive: false,
+            presence: None,
         }
     }
 

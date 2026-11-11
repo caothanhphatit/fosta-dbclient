@@ -170,6 +170,9 @@ pub struct ColumnProfile {
     /// dropped and its values are never sampled.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sensitive: bool,
+    /// The share of sampled documents holding the field, in percent (MongoDB field paths, P6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,7 +196,7 @@ pub enum RelationSource {
     Fk,
     /// A column named after another object (`customer_id` → `customers.id`).
     InferredName,
-    /// A MongoDB field holding another collection's `_id` (P6).
+    /// A MongoDB field holding another collection's `_id`, matched on a sample of its values (P6).
     MongoRef,
 }
 

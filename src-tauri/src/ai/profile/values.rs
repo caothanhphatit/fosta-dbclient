@@ -14,7 +14,10 @@
 //!
 //! [`Engine::distinct_values_statement`]: crate::contract::Engine::distinct_values_statement
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use serde::Serialize;
 use serde_json::{json, Value as Json};
@@ -119,7 +122,7 @@ const SKIPPED_TYPES: [&str; 16] = [
 ];
 
 /// Whether a column is worth reading: not sensitive, not a key, and of a type that can hold a short list of values.
-fn sampled(column: &ColumnProfile) -> bool {
+pub(super) fn sampled(column: &ColumnProfile) -> bool {
     if column.sensitive || column.primary || redact::is_sensitive_name(&column.name) {
         return false;
     }
@@ -288,14 +291,14 @@ pub fn strip_value_hints(profile: &mut DatabaseProfile) {
 }
 
 /// The columns a build reads, per object index, within the caps.
-fn plan(profile: &DatabaseProfile) -> Vec<(usize, Vec<usize>)> {
+fn plan(profile: &DatabaseProfile, done: &HashSet<usize>) -> Vec<(usize, Vec<usize>)> {
     let mut planned = Vec::new();
     let mut total = 0;
     for (index, object) in profile.objects.iter().enumerate() {
         if total >= MAX_COLUMNS {
             break;
         }
-        if !sampled_object(object) {
+        if !sampled_object(object) || done.contains(&index) {
             continue;
         }
         let room = MAX_COLUMNS_PER_OBJECT.min(MAX_COLUMNS - total);
@@ -366,6 +369,19 @@ pub async fn sample(
     cancel: &CancellationToken,
     progress: ProgressFn<'_>,
 ) -> AppResult<ValuesOutcome> {
+    sample_except(sampler, handle, profile, &HashSet::new(), cancel, progress).await
+}
+
+/// [`sample`], leaving alone the objects (by index) whose values the engine's extras already sampled: their hints
+/// stay as the extras left them.
+pub async fn sample_except(
+    sampler: &Sampler<'_>,
+    handle: &Handle,
+    profile: &mut DatabaseProfile,
+    done: &HashSet<usize>,
+    cancel: &CancellationToken,
+    progress: ProgressFn<'_>,
+) -> AppResult<ValuesOutcome> {
     let mut outcome = ValuesOutcome::default();
     let Some(path) = path_of(handle) else {
         outcome.skipped = Some(format!(
@@ -374,7 +390,7 @@ pub async fn sample(
         ));
         return Ok(outcome);
     };
-    let planned = plan(profile);
+    let planned = plan(profile, done);
     let total: usize = planned.iter().map(|(_, columns)| columns.len()).sum();
     let started = Instant::now();
     let database = profile.database.clone();
@@ -457,6 +473,7 @@ mod tests {
             comment: None,
             default: None,
             sensitive: false,
+            presence: None,
         }
     }
 

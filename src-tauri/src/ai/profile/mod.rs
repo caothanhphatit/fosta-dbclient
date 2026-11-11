@@ -11,11 +11,16 @@
 //! - [`digest`]: what a chat sees: the prompt digest and the `search_profile` / `get_object_profile` tools
 //! - [`summary`]: the model's summary and object descriptions, on request, with a cost estimate first
 //!
-//! [`values`] reads value hints, only under the read gate; engine extras (P6) come later. The structural build reads no
-//! rows and sends nothing anywhere; only [`summary`] sends anything to a model.
+//! - [`extras`]: what an engine adds after the walk (MongoDB field paths and references, Elasticsearch mappings and
+//!   aliases, Redis key patterns), its reads of data through the gateway as the assistant
+//!
+//! [`values`] reads value hints, only under the read gate. The structural walk reads no rows itself (document engines
+//! sample documents to describe a collection); [`extras`] reads sampled documents and key names only through the
+//! gateway, audited. Nothing is sent anywhere while learning; only [`summary`] sends anything to a model.
 
 pub mod build;
 pub mod digest;
+pub mod extras;
 pub mod fingerprint;
 pub mod infer;
 pub mod model;
@@ -24,12 +29,13 @@ pub mod store;
 pub mod summary;
 pub mod values;
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use serde::Serialize;
 
 pub use self::{
     build::{Progress, Step},
+    extras::ExtrasOutcome,
     fingerprint::ObjectDiff,
     model::{DatabaseProfile, ProfileNote},
     store::{ProfileStatus, ProfileStore},
@@ -56,11 +62,23 @@ pub struct LearnOutcome {
     /// What value sampling did; none when it was not asked for or not allowed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub values: Option<ValuesOutcome>,
+    /// What the engine's extras added (field paths, references, mappings, key patterns); none for engines without them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extras: Option<ExtrasOutcome>,
+}
+
+/// How a build may read data: through the gateway as the assistant on the connection (`sampler`'s context), for the
+/// engine's extras (sampled documents, key names), and value hints only with `values` (the user lets the assistant read
+/// data on this connection and the caller asked for hints).
+pub struct BuildReads<'a> {
+    pub sampler: Sampler<'a>,
+    pub values: bool,
 }
 
 /// Builds (or refreshes) the profile of `database` on `handle`'s connection and stores it. `run_id` registers the
 /// build with [`AiRuns`], so `ai_cancel(run_id)` stops it; `progress` hears each step. With a `sampler` (the user lets the
-/// assistant read data on this connection and the caller asked for it) the build also reads value hints ([`values`]).
+/// assistant read data on this connection and the caller asked for it) the build also runs the engine's extras reads
+/// and reads value hints ([`values`]).
 pub async fn learn(
     runs: &AiRuns,
     store: &Arc<ProfileStore>,
@@ -70,11 +88,13 @@ pub async fn learn(
     sampler: Option<Sampler<'_>>,
     progress: build::ProgressFn<'_>,
 ) -> AppResult<LearnOutcome> {
-    learn_with(runs, store, handle, database, run_id, sampler, true, progress).await
+    let reads = sampler.map(|sampler| BuildReads { sampler, values: true });
+    learn_with(runs, store, handle, database, run_id, reads, true, progress).await
 }
 
-/// [`learn`]; without `keep_hints` (the user opted out of value sampling for this build) the stored value hints are
-/// dropped instead of carried over for unchanged objects, and the profile no longer says data was read.
+/// [`learn`] with the reads spelled out: `reads` none reads nothing but metadata. Without `keep_hints` (the user opted
+/// out of value sampling for this build) the stored value hints are dropped instead of carried over for unchanged
+/// objects, and the profile no longer says data was read.
 #[allow(clippy::too_many_arguments)]
 pub async fn learn_with(
     runs: &AiRuns,
@@ -82,7 +102,7 @@ pub async fn learn_with(
     handle: &Handle,
     database: &str,
     run_id: &str,
-    sampler: Option<Sampler<'_>>,
+    reads: Option<BuildReads<'_>>,
     keep_hints: bool,
     progress: build::ProgressFn<'_>,
 ) -> AppResult<LearnOutcome> {
@@ -94,11 +114,20 @@ pub async fn learn_with(
     let token = CancellationToken::new();
     let building = async {
         let mut profile = build::build(handle, &connection_id, database, &token, progress).await?;
-        let values = match &sampler {
-            Some(sampler) => Some(values::sample(sampler, handle, &mut profile, &token, progress).await?),
+        let extras_reads = reads.as_ref().map(|reads| extras::ExtrasReads {
+            sampler: &reads.sampler,
+            values: reads.values,
+        });
+        let enriched = extras::enrich(handle, extras_reads, &mut profile, &token, progress).await?;
+        let (extras, sampled) = match enriched {
+            Some((outcome, sampled)) => (Some(outcome), sampled),
+            None => (None, HashSet::new()),
+        };
+        let values = match reads.as_ref().filter(|reads| reads.values) {
+            Some(reads) => Some(values::sample_except(&reads.sampler, handle, &mut profile, &sampled, &token, progress).await?),
             None => None,
         };
-        Ok::<_, AppError>((profile, values))
+        Ok::<_, AppError>((profile, values, extras))
     };
     tokio::pin!(building);
     let built = tokio::select! {
@@ -109,7 +138,7 @@ pub async fn learn_with(
         }
     };
     runs.finish(run_id);
-    let (fresh, values) = built.map_err(|error| if token.is_cancelled() { cancelled() } else { error })?;
+    let (fresh, values, extras) = built.map_err(|error| if token.is_cancelled() { cancelled() } else { error })?;
     progress(Progress::new(Step::Saving, 0, 1));
     let writer = Arc::clone(store);
     let (profile, diff, refreshed) = tokio::task::spawn_blocking(move || {
@@ -129,6 +158,7 @@ pub async fn learn_with(
         refreshed,
         diff,
         values,
+        extras,
     })
 }
 
@@ -187,3 +217,6 @@ pub async fn status(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod extras_tests;

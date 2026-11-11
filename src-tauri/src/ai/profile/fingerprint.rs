@@ -40,6 +40,12 @@ pub fn object_fingerprint<'a>(kind: &str, qualified_name: &str, columns: impl In
     sha256_hex(&format!("{kind}\n{qualified_name}\n{}", lines.join("\n")))
 }
 
+/// The fingerprint of an object whose engine names a metadata-only basis for it (MongoDB: options, validator and index
+/// specs), instead of columns that come from sampled documents and move between builds.
+pub fn basis_fingerprint(kind: &str, qualified_name: &str, basis: &str) -> String {
+    sha256_hex(&format!("{kind}\n{qualified_name}\nbasis\n{basis}"))
+}
+
 pub fn of_object(object: &ObjectProfile) -> String {
     object_fingerprint(
         object.kind.as_str(),

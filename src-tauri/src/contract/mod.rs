@@ -13,6 +13,7 @@
 //! - [`limits`]: the safety rules' backstops and the per-call context.
 //! - [`errors`]: engine errors and the structured codes.
 //! - [`vector`]: the `vector.*` operations, built on an engine's [`vector::VectorStore`].
+//! - [`profile`]: what an engine adds to the assistant's learned profile of a database.
 
 pub mod capability;
 pub mod classify;
@@ -22,6 +23,7 @@ pub mod engine;
 pub mod errors;
 pub mod limits;
 pub mod object;
+pub mod profile;
 pub mod schema;
 pub mod session;
 pub mod spec;
@@ -45,6 +47,7 @@ pub use limits::{cancelled, CallContext, CancellationToken, Limits, CANCELLED};
 pub use object::{
     ActionTarget, Badge, BuiltinAction, NodeAction, NodeKey, NodeKind, ObjectNode, ObjectRef, Tone, TreeChildren, TreeRequest,
 };
+pub use profile::{ExtrasRead, FieldReference, FieldSamples, FieldShape, ObjectExtras, ProfileEnrichment, ProfileExtras, KEY_PATTERN};
 pub use schema::{Relation, SchemaColumn, SchemaGraph, SchemaTable};
 pub use session::{
     Canceller, OpenedSession, RunRequest, RunSummary, Session, SessionInfo, SessionOptions, TransactionOp, TransactionState, TxState,

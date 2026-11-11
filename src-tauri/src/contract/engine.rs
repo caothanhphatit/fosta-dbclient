@@ -17,6 +17,7 @@ use super::{
     errors::unsupported_capability,
     limits::CallContext,
     object::{NodeAction, ObjectRef, TreeChildren, TreeRequest},
+    profile::ProfileExtras,
     schema::SchemaGraph,
     session::{OpenedSession, SessionOptions},
     spec::{ConnectRequest, ConnectionSpec, ServerInfo},
@@ -100,6 +101,11 @@ pub trait Connection: Send + Sync + 'static {
         None
     }
     fn admin(&self) -> Option<&dyn DatabaseAdmin> {
+        None
+    }
+    /// What the engine adds to the assistant's learned profile after the structural walk (field paths, mappings, key
+    /// patterns); none adds nothing.
+    fn profile_extras(&self) -> Option<&dyn ProfileExtras> {
         None
     }
     async fn ping(&self) -> AppResult<()> {

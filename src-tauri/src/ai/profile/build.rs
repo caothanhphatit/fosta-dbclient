@@ -268,6 +268,7 @@ fn described(node: &ObjectNode, description: &ObjectDescription) -> ObjectProfil
                     redact::clean(column.default.as_deref())
                 },
                 sensitive,
+                presence: None,
             }
         })
         .collect();

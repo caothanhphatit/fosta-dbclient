@@ -30,7 +30,8 @@ pub const PROGRESS_EVENT: &str = "profile-progress";
 /// Rows are read only for value hints: when the user lets the assistant read data on this connection
 /// (`gateway::assistant::reads_allowed`) and `sample_values` is not false (it defaults to that setting); those reads go
 /// through the gateway as the assistant and are audited one by one. An explicit `sample_values: false` also drops the value hints an
-/// earlier build stored.
+/// earlier build stored. The engine's extras (MongoDB `mongo.schema` samples, a Redis SCAN of key names) read through the
+/// gateway as the assistant too, audited; their values become hints only under the same rule.
 pub async fn profile_learn(
     state: &AppState,
     connection_id: String,
@@ -39,11 +40,18 @@ pub async fn profile_learn(
     sample_values: Option<bool>,
 ) -> AppResult<LearnOutcome> {
     let handle = state.engines.handle(&connection_id)?;
-    let sampler = read_context(state, &connection_id)
-        .filter(|_| sample_values.unwrap_or(true))
-        .map(|context| profile::Sampler {
-            manager: &state.engines,
-            context,
+    // The engine's extras (sampled documents, key names) read through the gateway as the assistant on any saved
+    // connection; their values become hints only where value sampling is allowed and asked for.
+    let values = read_context(state, &connection_id).is_some() && sample_values.unwrap_or(true);
+    let reads = state
+        .config
+        .read(|config| Context::for_connection(config, &connection_id).ok())
+        .map(|context| profile::BuildReads {
+            sampler: profile::Sampler {
+                manager: &state.engines,
+                context,
+            },
+            values,
         });
     // An explicit opt-out also drops the value hints an earlier build stored.
     let keep_hints = sample_values != Some(false);
@@ -54,7 +62,7 @@ pub async fn profile_learn(
         &handle,
         &database,
         &run_id,
-        sampler,
+        reads,
         keep_hints,
         &progress,
     )
