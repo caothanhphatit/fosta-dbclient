@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { EngineDescriptor } from "./contract";
-import { clearViews, findView, registerViews, resolveView, rolesFor, setEngineLoader, type ViewFactory, type ViewRegistration } from "./views";
+import { clearViews, defaultRole, findView, registerViews, resolveView, rolesFor, setEngineLoader, type ViewFactory, type ViewRegistration } from "./views";
 import descriptorFixture from "./__fixtures__/contract/engine-descriptor.json";
 
 const base = descriptorFixture as EngineDescriptor;
@@ -61,6 +61,18 @@ describe("view registry", () => {
     ]);
     expect(rolesFor(postgres, "table")).toEqual(["data", "design", "console"]);
     expect(rolesFor(mongodb, "collection")).toEqual(["console"]);
+  });
+
+  it("opens a workspace by default where one is registered", () => {
+    registerViews([
+      reg("data", { engine: "*", kinds: ["collection"], role: "data" }),
+      reg("workspace", { engine: "mongodb", kinds: ["collection"], role: "workspace" }),
+    ]);
+    expect(defaultRole(mongodb, "collection", "data")).toBe("workspace");
+    expect(defaultRole(mongodb, "view", "data")).toBe("data");
+    expect(defaultRole(mongodb, "collection", "design")).toBe("design");
+    expect(defaultRole(postgres, "collection", "data")).toBe("data");
+    expect(rolesFor(mongodb, "collection")).toEqual(["data", "workspace"]);
   });
 
   it("loads the engine module before resolving", async () => {

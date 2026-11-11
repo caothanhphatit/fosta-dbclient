@@ -194,3 +194,53 @@ describe("queryNumber", () => {
     expect(queryNumber("orders")).toBe(0);
   });
 });
+
+describe("workspace tabs (saved view)", () => {
+  const orders: Extract<SavedTab, { kind: "object" }> = {
+    id: "w-orders",
+    kind: "object",
+    connectionId: "c3",
+    title: "orders",
+    role: "workspace",
+    object: { database: "shop", schema: null, name: "orders", kind: "collection" },
+    view: { section: "aggregations", state: { documents: { filter: '{ "status": "NEW" }' }, aggregations: { stages: 3 } } },
+  };
+
+  it("round-trips the section and the section states", () => {
+    const state = serializeTabs([orders, table], 0, 10_000);
+    expect(parseSavedTabs(JSON.parse(JSON.stringify(state)))).toEqual({ version: 1, tabs: [orders, table], active: 0 });
+  });
+
+  it("keeps a file from before workspace tabs as it was, and drops a malformed view but not its tab", () => {
+    const parsed = parseSavedTabs({ tabs: [{ ...table }] });
+    expect(parsed?.tabs[0]).toEqual(table);
+    expect(parsed?.tabs[0]).not.toHaveProperty("view");
+    const broken = parseSavedTabs({
+      tabs: [
+        { ...orders, view: { section: 42 } },
+        { ...orders, id: "w2", view: "documents" },
+      ],
+    });
+    expect(broken?.tabs).toHaveLength(2);
+    for (const tab of broken?.tabs ?? []) expect(tab).not.toHaveProperty("view");
+    const noState = parseSavedTabs({ tabs: [{ ...orders, view: { section: "schema" } }] });
+    expect(noState?.tabs[0]).toMatchObject({ view: { section: "schema", state: {} } });
+  });
+
+  it("bounds the saved view of each tab", () => {
+    const huge: SavedTab = { ...orders, view: { section: "documents", state: { documents: { filter: "x" }, aggregations: "p".repeat(40_000) } } };
+    const [stored] = serializeTabs([huge], null, 10_000).tabs;
+    expect(stored).toMatchObject({ view: { section: "documents", state: { documents: { filter: "x" } } } });
+    expect(JSON.stringify(stored).length).toBeLessThan(1_000);
+  });
+
+  it("drops section states of the last workspace tabs after query texts when the state is still too large", () => {
+    const big = (id: string): SavedTab => ({ ...orders, id, view: { section: "documents", state: { documents: "d".repeat(20_000) } } });
+    const state = serializeTabs([big("w1"), query("q".repeat(5_000)), big("w2")], null, 1_000_000);
+    const fitted = fitToBytes(state, 26_000);
+    expect(jsonBytes(fitted)).toBeLessThanOrEqual(26_000);
+    expect(fitted.tabs[1]).toMatchObject({ text: "", textOmitted: true });
+    expect(fitted.tabs[2]).toMatchObject({ view: { section: "documents", state: {} } });
+    expect(fitted.tabs[0]).toMatchObject({ view: { state: { documents: "d".repeat(20_000) } } });
+  });
+});

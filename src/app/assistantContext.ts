@@ -5,6 +5,7 @@ import type { ConnectionTree } from "../features/connections/tree";
 import type { QueryView } from "../features/query/queryView";
 import { TableView } from "../features/table/tableView";
 import type { LogTabContent } from "../features/tasks/tasksPanel";
+import { isWorkspaceTab } from "../features/workspace/sectionWorkspace";
 
 const LOG_TAIL_LINES = 80;
 
@@ -42,6 +43,16 @@ export function assistantContext(active: TabContent | null, config: AppConfig | 
       database: active.currentDatabase() ?? undefined,
       editorText: () => active.currentText(),
       lastError: () => active.lastError,
+    });
+  }
+  if (isWorkspaceTab(active)) {
+    // An engine workspace: the object, plus what each loaded section says about itself (bounded in `workspaceContextText`).
+    const object = active.object;
+    return withConnection(active.connectionId, {
+      kind: "table",
+      database: object?.database ?? undefined,
+      table: object ? (object.schema ? `${object.schema}.${object.name}` : object.name) : undefined,
+      extra: () => active.workspaceContext(),
     });
   }
   if (active instanceof TableView) {

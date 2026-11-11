@@ -10,7 +10,11 @@ import type { Navigator } from "./navigator";
 import type { TabContent } from "./tabs";
 import type { ConnectionProfile } from "./types";
 
-export type ViewRole = "data" | "design" | "overview" | "value" | "console" | "server" | "diagram" | (string & {});
+/**
+ * `workspace`: an engine's dedicated tab for an object, with a strip of sections (`features/workspace`). Where one is
+ * registered for a kind, a default open uses it instead of `data` (`defaultRole`); the grid stays one menu entry away.
+ */
+export type ViewRole = "data" | "design" | "overview" | "value" | "console" | "server" | "diagram" | "workspace" | (string & {});
 
 export interface ViewContext {
   connection: ConnectionApi;
@@ -88,6 +92,14 @@ export function rolesFor(engine: EngineDescriptor, kind: string): ViewRole[] {
   const roles = new Set<ViewRole>();
   for (const reg of registrations) if (precedence(reg, engine, kind, reg.role) > 0) roles.add(reg.role);
   return [...roles];
+}
+
+/**
+ * The role a default open (double-click, Enter, the node menu's first entry) uses: `workspace` instead of `data` when
+ * one is registered for the kind; any other role stays. Synchronous like `findView` (the engine's UI module is loaded).
+ */
+export function defaultRole(engine: EngineDescriptor, kind: string, role: ViewRole): ViewRole {
+  return role === "data" && findView(engine, kind, "workspace") ? "workspace" : role;
 }
 
 let engineLoader: ((id: string) => Promise<void>) | null = null;

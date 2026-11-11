@@ -4,6 +4,7 @@
  * unit-tested.
  */
 import type { ObjectRef } from "../core/contract";
+import { boundViewState, parseViewState, type WorkspaceViewState } from "../features/workspace/workspaceState";
 
 /** One open tab, enough to open it again (without its id). */
 export type SavedTabBody =
@@ -29,6 +30,8 @@ export type SavedTabBody =
       filter?: string;
       columnFilters?: Record<string, string>;
       database?: string | null;
+      /** An engine workspace tab's section and section states (`features/workspace`), at most `MAX_VIEW_BYTES`. */
+      view?: WorkspaceViewState;
     }
   | { kind: "logs"; taskId: string; title: string };
 
@@ -75,10 +78,15 @@ function compact(tab: SavedTab): SavedTab {
   return copy;
 }
 
+/** A workspace tab without its section states (it opens on the same section, with their defaults). */
+function withoutViewState(tab: Extract<SavedTab, { kind: "object" }>): SavedTab {
+  return tab.view ? { ...tab, view: { section: tab.view.section, state: {} } } : tab;
+}
+
 /**
  * Leaves out the text of the last query tabs that have some until `state` takes at most `maxBytes` (non-ASCII text
- * and JSON escapes take more bytes than characters). The whole state is measured once; each dropped text then only
- * subtracts what its tab shrank by.
+ * and JSON escapes take more bytes than characters); still too large, the section states of the last workspace tabs
+ * too. The whole state is measured once; each dropped part then only subtracts what its tab shrank by.
  */
 export function fitToBytes(state: SavedWorkspaceTabs, maxBytes: number): SavedWorkspaceTabs {
   let size = jsonBytes(state);
@@ -88,6 +96,13 @@ export function fitToBytes(state: SavedWorkspaceTabs, maxBytes: number): SavedWo
     const tab = tabs[index];
     if (tab.kind !== "query" || (tab.text === "" && savedText(tab) === "")) continue;
     const emptied = withoutText(tab);
+    size -= jsonBytes(tab) - jsonBytes(emptied);
+    tabs[index] = emptied;
+  }
+  for (let index = tabs.length - 1; index >= 0 && size > maxBytes; index -= 1) {
+    const tab = tabs[index];
+    if (tab.kind !== "object" || !tab.view || Object.keys(tab.view.state).length === 0) continue;
+    const emptied = withoutViewState(tab);
     size -= jsonBytes(tab) - jsonBytes(emptied);
     tabs[index] = emptied;
   }
@@ -101,6 +116,7 @@ export function fitToBytes(state: SavedWorkspaceTabs, maxBytes: number): SavedWo
 export function serializeTabs(tabs: SavedTab[], active: number | null, budget: number): SavedWorkspaceTabs {
   let left = budget;
   const bounded = tabs.map((tab): SavedTab => {
+    if (tab.kind === "object") return tab.view ? { ...tab, view: boundViewState(tab.view) } : tab;
     if (tab.kind !== "query") return tab;
     const stored = compact(tab);
     const size = tab.text.length + (stored.kind === "query" && stored.saved !== undefined ? stored.saved.length : 0);
@@ -153,6 +169,8 @@ function parseBody(value: Record<string, unknown>): SavedTabBody | null {
   if (value.kind === "object" && isString(value.connectionId) && isString(value.role)) {
     const object = parseObject(value.object);
     if (!object) return null;
+    // Files from before workspace tabs have no `view`; a malformed one is dropped, not the tab.
+    const view = parseViewState(value.view);
     const columnFilters =
       isRecord(value.columnFilters) && Object.values(value.columnFilters).every(isString) ? (value.columnFilters as Record<string, string>) : undefined;
     return {
@@ -164,6 +182,7 @@ function parseBody(value: Record<string, unknown>): SavedTabBody | null {
       ...(isString(value.filter) ? { filter: value.filter } : {}),
       ...(columnFilters ? { columnFilters } : {}),
       ...(isString(value.database) ? { database: value.database } : {}),
+      ...(view ? { view } : {}),
     };
   }
   if (value.kind === "logs" && isString(value.taskId)) return { kind: "logs", taskId: value.taskId, title: value.title };

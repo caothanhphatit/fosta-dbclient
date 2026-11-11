@@ -15,7 +15,7 @@ import { showError } from "../../core/errorPanel";
 import { dialectOf } from "../../core/sql";
 import type { TabContent } from "../../core/tabs";
 import type { AppConfig, ConnectionProfile, TaskState } from "../../core/types";
-import { loadEngineUi, nodeIcon, recoverConnectError, type ViewRole } from "../../core/views";
+import { defaultRole, loadEngineUi, nodeIcon, recoverConnectError, type ViewRole } from "../../core/views";
 import { withConfirmation } from "../safety/confirmationDialog";
 import { databaseDialog } from "./databaseDialog";
 import { fillTemplate, plainName, ROOT, TreeModel, type VisibleRow } from "./treeModel";
@@ -401,7 +401,7 @@ export class ConnectionTree {
   /** Double-click / Enter: containers open and close; everything else opens its default view. */
   private activate(conn: ConnectionNode, node: ObjectNode, shown: boolean): void {
     if (node.expandable && !node.defaultView) this.toggleNode(conn, node, shown);
-    else void this.host.openObject(conn.profile, node, node.defaultView ?? "data");
+    else void this.host.openObject(conn.profile, node, node.defaultView ?? "data", { asDefault: true });
   }
 
   // --- Actions ----------------------------------------------------------------------------------------------------------
@@ -529,7 +529,16 @@ export class ConnectionTree {
     const items: MenuItem[] = [];
     if (!node.expandable || node.defaultView) {
       const role = node.defaultView ?? "data";
-      items.push({ label: openLabel(node.kind, role), icon: nodeIcon(node.icon, "table"), run: () => void this.host.openObject(conn.profile, node, role) });
+      const profile = conn.profile;
+      items.push({
+        label: openLabel(node.kind, role),
+        icon: nodeIcon(node.icon, "table"),
+        run: () => void this.host.openObject(profile, node, role, { asDefault: true }),
+      });
+      // Where an engine workspace is the default open, the grid stays one entry away.
+      if (defaultRole(engineOf(profile), node.kind, role) === "workspace") {
+        items.push({ label: "Open as grid", icon: "table", run: () => void this.host.openObject(profile, node, "data") });
+      }
     } else {
       items.push({ label: shown ? "Collapse" : "Expand", icon: "chevron", run: () => this.toggleNode(conn, node, shown) });
     }

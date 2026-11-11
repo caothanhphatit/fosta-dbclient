@@ -7,11 +7,13 @@ import { showError } from "../core/errorPanel";
 import type { Navigator } from "../core/navigator";
 import type { TabContent, TabManager } from "../core/tabs";
 import type { ConnectionProfile, KeyCell, TableTarget, TaskDef } from "../core/types";
-import { nodeIcon, resolveView, type ViewContext, type ViewRegistration, type ViewRole } from "../core/views";
+import { defaultRole, loadEngineUi, nodeIcon, resolveView, type ViewContext, type ViewRegistration, type ViewRole } from "../core/views";
 import type { QueryHost, QueryView } from "../features/query/queryView";
 import { createLogView, type TasksPanel } from "../features/tasks/tasksPanel";
 import { VectorHealthView } from "../features/vector/vectorHealth";
 import { VectorSearchView } from "../features/vector/vectorSearch";
+import { isWorkspaceTab } from "../features/workspace/sectionWorkspace";
+import type { WorkspaceViewState } from "../features/workspace/workspaceState";
 import { RestoredTab, type RestoreResult } from "./restoredTab";
 import { queryNumber, savedText, type SavedTab, type SavedTabBody } from "./tabState";
 import { captureTyping } from "./typingBuffer";
@@ -67,6 +69,13 @@ export interface OpenParams extends Record<string, unknown> {
   replaceKey?: string;
   /** The workspace the tab belongs to (a restored tab: its own, even when another workspace is shown meanwhile). */
   scope?: string;
+  /**
+   * A default open (double-click, Enter): the `data` role becomes `workspace` where the engine registered one for the
+   * kind (`defaultRole`). Without it the role is used as asked, so "Open as grid" still opens the grid.
+   */
+  asDefault?: boolean;
+  /** An engine workspace tab's saved section and section states (a restored tab). */
+  view?: WorkspaceViewState;
 }
 
 function isNode(target: OpenTarget): target is ObjectNode {
@@ -166,12 +175,13 @@ export class AppNavigation implements Navigator {
    * connection. Resolves with the tab content (an existing tab is selected and returned), or null when no view is
    * registered or creating it failed (reported in the error panel).
    */
-  async openObject(profile: ConnectionProfile, target: OpenTarget, role: ViewRole, params: OpenParams = {}): Promise<TabContent | null> {
+  async openObject(profile: ConnectionProfile, target: OpenTarget, asked: ViewRole, params: OpenParams = {}): Promise<TabContent | null> {
     const scope = params.scope ?? this.host.workspaceId();
     const engine = engineOf(profile);
     const node = isNode(target) ? target : null;
     const object = node ? node.object : (target as ObjectRef | null);
     const kind = node?.kind ?? object?.kind ?? "connection";
+    const role = params.asDefault ? await this.defaultRoleOf(engine, kind, asked) : asked;
     const identity = object ? objectIdentity(object) : (node?.key.id ?? "");
     const key = this.objectKey(scope, profile.id, role, identity, params);
     const existing = this.tabs.contentOf(key);
@@ -191,6 +201,10 @@ export class AppNavigation implements Navigator {
       showError(error, `Load the ${engine.label} views`);
       return null;
     }
+    if (!registration && role === "workspace") {
+      // A saved workspace tab of an engine that no longer has one opens the grid instead.
+      return this.openObject(profile, target, "data", { ...params, asDefault: false, view: undefined });
+    }
     if (!registration) {
       toast(`${engine.label} has no ${role} view for ${kind === "connection" ? "a connection" : `a ${kind}`}`);
       return null;
@@ -209,7 +223,7 @@ export class AppNavigation implements Navigator {
       const factory = await registration.load();
       const name = node?.label ?? (object ? (object.schema ? `${object.schema}.${object.name}` : object.name) : profile.name);
       const { title, subtitle } = this.describeTab(registration, ctx, role, name, params);
-      const tabIcon: IconName = role === "data" ? nodeIcon(node?.icon, dataIcon(kind)) : (registration.icon ?? "table");
+      const tabIcon: IconName = role === "data" || role === "workspace" ? nodeIcon(node?.icon, dataIcon(kind)) : (registration.icon ?? "table");
       const database = object?.database ?? (typeof params.database === "string" ? params.database : null);
       const spec = { key, scope, title, subtitle, icon: tabIcon, connection: profile.name, database, create: () => factory(ctx) };
       if (params.replaceKey) {
@@ -232,11 +246,24 @@ export class AppNavigation implements Navigator {
           ...(typeof params.database === "string" ? { database: params.database } : {}),
         });
       }
+      // A workspace tab's section and section states are saved with the open tabs whenever they change.
+      const content = this.tabs.contentOf(key);
+      if (isWorkspaceTab(content)) content.onViewChanged = () => this.onTabEdited?.();
     } catch (error) {
       showError(error, `Open ${describeOpen(role, kind)}`);
       return null;
     }
     return this.tabs.contentOf(key) ?? null;
+  }
+
+  /** The role a default open of `kind` uses (the engine's UI module loaded first); `asked` when that fails. */
+  private async defaultRoleOf(engine: EngineInfo, kind: string, asked: ViewRole): Promise<ViewRole> {
+    try {
+      await loadEngineUi(engine.id);
+    } catch {
+      return asked;
+    }
+    return defaultRole(engine, kind, asked);
   }
 
   /** `suggested`: the filter comes from the assistant and is only pre-filled; the user applies it. */
@@ -342,6 +369,7 @@ export class AppNavigation implements Navigator {
     const record = this.records.get(key);
     if (!record) return null;
     const id = this.idOf(key);
+    if (record.kind === "object" && isWorkspaceTab(content)) return { ...record, id, view: content.viewState() };
     const view = asQueryView(content);
     if (record.kind !== "query" || !view) return { ...record, id };
     return { ...record, id, database: view.currentDatabase(), language: view.languageId(), text: view.editorText(), saved: view.savedText() };
@@ -429,7 +457,14 @@ export class AppNavigation implements Navigator {
         title: saved.title,
       });
     } else {
-      const params: OpenParams = { replaceKey: key, scope, filter: saved.filter, columnFilters: saved.columnFilters, database: saved.database };
+      const params: OpenParams = {
+        replaceKey: key,
+        scope,
+        filter: saved.filter,
+        columnFilters: saved.columnFilters,
+        database: saved.database,
+        view: saved.view,
+      };
       if (saved.role === "diagram") params.database = saved.database ?? saved.object.database ?? saved.object.name;
       opened = (await this.openObject(profile, saved.object, saved.role, params)) !== null;
     }
@@ -467,11 +502,16 @@ export class AppNavigation implements Navigator {
       case "data": {
         const filter = params.filter ?? "";
         const columns = columnFiltersText(params.columnFilters);
-        const title = params.suggested ? `${name} (suggested filter)` : filter || columns ? `${name} (filtered)` : name;
+        // Where a workspace is the object's main tab, the grid says what it is (both would be called "orders").
+        const plain = defaultRole(ctx.engine, ctx.node?.kind ?? object?.kind ?? "", "data") === "workspace" ? `${name} · grid` : name;
+        const title = params.suggested ? `${name} (suggested filter)` : filter || columns ? `${name} (filtered)` : plain;
         return { title, subtitle: filter ? `${where} WHERE ${filter}` : columns ? `${where} · ${columns}` : where };
       }
       case "design":
         return { title: `${name} · design`, subtitle: where };
+      case "workspace":
+        // The object's main tab: its name alone, like the grid it replaces.
+        return { title: registration.title?.(ctx) ?? name, subtitle: where };
       case "diagram": {
         const database = params.database ?? object?.database ?? name;
         return { title: `${database} · diagram`, subtitle: `${ctx.profile.name} · ${database}` };
