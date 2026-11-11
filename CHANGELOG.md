@@ -51,6 +51,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the pipeline as mongosh, Node.js or Python. Documents › More › "Open as aggregation" turns the query bar into
   `$match` / `$sort` / `$skip` / `$limit` / `$project` stages, and pipelines save and load with the saved queries. The
   stages are kept with the open tabs.
+  A Schema section analyses a sample of the collection (up to 10,000 documents: random, the first ones, or those
+  matching a filter) and lists every field path as a tree, into sub-documents and arrays of documents: how often it is
+  present, its BSON types (mixed types highlighted), array lengths and element types, the most frequent values as small
+  bars for low-cardinality fields, min / max of numbers and dates, and ObjectId fields inferred to reference another
+  collection (bounded probes, labelled "inferred"). Selecting a field shows its details; "Filter by this field" puts a
+  filter in the Documents query bar (has the field, is missing, equals a top value, is of a type) and "Copy path"
+  copies it. The analysis is kept with the open tabs, its paths feed the query bar's completion, and the assistant
+  sees the fields and types (not the values).
 
 ### Changed
 

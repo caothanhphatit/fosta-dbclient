@@ -5,7 +5,7 @@
  * resolves [] instead of failing. `resolveRef` asks only when the user opened the reference (probing never asks). The
  * bulk operations and `applyEdits` (saving pending edits) always go through `withConfirmation`. `aggregatePreview` asks
  * only when the user ran it (a preview after an edit never asks); `aggregate` (the full run, `$out` / `$merge` included)
- * asks per the rules.
+ * asks per the rules. `schema` asks only when the user pressed Analyze.
  */
 import type { ConnectionApi } from "../../core/connectionApi";
 import type { ApplyResult, RowChangeSet } from "../../core/contract";
@@ -13,6 +13,7 @@ import type { Confirmation } from "../../core/types";
 import { withConfirmation } from "../../features/safety/confirmationDialog";
 import type { deleteArgs, PreviewResult, previewArgs, updateArgs } from "./bulkModel";
 import type { CountArgs, FindArgs, FindPage, Target } from "./queryModel";
+import type { SchemaArgs, SchemaResult } from "./schemaModel";
 
 export interface FindResult extends FindPage {
   documents: Record<string, unknown>[];
@@ -125,6 +126,15 @@ export class MongoApi {
   /** The full run; with `$out` / `$merge` the gateway asks per the rules (null: declined). */
   aggregate(args: AggregateArgs): Promise<AggregateResult | null> {
     return withConfirmation((confirmation) => this.connection.invokeCapability<AggregateResult>("mongo.aggregate", args, confirmation));
+  }
+
+  /**
+   * The shape of a sample of the collection (`mongo.schema`, reads only). `ask`: the user pressed Analyze, so a workspace
+   * that asks before reads asks (null: declined); without it a read that needs asking fails (the first automatic run).
+   */
+  schema(args: SchemaArgs, ask: boolean): Promise<SchemaResult | null> {
+    const call = (confirmation: Confirmation | null) => this.connection.invokeCapability<SchemaResult>("mongo.schema", args, confirmation);
+    return ask ? withConfirmation(call) : call(null);
   }
 
   /** The match count and a before/after sample of an update (reads only). */
