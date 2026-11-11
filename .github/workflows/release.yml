@@ -24,14 +24,52 @@ jobs:
       docker: ${{ steps.docker.outputs.present }}
     steps:
       # The installed app only accepts updates signed with this key (plugins.updater.pubkey in tauri.conf.json).
-      - name: Updater signing key is set
+      # Checks the shape of the secret without printing it or anything decoded from it: only lengths and offsets are logged.
+      # The value is the base64 text `tauri signer generate` writes (a minisign key file, itself holding a base64 line);
+      # extra characters after it fail the build late with "failed to decode secret key: Invalid symbol 61, offset ...".
+      - name: Updater signing key is set and well-formed
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+          key="$TAURI_SIGNING_PRIVATE_KEY"
+          fail() {
+            echo "::error title=TAURI_SIGNING_PRIVATE_KEY::$1 Paste the private key again (Settings > Secrets and variables > Actions): the single line of base64 from the .key file, nothing before or after it."
+            exit 1
+          }
+          if [ -z "$key" ]; then
             echo "::error::The repository secret TAURI_SIGNING_PRIVATE_KEY is missing. Add the updater's private key (Settings > Secrets and variables > Actions); without it installed apps cannot update."
             exit 1
           fi
+          echo "Secret length: ${#key} characters"
+          stripped=$(printf '%s' "$key" | LC_ALL=C tr -d ' \t\r\n')
+          whitespace=$(( ${#key} - ${#stripped} ))
+          case "$key" in
+            *[[:space:]]) fail "The secret ends with whitespace or a line break ($whitespace whitespace characters in total)." ;;
+            [[:space:]]*) fail "The secret starts with whitespace or a line break ($whitespace whitespace characters in total)." ;;
+          esac
+          [ "$whitespace" -eq 0 ] || fail "The secret contains $whitespace whitespace characters or line breaks inside it."
+          if printf '%s' "$key" | LC_ALL=C grep -q '[^A-Za-z0-9+/=]'; then
+            fail "The secret contains characters that are not base64 (allowed: A-Z a-z 0-9 + / =)."
+          fi
+          before_padding="${key%%=*}"
+          if [ "${#before_padding}" -lt "${#key}" ]; then
+            case "${key:${#before_padding}}" in
+              = | ==) ;;
+              *) fail "Base64 padding '=' appears at offset ${#before_padding} with more text after it: something was pasted after the key." ;;
+            esac
+          fi
+          [ $(( ${#key} % 4 )) -eq 0 ] || fail "The secret is ${#key} characters long, not a multiple of 4: it is cut off or has extra characters."
+          if ! printf '%s' "$key" | base64 -d > /dev/null 2>&1; then
+            fail "The secret does not decode as base64."
+          fi
+          echo "Decoded: $(printf '%s' "$key" | base64 -d | wc -c) bytes, $(printf '%s' "$key" | base64 -d | wc -l) line breaks"
+          if ! printf '%s' "$key" | base64 -d | head -n 1 | grep -q '^untrusted comment:'; then
+            fail "The decoded secret is not a minisign key file (no 'untrusted comment:' first line). Use the private key (.key), not the public key or the key file's inner line."
+          fi
+          if ! printf '%s' "$key" | base64 -d | sed -n 2p | tr -d '\r' | LC_ALL=C grep -Eq '^[A-Za-z0-9+/]+={0,2}$'; then
+            fail "The second line of the decoded key file is not a single base64 line."
+          fi
+          echo "The signing key looks well-formed."
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -83,6 +121,14 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - name: Tool versions
+        shell: bash
+        run: |
+          echo "node  $(node --version)"
+          echo "npm   $(npm --version)"
+          rustc --version
+          cargo --version
+          echo "tauri $(npx --no-install tauri --version)"
       - name: Build and create the draft release
         id: tauri
         uses: tauri-apps/tauri-action@v0
@@ -102,6 +148,62 @@ jobs:
           includeUpdaterJson: true
           # Bundling is off in tauri.conf.json (local builds are portable); the release turns on the NSIS installer.
           args: --config src-tauri/tauri.release.conf.json
+      # Diagnostics only: lists what was built and checks the updater files; uploads nothing.
+      - name: Bundle files and updater signatures
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
+        run: |
+          bundle=src-tauri/target/release/bundle
+          echo "Built files (bytes, path):"
+          if [ -d "$bundle" ]; then find "$bundle" -type f -printf '%12s  %p\n' | sort -k2; else echo "  no $bundle directory"; fi
+          if [ -f src-tauri/target/release/fosta-studio.exe ]; then find src-tauri/target/release/fosta-studio.exe -printf '%12s  %p\n'; fi
+          status=0
+          installers=0
+          while IFS= read -r -d '' installer; do
+            installers=$((installers + 1))
+            if [ -s "$installer.sig" ]; then
+              echo "Signature present: $installer.sig"
+            else
+              echo "::error::Missing or empty updater signature: $installer.sig"
+              status=1
+            fi
+          done < <(find "$bundle" -type f \( -name '*-setup.exe' -o -name '*.msi' \) -print0 2>/dev/null)
+          if [ "$installers" -eq 0 ]; then
+            echo "::error::No installer was built under $bundle."
+            status=1
+          fi
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::warning::tauri-action reported no release id; the release assets and latest.json are not checked."
+            exit "$status"
+          fi
+          echo "Assets on the draft release (bytes, name):"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate --jq '.[] | "\(.size)  \(.name)"'
+          asset_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate --jq '.[] | select(.name == "latest.json") | .id')
+          if [ -z "$asset_id" ]; then
+            echo "::error::latest.json is not on the draft release; installed apps would not see this update."
+            exit 1
+          fi
+          gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$RUNNER_TEMP/latest.json"
+          echo "latest.json:"
+          cat "$RUNNER_TEMP/latest.json"
+          echo
+          # Every platform needs a download URL and a signature, or installed apps reject the update.
+          node -e '
+            const latest = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const platforms = Object.entries(latest.platforms ?? {});
+            if (platforms.length === 0) console.log("::error::latest.json lists no platforms.");
+            let ok = platforms.length > 0;
+            for (const [name, entry] of platforms) {
+              console.log(name + ": url " + (entry.url ? "set" : "MISSING") + ", signature " + (entry.signature ? "set" : "MISSING"));
+              if (!entry.url || !entry.signature) ok = false;
+            }
+            if (!ok) console.log("::error::latest.json has a platform without a url or a signature.");
+            process.exit(ok ? 0 : 1);
+          ' "$RUNNER_TEMP/latest.json" || status=1
+          exit "$status"
       - name: Attach the portable exe
         shell: bash
         env:
