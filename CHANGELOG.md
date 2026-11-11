@@ -102,6 +102,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   "Connect your first database" card on the welcome screen and a New connection button in the sidebar. Existing settings
   are not changed.
 
+### Security
+
+- `open_collection_workspace` is pinned to the chat's connection and database like `sample_documents`, and both refuse
+  system collections (`system.*`) and the `admin`, `local` and `config` databases. A workspace the assistant opens no
+  longer runs its first page: Documents says the query was suggested and waits for Find. Previously a document holding a
+  prompt injection could make the app read `admin.system.users` on its own in an Open workspace, and the next chat
+  message sent the result to the provider.
+- Sampled documents reach the model only when reading the view's collection is a plain read for the rules (not
+  administration, not a system collection or server database).
+- The assistant's collection tools refuse stages that write (`$out`, `$merge`) and stages naming another database
+  (`{ db, coll }` in `$lookup`, `$unionWith`, `$merge`). `mongo-pipeline` blocks that do so are flagged in the chat, and
+  their buttons ask before applying them.
+- MongoDB classification: an aggregation with `$out` and a TTL index (`expireAfterSeconds`, also through `createIndexes`
+  and `collMod`) are destructive instead of DDL; bulk updates and deletes whose filter trivially matches every document
+  (`{ $expr: true }`, `{ _id: { $exists: true } }`, `{ $and: [{}] }`, …) are destructive like an empty filter; database and
+  collection names with leading or trailing spaces are refused instead of trimmed after classification;
+  `system.backup_users`, `system.new_users`, `system.profile`, `oplog.rs`, `startup_log`, the whole `local` database and the
+  stages `$planCacheStats`, `$listSampledQueries` and `$queryStats` are administration.
+- Change streams are refused by the full aggregation and by explain, not only by the preview (collecting one never ended
+  and kept the connection busy).
+- Without the read setting, values are cut from the server errors in the assistant's context (duplicate keys, quoted
+  literals).
+- Saved queries: ids at most 200 characters, one saved query at most 256 KB and a workspace's saved queries at most 8 MB.
+
 ## [0.2.1] - 2026-11-11
 
 ### Added

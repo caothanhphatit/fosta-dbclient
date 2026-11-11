@@ -73,9 +73,25 @@ MongoDB document edits are saved the same way (one save, the same rules) and com
 
 MongoDB bulk changes from the collection workspace are rated by what they do: an update preview reads (it simulates the
 update on a few documents and refuses operators it cannot simulate exactly), "Update matching documents" is a write, or
-destructive when the filter is empty, and "Delete matching documents" is always destructive, so a Guarded workspace asks for
-the collection's name and a Read-only one blocks it. Server-side JavaScript (`$where`, `$function`, `$accumulator`) is refused in
-filters and updates whatever the rules.
+destructive when the filter matches every document, and "Delete matching documents" is always destructive, so a Guarded
+workspace asks for the collection's name and a Read-only one blocks it. "Matches every document" covers an empty filter and the
+trivially true forms (`{ $expr: true }`, `{ _id: { $exists: true } }`, `{ $and: [{}] }`, `{ $or: [ …, {} ] }`,
+`{ $jsonSchema: {} }`, a lone `$comment`); an expression the server would have to evaluate, such as `{ $expr: { $eq: [1, 1] } }`,
+is not caught, so this guards against mistakes and pasted filters rather than being a boundary. An aggregation with `$out`
+(which drops and replaces its target, possibly the source itself) and a TTL index (`expireAfterSeconds`, which deletes
+documents on its own) are destructive too; `$merge` is a write. Change streams (`$changeStream`) never end and are refused by
+the workspace's aggregations and explain. Server-side JavaScript (`$where`, `$function`, `$accumulator`) is refused in filters and
+updates whatever the rules. Database and collection names are used exactly as given: a name with leading or trailing spaces is
+refused, so the rules and the call always see the same collection.
+
+Reading credentials or other sessions' data is administration, whatever the command: `system.users`, `system.roles`,
+`system.keys`, `system.backup_users` and `system.new_users`, the profiler (`system.profile`), the oplog and the startup log
+(`oplog.rs`, `startup_log`), every collection of the `local` database, `usersInfo`, `currentOp`, `getLog`, `hostInfo`,
+`getCmdLineOpts`, and the stages `$currentOp`, `$listSessions`, `$listLocalSessions`, `$planCacheStats`,
+`$listSampledQueries` and `$queryStats`. In a query tab, where the command does not name its database, the `local` database is
+recognized by those collection names only. A view is rated by its own name: a view defined over one of these collections
+(which needs an administrative `create` first, in the same database) reads as a plain read in the collection workspace. The
+assistant never opens or reads the `admin`, `local` or `config` databases or any `system.*` collection.
 
 **For production databases, also connect with a database user that can only read.** The app's rules are a safety net, not a
 replacement for database permissions.
@@ -89,9 +105,18 @@ shown in the chat and written to the audit log. Database content is passed to th
 
 On MongoDB the same setting covers sampled documents: `sample_documents` reads at most 20 documents of a collection in the
 chat's database (or what leaves a pipeline stage, on a bounded sample), with long values cut, through the same read-only gateway
-check, shown in the chat and audited; and the collection workspace sends a few documents (cut the same way) with the context. Where
-the setting is off, neither reaches the model: it sees field names and types only. Filters and pipelines it suggests, in the chat
-or through `open_collection_workspace`, are only pre-filled for you to review; they never run on their own.
+check, shown in the chat and audited; and the collection workspace sends a few documents (cut the same way) with the context,
+only when reading that collection is a plain read for the rules (not a system collection, not `admin`, `local` or `config`, not
+administration). Where the setting is off, neither reaches the model: it sees field names, types, the filter you typed and the
+errors, with the values cut out of the errors (the key of a duplicate-key error, every quoted literal). An error message spread
+over several lines may keep values on its later lines.
+
+Filters and pipelines it suggests, in the chat or through `open_collection_workspace`, are only pre-filled for you to review;
+they never run on their own, and a workspace the assistant opens does not run its first page either (Documents waits for
+_Find_). Both collection tools are pinned to the chat's connection and database, and refuse system collections, the `admin`,
+`local` and `config` databases, stages that write (`$out`, `$merge`), server-side JavaScript and stages naming another database
+(`{ db, coll }` in `$lookup`, `$unionWith` or `$merge`). A `mongo-pipeline` block in the chat that writes or names another
+database is flagged under the block, and its buttons ask before applying it.
 
 ## MCP clients
 
