@@ -43,6 +43,8 @@ pub const MAX_VALUE_CHARS: usize = 64;
 pub const BUDGET: Duration = Duration::from_secs(60);
 /// The server-side time bound of one MongoDB read.
 const MONGO_MAX_TIME_MS: u64 = 3_000;
+/// The engine whose connections answer `mongo.distinct`.
+const MONGODB: &str = "mongodb";
 /// Failed reads in one object before its other columns are left alone.
 const MAX_FAILURES_PER_OBJECT: usize = 2;
 
@@ -79,7 +81,7 @@ fn path_of(handle: &Handle) -> Option<Path> {
     let column = ColumnInfo::result("c", "text", ValueKind::Text);
     if handle.conn.capabilities().contains(Capability::Query) && handle.engine.distinct_values_statement(&probe, &column, 1, 1).is_some() {
         Some(Path::Sql)
-    } else if handle.engine.id() == "mongo" {
+    } else if handle.engine.id() == MONGODB {
         Some(Path::Mongo)
     } else {
         None

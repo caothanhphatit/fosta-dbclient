@@ -35,7 +35,7 @@ struct Engine2 {
 fn descriptor(mongo: bool) -> EngineDescriptor {
     let mut descriptor = fake::descriptor();
     if mongo {
-        descriptor.id = "mongo".into();
+        descriptor.id = MONGODB.into();
         descriptor.family = EngineFamily::Document;
     }
     descriptor.capabilities = CapabilitySet::of(&[Capability::Tree, Capability::Describe, Capability::Query]);
@@ -456,4 +456,169 @@ async fn engines_without_a_bounded_read_are_skipped() {
     assert!(outcome.skipped.unwrap().contains("no bounded way"));
     assert_eq!((outcome.columns, profile.data_read), (0, false));
     assert!(!engine.calls.lock().unwrap().iter().any(|call| call == "run" || call == "invoke"));
+}
+
+/// Against the MongoDB container (`db-studio-dev-mongo-1`, root / studio-root on 127.0.0.1:27017).
+#[tokio::test]
+#[ignore = "needs the MongoDB container (dev/compose); run with --ignored --test-threads=1"]
+async fn live_mongo_hints() {
+    use crate::contract::{CollectSink, ConnectSecrets, ConnectionSpec};
+    let env = |name: &str, default: &str| std::env::var(format!("FOSTA_CONTRACT_MONGO_{name}")).unwrap_or_else(|_| default.into());
+    let spec = ConnectionSpec {
+        engine: MONGODB.into(),
+        host: env("HOST", "127.0.0.1"),
+        port: env("PORT", "27017").parse().unwrap_or(27017),
+        user: env("USER", "root"),
+        database: Some("admin".into()),
+        ..ConnectionSpec::default()
+    };
+    let manager = ConnectionManager::default();
+    manager
+        .connect("c", spec, ConnectSecrets::password(&env("PASSWORD", "studio-root")))
+        .await
+        .expect("connect");
+    let handle = manager.handle("c").unwrap();
+    const STATUSES: [&str; 3] = ["new", "paid", "shipped"];
+    let documents: Vec<serde_json::Value> = (0..40usize)
+        .map(|index| {
+            json!({
+                "_id": index,
+                "status": STATUSES[index % 3],
+                "email": format!("user{index}@example.com"),
+                "password": format!("secret-{index}"),
+                "note": format!("note {index}"),
+                "active": index % 2 == 0,
+            })
+        })
+        .collect();
+    let session = handle
+        .call("opened a session", |conn| async move {
+            conn.open_session(&SessionOptions::default(), &CallContext::default()).await
+        })
+        .await
+        .unwrap()
+        .session;
+    for command in [
+        json!({ "delete": "orders", "deletes": [{ "q": {}, "limit": 0 }] }),
+        json!({ "insert": "orders", "documents": documents }),
+    ] {
+        let request = RunRequest {
+            text: command.to_string(),
+            database: Some("fosta_values".into()),
+            offset: 0,
+        };
+        let mut sink = CollectSink::default();
+        handle
+            .run(Arc::clone(&session), request, RunOptions::default(), &mut sink)
+            .await
+            .unwrap();
+    }
+    let (store, dir) = store("live-mongo");
+    let sampler = Sampler {
+        manager: &manager,
+        context: open(),
+    };
+    let outcome = learn(&AiRuns::default(), &store, &handle, "fosta_values", "r", Some(sampler), &quiet)
+        .await
+        .unwrap();
+    let profile = store.load("c", "fosta_values").unwrap().unwrap();
+    let orders = hints(&profile, "orders");
+    assert_eq!(orders["status"].values, ["new", "paid", "shipped"]);
+    assert_eq!(orders["active"].values, ["false", "true"]);
+    assert_eq!(orders["email"].format.as_deref(), Some("email"));
+    assert!(orders["email"].values.is_empty());
+    assert!(!orders.contains_key("password") && !orders.contains_key("note") && !orders.contains_key("_id"));
+    assert!(profile.data_read && outcome.values.unwrap().failed == 0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn every_engine_classifies_its_distinct_values_statement_as_one_read() {
+    let registry = crate::runtime::registry::registry();
+    let object = ObjectRef::new(Some("shop"), Some("pub\"lic"), "ord`ers]", NodeKind::TABLE);
+    let column = ColumnInfo::result("st\"a`tus]", "text", ValueKind::Text);
+    let mut covered = Vec::new();
+    for id in registry.ids() {
+        let engine = registry.get(id).unwrap();
+        let Some(statement) = engine.distinct_values_statement(&object, &column, SAMPLE_ROWS, 21) else {
+            continue;
+        };
+        let language = engine.descriptor().default_language().unwrap().id.clone();
+        let classification = engine.classify(&ClassifyInput::Statement {
+            language: &language,
+            text: &statement,
+        });
+        assert_eq!(classification.statements.len(), 1, "{id}: {statement}");
+        assert_eq!(classification.worst(), Some(Category::Read), "{id}: {statement}");
+        assert!(classification.refusal().is_none(), "{id}: {statement}");
+        covered.push(id);
+    }
+    assert!(covered.len() >= 6, "{covered:?}");
+}
+
+/// A real SQL engine end to end: a SQLite file in the temporary directory.
+#[tokio::test(flavor = "multi_thread")]
+async fn sqlite_hints_through_the_real_engine() {
+    use crate::contract::{CollectSink, ConnectSecrets, ConnectionSpec};
+    let file = std::env::temp_dir().join(format!("fosta-values-{}.db", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    let mut spec = ConnectionSpec {
+        engine: "sqlite".into(),
+        file: Some(file.to_string_lossy().into_owned()),
+        ..ConnectionSpec::default()
+    };
+    spec.options.insert("create".into(), "true".into());
+    let manager = ConnectionManager::default();
+    manager.connect("c", spec, ConnectSecrets::default()).await.expect("connect");
+    let handle = manager.handle("c").unwrap();
+    let session = handle
+        .call("opened a session", |conn| async move {
+            conn.open_session(&SessionOptions::default(), &CallContext::default()).await
+        })
+        .await
+        .unwrap()
+        .session;
+    let mut statements = vec![
+        "CREATE TABLE \"order items\" (id INTEGER PRIMARY KEY, \"st\"\"atus\" TEXT, email TEXT, password TEXT, note TEXT, level SMALLINT)"
+            .to_owned(),
+    ];
+    for index in 0..40 {
+        statements.push(format!(
+            "INSERT INTO \"order items\" VALUES ({index}, '{}', 'user{index}@example.com', 'pw{index}', 'note {index}', {})",
+            ["new", "paid"][index % 2],
+            index % 3
+        ));
+    }
+    for text in statements {
+        let request = RunRequest {
+            text,
+            database: None,
+            offset: 0,
+        };
+        let mut sink = CollectSink::default();
+        handle
+            .run(Arc::clone(&session), request, RunOptions::default(), &mut sink)
+            .await
+            .unwrap();
+    }
+    let (store, dir) = store("sqlite");
+    let sampler = Sampler {
+        manager: &manager,
+        context: open(),
+    };
+    let outcome = learn(&AiRuns::default(), &store, &handle, "main", "r", Some(sampler), &quiet)
+        .await
+        .unwrap();
+    let values = outcome.values.unwrap();
+    let profile = store.load("c", "main").unwrap().unwrap();
+    let hints = hints(&profile, "order items");
+    assert_eq!(hints["st\"atus"].values, ["new", "paid"], "{values:?}");
+    assert_eq!(hints["level"].values, ["0", "1", "2"]);
+    assert_eq!(hints["email"].format.as_deref(), Some("email"));
+    assert!(!hints.contains_key("password") && !hints.contains_key("note") && !hints.contains_key("id"));
+    assert_eq!((values.columns, values.failed), (4, 0), "{values:?}");
+    assert!(profile.data_read);
+    manager.disconnect("c").await;
+    let _ = std::fs::remove_file(&file);
+    let _ = std::fs::remove_dir_all(dir);
 }
