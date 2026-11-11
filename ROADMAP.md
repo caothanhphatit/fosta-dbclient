@@ -16,6 +16,11 @@ Where Fosta Studio is heading. Plans change; open an issue to discuss an item or
 - Structured errors with an error panel, an application log and copyable diagnostics; compact density and a richer status bar.
 - A built-in AI agent with the model of your choice: it explores your schema, writes and explains queries, runs code blocks under the
   safety rules, optionally runs read-only queries itself, and opens views for you.
+- A MongoDB collection workspace: a query bar in mongosh syntax with completion, document views (list, JSON, table) with
+  editing, saved queries, an aggregation builder with a preview per stage, schema analysis, index management, visual
+  explain plans and schema validation.
+- The assistant can learn a database once (structure, and sampled values only where it may read data) and answers
+  questions about Fosta Studio itself from the built-in help.
 - Vector search tools for MariaDB and PostgreSQL (pgvector).
 - A web edition: one Docker image to use Fosta Studio in a browser.
 
@@ -28,8 +33,6 @@ Where Fosta Studio is heading. Plans change; open an issue to discuss an item or
 
 ## Later
 
-- **MongoDB beyond Compass**: a query bar with autocomplete and shell syntax, document views (list, JSON, table), an aggregation
-  builder with a preview per stage, schema analysis, visual explain plans.
 - **Schema compare and sync** between environments, with migration scripts.
 - **Visual execution plans** for every engine, with index suggestions.
 - **Activity monitor**: running queries, locks and blocking sessions.

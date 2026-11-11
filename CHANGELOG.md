@@ -7,118 +7,116 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added
+## [0.3.0] - 2026-11-12
 
-- A MongoDB collection workspace: double-clicking a collection opens it (the grid stays in the menu as "Open as grid").
-  Its Documents section has a query bar with Filter, Project, Sort, Collation, Skip and Limit in mongosh syntax
-  (`ObjectId("…")`, `ISODate("…")`, unquoted keys, braces optional), errors underlined where they are, and completion
-  of field paths, query operators, BSON constructors and the field's own values. Ctrl+Enter runs; ArrowUp / ArrowDown
-  and the history button recall recent filters of the collection. Documents show as a List (a virtualised tree whose
-  fields expand on demand), as JSON, or as a read-only Table (nested fields as dotted-path columns, arrays as
-  "[n items]" that open in a side panel, mixed types flagged), paged by `_id` where the sort allows it, with the matching
-  count (estimated without a filter, counted on views) and the server time. Switching modes keeps the document at the
-  top. BSON values read as what they are: ObjectId with its creation time on hover, dates in local time with UTC on
-  hover, Decimal128, Long, Binary/UUID, Regex and Timestamp, and any value copies as shell syntax. Fields like
-  `customerId` / `customer_id` holding an ObjectId that matches a document of another collection show as inferred
-  references (probed in the background, bounded and cached); opening one shows the document in a side panel with a link
-  to its collection filtered by `_id`. Views open in the workspace too. When a field does not parse, the documents shown
-  are dimmed and marked as the previous query's. Every read goes through the safety gateway, and the filter, sort and
-  view are kept with the open tabs.
-  Documents of a collection can be edited in the List and Table modes: edit a value with its type (String, Number
-  keeping the stored type, Double, Int32, Int64, Decimal128, Boolean, Date, ObjectId, Null, or an object / array in
-  mongosh syntax), add, rename and remove fields and array items, insert, duplicate and delete documents. Edits stay
-  pending (marked in the views, counted in the pending bar) until Save; Review shows each changed document as a diff.
-  A save writes nested edits by dotted path (`$set` / `$unset` of `address.city`, not the whole `address`), checks only
-  the edited paths against what was loaded, opens the conflict dialog when someone changed one of them, and goes
-  through the workspace's rules like a grid save. The query bar's More menu has "Update matching documents…" (a
-  before/after preview of the first documents and the match count, simulated without writing; operators it cannot
-  simulate exactly are refused) and "Delete matching documents…" (count and the first documents), each for the bar's
-  current filter.
-  Saved queries: Save keeps the bar's fields (as typed) under a name, stored with the workspace of the connection in
+This release also includes the fixes and additions of
+[0.2.1](https://github.com/caothanhphatit/fosta-dbclient/blob/main/CHANGELOG.md#021---2026-11-11), which was not
+published on its own.
+
+### MongoDB collection workspace
+
+- **Open a collection as a workspace**: double-clicking a collection opens it (the grid stays in the menu as "Open as
+  grid"), with sections for Documents, Aggregations, Schema, Indexes, Explain and Validation. Views open in the
+  workspace too. Every read goes through the safety gateway, and each section's state is kept with the open tabs.
+- **Query bar**: Filter, Project, Sort, Collation, Skip and Limit in mongosh syntax (`ObjectId("…")`, `ISODate("…")`,
+  unquoted keys, braces optional), errors underlined where they are, and completion of field paths, query operators,
+  BSON constructors and the field's own values. Ctrl+Enter runs; ArrowUp / ArrowDown and the history button recall
+  recent filters of the collection. When a field does not parse, the documents shown are dimmed and marked as the
+  previous query's.
+- **Document views**: a List (a virtualised tree whose fields expand on demand), JSON, or a read-only Table (nested
+  fields as dotted-path columns, arrays as "[n items]" that open in a side panel, mixed types flagged), paged by `_id`
+  where the sort allows it, with the matching count (estimated without a filter, counted on views) and the server time.
+  Switching modes keeps the document at the top. BSON values read as what they are: ObjectId with its creation time on
+  hover, dates in local time with UTC on hover, Decimal128, Long, Binary/UUID, Regex and Timestamp, and any value
+  copies as shell syntax.
+- **Inferred references**: fields like `customerId` / `customer_id` holding an ObjectId that matches a document of
+  another collection show as references (probed in the background, bounded and cached); opening one shows the document
+  in a side panel with a link to its collection filtered by `_id`.
+- **Edit documents** in the List and Table modes: edit a value with its type (String, Number keeping the stored type,
+  Double, Int32, Int64, Decimal128, Boolean, Date, ObjectId, Null, or an object / array in mongosh syntax), add, rename
+  and remove fields and array items, insert, duplicate and delete documents. Edits stay pending (marked in the views,
+  counted in the pending bar) until Save; Review shows each changed document as a diff. A save writes nested edits by
+  dotted path (`$set` / `$unset` of `address.city`, not the whole `address`), checks only the edited paths against what
+  was loaded, opens the conflict dialog when someone changed one of them, and goes through the workspace's rules like a
+  grid save.
+- **Bulk changes**: the query bar's More menu has "Update matching documents…" (a before/after preview of the first
+  documents and the match count, simulated without writing; operators it cannot simulate exactly are refused) and
+  "Delete matching documents…" (count and the first documents), each for the bar's current filter.
+- **Saved queries**: Save keeps the bar's fields (as typed) under a name, stored with the workspace of the connection in
   `fosta-studio.json`; the Saved dropdown lists the collection's saved queries first, then the others of the database,
   with search, rename and delete, and applying one of another collection opens it in that collection's tab. Query-bar
-  runs in the query history panel have "Open in collection", which opens the collection workspace with the bar filled
-  in.
-  An Aggregations section builds pipelines as stage cards: pick the operator from the common stages (each with a short
+  runs in the query history panel have "Open in collection", which opens the workspace with the bar filled in.
+- **Aggregations**: build pipelines as stage cards. Pick the operator from the common stages (each with a short
   description and a template), edit the stage in mongosh syntax with completion of the fields that reach that stage
   (sampled from the previous stage's output), accumulators in `$group`, expression operators and collection names for
   `$lookup` / `$unionWith` / `$out` / `$merge`; turn stages on and off, reorder them by dragging (or ArrowUp / ArrowDown
-  on the handle), fold, duplicate and delete them. Each card previews its output on a bounded sample of the collection
-  (size and first / random documents in the header): the count, the time and the first documents, a `$lookup`'s joined
-  array opened, the error on the stage that failed, and why later stages did not run. The preview runs after each edit
-  and with Preview; `$out` / `$merge` are never previewed. Run executes the pipeline through the safety gateway (`$out`
-  / `$merge` confirmed there) and shows the result as a List, JSON or Table; runs go to the query history. Code exports
-  the pipeline as mongosh, Node.js or Python. Documents › More › "Open as aggregation" turns the query bar into
-  `$match` / `$sort` / `$skip` / `$limit` / `$project` stages, and pipelines save and load with the saved queries. The
-  stages are kept with the open tabs.
-  The assistant helps in the workspace: it answers with `mongo-filter` and `mongo-pipeline` blocks in mongosh syntax,
-  which "Apply to query bar", "Open in Aggregations", "Insert as stage(s)" (after the active stage) and "Replace stage"
-  put into the collection after parsing them (a parse error is shown instead); replacing your own filter or stages shows
-  a diff first, and nothing runs until you do. The query bar's "Ask" turns a sentence into a filter, and each stage card's
-  "Ask" explains the stage, suggests the next one or fixes its error, with the pipeline, the active stage and its error
-  as context. The assistant can open a collection's Documents or Aggregations with its suggestion pre-filled
-  (`open_collection_workspace`), and where the workspace lets it read data, read up to 20 documents of a collection or of
-  what leaves a pipeline stage (`sample_documents`, values cut, shown in the chat and audited); only then do sampled
-  documents of the active stage go with the context.
-  A Schema section analyses a sample of the collection (up to 10,000 documents: random, the first ones, or those
-  matching a filter) and lists every field path as a tree, into sub-documents and arrays of documents: how often it is
-  present, its BSON types (mixed types highlighted), array lengths and element types, the most frequent values as small
-  bars for low-cardinality fields, min / max of numbers and dates, and ObjectId fields inferred to reference another
-  collection (bounded probes, labelled "inferred"). Selecting a field shows its details; "Filter by this field" puts a
-  filter in the Documents query bar (has the field, is missing, equals a top value, is of a type) and "Copy path"
-  copies it. The analysis is kept with the open tabs, its paths feed the query bar's completion, and the assistant
-  sees the fields and types (not the values).
-  An Indexes section lists the collection's indexes: keys with their direction or type (text, 2dsphere, hashed,
-  wildcard), properties (unique, sparse, partial filter, TTL, collation, hidden), size, and how many operations used
-  each since when, with an "Unused" hint for indexes no query used in a week. Each index copies as a mongosh
-  `createIndex` line, can be hidden from the query planner and shown again, or dropped (never `_id_`; Guarded
-  workspaces ask for the collection name). "Create index" opens a form with key rows (field completion from the sampled
-  paths, 1 / -1 / text / 2dsphere / hashed), a name, unique / sparse / hidden, a partial filter, TTL, collation and
-  wildcard projection in mongosh syntax, and a live preview of the command; creating goes through the safety gateway
-  as DDL. The sort and search are kept with the open tabs, and the assistant sees the indexes.
-  An Explain section shows the query plan of the Documents query or of the Aggregations pipeline ("Explain" in the
-  query bar and in the Aggregations header opens it and runs): the planner's choice only, or execution statistics,
-  which run the query within the workspace's timeout (still a read; `$out` / `$merge` are refused). The plan is a tree
-  of stage cards with the index, keys, filter, documents and keys examined against documents returned, and time; the
-  winning plan is highlighted and the rejected plans fold under it. Badges and warnings point out collection scans,
-  in-memory sorts, many documents examined per document returned and filtered fields no index serves, and an index is
-  suggested by the Equality, Sort, Range rule unless one already covers the query ("Create index…" opens the Indexes
-  form prefilled). Classic, slot-based (MongoDB 7 and 8) and sharded plans are read; any other shape shows as raw JSON,
-  which is always one click away. The source and verbosity are kept with the open tabs, and the assistant sees the
-  summary and the warnings.
-  A Validation section shows the collection's rules: level (strict, moderate, off), action (error, warn) and the
-  validator in a mongosh-syntax editor with `$jsonSchema` completion. "Generate from schema" builds a `$jsonSchema`
-  from the analysed sample: a type per field (a list for mixed fields), required fields present in at least a chosen
-  share of documents (100% by default), nested documents and array items, and optional enums for string fields with
-  few values. "Check existing documents" counts the documents the draft would refuse and lists a few; one click opens
-  a document in Documents. Apply shows a line diff of the old and new validator, warns when existing documents
-  fail strict rules (with a one-click switch to moderate), and goes through the safety gateway as DDL (`collMod`);
-  Discard goes back to the applied rules and Remove rules empties the validator. Server-side JavaScript is refused in
-  validators. An unapplied draft is kept with the open tabs, and the assistant sees the rules.
-- "Learn this database": the assistant studies a database once and keeps what it learned, so every chat knows it
+  on the handle), fold, duplicate and delete them. Each card previews its output on a bounded sample of the collection:
+  the count, the time and the first documents, a `$lookup`'s joined array opened, the error on the stage that failed,
+  and why later stages did not run. `$out` / `$merge` are never previewed. Run executes the pipeline through the safety
+  gateway (`$out` / `$merge` confirmed there) and shows the result as a List, JSON or Table; runs go to the query
+  history. Code exports the pipeline as mongosh, Node.js or Python. Documents › More › "Open as aggregation" turns the
+  query bar into `$match` / `$sort` / `$skip` / `$limit` / `$project` stages, and pipelines save and load with the saved
+  queries.
+- **Schema**: analyses a sample of the collection (up to 10,000 documents: random, the first ones, or those matching a
+  filter) and lists every field path as a tree, into sub-documents and arrays of documents: how often it is present,
+  its BSON types (mixed types highlighted), array lengths and element types, the most frequent values as small bars for
+  low-cardinality fields, min / max of numbers and dates, and inferred references. "Filter by this field" puts a filter
+  in the Documents query bar (has the field, is missing, equals a top value, is of a type) and "Copy path" copies it.
+  The analysed paths feed the query bar's completion.
+- **Indexes**: keys with their direction or type (text, 2dsphere, hashed, wildcard), properties (unique, sparse, partial
+  filter, TTL, collation, hidden), size, and how many operations used each since when, with an "Unused" hint for
+  indexes no query used in a week. Each index copies as a mongosh `createIndex` line, can be hidden from the query
+  planner and shown again, or dropped (never `_id_`; Guarded workspaces ask for the collection name). "Create index"
+  opens a form with key rows (field completion, 1 / -1 / text / 2dsphere / hashed), a name, unique / sparse / hidden, a
+  partial filter, TTL, collation and wildcard projection, and a live preview of the command; creating goes through the
+  safety gateway as DDL.
+- **Explain**: the query plan of the Documents query or of the Aggregations pipeline ("Explain" in the query bar and in
+  the Aggregations header), as the planner's choice only or with execution statistics (run within the workspace's
+  timeout; `$out` / `$merge` are refused). The plan is a tree of stage cards with the index, keys, filter, documents and
+  keys examined against documents returned, and time; the winning plan is highlighted and rejected plans fold under it.
+  Badges and warnings point out collection scans, in-memory sorts, many documents examined per document returned and
+  filtered fields no index serves, and an index is suggested by the Equality, Sort, Range rule unless one already
+  covers the query ("Create index…" opens the Indexes form prefilled). Classic, slot-based (MongoDB 7 and 8) and sharded
+  plans are read; any other shape shows as raw JSON, which is always one click away.
+- **Validation**: level (strict, moderate, off), action (error, warn) and the validator in a mongosh-syntax editor with
+  `$jsonSchema` completion. "Generate from schema" builds a `$jsonSchema` from the analysed sample: a type per field (a
+  list for mixed fields), required fields present in at least a chosen share of documents (100% by default), nested
+  documents and array items, and optional enums for string fields with few values. "Check existing documents" counts
+  the documents the draft would refuse and lists a few. Apply shows a line diff of the old and new validator, warns
+  when existing documents fail strict rules (with a one-click switch to moderate), and goes through the safety gateway
+  as DDL (`collMod`); Remove rules empties the validator. Server-side JavaScript is refused in validators.
+- **The assistant in the workspace**: it answers with `mongo-filter` and `mongo-pipeline` blocks in mongosh syntax,
+  which "Apply to query bar", "Open in Aggregations", "Insert as stage(s)" and "Replace stage" put into the collection
+  after parsing them; replacing your own filter or stages shows a diff first, and nothing runs until you do. The query
+  bar's "Ask" turns a sentence into a filter, and each stage card's "Ask" explains the stage, suggests the next one or
+  fixes its error. The assistant can open a collection's Documents or Aggregations with its suggestion pre-filled, and
+  where the workspace lets it read data, read up to 20 documents of a collection or of a pipeline stage (values cut,
+  shown in the chat and audited). It sees the schema analysis (fields and types, not values), the indexes, the explain
+  summary and the validation rules.
+
+### The assistant learns your database and the app
+
+- **Learn this database**: the assistant studies a database once and keeps what it learned, so every chat knows it
   without looking it up again. Start it from the book button in the assistant panel, the "Learn this database" chip of
   a new chat, or a database or connection in the tree. Learning reads the structure (tables, views, collections,
   columns, keys, indexes, foreign keys and relations inferred from column names; Elasticsearch mappings and aliases).
   Only where the assistant may read data on the connection does it also sample MongoDB documents (nested field paths
   and references) and Redis key names (key patterns, never values), and, with the "Sample column values" box ticked, a
   few distinct values per column (enum lists and formats); elsewhere learning is metadata only, says so, and drops
-  value hints learned earlier. The dialog lists the steps with counts and can be cancelled. Nothing goes to the model while
-  learning; afterwards the dialog shows what a summary would send (objects, requests, estimated tokens, model and
-  provider, with a model picker) and lets you "Summarise" or "Skip (structure only)". The "What the assistant knows" tab
-  shows the summary, your notes (for the database or one object), and every object with its signature, a description
-  you can edit (marked "edited by you", never replaced by the model), columns with value hints and relations; Refresh,
-  "Refresh changed only" and Delete. When tables or columns change the panel says "Schema changed — refresh". Settings →
-  "Assistant may learn databases" (on by default) and Edit workspace → "Assistant may learn databases" turn it off.
-- The assistant knows Fosta Studio itself: for questions about the app it searches the app's own help (how-to entries
-  and the user docs, built into the app, no network) and quotes the UI labels in English, and it can offer a button for
-  one of the app's actions (the MCP server settings, the LLM providers, a new connection, copy diagnostics…). The button
-  shows the help entry's title, is marked as a Fosta Studio action, and runs only when you click it.
-
-### Changed
-
-- A first start no longer adds a "Local MariaDB" connection that may not exist. A workspace without connections shows a
-  "Connect your first database" card on the welcome screen and a New connection button in the sidebar. Existing settings
-  are not changed.
+  value hints learned earlier. The dialog lists the steps with counts and can be cancelled.
+- **Nothing goes to the model while learning**. Afterwards the dialog shows what a summary would send (objects,
+  requests, estimated tokens, model and provider, with a model picker) and lets you "Summarise" or "Skip (structure
+  only)".
+- **What the assistant knows**: a tab with the summary, your notes (for the database or one object), and every object
+  with its signature, a description you can edit (marked "edited by you", never replaced by the model), columns with
+  value hints and relations; Refresh, "Refresh changed only" and Delete. When tables or columns change the panel says
+  "Schema changed — refresh". Settings → "Assistant may learn databases" (on by default) and Edit workspace →
+  "Assistant may learn databases" turn it off.
+- **The assistant knows Fosta Studio itself**: for questions about the app it searches the app's own help (how-to
+  entries and the user docs, built into the app, no network) and quotes the UI labels in English, and it can offer a
+  button for one of the app's actions (the MCP server settings, the LLM providers, a new connection, copy
+  diagnostics…). The button shows the help entry's title, is marked as a Fosta Studio action, and runs only when you
+  click it.
 
 ### Security
 
@@ -143,6 +141,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Without the read setting, values are cut from the server errors in the assistant's context (duplicate keys, quoted
   literals).
 - Saved queries: ids at most 200 characters, one saved query at most 256 KB and a workspace's saved queries at most 8 MB.
+- Learned databases keep no secrets or identifiers: system and credential objects are left out, columns named like
+  credentials or personal data are never sampled, secret-looking text is redacted, and Redis key patterns and MongoDB
+  field paths replace values used as keys (emails, ids, IP addresses, phone numbers, tokens) with placeholders. A
+  learning run audits its reads as one summary entry per phase (reads by kind, failures, why it stopped) instead of one
+  entry per read. See [docs/security.md](docs/security.md).
+
+### Changed
+
+- A first start no longer adds a "Local MariaDB" connection that may not exist. A workspace without connections shows a
+  "Connect your first database" card on the welcome screen and a New connection button in the sidebar. Existing settings
+  are not changed.
+
+### Fixed
+
+- The text selection in the query editor is visible again: a translucent accent colour, dimmer when the editor is not
+  focused, no longer hidden under the active-line highlight.
 
 ## [0.2.1] - 2026-11-11
 
@@ -340,7 +354,8 @@ First public release for Windows, plus a web edition for Docker.
 - **Design view** with columns and DDL, and an interactive **ER diagram** per database.
 - Light, dark and system themes. Settings are stored in `fosta-studio.json` next to the executable.
 
-[Unreleased]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/caothanhphatit/fosta-dbclient/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/caothanhphatit/fosta-dbclient/releases/tag/v0.1.0
