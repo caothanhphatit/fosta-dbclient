@@ -2,7 +2,19 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { mockEmbeddingKey, resolveKeyRef, saveAiConnection, saveEmbeddingSettings, savedApiKeys } from "../../dev/mock/ai";
 import { state } from "../../dev/mock/state";
 import type { EmbeddingSettings } from "../../core/types";
-import { embeddingEndpoint, embeddingKeyKept, keyChoices, keyToSend, OWN_EMBEDDING_KEY, sameApi } from "./embeddingKeys";
+import {
+  embeddingEndpoint,
+  embeddingKeyKept,
+  ENDPOINT_CHANGED,
+  endpointHint,
+  isLocalUrl,
+  KEY_NEEDED,
+  keyChoices,
+  keyToSend,
+  missingKeyProblem,
+  OWN_EMBEDDING_KEY,
+  sameApi,
+} from "./embeddingKeys";
 
 const OPENAI: EmbeddingSettings = { url: "https://api.openai.com/v1/embeddings", model: "text-embedding-3-large", auth: "bearer", dimensions: null };
 
@@ -78,7 +90,11 @@ describe("dev mock keys", () => {
     saveEmbeddingSettings({ ...OPENAI, model: "text-embedding-3-small" }, null, null);
     expect(mockEmbeddingKey()).toBe("sk-emb");
     expect(state.config.embedding?.model).toBe("text-embedding-3-small");
-    saveEmbeddingSettings({ ...OPENAI, url: "https://other.example.com/v1/embeddings" }, null, null);
+    // Another endpoint without a key is refused, and nothing changes.
+    expect(() => saveEmbeddingSettings({ ...OPENAI, url: "https://other.example.com/v1/embeddings" }, null, null)).toThrow(ENDPOINT_CHANGED);
+    expect(mockEmbeddingKey()).toBe("sk-emb");
+    expect(state.config.embedding?.url).toBe(OPENAI.url);
+    saveEmbeddingSettings({ ...OPENAI, url: "https://other.example.com/v1/embeddings", auth: "none" }, null, null);
     expect(mockEmbeddingKey()).toBeNull();
   });
 
@@ -90,5 +106,38 @@ describe("dev mock keys", () => {
     expect(mockEmbeddingKey()).toBe("sk-work");
     expect(() => resolveKeyRef("ai:work", "https://evil.example.com/v1/embeddings")).toThrow(/another endpoint/);
     expect(() => saveEmbeddingSettings({ ...OPENAI, url: "https://evil.example.com/v1/embeddings" }, null, "ai:work")).toThrow(/another endpoint/);
+  });
+});
+
+describe("saving without a key", () => {
+  const GEMINI: EmbeddingSettings = { ...OPENAI, url: "https://generativelanguage.googleapis.com/v1beta/openai/", model: "gemini-embedding-001" };
+
+  it("is refused when the endpoint changed: the request would go out unauthenticated and answer 404", () => {
+    expect(missingKeyProblem(OPENAI, GEMINI, false, true)).toBe(ENDPOINT_CHANGED);
+    expect(missingKeyProblem(OPENAI, { ...OPENAI, auth: "api-key" }, false, true)).toBe(ENDPOINT_CHANGED);
+    expect(missingKeyProblem(null, GEMINI, false, false)).toBe(KEY_NEEDED);
+    expect(missingKeyProblem(OPENAI, OPENAI, false, false)).toBe(KEY_NEEDED);
+  });
+
+  it("is fine with a key, a kept key, no key asked for, or a server on this machine", () => {
+    expect(missingKeyProblem(OPENAI, GEMINI, true, false)).toBeNull();
+    expect(missingKeyProblem(OPENAI, { ...OPENAI, url: "https://api.openai.com/v1", model: "text-embedding-3-small" }, false, true)).toBeNull();
+    expect(missingKeyProblem(OPENAI, { ...GEMINI, auth: "none" }, false, false)).toBeNull();
+    expect(missingKeyProblem(OPENAI, { ...OPENAI, url: "http://localhost:11434/v1" }, false, false)).toBeNull();
+  });
+
+  it("treats only this machine as local", () => {
+    for (const url of ["http://localhost:11434/v1", "http://ollama.localhost/v1", "http://127.0.0.1:11434/v1", "http://[::1]:11434/v1"])
+      expect(isLocalUrl(url), url).toBe(true);
+    for (const url of ["https://api.openai.com/v1", "http://localhost.evil.com/v1", "http://192.168.1.10:11434/v1", "not a url"])
+      expect(isLocalUrl(url), url).toBe(false);
+  });
+});
+
+describe("endpointHint", () => {
+  it("shows where requests go", () => {
+    expect(endpointHint("https://api.openai.com/v1")).toBe("Requests go to https://api.openai.com/v1/embeddings");
+    expect(endpointHint("https://api.openai.com/v1/embeddings")).toBe("Requests go to https://api.openai.com/v1/embeddings");
+    expect(endpointHint("  ")).toBe("");
   });
 });

@@ -74,3 +74,40 @@ export function keyChoices(refs: SavedKeyRef[]): { choices: KeyChoice[]; selecte
 export function keyToSend(choice: string, typed: string): { apiKey: string | null; keyRef: string | null } {
   return choice ? { apiKey: null, keyRef: choice } : { apiKey: typed || null, keyRef: null };
 }
+
+/** What the URL field takes. */
+export const ENDPOINT_ACCEPTS = "A base URL such as https://api.openai.com/v1, or the full …/embeddings URL";
+
+/** Where requests go for the URL as typed, shown under the field; empty while nothing is typed. */
+export function endpointHint(url: string): string {
+  const typed = url.trim();
+  return typed ? `Requests go to ${embeddingEndpoint(typed)}` : "";
+}
+
+/** Whether `url` points at this machine (localhost, *.localhost, a loopback address), like `embedding::is_local`. */
+export function isLocalUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url.trim()).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  host = host.replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (host === "localhost" || host.endsWith(".localhost") || host === "::1") return true;
+  return /^127\.\d+\.\d+\.\d+$/.test(host);
+}
+
+export const ENDPOINT_CHANGED = "The endpoint changed, enter the API key again or pick a saved key";
+export const KEY_NEEDED = 'Enter the API key or pick a saved key, or choose "No key" for a server that needs none';
+
+/**
+ * Why `settings` cannot be saved without a key, like the backend's check: without one the request would go out with no
+ * authentication, and some providers then answer 404 instead of 401. Fine with a typed or picked key (`haveKey`), with
+ * "No key", for a server on this machine, or while the endpoint's own key is saved (`savedSecret`) and still belongs.
+ */
+export function missingKeyProblem(saved: EmbeddingSettings | null, settings: EmbeddingSettings, haveKey: boolean, savedSecret: boolean): string | null {
+  if (haveKey || settings.auth === "none" || isLocalUrl(settings.url)) return null;
+  if (saved && !embeddingKeyKept(saved, settings)) return ENDPOINT_CHANGED;
+  if (saved && savedSecret) return null;
+  return KEY_NEEDED;
+}

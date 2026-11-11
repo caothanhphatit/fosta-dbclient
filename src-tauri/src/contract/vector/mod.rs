@@ -420,7 +420,10 @@ pub async fn search<S: VectorStore + ?Sized>(store: &mut S, request: &SearchArgs
         SearchQuery::Literal { text } => parse_vector(text)?,
         SearchQuery::Vector { values } => values.clone(),
     };
-    ensure_dims(query.len(), column.dims)?;
+    match request.query {
+        SearchQuery::Vector { .. } => ensure_embedding_dims(query.len(), &column)?,
+        _ => ensure_dims(query.len(), column.dims)?,
+    }
     // A stored row or an embedding can hold NaN or an overflow; no engine ranks those meaningfully.
     ensure_finite(&query)?;
     let index = store.indexes(&table).await?.into_iter().find(|index| index.column == column.name);
@@ -469,6 +472,28 @@ pub fn summarize(values: &[f32]) -> String {
         .join(", ");
     let more = if values.len() > PREVIEW_VALUES { ", …" } else { "" };
     format!("[{}] ‖{:.3}‖ {preview}{more}", values.len(), norm(values))
+}
+
+/// An embedded text of the wrong size: the embedding model is not the one that filled the column. Checked here, before
+/// the engine runs the search, so the message names both sizes instead of the engine's own error.
+pub fn ensure_embedding_dims(actual: usize, column: &VectorColumn) -> AppResult<()> {
+    if actual == column.dims as usize {
+        return Ok(());
+    }
+    let dims = column.dims.to_string();
+    let named = column
+        .type_name
+        .split(|character: char| !character.is_ascii_digit())
+        .any(|part| part == dims);
+    let column_type = if named {
+        column.type_name.clone()
+    } else {
+        format!("{} of {dims} dimensions", column.type_name)
+    };
+    Err(AppError::new(format!(
+        "The model returned {actual} dimensions, the column is {column_type}. Use the model that produced the stored \
+         vectors, or set Dimensions to {dims} in the embedding settings if the model can shorten its output"
+    )))
 }
 
 pub fn ensure_dims(actual: usize, expected: u32) -> AppResult<()> {
@@ -547,6 +572,20 @@ mod tests {
         assert!(summarize(&[1.0; 6]).ends_with(", …"));
         assert!(ensure_dims(3, 4).is_err());
         assert!(ensure_dims(4, 4).is_ok());
+        let column = |type_name: &str| VectorColumn {
+            name: "embedding".into(),
+            dims: 1024,
+            type_name: type_name.into(),
+            metrics: Vec::new(),
+        };
+        let error = ensure_embedding_dims(768, &column("VECTOR(1024)")).unwrap_err().to_string();
+        assert!(
+            error.starts_with("The model returned 768 dimensions, the column is VECTOR(1024)."),
+            "{error}"
+        );
+        let error = ensure_embedding_dims(768, &column("Array(Float32)")).unwrap_err().to_string();
+        assert!(error.contains("the column is Array(Float32) of 1024 dimensions"), "{error}");
+        assert!(ensure_embedding_dims(1024, &column("VECTOR(1024)")).is_ok());
         assert_eq!(where_clause(Some(" stock > 0 ")), " WHERE stock > 0");
         assert_eq!(where_clause(Some("  ")), "");
     }

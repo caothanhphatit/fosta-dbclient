@@ -67,6 +67,33 @@ pub fn endpoint(url: &str) -> String {
     sent
 }
 
+/// Whether `url` points at this machine (`localhost`, a `*.localhost` name, a loopback address such as `127.0.0.1` or
+/// `::1`): a local server such as Ollama that may need no key, so the settings may be saved without one.
+pub fn is_local(url: &str) -> bool {
+    let Some(host) = reqwest::Url::parse(url.trim())
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
+    else {
+        return false;
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => ip.is_loopback(),
+        Err(_) => {
+            let name = host.trim_end_matches('.');
+            name == "localhost" || name.ends_with(".localhost")
+        }
+    }
+}
+
+/// The error for a failed request. Without a key some providers answer 404 or 400 instead of 401, so the message says
+/// when none was sent.
+fn status_error(status: reqwest::StatusCode, key_sent: bool, body: &str) -> AppError {
+    let preview: String = body.chars().take(ERROR_PREVIEW).collect();
+    let no_key = if key_sent { "" } else { " (no API key was sent)" };
+    AppError::new(format!("Embedding API returned {status}{no_key}: {preview}"))
+}
+
 pub async fn embed(settings: &EmbeddingSettings, api_key: Option<String>, text: &str) -> AppResult<Vec<f32>> {
     let mut body = serde_json::json!({ "model": settings.model, "input": text });
     if let Some(dimensions) = settings.dimensions {
@@ -74,17 +101,16 @@ pub async fn embed(settings: &EmbeddingSettings, api_key: Option<String>, text: 
     }
     let client = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build()?;
     let request = client.post(endpoint(&settings.url)).json(&body);
-    let request = match (settings.auth, api_key) {
-        (EmbeddingAuth::Bearer, Some(key)) => request.bearer_auth(key),
-        (EmbeddingAuth::ApiKey, Some(key)) => request.header("api-key", key),
-        _ => request,
+    let (request, key_sent) = match (settings.auth, api_key.filter(|key| !key.is_empty())) {
+        (EmbeddingAuth::Bearer, Some(key)) => (request.bearer_auth(key), true),
+        (EmbeddingAuth::ApiKey, Some(key)) => (request.header("api-key", key), true),
+        _ => (request, false),
     };
     let response = request.send().await?;
     let status = response.status();
     let payload = response.text().await?;
     if !status.is_success() {
-        let preview: String = payload.chars().take(ERROR_PREVIEW).collect();
-        return Err(AppError::new(format!("Embedding API returned {status}: {preview}")));
+        return Err(status_error(status, key_sent, &payload));
     }
     let parsed: EmbeddingResponse = serde_json::from_str(&payload).map_err(|error| {
         AppError::new(format!(
@@ -101,7 +127,39 @@ pub async fn embed(settings: &EmbeddingSettings, api_key: Option<String>, text: 
 
 #[cfg(test)]
 mod tests {
-    use super::endpoint;
+    use super::{endpoint, is_local, status_error};
+
+    #[test]
+    fn only_this_machine_is_local() {
+        for local in [
+            "http://localhost:11434/v1",
+            "http://LOCALHOST/v1",
+            "http://ollama.localhost:8080/v1",
+            "http://127.0.0.1:11434/v1",
+            "http://127.1.2.3/v1",
+            "http://[::1]:11434/v1",
+        ] {
+            assert!(is_local(local), "{local}");
+        }
+        for remote in [
+            "https://api.openai.com/v1",
+            "http://localhost.evil.com/v1",
+            "http://192.168.1.10:11434/v1",
+            "http://0.0.0.0/v1",
+            "not a url",
+        ] {
+            assert!(!is_local(remote), "{remote}");
+        }
+    }
+
+    #[test]
+    fn a_failure_without_a_key_says_so() {
+        let error = status_error(reqwest::StatusCode::NOT_FOUND, false, "Not found").to_string();
+        assert!(error.contains("404 Not Found (no API key was sent)"), "{error}");
+        let error = status_error(reqwest::StatusCode::UNAUTHORIZED, true, "bad key").to_string();
+        assert!(!error.contains("no API key"), "{error}");
+        assert!(error.contains("401"), "{error}");
+    }
 
     #[test]
     fn a_base_url_gets_the_embeddings_route() {

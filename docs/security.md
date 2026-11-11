@@ -47,6 +47,11 @@ pick one already saved for the same API (same scheme, host and port, one path in
 `https://api.openai.com/v1` and `…/v1/embeddings`): the dialog only gets a reference and a label, and the app copies the
 secret itself. Keys saved for another host are not offered, and a reference to one is refused.
 
+Saving embedding settings for a new endpoint without a key is refused ("The endpoint changed, enter the API key again or
+pick a saved key"), so requests never go out unauthenticated by accident; choose "No key" for a server that needs none, or
+use a local URL (`localhost`, `*.localhost`, a loopback address). A failed request that sent no key says so next to the HTTP
+status.
+
 ## Safety rules
 
 Every statement the app runs (query tabs, grid edits, filters, imports, consoles, the assistant) is classified as read, write, DDL,

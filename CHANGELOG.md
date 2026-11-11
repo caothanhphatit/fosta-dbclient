@@ -12,11 +12,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A "Community (Discord)" link in the settings menu and on the welcome screen, and the Discord invite in the README.
 - The embedding and AI provider dialogs can use a key already saved for the same API ("Use the key saved for …") instead of
   having it typed again; only keys saved for the same host and path are offered.
+- Provider presets in the embedding dialog: OpenAI, Gemini (OpenAI-compatible), Azure OpenAI (a URL template to complete,
+  key sent as `api-key`) and Ollama (local, no key). A preset fills the URL, the authentication and a default model; a
+  model you typed is kept. The URL field says it takes a base URL or the full `…/embeddings` URL and shows where requests go.
 
 ### Fixed
 
 - Editing the embedding settings keeps the saved key when only the model or dimensions change, and the dialog shows it is
   kept. An endpoint given as a base URL (`…/v1`) gets `/embeddings` added; it was posted as it was and failed with HTTP 404.
+- Changing the embedding endpoint dropped the saved key silently, and requests then went out without one (Gemini answered
+  404, not 401). Saving now asks for the key again or a saved one ("No key" and local URLs need none), and a failed request
+  that sent no key says "no API key was sent" next to the HTTP status.
+- A text search whose embedding has the wrong size now says so ("The model returned 768 dimensions, the column is
+  VECTOR(1024)") before the search runs, instead of a generic dimension error.
 
 ## [0.2.0] - 2026-11-09
 

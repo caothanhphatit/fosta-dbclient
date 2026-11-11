@@ -6,7 +6,7 @@ import type { Channel } from "@tauri-apps/api/core";
 import { errorText } from "../../core/errors";
 import type { AiConnection, AiSettings, AppConfig, ChatEvent, ChatRequest, EmbeddingSettings, KeyTarget, SavedKeyRef } from "../../core/types";
 import { baseUrlOf, connectionSettings, endpointProblem, providerPreset } from "../../features/assistant/aiProviders";
-import { embeddingEndpoint, embeddingKeyKept, sameApi } from "../../features/vector/embeddingKeys";
+import { embeddingEndpoint, embeddingKeyKept, missingKeyProblem, sameApi } from "../../features/vector/embeddingKeys";
 import { mockError } from "./errors";
 import { state } from "./state";
 
@@ -71,13 +71,21 @@ export function resolveKeyRef(keyRef: string, endpoint: string): string {
   return owner.secret;
 }
 
-/** Like the backend: an empty key keeps the saved one unless the endpoint or the way it is sent changed. */
+/**
+ * Like the backend: an empty key keeps the saved one unless the endpoint or the way it is sent changed, and saving
+ * without any key is refused unless none is needed.
+ */
 export function saveEmbeddingSettings(settings: EmbeddingSettings | null, apiKey: string | null, keyRef: string | null): AppConfig {
   const saved = state.config.embedding;
-  if (!settings) embeddingKey = null;
-  else if (apiKey) embeddingKey = apiKey;
-  else if (keyRef) embeddingKey = resolveKeyRef(keyRef, embeddingEndpoint(settings.url));
-  else if (saved && !embeddingKeyKept(saved, settings)) embeddingKey = null;
+  if (!settings) {
+    embeddingKey = null;
+  } else {
+    const key = apiKey || (keyRef ? resolveKeyRef(keyRef, embeddingEndpoint(settings.url)) : null);
+    const problem = missingKeyProblem(saved, settings, Boolean(key), embeddingKey !== null);
+    if (problem) throw mockError("ERROR", problem);
+    if (key) embeddingKey = key;
+    else if (saved && !embeddingKeyKept(saved, settings)) embeddingKey = null;
+  }
   state.config = { ...state.config, embedding: settings };
   return state.config;
 }

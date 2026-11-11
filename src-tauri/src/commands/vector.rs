@@ -10,10 +10,11 @@ pub use crate::contract::vector::KeyCell;
 use crate::{
     config::AppConfig,
     contract::Capability,
-    embedding::{self, EmbeddingSettings},
+    embedding::{self, EmbeddingAuth, EmbeddingSettings},
     error::{AppError, AppResult},
     gateway::{self, Caller},
-    secrets, AppState,
+    secrets::{self, SecretKey},
+    AppState,
 };
 
 const EMBEDDING_PROBE: &str = "Fosta Studio embedding test";
@@ -136,6 +137,12 @@ pub fn save_embedding_settings(
 ) -> AppResult<AppConfig> {
     let config = state.config.snapshot();
     let api_key = typed_or_picked(&config, settings.as_ref(), api_key, key_ref)?;
+    if let Some(next) = settings.as_ref() {
+        let saved_secret = api_key.is_none() && secrets::contains(&SecretKey::Embedding)?;
+        if let Some(problem) = missing_key(config.embedding.as_ref(), next, api_key.is_some(), saved_secret) {
+            return Err(AppError::new(problem));
+        }
+    }
     remember_embedding_key(config.embedding.as_ref(), settings.as_ref(), api_key)?;
     state.config.update(|config| {
         config.embedding = settings;
@@ -161,6 +168,29 @@ fn typed_or_picked(
 /// way of sending the key.
 fn same_target(saved: &EmbeddingSettings, settings: &EmbeddingSettings) -> bool {
     embedding::endpoint(&saved.url) == embedding::endpoint(&settings.url) && saved.auth == settings.auth
+}
+
+pub const ENDPOINT_CHANGED: &str = "The endpoint changed, enter the API key again or pick a saved key";
+pub const KEY_NEEDED: &str = "Enter the API key or pick a saved key, or choose \"No key\" for a server that needs none";
+
+/// Why `settings` cannot be saved without a key, if so. Saved without one, requests would go out with no
+/// authentication and some providers answer 404 instead of 401. A key is not needed when one is given (`have_key`),
+/// when the settings send none, for a server on this machine, or while the saved key still belongs to the endpoint
+/// (`saved_secret`: one is saved).
+fn missing_key(
+    saved: Option<&EmbeddingSettings>,
+    settings: &EmbeddingSettings,
+    have_key: bool,
+    saved_secret: bool,
+) -> Option<&'static str> {
+    if have_key || settings.auth == EmbeddingAuth::None || embedding::is_local(&settings.url) {
+        return None;
+    }
+    match saved {
+        Some(saved) if !same_target(saved, settings) => Some(ENDPOINT_CHANGED),
+        Some(_) if saved_secret => None,
+        _ => Some(KEY_NEEDED),
+    }
 }
 
 fn remember_embedding_key(
@@ -195,7 +225,6 @@ async fn embed_text(state: &AppState, text: &str) -> AppResult<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::embedding::EmbeddingAuth;
 
     const KEY: &str = "app:embedding";
 
@@ -270,5 +299,33 @@ mod tests {
         // A typed key wins over a picked one.
         let typed = typed_or_picked(&config, Some(&elsewhere), Some("typed".into()), Some("ai:work".into())).unwrap();
         assert_eq!(typed.as_deref(), Some("typed"));
+    }
+
+    #[test]
+    fn saving_without_a_key_is_refused_unless_none_is_needed() {
+        let saved = settings("https://api.openai.com/v1/embeddings", EmbeddingAuth::Bearer);
+        // The endpoint changed and no key was typed or picked: the request would go out without one.
+        let moved = settings("https://generativelanguage.googleapis.com/v1beta/openai/", EmbeddingAuth::Bearer);
+        assert_eq!(missing_key(Some(&saved), &moved, false, true), Some(ENDPOINT_CHANGED));
+        let resent = settings("https://api.openai.com/v1/embeddings", EmbeddingAuth::ApiKey);
+        assert_eq!(missing_key(Some(&saved), &resent, false, true), Some(ENDPOINT_CHANGED));
+        // A typed or picked key, a model-only change with the key saved, no key asked for, a local server: fine.
+        assert_eq!(missing_key(Some(&saved), &moved, true, false), None);
+        let base = settings("https://api.openai.com/v1", EmbeddingAuth::Bearer);
+        assert_eq!(missing_key(Some(&saved), &base, false, true), None);
+        assert_eq!(
+            missing_key(
+                Some(&saved),
+                &settings("https://x.example.com/e", EmbeddingAuth::None),
+                false,
+                false
+            ),
+            None
+        );
+        let ollama = settings("http://localhost:11434/v1", EmbeddingAuth::Bearer);
+        assert_eq!(missing_key(Some(&saved), &ollama, false, false), None);
+        // Nothing saved yet, or the endpoint's key is gone.
+        assert_eq!(missing_key(None, &saved, false, false), Some(KEY_NEEDED));
+        assert_eq!(missing_key(Some(&saved), &base, false, false), Some(KEY_NEEDED));
     }
 }
