@@ -43,7 +43,7 @@ export interface QueryBarOptions {
   reset(): void;
   /** A field or the options row changed (the section saves its state). */
   changed(): void;
-  /** The items of the bar's "More" menu (bulk actions on the matching documents); none: no menu. */
+  /** The items of the bar's "More" menu (open as aggregation, bulk actions on the matching documents); none: no menu. */
   actions?(): MenuItem[];
   /** Save and the Saved dropdown; none: no buttons. */
   saved?: SavedQueries;
@@ -150,7 +150,7 @@ export class QueryBar {
     if (!actions) return null;
     const button = h(
       "button",
-      { class: "tool-button mq-more", type: "button", title: "Update or delete the documents the filter matches", "aria-label": "More actions" },
+      { class: "tool-button mq-more", type: "button", title: "Open as aggregation; update or delete the matching documents", "aria-label": "More actions" },
       icon("more"),
     );
     button.addEventListener("click", () => showMenuBelow(button, actions()));

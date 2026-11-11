@@ -39,6 +39,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   with search, rename and delete, and applying one of another collection opens it in that collection's tab. Query-bar
   runs in the query history panel have "Open in collection", which opens the collection workspace with the bar filled
   in.
+  An Aggregations section builds pipelines as stage cards: pick the operator from the common stages (each with a short
+  description and a template), edit the stage in mongosh syntax with completion of the fields that reach that stage
+  (sampled from the previous stage's output), accumulators in `$group`, expression operators and collection names for
+  `$lookup` / `$unionWith` / `$out` / `$merge`; turn stages on and off, reorder them by dragging (or ArrowUp / ArrowDown
+  on the handle), fold, duplicate and delete them. Each card previews its output on a bounded sample of the collection
+  (size and first / random documents in the header): the count, the time and the first documents, a `$lookup`'s joined
+  array opened, the error on the stage that failed, and why later stages did not run. The preview runs after each edit
+  and with Preview; `$out` / `$merge` are never previewed. Run executes the pipeline through the safety gateway (`$out`
+  / `$merge` confirmed there) and shows the result as a List, JSON or Table; runs go to the query history. Code exports
+  the pipeline as mongosh, Node.js or Python. Documents › More › "Open as aggregation" turns the query bar into
+  `$match` / `$sort` / `$skip` / `$limit` / `$project` stages, and pipelines save and load with the saved queries. The
+  stages are kept with the open tabs.
 
 ### Changed
 
@@ -71,20 +83,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Workspace Commands**: startup tasks become the workspace's *Commands* (panel, and a toolbar menu to start, stop, restart or
+- **Workspace Commands**: startup tasks become the workspace's _Commands_ (panel, and a toolbar menu to start, stop, restart or
   open the log of each). A command starts with the workspace or when a connection needs it, and a connection can be bound to one
-  (Edit connection → Command, or *New command…* with a `kubectl port-forward` template): connect starts it if needed and waits
+  (Edit connection → Command, or _New command…_ with a `kubectl port-forward` template): connect starts it if needed and waits
   until it is ready. Connections share a command; one started for them stops with the last of them. Failures show
   `COMMAND_FAILED` with the log tail; the log opens from the connection's menu.
 - **MCP server**: Claude Code, Claude Desktop, Cursor, VS Code and Zed can use saved connections without seeing passwords
   (Settings → MCP server, off by default). Streamable HTTP on `127.0.0.1` with a bearer token kept in Credential Manager, a stdio
   bridge (`fosta-studio mcp`, `fosta-studio-server mcp`), and `/mcp` on the web edition behind its access token. Each workspace
-  opts in (*MCP clients: Off / Read-only / Ask before writes*; Production and Read-only workspaces at most Read-only). Tools:
+  opts in (_MCP clients: Off / Read-only / Ask before writes_; Production and Read-only workspaces at most Read-only). Tools:
   `list_connections`, `list_databases`, `list_tables`, `describe_table`, `schema_overview`, `run_read_query` and `run_query`, which
   the user approves statement by statement in a dialog naming the client. Every call is audited; see [docs/mcp.md](docs/mcp.md).
-- **Updates**: a daily check for a new release (Settings → Check for updates, on by default; *Check for updates now* any time) and
-  an *Update X.Y.Z* item in the status bar. The installed Windows app downloads the update in the background and installs it on
-  quit or with *Restart to update*, asking first about open transactions and unsaved edits, then shows what's new once. The
+- **Updates**: a daily check for a new release (Settings → Check for updates, on by default; _Check for updates now_ any time) and
+  an _Update X.Y.Z_ item in the status bar. The installed Windows app downloads the update in the background and installs it on
+  quit or with _Restart to update_, asking first about open transactions and unsaved edits, then shows what's new once. The
   portable app links to the release; the web edition shows the Docker commands, and `deploy/docker-compose.yml` has an optional
   Watchtower service (`--profile autoupdate`).
 - **Vector tools** (columns, indexes, similarity search, health checks and index recall) on more engines, in addition to MariaDB
@@ -101,10 +113,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   that cannot be read is never overwritten; one that does not parse is moved to `fosta-studio-tabs.json.corrupt`. Two windows of the
   web edition merge their tabs instead of overwriting each other's (a tab closed in one window but open in the other comes back).
 - **Unsaved query text**: closing a query tab whose text was edited and not run asks first, and quitting lists those tabs (once:
-  restored text left unchanged is not listed again). *Close all*, and deleting a workspace or a connection, ask one question for
+  restored text left unchanged is not listed again). _Close all_, and deleting a workspace or a connection, ask one question for
   all tabs that would lose something; declining keeps the workspace or connection.
 - **Query results**: click a column header (or use its menu) to sort the loaded rows (numbers and decimals exactly, timestamps by
-  instant); *Refresh names* reloads the completion names.
+  instant); _Refresh names_ reloads the completion names.
 - **New logo** (an F made of data rows) in the app icon, welcome screen, web favicon, website and README, and **engine logos** for
   PostgreSQL, SQLite, ClickHouse, Oracle, Redis, Elasticsearch and OpenSearch.
 - **Hide the sidebar** with `Ctrl+B` or its button, and **hide the workspace rail** with its small arrow (`Ctrl+Shift+B`).
@@ -132,7 +144,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   than the window; the arrow keys move through them.
 - **Scripts with many statements**: the result tabs update incrementally, and above 50 result sets one list of them replaces the
   tabs (click one to open it), so a 15,000-statement script no longer freezes the window.
-- **Stop** in a query tab shows *Stopped* with the rows received so far instead of an error.
+- **Stop** in a query tab shows _Stopped_ with the rows received so far instead of an error.
 - **Tab titles** name the connection, and the database, when two tabs share a title.
 - **Lost sessions**: after the backend or the server restarted, a query tab reconnects and reopens its session on the next run, and
   the tree no longer shows a connection the backend lost as connected. The run goes again on its own only when every statement

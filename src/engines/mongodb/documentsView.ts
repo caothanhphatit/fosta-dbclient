@@ -49,7 +49,8 @@ import {
   type QueryState,
 } from "./queryModel";
 import { refFields, RefResolver } from "./refs";
-import { readQueryRequest, stateOfSaved, type DocumentsRequest } from "./savedQueries";
+import { stagesFromQuery } from "./pipelineModel";
+import { pipelineOfSaved, readQueryRequest, stateOfSaved, type AggregationsRequest, type DocumentsRequest } from "./savedQueries";
 import { SavedQueries } from "./savedQueriesMenu";
 import "./mongodb.css";
 
@@ -173,13 +174,14 @@ class DocumentsSection implements SectionContent {
         void this.run();
       },
       changed: () => this.ctx.stateChanged(),
-      actions: this.isView ? undefined : () => this.bulkActions(),
+      actions: () => this.moreActions(),
       saved: new SavedQueries({
         connectionId: ctx.view.connection.connectionId,
         database: this.database,
         collection: this.collection,
         state: () => this.bar.state(),
         apply: (state) => this.applyQuery(state),
+        applyPipeline: (pipeline) => void ctx.deliver("aggregations", { pipeline } satisfies AggregationsRequest),
         openElsewhere: (saved) => this.openSaved(saved),
       }),
     });
@@ -267,6 +269,31 @@ class DocumentsSection implements SectionContent {
     await this.load(cursor);
   }
 
+  /** The query bar's More menu: the query as a pipeline, then (on a collection) the bulk actions on the matching documents. */
+  private moreActions(): MenuItem[] {
+    const open: MenuItem = {
+      label: "Open as aggregation",
+      icon: "layers",
+      detail: "Filter, sort, skip, limit and project as stages",
+      run: () => this.openAsAggregation(),
+    };
+    return this.isView ? [open] : [open, "separator", ...this.bulkActions()];
+  }
+
+  /** Turns the bar's query (as typed now) into stages and opens them in the Aggregations section. */
+  private openAsAggregation(): void {
+    const state = this.bar.state();
+    const built = buildQuery(state, { database: this.database, collection: this.collection });
+    if (!built.ok) {
+      this.bar.showError(built.error);
+      this.bar.focusError(built.error);
+      return;
+    }
+    if (state.collation.trim()) toast("The collation is not a stage: the pipeline runs without it.");
+    const pipeline = stagesFromQuery(state);
+    void this.ctx.deliver("aggregations", { pipeline: pipeline.length > 0 ? pipeline : ["{ $match: {} }"] } satisfies AggregationsRequest);
+  }
+
   private bulkActions(): MenuItem[] {
     const blocked = this.writesBlocked ? "The workspace is Read-only" : undefined;
     return [
@@ -321,6 +348,12 @@ class DocumentsSection implements SectionContent {
   private openSaved(saved: SavedQuery): void {
     const kind = this.collectionsOfDatabase().find((table) => table.name === saved.collection)?.kind === "view" ? "view" : "collection";
     const object: ObjectRef = { database: this.database, schema: null, name: saved.collection, kind };
+    const pipeline = pipelineOfSaved(saved);
+    if (pipeline) {
+      const request: AggregationsRequest = { pipeline };
+      this.ctx.view.navigator.openWorkspace(this.ctx.view.connection.connectionId, object, "aggregations", request);
+      return;
+    }
     const request: DocumentsRequest = { query: stateOfSaved(saved) };
     this.ctx.view.navigator.openWorkspace(this.ctx.view.connection.connectionId, object, "documents", request);
   }
