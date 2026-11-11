@@ -31,7 +31,8 @@ const PROFILE_RULE: &str = "\
 
 /// Questions about the app itself, answered from its embedded help.
 const APP_HELP_RULE: &str = "\
-- For questions about Fosta Studio itself (\"how do I…\", where a setting is, what a feature does), call search_app_help and answer from what it returns; do not guess steps. Quote UI labels (buttons, menus, settings, tabs) in English exactly as the help writes them, even when you answer in another language.\n";
+- For questions about Fosta Studio itself (\"how do I…\", where a setting is, what a feature does), call search_app_help and answer from what it returns; do not guess steps. Quote UI labels (buttons, menus, settings, tabs) in English exactly as the help writes them, even when you answer in another language.\n\
+- When a help section names a \"UI action:\" and opening it saves the user looking for it, call suggest_app_action with that id (at most one per answer, never ids the help did not return). It only shows a button; the user must click it, nothing runs on its own. Still write the steps.\n";
 
 const RULES: &str = "\
 - You can drive the app: open_diagram to show structure or relationships, open_table to show rows (with a filter), open_query to put a longer script in its own tab. These only open views; nothing runs. Mention what you opened in one short line.\n\
@@ -498,6 +499,10 @@ mod tests {
                 "{rules}"
             );
             assert!(rules.contains("call search_app_help") && rules.contains("in English"), "{rules}");
+            assert!(
+                rules.contains("call suggest_app_action") && rules.contains("the user must click it"),
+                "{rules}"
+            );
         }
     }
 

@@ -93,7 +93,6 @@ impl From<HelpEntry> for HelpSection {
 
 /// The merged sections, their index and the summary, built once.
 pub(crate) struct HelpPack {
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) entries: Vec<HelpEntry>,
     pub(crate) sections: Vec<HelpSection>,
     index: Bm25,
@@ -139,6 +138,27 @@ pub(crate) fn search(query: &str, limit: usize) -> Vec<&'static HelpSection> {
         .take(limit)
         .map(|index| &pack.sections[index])
         .collect()
+}
+
+/// The UI action ids the pack names (`verb:target`, e.g. `open_settings:mcp`), each with the title of the first entry
+/// that names it, sorted by id. This is the allowlist of `suggest_app_action`; the frontend registry
+/// (`src/app/appActions.ts`) maps exactly these ids, which the tests on both sides check against `docs/app-help.yaml`.
+pub(crate) fn actions() -> Vec<(&'static str, &'static str)> {
+    let mut actions: Vec<(&str, &str)> = Vec::new();
+    for entry in &pack().entries {
+        if let Some(action) = entry.action.as_deref() {
+            if !actions.iter().any(|(id, _)| *id == action) {
+                actions.push((action, &entry.title));
+            }
+        }
+    }
+    actions.sort_unstable();
+    actions
+}
+
+/// The title of the first entry naming the UI action `id`, or `None` when the pack names no such action.
+pub(crate) fn action_title(id: &str) -> Option<&'static str> {
+    actions().into_iter().find(|(action, _)| *action == id).map(|(_, title)| title)
 }
 
 /// The `search_app_help` tool: the top three sections for `query`, at most [`MAX_RESULT_CHARS`] characters.
@@ -761,6 +781,35 @@ mod tests {
         }
         assert!(search_app_help("  ").contains("Pass `query`"));
         assert!(search_app_help("zzzz").starts_with("No help section matches"));
+    }
+
+    /// The ids of `APP_ACTION_IDS` in the frontend registry (`src/app/appActions.ts`).
+    fn registry_ids() -> Vec<String> {
+        let source = include_str!("../../../src/app/appActions.ts");
+        let start = source.find("APP_ACTION_IDS = [").expect("appActions.ts declares APP_ACTION_IDS");
+        let list = &source[start..];
+        let list = &list[..list.find(']').expect("APP_ACTION_IDS is closed")];
+        list.split('"').skip(1).step_by(2).map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn the_pack_actions_match_the_frontend_registry() {
+        let actions = actions();
+        assert!(actions.len() >= 10, "{actions:?}");
+        for (id, title) in &actions {
+            let (verb, target) = id.split_once(':').unwrap_or_default();
+            assert!(
+                matches!(verb, "open_dialog" | "open_view" | "open_settings" | "run"),
+                "{id}: unknown verb"
+            );
+            assert!(target.chars().all(|c| c.is_ascii_lowercase() || c == '_'), "{id}");
+            assert_eq!(action_title(id), Some(*title));
+        }
+        assert_eq!(action_title("run:drop_database"), None);
+        let mut registry = registry_ids();
+        registry.sort_unstable();
+        let pack: Vec<String> = actions.iter().map(|(id, _)| (*id).to_owned()).collect();
+        assert_eq!(registry, pack, "src/app/appActions.ts and docs/app-help.yaml name the same actions");
     }
 
     #[test]

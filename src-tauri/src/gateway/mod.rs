@@ -827,6 +827,9 @@ pub fn assistant_tool_effect(name: &str) -> AppResult<AssistantToolEffect> {
         "search_profile" | "get_object_profile" => Ok(AssistantToolEffect::ReadMetadata),
         "run_read_query" | "sample_documents" => Ok(AssistantToolEffect::ReadRows),
         "open_diagram" | "open_table" | "open_query" | "open_collection_workspace" => Ok(AssistantToolEffect::OpenView),
+        // A button in the chat for one of the app's own actions (ids from the help pack only); it never runs by itself,
+        // the user clicks it.
+        "suggest_app_action" => Ok(AssistantToolEffect::OpenView),
         other => Err(AppError::new(format!("The assistant has no tool called {other}"))),
     }
 }
@@ -1069,9 +1072,11 @@ mod tests {
             "open_table",
             "open_query",
             "open_collection_workspace",
+            "suggest_app_action",
         ] {
             assert!(assistant_tool_effect(name).is_ok(), "{name}");
         }
+        assert_eq!(assistant_tool_effect("suggest_app_action").unwrap(), AssistantToolEffect::OpenView);
         assert_eq!(
             assistant_tool_effect("open_collection_workspace").unwrap(),
             AssistantToolEffect::OpenView

@@ -321,6 +321,10 @@ pub enum UiAction {
         suggested_project: Option<String>,
         suggested_pipeline: Option<Vec<String>>,
     },
+    /// A button in the chat that runs one of the app's own actions (an id the help pack names, such as
+    /// `open_settings:mcp`) when the user clicks it. Nothing runs on its own.
+    #[serde(rename_all = "camelCase")]
+    SuggestAppAction { id: String, label: String },
 }
 
 /// In-flight requests, so the UI can stop one.
