@@ -205,6 +205,11 @@ function performAssistantAction(action: UiAction): void {
       navigation.openQuery(profile.id, action.database ?? context.database ?? null, action.sql);
       break;
     case "openCollectionWorkspace": {
+      // Pinned to the chat's database (the backend refuses others too).
+      if (action.database !== context.database) {
+        toast(`The assistant asked to open ${action.database}.${action.collection}, outside the chat's database; it was not opened`, "error");
+        break;
+      }
       // Kind as the active tab knows it (a view opens in the same workspace); a collection otherwise.
       const same = context.object && context.object.database === action.database && context.object.name === action.collection;
       const object: ObjectRef = { database: action.database, schema: null, name: action.collection, kind: same ? context.object!.kind : "collection" };
@@ -214,8 +219,8 @@ function performAssistantAction(action: UiAction): void {
         project: action.suggestedProject,
         pipeline: action.suggestedPipeline,
       };
-      const suggested = Object.values(suggestion).some((value) => value !== null && value !== undefined);
-      navigation.openWorkspace(profile.id, object, action.section, suggested ? ({ assistant: suggestion } satisfies AssistantSuggestion) : null);
+      // Always marked as the assistant's, even without a suggestion: the section opens without running anything.
+      navigation.openWorkspace(profile.id, object, action.section, { assistant: suggestion } satisfies AssistantSuggestion);
       break;
     }
   }

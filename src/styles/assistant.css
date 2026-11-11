@@ -416,6 +416,24 @@
   display: none;
 }
 
+/* A pipeline block that writes ($out, $merge) or names another database: its buttons ask before applying it. */
+.chat-code-warning {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 6px 11px;
+  border-top: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.chat-code-warning svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--warning);
+}
+
 /* Engines add buttons of their own: the bar wraps instead of squeezing the labels. */
 .chat-code-bar {
   flex-wrap: wrap;

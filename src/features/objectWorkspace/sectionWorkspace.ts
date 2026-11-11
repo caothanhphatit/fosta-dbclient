@@ -47,6 +47,12 @@ export interface SectionContext {
   show(sectionId: string): Promise<void>;
   /** Shows another section of the same tab and hands it `request` (its `receive`), e.g. a query to open as a pipeline. */
   deliver(sectionId: string, request: unknown): Promise<void>;
+  /**
+   * The request this section is being loaded for (`deliver`, or the tab opened with `params.request`), undefined
+   * otherwise. `receive` gets it right after; a section reads it here to decide what to do first, e.g. Documents does
+   * not run its first page for an assistant's suggestion.
+   */
+  request?: unknown;
 }
 
 export type SectionFactory = (ctx: SectionContext) => SectionContent;
@@ -114,6 +120,8 @@ class SectionWorkspace implements WorkspaceTab {
   /** Saved state of sections not loaded yet (kept so saving again does not lose it). */
   private readonly restored: Record<string, unknown>;
   private active: string;
+  /** A request waiting for its section to load (`SectionContext.request`). */
+  private incoming: { section: string; request: unknown } | null = null;
   private disposed = false;
 
   constructor(
@@ -128,6 +136,7 @@ class SectionWorkspace implements WorkspaceTab {
     this.restored = { ...(saved?.state ?? {}) };
     const wanted = typeof ctx.params?.section === "string" ? ctx.params.section : saved?.section;
     this.active = this.sections.find((section) => section.id === wanted)?.id ?? this.sections[0]?.id ?? "";
+    if (ctx.params?.request !== undefined) this.incoming = { section: this.active, request: ctx.params.request };
     for (const section of this.sections) {
       const button = h(
         "button",
@@ -176,6 +185,8 @@ class SectionWorkspace implements WorkspaceTab {
   }
 
   async deliver(sectionId: string, request: unknown): Promise<void> {
+    // Seen by the section when this loads it (a section already loaded only receives it).
+    if (!this.loaded.has(sectionId)) this.incoming = { section: sectionId, request };
     await this.show(sectionId);
     if (this.disposed || this.active !== sectionId) return;
     this.loaded.get(sectionId)?.content?.receive?.(request);
@@ -254,6 +265,9 @@ class SectionWorkspace implements WorkspaceTab {
     this.body.append(slot);
     const entry: Loaded = { content: null, slot, pending: null };
     this.loaded.set(section.id, entry);
+    // Taken now, so a later load of another section does not see it.
+    const incoming = this.incoming?.section === section.id ? this.incoming : null;
+    if (incoming) this.incoming = null;
     const run = async (): Promise<void> => {
       try {
         const factory = await section.load();
@@ -265,6 +279,7 @@ class SectionWorkspace implements WorkspaceTab {
           stateChanged: () => this.onViewChanged?.(),
           show: (id) => this.show(id),
           deliver: (id, request) => this.deliver(id, request),
+          ...(incoming ? { request: incoming.request } : {}),
         };
         const content = factory(sectionCtx);
         delete this.restored[section.id];

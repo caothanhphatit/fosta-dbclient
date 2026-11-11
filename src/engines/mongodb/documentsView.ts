@@ -66,6 +66,8 @@ export const STORE_QUERY = "mongo.query";
 export const STORE_FIELD_PATHS = "mongo.fieldPaths";
 
 const READ_ONLY_NOTE = "Read-only workspace: documents cannot be edited, added or deleted here. Change the workspace's safety rules to edit.";
+/** Shown instead of the first page when the assistant opened the section: nothing has run. */
+const ASSISTANT_OPENED_NOTE = "Suggested by the assistant: nothing has run yet. Review the query bar, then press Find.";
 
 export function documentsSectionFactory(ctx: SectionContext): SectionContent {
   return new DocumentsSection(ctx);
@@ -235,7 +237,10 @@ class DocumentsSection implements SectionContent {
     );
     this.setMode(this.mode, false);
     this.updatePager();
-    void this.run(false);
+    // Opened for the assistant (`open_collection_workspace`, a fence's button): nothing runs until the user presses
+    // Find, so a model steered by document contents cannot make the app read a collection on its own.
+    if (suggestionOf(ctx.request)) this.showMessage(ASSISTANT_OPENED_NOTE);
+    else void this.run(false);
   }
 
   dispose(): void {

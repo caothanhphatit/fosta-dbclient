@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FenceTarget } from "../../core/assistantFences";
 import type { ObjectRef } from "../../core/contract";
-import { filterFenceActions, pipelineFenceActions } from "./assistantFences";
+import { filterFenceActions, pipelineFenceActions, pipelineWarning } from "./assistantFences";
 
 function target(object: ObjectRef | null) {
   const opened: { section: string; request: unknown }[] = [];
@@ -47,5 +47,43 @@ describe("applying the assistant's fences", () => {
       { section: "aggregations", request: { assistant: { pipeline: ["{ $match: { a: 1 } }", "{ $limit: 5 }"], mode: "insert" } } },
       { section: "aggregations", request: { assistant: { pipeline: ["{ $limit: 5 }"], mode: "replaceActive" } } },
     ]);
+    expect(open.warning).toBeUndefined();
+  });
+
+  it("flags pipelines that write or name another database and asks before applying them", async () => {
+    for (const code of [
+      "[ { $match: {} }, { $out: 'orders' } ]",
+      "[ { $merge: { into: 'totals' } } ]",
+      "[ { $facet: { a: [ { $merge: 'x' } ] } } ]",
+      "[ { $lookup: { from: { db: 'billing', coll: 'cards' }, localField: 'c', foreignField: '_id', as: 'c' } } ]",
+      "{ $unionWith: { db: 'admin', coll: 'system.users' } }",
+    ]) {
+      const { fence, opened } = target(orders);
+      const asked: string[] = [];
+      let answer = false;
+      const confirm = (message: string) => {
+        asked.push(message);
+        return Promise.resolve(answer);
+      };
+      const [open] = pipelineFenceActions(code, fence, confirm);
+      expect(open.warning, code).toMatch(/^Check before applying: /);
+      expect(open.title, code).toContain("Check before applying");
+      // Declined: nothing is applied.
+      expect(await open.run()).toBeNull();
+      expect(opened, code).toEqual([]);
+      // Confirmed: applied as a suggestion (still not run).
+      answer = true;
+      expect(await open.run()).toBeNull();
+      expect(asked).toHaveLength(2);
+      expect(opened).toHaveLength(1);
+    }
+  });
+
+  it("does not flag field names that look like write stages, or the chat's own database", () => {
+    const quiet = (code: string) => pipelineFenceActions(code, target(orders).fence)[0].warning;
+    expect(quiet("[ { $project: { outcome: '$outcome', merge: 1 } } ]")).toBeUndefined();
+    expect(quiet("[ { $lookup: { from: { db: 'shop', coll: 'customers' }, localField: 'c', foreignField: '_id', as: 'c' } } ]")).toBeUndefined();
+    expect(quiet("[ { $match: { db: 'x' } } ]")).toBeUndefined();
+    expect(pipelineWarning("[ { $out: 'x' }, { $unionWith: { db: 'other', coll: 'y' } } ]", target(orders).fence)).toContain("$out drops the target");
   });
 });

@@ -253,6 +253,9 @@ export function scriptedReply(request: ChatRequest): string {
   if (/broken/i.test(question)) return "This one does not parse:\n\n```mongo-filter\n{ status: }\n```";
   if (/next stage/i.test(question)) return "Sort the groups by their total, largest first:\n\n```mongo-pipeline\n{ $sort: { total: -1 } }\n```";
   if (/fix it/i.test(question)) return "The stage needs one operator; this keeps the paid orders:\n\n```mongo-pipeline\n{ $match: { status: 'paid' } }\n```";
+  if (/copy/i.test(question)) {
+    return "This copies the paid orders into paid_orders, replacing that collection:\n\n```mongo-pipeline\n[ { $match: { status: 'paid' } }, { $out: 'paid_orders' } ]\n```";
+  }
   if (/explain/i.test(question)) return "This stage keeps the documents that match its filter and passes them on unchanged.";
   if (/mongo-filter|filter/i.test(question)) return "Paid orders over 100:\n\n```mongo-filter\n{ status: 'paid', total: { $gt: 100 } }\n```";
   return [

@@ -78,6 +78,8 @@ export interface OpenParams extends Record<string, unknown> {
   asDefault?: boolean;
   /** An engine workspace tab's saved section and section states (a restored tab). */
   view?: WorkspaceViewState;
+  /** A new engine workspace tab: the request its first section is opened for (`SectionContext.request`). */
+  request?: unknown;
 }
 
 function isNode(target: OpenTarget): target is ObjectNode {
@@ -288,7 +290,8 @@ export class AppNavigation implements Navigator {
   openWorkspace(connectionId: string, object: ObjectRef, section: string, request: unknown): void {
     const profile = this.profile(connectionId);
     if (!profile) return;
-    void this.openObject(profile, object, "workspace", { section }).then((content) => {
+    // A new tab hands `request` to the section as it loads (`SectionContext.request`); `deliver` then receives it.
+    void this.openObject(profile, object, "workspace", { section, request }).then((content) => {
       if (isWorkspaceTab(content)) void content.deliver(section, request);
     });
   }

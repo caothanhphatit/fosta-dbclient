@@ -497,7 +497,11 @@ export class AssistantPanel {
         openWorkspace: (object: ObjectRef, section: string, request: unknown) => this.host.openWorkspace(connectionId, object, section, request),
       };
       void fenceActionsOf(context.driver, fenceTag).then((actions) => {
-        for (const action of actions?.(code, target) ?? []) copy.before(fenceButton(action, problem));
+        const made = actions?.(code, target) ?? [];
+        for (const action of made) copy.before(fenceButton(action, problem));
+        // A block that writes or reaches another database says so under it; its buttons ask before applying.
+        const warning = made.find((action) => action.warning)?.warning;
+        if (warning) problem.before(h("div", { class: "chat-code-warning", role: "note" }, icon("shield"), h("span", {}, warning)));
       });
     }
     return block;

@@ -60,6 +60,34 @@ export function parsePipelineFence(code: string): FenceParse<{ stages: string[] 
 }
 
 /**
+ * What needs a second look in a pipeline from the assistant before it is applied: a stage that writes (`$out` drops
+ * and replaces its target, `$merge` changes it), at any depth, or a `{ db, coll }` naming another database than
+ * `database` (`$lookup` / `$unionWith` sources, `$merge.into`, `$out`). Empty when there is nothing to warn about. The
+ * assistant's own tool refuses both; a fence is applied by the user, so it is flagged and asks first.
+ */
+export function pipelineRisks(stages: readonly string[], database: string | null): string[] {
+  const risks = new Set<string>();
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      value.forEach(walk);
+      return;
+    }
+    if (typeof value !== "object" || value === null) return;
+    const object = value as Record<string, unknown>;
+    if ("$out" in object) risks.add("$out drops the target collection and replaces it with the result");
+    if ("$merge" in object) risks.add("$merge writes the result into a collection");
+    const db = object.db;
+    if (typeof db === "string" && "coll" in object && db !== database) risks.add(`it names the database ${db}, outside ${database ?? "the current one"}`);
+    Object.values(object).forEach(walk);
+  };
+  for (const stage of stages) {
+    const parsed = parseStage(stage);
+    if (parsed.ok) walk(parsed.value);
+  }
+  return [...risks];
+}
+
+/**
  * The top-level elements of the array literal `text` as written, or null when `text` is not one array. Strings,
  * comments and regex literals are skipped over, so brackets and commas inside them do not count.
  */

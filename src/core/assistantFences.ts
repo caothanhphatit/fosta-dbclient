@@ -21,6 +21,11 @@ export interface FenceAction {
   icon: IconName;
   label: string;
   title: string;
+  /**
+   * Why the block needs a second look (a pipeline that writes or names another database): shown under the block, and
+   * `run` asks before applying it.
+   */
+  warning?: string;
   /** Applies the block; resolves to a message to show under it instead (a parse error), or null. */
   run(): Promise<string | null> | string | null;
 }
