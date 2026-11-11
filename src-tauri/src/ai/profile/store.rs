@@ -29,6 +29,7 @@ use super::{
 use crate::{
     audit::now_millis,
     config,
+    contract::KEY_PATTERN,
     data_files::write_private,
     error::{AppError, AppResult},
     lock::lock,
@@ -48,6 +49,8 @@ pub const MAX_NOTE_CHARS: usize = 4_000;
 pub const MAX_DESCRIPTION_CHARS: usize = 2_000;
 const MAX_NOTE_ID_CHARS: usize = 100;
 const MAX_NAME_CHARS: usize = 500;
+/// The engine knowledge describing the Redis key sample (`engines::redis::profile`).
+const KEY_SAMPLE_EXTRAS: &str = "keyPatterns";
 
 /// The fields of a profile file a status or a cleanup needs (the rest of the file is skipped).
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -462,6 +465,7 @@ pub fn merge_with(previous: Option<DatabaseProfile>, mut fresh: DatabaseProfile,
         fresh.data_read = false;
     }
     let Some(previous) = previous else {
+        fresh.data_read = fresh.objects.iter().any(|object| !object.value_hints.is_empty());
         let diff = ObjectDiff {
             added: fresh.objects.iter().map(|object| object.qualified()).collect(),
             ..ObjectDiff::default()
@@ -497,8 +501,13 @@ pub fn merge_with(previous: Option<DatabaseProfile>, mut fresh: DatabaseProfile,
     }
     if fresh.extras.is_empty() {
         fresh.extras = previous.extras;
+        // The key sample goes with the key patterns it describes (a build without reads learns none).
+        if !fresh.objects.iter().any(|object| object.kind == KEY_PATTERN) {
+            fresh.extras.remove(KEY_SAMPLE_EXTRAS);
+        }
     }
-    fresh.data_read = fresh.data_read || fresh.objects.iter().any(|object| !object.value_hints.is_empty());
+    // The profile says data was read only while it holds what was read.
+    fresh.data_read = fresh.objects.iter().any(|object| !object.value_hints.is_empty());
     (fresh, diff)
 }
 

@@ -63,8 +63,8 @@ impl Engine for DocEngine {
 }
 
 #[derive(Default)]
-struct State {
-    invoked: Mutex<Vec<String>>,
+pub(crate) struct State {
+    pub(crate) invoked: Mutex<Vec<String>>,
     /// Bumped per build: the sampled fields differ from one build to the next, like a random sample.
     builds: AtomicUsize,
     /// Another index spec: the metadata basis changes.
@@ -274,18 +274,24 @@ impl ProfileExtras for DocConn {
     }
 }
 
-fn setup() -> (ConnectionManager, Handle, Arc<State>) {
+/// Opens the document engine as `id` on `manager`; the state records what was read.
+pub(crate) fn insert_doc(manager: &ConnectionManager, id: &str) -> Arc<State> {
     static ENGINE: DocEngine = DocEngine;
     let state = Arc::new(State::default());
-    let manager = ConnectionManager::default();
     manager.insert(
-        "c",
+        id,
         &ENGINE,
         Arc::new(DocConn {
             state: Arc::clone(&state),
             info: ServerInfo::default(),
         }),
     );
+    state
+}
+
+fn setup() -> (ConnectionManager, Handle, Arc<State>) {
+    let manager = ConnectionManager::default();
+    let state = insert_doc(&manager, "c");
     let handle = manager.handle("c").unwrap();
     (manager, handle, state)
 }
@@ -399,7 +405,9 @@ async fn without_reads_only_metadata_is_used() {
     assert_eq!(orders.columns.len(), 2, "the described columns stay");
     assert!(profile.object("session:{id}").is_none());
     assert_eq!(profile.extras["views"]["recent"], "orders");
-    assert_eq!(outcome.extras.unwrap().reads, 0);
+    let extras = outcome.extras.unwrap();
+    assert_eq!(extras.reads, 0);
+    assert_eq!(extras.skipped.as_deref(), Some(super::extras::NO_READS));
     let _ = std::fs::remove_dir_all(dir);
 }
 

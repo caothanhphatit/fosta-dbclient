@@ -219,4 +219,4 @@ pub async fn status(
 mod tests;
 
 #[cfg(test)]
-mod extras_tests;
+pub(crate) mod extras_tests;

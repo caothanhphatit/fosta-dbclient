@@ -98,9 +98,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - "Learn this database": the assistant studies a database once and keeps what it learned, so every chat knows it
   without looking it up again. Start it from the book button in the assistant panel, the "Learn this database" chip of
   a new chat, or a database or connection in the tree. Learning reads the structure (tables, views, collections,
-  columns, keys, indexes, foreign keys and relations inferred from column names; MongoDB field paths and references)
-  and, where the assistant may read data and the "Sample column values" box is ticked, a few distinct values per column
-  (enum lists and formats); the dialog lists the steps with counts and can be cancelled. Nothing goes to the model while
+  columns, keys, indexes, foreign keys and relations inferred from column names; Elasticsearch mappings and aliases).
+  Only where the assistant may read data on the connection does it also sample MongoDB documents (nested field paths
+  and references) and Redis key names (key patterns, never values), and, with the "Sample column values" box ticked, a
+  few distinct values per column (enum lists and formats); elsewhere learning is metadata only, says so, and drops
+  value hints learned earlier. The dialog lists the steps with counts and can be cancelled. Nothing goes to the model while
   learning; afterwards the dialog shows what a summary would send (objects, requests, estimated tokens, model and
   provider, with a model picker) and lets you "Summarise" or "Skip (structure only)". The "What the assistant knows" tab
   shows the summary, your notes (for the database or one object), and every object with its signature, a description

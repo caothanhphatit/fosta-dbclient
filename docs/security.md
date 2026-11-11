@@ -122,10 +122,24 @@ database is flagged under the block, and its buttons ask before applying it.
 
 "Learn this database" reads the structure of one database through the open connection: object names and kinds, columns
 and types, keys, indexes, foreign keys, comments and the engine's row estimates (never a count of rows). System and
-credential objects (`mysql.user`, `pg_authid`, `sys.*`, Elasticsearch `.security*` and the like) are left out. Row or
-document values are read only when the assistant may read data on that connection (the setting above, per workspace) and
-"Sample column values" is ticked in the dialog: then a few distinct values per short column are read as the assistant,
-through the same read-only gateway check, and audited. Columns whose names look like credentials or personal data
+credential objects (`mysql.user`, `pg_authid`, `sys.*`, Elasticsearch `.security*` and the like) are left out. For
+MongoDB the collection's top-level field names and types come from the same sample of up to 100 documents the object tree
+uses to describe a collection; no value is kept.
+
+Data is read only when the assistant may read data on that connection (the setting above, per workspace; off by default
+for Read-only and Production workspaces). Then, as the assistant and through the same read-only gateway check:
+
+- MongoDB samples up to 500 random documents per collection (`mongo.schema`, at most 200 collections) to learn nested
+  field paths, their types, how often they occur and references between collections;
+- Redis scans up to 5,000 key names with their types and TTLs (never values) and keeps them as key patterns such as
+  `user:{id}:profile`: numbers, UUIDs, hashes, emails, IP addresses, phone numbers and token-like segments become
+  placeholders, and secret-looking text is redacted;
+- with "Sample column values" ticked in the dialog, a few distinct values per short column are read.
+
+Without reads, learning is metadata only: the structure above, MongoDB collection options and index specs, and
+Elasticsearch mappings, aliases and data streams (which are metadata, so they are always read). MongoDB then has no
+nested paths and Redis no key patterns, and the build says so. Value hints learned earlier are dropped by a refresh that
+may not sample them (reads off now, or "Sample column values" unticked). Columns whose names look like credentials or personal data
 (`password`, `secret`, `token`, `api_key`, `salt`, `hash`, `ssn`, `card`, `cvv`, `iban`…) are never sampled and lose
 their comments and defaults, and secret-looking text (API keys, tokens, PEM blocks) is replaced by `[redacted]` throughout
 the profile.

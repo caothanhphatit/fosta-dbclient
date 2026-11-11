@@ -30,11 +30,12 @@ use crate::{
 pub const PROGRESS_EVENT: &str = "profile-progress";
 
 /// Builds (or refreshes) the profile of `database` on the open connection `connection_id`. Nothing is sent to a model.
-/// Rows are read only for value hints: when the user lets the assistant read data on this connection
-/// (`gateway::assistant::reads_allowed`) and `sample_values` is not false (it defaults to that setting); those reads go
-/// through the gateway as the assistant and are audited one by one. An explicit `sample_values: false` also drops the value hints an
-/// earlier build stored. The engine's extras (MongoDB `mongo.schema` samples, a Redis SCAN of key names) read through the
-/// gateway as the assistant too, audited; their values become hints only under the same rule.
+/// Data is read only where the user lets the assistant read data on this connection
+/// (`gateway::assistant::reads_allowed`): then the engine's extras read through the gateway as the assistant (MongoDB
+/// `mongo.schema` samples, a Redis SCAN of key names), and value hints are read unless `sample_values` is false. Without
+/// reads the build is metadata only (the structural walk, MongoDB collection options and indexes, Elasticsearch
+/// mappings and aliases). The reads are audited as one summary entry per phase, failures and refusals one by one. Value
+/// hints an earlier build stored are dropped whenever this build may not sample values (reads off now, or opted out).
 pub async fn profile_learn(
     state: &AppState,
     connection_id: String,
@@ -44,21 +45,17 @@ pub async fn profile_learn(
 ) -> AppResult<LearnOutcome> {
     ensure_learning_allowed(state, &connection_id)?;
     let handle = state.engines.handle(&connection_id)?;
-    // The engine's extras (sampled documents, key names) read through the gateway as the assistant on any saved
-    // connection; their values become hints only where value sampling is allowed and asked for.
-    let values = read_context(state, &connection_id).is_some() && sample_values.unwrap_or(true);
-    let reads = state
-        .config
-        .read(|config| Context::for_connection(config, &connection_id).ok())
-        .map(|context| profile::BuildReads {
-            sampler: profile::Sampler {
-                manager: &state.engines,
-                context,
-            },
-            values,
-        });
-    // An explicit opt-out also drops the value hints an earlier build stored.
-    let keep_hints = sample_values != Some(false);
+    let context = read_context(state, &connection_id);
+    let values = context.is_some() && sample_values.unwrap_or(true);
+    let reads = context.map(|context| profile::BuildReads {
+        sampler: profile::Sampler {
+            manager: &state.engines,
+            context,
+        },
+        values,
+    });
+    // Hints are kept only while this build may sample them.
+    let keep_hints = values;
     let progress = progress_emitter(state, &run_id, &connection_id, &database);
     let outcome = profile::learn_with(
         &state.ai,
@@ -558,6 +555,58 @@ mod tests {
         );
         assert!(entry.detail.contains("data read: no"));
         let _ = std::fs::remove_file(audit_path);
+    }
+
+    fn save_doc_connection(state: &AppState, reads: AssistantQueries) {
+        state
+            .config
+            .update(|config| {
+                config.workspaces[0].connections.retain(|connection| connection.id != "doc");
+                config.workspaces[0].connections.push(crate::config::ConnectionProfile {
+                    id: "doc".into(),
+                    name: "Doc".into(),
+                    engine: "fakedoc".into(),
+                    ..Default::default()
+                });
+                config.workspaces[0].assistant_queries = reads;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_extras_read_only_where_the_assistant_may_read_data() {
+        let state = AppState::for_test("profile-extras-gate", crate::Capabilities::desktop(), AppConfig::default());
+        let doc = crate::ai::profile::extras_tests::insert_doc(&state.engines, "doc");
+        save_doc_connection(&state, AssistantQueries::Deny);
+        let denied = profile_learn(&state, "doc".into(), "shop".into(), "run".into(), None)
+            .await
+            .unwrap();
+        assert!(doc.invoked.lock().unwrap().is_empty(), "no sample, no key names");
+        let extras = denied.extras.unwrap();
+        assert_eq!(extras.reads, 0);
+        assert_eq!(extras.skipped.as_deref(), Some(crate::ai::profile::extras::NO_READS));
+        assert!(denied.values.is_none() && !denied.status.data_read);
+        let stored = profile_get(&state, "doc".into(), "shop".into()).await.unwrap().unwrap();
+        assert!(stored.object("session:{id}").is_none(), "no key pattern without reads");
+        // Allowed: the extras read through the gateway and keep value hints.
+        save_doc_connection(&state, AssistantQueries::Allow);
+        let allowed = profile_learn(&state, "doc".into(), "shop".into(), "run".into(), None)
+            .await
+            .unwrap();
+        assert!(!doc.invoked.lock().unwrap().is_empty());
+        assert!(allowed.status.data_read);
+        let stored = profile_get(&state, "doc".into(), "shop".into()).await.unwrap().unwrap();
+        assert!(stored.objects.iter().any(|object| !object.value_hints.is_empty()));
+        // Reads revoked again: a refresh drops the stored hints and no longer says data was read.
+        save_doc_connection(&state, AssistantQueries::Deny);
+        let revoked = profile_learn(&state, "doc".into(), "shop".into(), "run".into(), None)
+            .await
+            .unwrap();
+        assert!(!revoked.status.data_read);
+        let stored = profile_get(&state, "doc".into(), "shop".into()).await.unwrap().unwrap();
+        assert!(stored.objects.iter().all(|object| object.value_hints.is_empty()));
+        assert!(!stored.data_read);
     }
 
     #[tokio::test]

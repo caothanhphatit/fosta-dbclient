@@ -118,24 +118,44 @@ pub async fn enrich(
     let keep_values = reads.as_ref().is_some_and(|reads| reads.values);
     let mut state = State::default();
     apply(profile, metadata, false, &mut outcome, &mut state);
-    if let Some(reads) = reads {
-        let answered = run_reads(handle, reads.sampler, &database, &objects, cancel, progress, &mut outcome).await?;
-        if !answered.is_empty() {
-            let interpreted = handle
-                .conn
-                .profile_extras()
-                .map(|extras| extras.interpret(&database, &answered))
-                .unwrap_or_default();
-            apply(profile, interpreted, keep_values, &mut outcome, &mut state);
+    let Some(reads) = reads else {
+        // Without the read gate the extras stay metadata only: no document sample, no key names.
+        let planned = handle
+            .conn
+            .profile_extras()
+            .map(|extras| extras.reads(&database, &objects).len())
+            .unwrap_or(0);
+        if planned > 0 && outcome.skipped.is_none() {
+            outcome.skipped = Some(NO_READS.to_owned());
         }
+        finish(profile);
+        return Ok(Some((outcome, state.sampled)));
+    };
+    let answered = run_reads(handle, reads.sampler, &database, &objects, cancel, progress, &mut outcome).await?;
+    if !answered.is_empty() {
+        let interpreted = handle
+            .conn
+            .profile_extras()
+            .map(|extras| extras.interpret(&database, &answered))
+            .unwrap_or_default();
+        apply(profile, interpreted, keep_values, &mut outcome, &mut state);
     }
-    profile.fingerprint = fingerprint::database_fingerprint(&profile.objects);
-    profile.total_objects = profile.total_objects.max(profile.objects.len());
-    profile.detailed_objects = profile.objects.iter().filter(|object| object.detailed).count();
+    finish(profile);
     if keep_values {
         profile.data_read = profile.data_read || outcome.hinted > 0;
     }
     Ok(Some((outcome, state.sampled)))
+}
+
+/// The note of a build whose engine would have sampled data, had the assistant been allowed to read it.
+pub const NO_READS: &str =
+    "Documents and key names were not sampled: the assistant may not read data on this connection, so only metadata was learned";
+
+/// The profile's counts and fingerprint after the extras.
+fn finish(profile: &mut DatabaseProfile) {
+    profile.fingerprint = fingerprint::database_fingerprint(&profile.objects);
+    profile.total_objects = profile.total_objects.max(profile.objects.len());
+    profile.detailed_objects = profile.objects.iter().filter(|object| object.detailed).count();
 }
 
 /// Runs the engine's reads through the gateway, within [`MAX_READS`] and [`BUDGET`]; a refusal ends them.
