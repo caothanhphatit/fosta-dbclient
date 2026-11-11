@@ -347,15 +347,19 @@ class AggregationsSection implements SectionContent {
   /** A card's "Ask": the question about stage `index`, with the pipeline, the stage and its error as context. */
   private ask(index: number, question: StageQuestion): void {
     const stage = this.stages[index];
-    const askAssistant = this.ctx.view.navigator.askAssistant;
-    if (!stage || !askAssistant) return;
+    const navigator = this.ctx.view.navigator;
+    if (!stage || !navigator.askAssistant) return;
     this.active = index;
     for (const [id, card] of this.cards) card.setActive(id === stage.id);
     const operator = operatorOfText(stage.text) ?? stage.operator;
     const context = [this.assistantContext() ?? ""];
     const error = this.stageError(index);
     if (error) context.push(`Error of stage ${index + 1}: ${error}`);
-    askAssistant(stageQuestion(question, index, operator, `${this.database}.${this.collection}`), context.join("\n"), this.assistantSamples() ?? undefined);
+    navigator.askAssistant(
+      stageQuestion(question, index, operator, `${this.database}.${this.collection}`),
+      context.join("\n"),
+      this.assistantSamples() ?? undefined,
+    );
   }
 
   /** Why stage `index` fails: it does not parse, or the preview's error for it. */

@@ -415,3 +415,12 @@
 .chat-code-error[hidden] {
   display: none;
 }
+
+/* Engines add buttons of their own: the bar wraps instead of squeezing the labels. */
+.chat-code-bar {
+  flex-wrap: wrap;
+}
+
+.chat-code-button {
+  white-space: nowrap;
+}

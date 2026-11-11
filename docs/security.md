@@ -87,6 +87,12 @@ under the workspace's rules. The optional read-only query tool lets the assistan
 statement); those rows go to your provider. It is off for Production and Read-only workspaces unless you allow it, and every run is
 shown in the chat and written to the audit log. Database content is passed to the model as untrusted data.
 
+On MongoDB the same setting covers sampled documents: `sample_documents` reads at most 20 documents of a collection in the
+chat's database (or what leaves a pipeline stage, on a bounded sample), with long values cut, through the same read-only gateway
+check, shown in the chat and audited; and the collection workspace sends a few documents (cut the same way) with the context. Where
+the setting is off, neither reaches the model: it sees field names and types only. Filters and pipelines it suggests, in the chat
+or through `open_collection_workspace`, are only pre-filled for you to review; they never run on their own.
+
 ## MCP clients
 
 The MCP server ([mcp.md](mcp.md)) lets AI clients such as Claude Code, Claude Desktop or Cursor use saved connections. It is off

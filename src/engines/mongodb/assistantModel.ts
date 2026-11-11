@@ -200,7 +200,7 @@ export type StageQuestion = "explain" | "next" | "fix";
 
 /** The message of the query bar's "Ask": plain language to a filter for `collection`. */
 export function filterQuestion(collection: string, request: string): string {
-  return `Write a MongoDB filter for the collection ${collection}: ${request.trim()}\nAnswer with one \`${FILTER_FENCE}\` code block (mongosh syntax) and at most one sentence.`;
+  return `Write a MongoDB filter for the collection ${collection}: ${request.trim()}\n\nAnswer with one \`${FILTER_FENCE}\` code block (mongosh syntax) and at most one sentence.`;
 }
 
 /** The message of a stage card's "Ask" (`index` 0-based). */

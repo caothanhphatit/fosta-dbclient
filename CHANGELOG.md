@@ -51,6 +51,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   the pipeline as mongosh, Node.js or Python. Documents › More › "Open as aggregation" turns the query bar into
   `$match` / `$sort` / `$skip` / `$limit` / `$project` stages, and pipelines save and load with the saved queries. The
   stages are kept with the open tabs.
+  The assistant helps in the workspace: it answers with `mongo-filter` and `mongo-pipeline` blocks in mongosh syntax,
+  which "Apply to query bar", "Open in Aggregations", "Insert as stage(s)" (after the active stage) and "Replace stage"
+  put into the collection after parsing them (a parse error is shown instead); replacing your own filter or stages shows
+  a diff first, and nothing runs until you do. The query bar's "Ask" turns a sentence into a filter, and each stage card's
+  "Ask" explains the stage, suggests the next one or fixes its error, with the pipeline, the active stage and its error
+  as context. The assistant can open a collection's Documents or Aggregations with its suggestion pre-filled
+  (`open_collection_workspace`), and where the workspace lets it read data, read up to 20 documents of a collection or of
+  what leaves a pipeline stage (`sample_documents`, values cut, shown in the chat and audited); only then do sampled
+  documents of the active stage go with the context.
   A Schema section analyses a sample of the collection (up to 10,000 documents: random, the first ones, or those
   matching a filter) and lists every field path as a tree, into sub-documents and arrays of documents: how often it is
   present, its BSON types (mixed types highlighted), array lengths and element types, the most frequent values as small
