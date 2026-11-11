@@ -76,6 +76,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   paths, 1 / -1 / text / 2dsphere / hashed), a name, unique / sparse / hidden, a partial filter, TTL, collation and
   wildcard projection in mongosh syntax, and a live preview of the command; creating goes through the safety gateway
   as DDL. The sort and search are kept with the open tabs, and the assistant sees the indexes.
+  A Validation section shows the collection's rules: level (strict, moderate, off), action (error, warn) and the
+  validator in a mongosh-syntax editor with `$jsonSchema` completion. "Generate from schema" builds a `$jsonSchema`
+  from the analysed sample: a type per field (a list for mixed fields), required fields present in at least a chosen
+  share of documents (100% by default), nested documents and array items, and optional enums for string fields with
+  few values. "Check existing documents" counts the documents the draft would refuse and lists a few; one click opens
+  a document in Documents. Apply shows a line diff of the old and new validator, warns when existing documents
+  fail strict rules (with a one-click switch to moderate), and goes through the safety gateway as DDL (`collMod`);
+  Discard goes back to the applied rules and Remove rules empties the validator. Server-side JavaScript is refused in
+  validators. An unapplied draft is kept with the open tabs, and the assistant sees the rules.
 
 ### Changed
 

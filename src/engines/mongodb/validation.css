@@ -1,0 +1,251 @@
+/* MongoDB collection workspace: the Validation section (rules, the validator editor, generate, check, review). Colours and spacing come from the shared tokens. */
+
+.vd-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--canvas);
+}
+
+.vd-bar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.vd-bar > .toolbar-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-left: auto;
+  gap: 8px;
+}
+
+.vd-section .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vd-field,
+.vd-check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+.vd-label {
+  color: var(--fg-3);
+}
+
+.vd-select {
+  width: auto;
+}
+
+.vd-number {
+  width: 64px;
+}
+
+.vd-meta,
+.vd-dim {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.vd-dirty {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.vd-dirty[hidden],
+.vd-info[hidden],
+.vd-generate[hidden],
+.vd-check[hidden],
+.vd-review[hidden],
+.vd-parse-error[hidden] {
+  display: none;
+}
+
+.vd-info {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.vd-info-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.vd-info-icon {
+  flex: none;
+}
+
+.vd-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  gap: 8px;
+  padding: 10px;
+  overflow: auto;
+}
+
+.vd-editor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.vd-editor .cm-scroller {
+  min-height: 180px;
+  max-height: 46vh;
+}
+
+.vd-parse-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.vd-actions,
+.vd-generate-row,
+.vd-check-head,
+.vd-review-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+
+.vd-actions .spacer,
+.vd-generate-row .spacer,
+.vd-check-head .spacer {
+  flex: 1;
+}
+
+.vd-generate,
+.vd-check,
+.vd-review {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.vd-review {
+  border-color: var(--accent);
+}
+
+.vd-check.vd-stale {
+  opacity: 0.6;
+}
+
+.vd-check.vd-stale .vd-check-head::after {
+  content: "The validator changed since this check";
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.vd-good {
+  color: var(--success);
+}
+
+.vd-bad {
+  color: var(--danger);
+}
+
+.vd-samples {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.vd-sample {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  gap: 10px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vd-sample:hover,
+.vd-sample:focus-visible {
+  background: var(--surface-2);
+}
+
+.vd-sample-id {
+  flex: none;
+  color: var(--syn-type);
+}
+
+.vd-sample-doc {
+  overflow: hidden;
+  color: var(--fg-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vd-review-settings {
+  font-size: 12px;
+}
+
+.vd-diff {
+  max-height: 40vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.vd-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.vd-shell {
+  max-height: 160px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+  white-space: pre;
+}

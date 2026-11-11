@@ -7,6 +7,8 @@
  * only when the user ran it (a preview after an edit never asks); `aggregate` (the full run, `$out` / `$merge` included)
  * asks per the rules. `schema` asks only when the user pressed Analyze. `indexes` asks only when the user pressed Refresh;
  * creating, hiding and dropping an index always go through `withConfirmation` (DDL / destructive per the rules).
+ * `validation` asks only when the user pressed Refresh; `validationCheck` and `setValidation` (DDL) always go through
+ * `withConfirmation`.
  */
 import type { ConnectionApi } from "../../core/connectionApi";
 import type { ApplyResult, RowChangeSet } from "../../core/contract";
@@ -16,6 +18,7 @@ import type { deleteArgs, PreviewResult, previewArgs, updateArgs } from "./bulkM
 import type { CreateIndexArgs, IndexesResult } from "./indexModel";
 import type { CountArgs, FindArgs, FindPage, Target } from "./queryModel";
 import type { SchemaArgs, SchemaResult } from "./schemaModel";
+import type { SetValidationArgs, SetValidationResult, ValidationCheckArgs, ValidationCheckResult } from "./validationModel";
 
 export interface FindResult extends FindPage {
   documents: Record<string, unknown>[];
@@ -178,6 +181,25 @@ export class MongoApi {
     return withConfirmation((confirmation) =>
       this.connection.invokeCapability<{ name: string; statement: string }>("mongo.dropIndex", { ...this.target, name }, confirmation),
     );
+  }
+
+  /**
+   * The collection's validator, level and action (`mongo.validation`, reads only; raw: `readRules` checks it). `ask`: the
+   * user pressed Refresh, so a workspace that asks before reads asks (null: declined).
+   */
+  validation(ask: boolean): Promise<unknown> {
+    const call = (confirmation: Confirmation | null) => this.connection.invokeCapability<unknown>("mongo.validation", { ...this.target }, confirmation);
+    return ask ? withConfirmation(call) : call(null);
+  }
+
+  /** How many existing documents a validator refuses, with a few of them (reads only; the user pressed Check). */
+  validationCheck(args: ValidationCheckArgs): Promise<ValidationCheckResult | null> {
+    return withConfirmation((confirmation) => this.connection.invokeCapability<ValidationCheckResult>("mongo.validationCheck", args, confirmation));
+  }
+
+  /** Applies a validator, level or action (DDL, `collMod`: the gateway asks per the rules; null: declined). */
+  setValidation(args: SetValidationArgs): Promise<SetValidationResult | null> {
+    return withConfirmation((confirmation) => this.connection.invokeCapability<SetValidationResult>("mongo.setValidation", args, confirmation));
   }
 
   /** The match count and a before/after sample of an update (reads only). */

@@ -28,6 +28,7 @@ import { pause } from "../sqlRun";
 import type { EngineMock, RunContext } from "../types";
 import { createIndex, dropIndex, listIndexes, setHidden, type IndexHost } from "./mongoIndexes";
 import { schemaResult } from "./mongoSchema";
+import { getValidation, setValidation, validationCheck, type ValidationHost } from "./mongoValidation";
 
 export const descriptor = DESCRIPTORS.mongodb;
 export const order = ORDER.indexOf("mongodb");
@@ -1180,6 +1181,13 @@ const indexHost: IndexHost = {
   },
   count: (database, collection) => catalog.resolve(collection, database)?.rows.length ?? 0,
 };
+const validationHost: ValidationHost = {
+  documents: (database, collection) => {
+    const table = catalog.resolve(collection, database);
+    return table && table.spec.database === database && table.spec.kind === "collection" ? table.rows.map((row) => documentOf(table, row)) : null;
+  },
+  matches: (document, filter) => matches(document, filter),
+};
 
 const OPERATIONS: Record<string, (args: Doc) => Json> = {
   "mongo.find": find,
@@ -1197,6 +1205,9 @@ const OPERATIONS: Record<string, (args: Doc) => Json> = {
   "mongo.hideIndex": (args) => setHidden(indexHost, args, true),
   "mongo.unhideIndex": (args) => setHidden(indexHost, args, false),
   "mongo.dropIndex": (args) => dropIndex(indexHost, args),
+  "mongo.validation": (args) => getValidation(validationHost, args),
+  "mongo.setValidation": (args) => setValidation(validationHost, args),
+  "mongo.validationCheck": (args) => validationCheck(validationHost, args),
 };
 
 /** How the gateway classifies an operation (classify.rs `classify_operation`); null for an unknown name. */
@@ -1229,12 +1240,13 @@ export const classifyOperation: NonNullable<EngineMock["classifyOperation"]> = (
     if (writes) return of("write", "$merge writes the result into a collection");
     return of("read");
   }
-  if (touchesSecrets(args) && name.endsWith("Index"))
+  if (touchesSecrets(args) && (name.endsWith("Index") || name === "mongo.setValidation"))
     return info("admin", "Shows users, credentials, other sessions' operations, server logs or the host; treated as administration");
   if (name === "mongo.createIndex") return info("ddl", "Builds a new index on the collection");
   if (name === "mongo.hideIndex") return info("ddl", "Hides the index from the query planner (collMod)");
   if (name === "mongo.unhideIndex") return info("ddl", "Lets the query planner use the index again (collMod)");
   if (name === "mongo.dropIndex") return info("destructive", "Drops the index; queries that used it scan instead until it is built again");
+  if (name === "mongo.setValidation") return info("ddl", "Changes the collection's validation rules (collMod); later writes are checked against them");
   if (name === "mongo.updateMany") return empty ? info("destructive", "An empty filter updates every document in the collection") : info("write");
   if (name === "mongo.deleteMany")
     return info("destructive", empty ? "An empty filter deletes every document in the collection" : "Deletes every matching document");
@@ -1257,7 +1269,7 @@ export const invoke: NonNullable<EngineMock["invoke"]> = (name, raw) => {
   const args = (raw ?? {}) as Doc;
   const operator =
     deniedOperator(args) ??
-    ["filter", "projection", "sort", "update", "keys", "partialFilterExpression", "wildcardProjection", "weights"]
+    ["filter", "projection", "sort", "update", "keys", "partialFilterExpression", "wildcardProjection", "weights", "validator"]
       .map((key) => deniedOperator(jsonArg(args, key)))
       .find(Boolean) ??
     pipelineDenied(args);
