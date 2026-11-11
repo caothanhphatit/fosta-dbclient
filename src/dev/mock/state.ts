@@ -211,9 +211,25 @@ const workspaces: Workspace[] = [
   },
 ];
 
+/**
+ * `?assistant=scripted` in the page URL starts with the scripted assistant (`ai.ts`, `SCRIPTED_HOST`) set up, so its code
+ * blocks can be tried without a provider or a key, also after a reload.
+ */
+const scriptedAssistant = typeof location !== "undefined" && new URLSearchParams(location.search).get("assistant") === "scripted";
+const aiConnections: AppConfig["aiConnections"] = scriptedAssistant
+  ? [{ id: "scripted", name: "Scripted", provider: "custom", baseUrl: "http://scripted.mock/v1", defaultModel: "scripted" }]
+  : [];
+
 /** Mutable state of the mock backend for this page load. */
 export const state: { config: AppConfig; history: HistoryEntry[]; historySequence: number } = {
-  config: { workspaces, activeWorkspace: "client-a", embedding: null, aiConnections: [], aiActive: null, queryHistory: true },
+  config: {
+    workspaces,
+    activeWorkspace: "client-a",
+    embedding: null,
+    aiConnections,
+    aiActive: scriptedAssistant ? { connectionId: "scripted", model: "scripted" } : null,
+    queryHistory: true,
+  },
   history: [],
   historySequence: 0,
 };
