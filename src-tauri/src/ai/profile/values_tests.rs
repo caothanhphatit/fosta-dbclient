@@ -318,7 +318,10 @@ fn read_columns(state: &State) -> Vec<String> {
 
 #[tokio::test]
 async fn sql_hints_are_read_when_allowed_within_the_caps() {
-    let (manager, handle, state) = setup(false);
+    let (mut manager, handle, state) = setup(false);
+    let audit_path = std::env::temp_dir().join(format!("fosta-values-audit-{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&audit_path);
+    manager.gateway = crate::gateway::Gateway::with_audit(crate::audit::AuditLog::new(audit_path.clone(), 1000));
     let (store, dir) = store("sql");
     let runs = AiRuns::default();
     let sampler = Sampler {
@@ -360,6 +363,20 @@ async fn sql_hints_are_read_when_allowed_within_the_caps() {
         profile.objects.iter().map(|object| object.value_hints.len()).sum::<usize>()
     );
     assert!(steps.lock().unwrap().contains(&Step::Values));
+    // One audit entry for all the value reads, none per read.
+    let audit = crate::audit::AuditLog::new(audit_path.clone(), 1000).read_all().unwrap();
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert!(
+        audit[0].statement.contains(&format!("{} value reads", statements.len())),
+        "{}",
+        audit[0].statement
+    );
+    assert!(
+        audit[0].detail.starts_with(&format!("{} reads, 0 failed", statements.len())),
+        "{}",
+        audit[0].detail
+    );
+    let _ = std::fs::remove_file(&audit_path);
     // The view for a chat that may not read data now.
     let mut view = profile.clone();
     strip_value_hints(&mut view);
