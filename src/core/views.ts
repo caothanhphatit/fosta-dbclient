@@ -8,7 +8,7 @@ import type { CapabilityName, ConnectInfo, EngineDescriptor, EngineFamily, Objec
 import { iconOrDefault, type IconName } from "./dom";
 import type { Navigator } from "./navigator";
 import type { TabContent } from "./tabs";
-import type { ConnectionProfile } from "./types";
+import type { ConnectionProfile, HistoryEntry } from "./types";
 
 /**
  * `workspace`: an engine's dedicated tab for an object, with a strip of sections (`features/objectWorkspace`). Where one is
@@ -137,6 +137,35 @@ export async function recoverConnectError(engineId: string, error: unknown, cont
     return await connectErrorHandler(engineId, error, context);
   } catch {
     return false;
+  }
+}
+
+/** Where a query-history entry reopens instead of a query tab: an engine workspace section, handed `request`. */
+export interface HistoryTarget {
+  /** The action's label ("Open in collection"). */
+  label: string;
+  connectionId: string;
+  object: ObjectRef;
+  section: string;
+  request: unknown;
+}
+
+type HistoryTargetResolver = (entry: HistoryEntry) => Promise<HistoryTarget | null>;
+
+let historyTargetResolver: HistoryTargetResolver | null = null;
+
+/** Installed by `src/engines/index.ts`: asks the entry's engine UI module where the entry reopens. */
+export function setHistoryTargetResolver(resolver: HistoryTargetResolver): void {
+  historyTargetResolver = resolver;
+}
+
+/** The workspace a history entry reopens in, or null when it only reopens as query text. */
+export async function historyTargetOf(entry: HistoryEntry): Promise<HistoryTarget | null> {
+  if (!historyTargetResolver) return null;
+  try {
+    return await historyTargetResolver(entry);
+  } catch {
+    return null;
   }
 }
 

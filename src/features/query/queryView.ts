@@ -14,6 +14,7 @@ import { api, errorCode, errorText, NOT_CONNECTED, reportConnectionLost } from "
 import { databaseName, databaseNodes, type ConnectionApi } from "../../core/connectionApi";
 import type {
   ConnectInfo,
+  ObjectRef,
   EngineDescriptor,
   ErrorPosition,
   LanguageSpec,
@@ -54,6 +55,8 @@ export interface QueryHost {
   /** The `queryHistory` setting. */
   historyEnabled(): boolean;
   openQuery(connectionId: string, database: string | null, sql: string): void;
+  /** Opens an engine workspace section with `request` (a history entry reopened where it ran). */
+  openWorkspace?(connectionId: string, object: ObjectRef, section: string, request: unknown): void;
   /** Connects again a connection the backend lost; true once it is connected. */
   reconnect?(connectionId: string): Promise<boolean>;
 }
@@ -229,6 +232,9 @@ export class QueryView implements TabContent {
       enabled: () => this.host.historyEnabled(),
       insert: (sql) => this.insertText(sql),
       openInNewTab: (entry) => this.host.openQuery(entry.connectionId, entry.database, entry.sql),
+      openTarget: this.host.openWorkspace
+        ? (target) => this.host.openWorkspace?.(target.connectionId, target.object, target.section, target.request)
+        : undefined,
       close: () => this.toggleHistory(false),
     });
 

@@ -19,7 +19,7 @@ import { toast } from "../../core/dialogs";
 import { formatNumber, h, icon, iconButton } from "../../core/dom";
 import { renderError } from "../../core/errorPanel";
 import { errorText } from "../../core/errors";
-import type { HistoryEntry } from "../../core/types";
+import type { HistoryEntry, SavedQuery } from "../../core/types";
 import type { SectionContent, SectionContext } from "../../features/objectWorkspace/sectionWorkspace";
 import { SchemaCache } from "../../lang/schemaCache";
 import { anchorAt, indexOfAnchor, type Anchor } from "./anchor";
@@ -46,8 +46,11 @@ import {
   type DocumentsMode,
   type DocumentsSavedState,
   type PageCursor,
+  type QueryState,
 } from "./queryModel";
 import { refFields, RefResolver } from "./refs";
+import { readQueryRequest, stateOfSaved, type DocumentsRequest } from "./savedQueries";
+import { SavedQueries } from "./savedQueriesMenu";
 import "./mongodb.css";
 
 /** Store keys other sections read (the query of this tab, the field paths seen). */
@@ -55,11 +58,6 @@ export const STORE_QUERY = "mongo.query";
 export const STORE_FIELD_PATHS = "mongo.fieldPaths";
 
 const READ_ONLY_NOTE = "Read-only workspace: documents cannot be edited, added or deleted here. Change the workspace's safety rules to edit.";
-
-/** What another tab hands the section (`receive`): a filter to run, e.g. `{ _id: ObjectId('…') }`. */
-export interface DocumentsRequest {
-  filter: string;
-}
 
 export function documentsSectionFactory(ctx: SectionContext): SectionContent {
   return new DocumentsSection(ctx);
@@ -176,6 +174,14 @@ class DocumentsSection implements SectionContent {
       },
       changed: () => this.ctx.stateChanged(),
       actions: this.isView ? undefined : () => this.bulkActions(),
+      saved: new SavedQueries({
+        connectionId: ctx.view.connection.connectionId,
+        database: this.database,
+        collection: this.collection,
+        state: () => this.bar.state(),
+        apply: (state) => this.applyQuery(state),
+        openElsewhere: (saved) => this.openSaved(saved),
+      }),
     });
 
     const modes = h("div", { class: "segmented mq-modes", role: "group", "aria-label": "Show documents as" });
@@ -293,13 +299,30 @@ class DocumentsSection implements SectionContent {
     else openDeleteMatching(context);
   }
 
-  /** Runs a filter handed over by another tab (a reference opened in its collection). */
+  /**
+   * Runs what another tab hands over: a filter (a reference opened in its collection) or a whole bar state (a saved
+   * query of this collection, a query-history entry reopened here).
+   */
   receive(request: unknown): void {
-    const filter = typeof request === "object" && request !== null ? (request as Partial<DocumentsRequest>).filter : undefined;
-    if (typeof filter !== "string") return;
-    this.bar.setState({ ...EMPTY_QUERY, limit: this.bar.state().limit, filter });
+    const asked = typeof request === "object" && request !== null ? (request as DocumentsRequest) : {};
+    const query = readQueryRequest(asked.query);
+    if (query) this.applyQuery(query);
+    else if (typeof asked.filter === "string") this.applyQuery({ ...EMPTY_QUERY, limit: this.bar.state().limit, filter: asked.filter });
+  }
+
+  /** Puts `state` into the bar (the options row opens when it has options) and runs it. */
+  private applyQuery(state: QueryState): void {
+    this.bar.setState(state);
     this.ctx.stateChanged();
     void this.run();
+  }
+
+  /** A saved query of another collection of the database: opened in that collection's workspace. */
+  private openSaved(saved: SavedQuery): void {
+    const kind = this.collectionsOfDatabase().find((table) => table.name === saved.collection)?.kind === "view" ? "view" : "collection";
+    const object: ObjectRef = { database: this.database, schema: null, name: saved.collection, kind };
+    const request: DocumentsRequest = { query: stateOfSaved(saved) };
+    this.ctx.view.navigator.openWorkspace(this.ctx.view.connection.connectionId, object, "documents", request);
   }
 
   assistantContext(): string | null {

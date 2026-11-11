@@ -63,6 +63,7 @@ import type {
   KeyTarget,
   RecallReport,
   SavedKeyRef,
+  SavedQuery,
   SchemaGraph,
   StatementCategory,
   TaskDef,
@@ -199,6 +200,13 @@ export const api = {
   restartTask: (id: string) => invoke<void>("restart_task", { id }),
   saveTask: (task: TaskDef, workspaceId: string | null = null) => invoke<AppConfig>("save_task", { task, workspaceId }),
   deleteTask: (id: string) => invoke<AppConfig>("delete_task", { id }),
+  /** The saved queries of the workspace holding `connectionId` (else `workspaceId`, else the active workspace). */
+  listSavedQueries: (connectionId: string | null, workspaceId: string | null = null) =>
+    invoke<SavedQuery[]>("list_saved_queries", { connectionId, workspaceId }),
+  /** Adds or replaces (same id) a saved query; answers with its workspace's saved queries. */
+  saveSavedQuery: (query: SavedQuery, workspaceId: string | null = null) => invoke<SavedQuery[]>("save_saved_query", { query, workspaceId }),
+  renameSavedQuery: (id: string, name: string) => invoke<SavedQuery[]>("rename_saved_query", { id, name }),
+  deleteSavedQuery: (id: string) => invoke<SavedQuery[]>("delete_saved_query", { id }),
   /** Relaxing a Production workspace needs its name in `relaxConfirmation`. */
   saveWorkspace: (workspace: WorkspaceMeta, relaxConfirmation: string | null = null) => invoke<AppConfig>("save_workspace", { workspace, relaxConfirmation }),
   /** The confirmation dialog's "Don't ask again": plain confirmations of these categories stop on this connection's rules. */

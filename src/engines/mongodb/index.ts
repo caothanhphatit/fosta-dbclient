@@ -5,6 +5,7 @@
  *   has the query bar (mongosh syntax, completion of fields, operators and values) and the documents (editable) as a tree, JSON
  *   or a table,
  * - the `mongo-command` console language; the grid and the design view are the shared ones (`../shared.ts`).
+ * - query-history entries of the query bar reopen in their collection workspace (`historyTarget`).
  *
  * Views are chunks of their own; styles are `mongodb.css`, imported by the views (never `src/styles.css`).
  */
@@ -44,6 +45,8 @@ const mongodb: EngineUiModule = {
   id: ENGINE,
   register: (register) => register(views),
   languages: { "mongo-command": mongoCommandLanguage },
+  // A query-bar run in the query history reopens in its collection workspace, with the bar filled in.
+  historyTarget: async (entry) => (await import("./savedQueries")).historyTarget(entry),
 };
 
 export default mongodb;

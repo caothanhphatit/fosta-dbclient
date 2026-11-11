@@ -1,13 +1,15 @@
 /**
  * Side panel of a query tab listing earlier runs (from the backend's history file): search, an
  * "All connections" filter, status, relative time, duration and the first line of SQL. Selecting an
- * entry shows its full text; double-click or Insert puts it into the editor without running it.
+ * entry shows its full text; double-click or Insert puts it into the editor without running it. An entry its engine
+ * can reopen elsewhere (a MongoDB query-bar run: its collection workspace) gets that action too.
  */
 import { showError } from "../../core/errorPanel";
 import { api } from "../../core/api";
 import { confirmDialog, toast } from "../../core/dialogs";
 import { copyText, h, icon, iconButton, type IconName } from "../../core/dom";
 import type { HistoryEntry } from "../../core/types";
+import { historyTargetOf, type HistoryTarget } from "../../core/views";
 import { firstLine, formatDuration, historyStatus, relativeTime, resultSummary, type HistoryStatus } from "./historyFormat";
 import "./query-history.css";
 
@@ -16,6 +18,8 @@ export interface HistoryPanelHost {
   enabled(): boolean;
   insert(sql: string): void;
   openInNewTab(entry: HistoryEntry): void;
+  /** Opens an entry where its engine reopens it (a workspace section); absent: entries reopen as text only. */
+  openTarget?(target: HistoryTarget): void;
   close(): void;
 }
 
@@ -265,6 +269,20 @@ export class HistoryPanel {
         action("Delete", "trash", () => void this.remove(entry), "Delete this entry from the history"),
       ),
     );
+    void this.addTargetAction(entry, action);
+  }
+
+  /** Adds the engine's "Open in …" action to the detail of `entry` once it is known (while it is still selected). */
+  private async addTargetAction(
+    entry: HistoryEntry,
+    action: (label: string, iconName: IconName, run: () => void, title?: string) => HTMLElement,
+  ): Promise<void> {
+    const open = this.host.openTarget;
+    if (!open) return;
+    const target = await historyTargetOf(entry);
+    if (!target || this.selectedId !== entry.id) return;
+    const actions = this.detail.querySelector(".history-actions");
+    actions?.prepend(action(target.label, "table", () => open(target), "Open the query where it ran, filled in (does not edit it here)"));
   }
 
   private async remove(entry: HistoryEntry): Promise<void> {

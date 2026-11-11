@@ -34,6 +34,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   before/after preview of the first documents and the match count, simulated without writing; operators it cannot
   simulate exactly are refused) and "Delete matching documents…" (count and the first documents), each for the bar's
   current filter.
+  Saved queries: Save keeps the bar's fields (as typed) under a name, stored with the workspace of the connection in
+  `fosta-studio.json`; the Saved dropdown lists the collection's saved queries first, then the others of the database,
+  with search, rename and delete, and applying one of another collection opens it in that collection's tab. Query-bar
+  runs in the query history panel have "Open in collection", which opens the collection workspace with the bar filled
+  in.
 
 ### Changed
 

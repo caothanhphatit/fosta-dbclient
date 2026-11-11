@@ -3,7 +3,8 @@
  * options row; Collation behind its own toggle. Fields take mongosh syntax (braces optional) and are parsed by
  * `queryModel.ts`; a field that does not parse is underlined at the error and named under the bar. Ctrl+Enter (or
  * Enter on a one-line field) runs; ArrowUp / ArrowDown in the filter and the history button recall recent filters of
- * this collection (this tab's, then the query history's).
+ * this collection (this tab's, then the query history's). Save keeps the fields under a name and the Saved button lists
+ * the saved queries (`savedQueriesMenu.ts`).
  */
 import { api } from "../../core/api";
 import { showMenuBelow, type MenuItem } from "../../core/contextMenu";
@@ -11,6 +12,7 @@ import { h, icon } from "../../core/dom";
 import { queryBarCompletionSource, withFields, type QueryBarField } from "../../lang/mongo/queryCompletion";
 import type { SchemaCache } from "../../lang/schemaCache";
 import type { MongoApi } from "./mongoApi";
+import type { SavedQueries } from "./savedQueriesMenu";
 import { FieldEditor } from "./queryEditor";
 import { clampLimit, commandPrefix, uniqueFilters, FIELD_LABELS, parseCommandText, type FieldError, type QueryField, type QueryState } from "./queryModel";
 import { lineColumn } from "../../lang/mongo/shell";
@@ -43,6 +45,8 @@ export interface QueryBarOptions {
   changed(): void;
   /** The items of the bar's "More" menu (bulk actions on the matching documents); none: no menu. */
   actions?(): MenuItem[];
+  /** Save and the Saved dropdown; none: no buttons. */
+  saved?: SavedQueries;
 }
 
 export class QueryBar {
@@ -78,6 +82,18 @@ export class QueryBar {
       h("span", {}, "Options"),
     );
     this.optionsButton.addEventListener("click", () => this.setOptionsOpen(this.optionsRow.hidden));
+    const saved = options.saved;
+    const savedButton = saved
+      ? h(
+          "button",
+          { class: "tool-button mq-saved", type: "button", title: "Saved queries of this database", "aria-label": "Saved queries", "aria-haspopup": "dialog" },
+          icon("bookmark"),
+          h("span", {}, "Saved"),
+        )
+      : null;
+    savedButton?.addEventListener("click", () => void saved?.open(savedButton));
+    const saveButton = saved ? h("button", { class: "btn mq-save", type: "button", title: "Save the fields under a name" }, "Save") : null;
+    saveButton?.addEventListener("click", () => void saved?.save());
     const reset = h("button", { class: "btn mq-reset", type: "button", title: "Clear every field and run" }, "Reset");
     reset.addEventListener("click", () => options.reset());
     const find = h("button", { class: "btn primary mq-find", type: "button", title: "Run the query (Ctrl+Enter)" }, "Find");
@@ -108,7 +124,18 @@ export class QueryBar {
     this.element = h(
       "div",
       { class: "mq-bar" },
-      h("div", { class: "mq-row" }, this.labelled("Filter", filterHost, "mq-grow"), historyButton, this.optionsButton, reset, find, this.moreButton()),
+      h(
+        "div",
+        { class: "mq-row" },
+        this.labelled("Filter", filterHost, "mq-grow"),
+        historyButton,
+        savedButton,
+        this.optionsButton,
+        saveButton,
+        reset,
+        find,
+        this.moreButton(),
+      ),
       this.optionsRow,
       this.collationRow,
       this.errorLine,
@@ -146,6 +173,9 @@ export class QueryBar {
     this.skip.value = String(state.skip);
     this.limit.value = String(clampLimit(state.limit));
     this.showError(null);
+    // What is set is shown: a saved or reopened query may have options and a collation.
+    if (state.project.trim() || state.sort.trim() || state.skip > 0 || state.collation.trim()) this.setOptionsOpen(true, false);
+    if (state.collation.trim()) this.setCollationOpen(true, false);
   }
 
   optionsOpen(): boolean {
@@ -190,6 +220,7 @@ export class QueryBar {
   }
 
   dispose(): void {
+    this.options.saved?.dispose();
     for (const editor of this.editors.values()) editor.destroy();
     this.editors.clear();
   }

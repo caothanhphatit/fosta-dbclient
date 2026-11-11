@@ -10,7 +10,16 @@ import { defaultLanguage, engineInfo } from "../core/engines";
 import { defaultLanguageSupport, jsonLanguageSupport, sqlLanguageSupport, type LanguageSupport } from "../core/language";
 import type { AppError } from "../core/contract";
 import { toAppError } from "../core/errors";
-import { registerViews, setConnectErrorHandler, setEngineLoader, setIconResolver, type ConnectErrorContext } from "../core/views";
+import {
+  registerViews,
+  setConnectErrorHandler,
+  setEngineLoader,
+  setHistoryTargetResolver,
+  setIconResolver,
+  type ConnectErrorContext,
+  type HistoryTarget,
+} from "../core/views";
+import type { HistoryEntry } from "../core/types";
 import { sharedViews } from "./shared";
 
 export interface EngineUiModule {
@@ -26,6 +35,11 @@ export interface EngineUiModule {
    * change a setting) and resolve true to retry the connect, or false to show the error as usual.
    */
   connectError?(error: AppError, context: ConnectErrorContext): Promise<boolean>;
+  /**
+   * Where a query-history entry of this engine reopens besides a query tab (a workspace section with the query in it);
+   * null when it only reopens as text.
+   */
+  historyTarget?(entry: HistoryEntry): Promise<HistoryTarget | null>;
 }
 
 const modules = import.meta.glob<{ default: EngineUiModule }>("./*/index.ts");
@@ -38,6 +52,10 @@ setIconResolver(engineIcon);
 setConnectErrorHandler(async (id, error, context) => {
   const module = await ensureEngine(id);
   return module?.connectError ? module.connectError(toAppError(error), context) : false;
+});
+setHistoryTargetResolver(async (entry) => {
+  const module = await ensureEngine(entry.driver);
+  return module?.historyTarget ? module.historyTarget(entry) : null;
 });
 
 /** Loads and registers the engine's UI module once; null when the engine has none (it then uses the shared views). */

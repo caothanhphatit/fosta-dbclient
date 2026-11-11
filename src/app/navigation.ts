@@ -561,6 +561,7 @@ export class AppNavigation implements Navigator {
       connectionName: (id) => this.host.connectionName(id),
       historyEnabled: () => this.host.historyEnabled(),
       openQuery: (id, db, sql) => this.openQuery(id, db, sql),
+      openWorkspace: (id, object, section, request) => this.openWorkspace(id, object, section, request),
       reconnect: (id) => this.host.ensureConnected(id),
     };
     const title = restore?.title ?? `Query ${this.queryCounter}`;
