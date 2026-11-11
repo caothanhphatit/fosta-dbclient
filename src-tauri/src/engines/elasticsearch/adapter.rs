@@ -26,7 +26,7 @@ use super::{
     console,
     descriptor::{self, Flavor, DEFAULT_PORT},
     docs::{ByQueryKind, ByQueryOp, DocumentOp},
-    dsl, edits, grid,
+    dsl, edits, grid, profile,
     session::{self, CONSOLE, ESQL, SQL},
     tree, vector,
 };
@@ -35,8 +35,8 @@ use crate::{
         classify_common, default_validate_filter, require, unsupported_capability, value::percent_decode,
         vector::OPERATIONS as VECTOR_OPERATIONS, ApplyResult, AuthMethodId, BrowseRequest, CallContext, Capability, CapabilitySet,
         Category, Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, Engine, EngineDescriptor, Filter,
-        LanguageSpec, NodeAction, ObjectDescription, ObjectRef, OpenedSession, Page, ParsedConnection, RawFilterLang, RowChangeSet,
-        ServerInfo, SessionOptions, StatementInfo, TabularData, TlsConfig, TlsMode, TreeChildren, TreeRequest,
+        LanguageSpec, NodeAction, ObjectDescription, ObjectRef, OpenedSession, Page, ParsedConnection, ProfileEnrichment, ProfileExtras,
+        RawFilterLang, RowChangeSet, ServerInfo, SessionOptions, StatementInfo, TabularData, TlsConfig, TlsMode, TreeChildren, TreeRequest,
     },
     error::{AppError, AppResult},
 };
@@ -446,11 +446,22 @@ impl Connection for EsConnection {
         Some(self)
     }
 
+    fn profile_extras(&self) -> Option<&dyn ProfileExtras> {
+        Some(self)
+    }
+
     async fn ping(&self) -> AppResult<()> {
         self.engine.client().get("/").await.map(|_| ())
     }
 
     async fn close(&self) {}
+}
+
+#[async_trait]
+impl ProfileExtras for EsConnection {
+    async fn metadata(&self, _database: &str, objects: &[ObjectRef], _ctx: &CallContext) -> AppResult<ProfileEnrichment> {
+        profile::metadata(&self.engine, objects).await
+    }
 }
 
 #[async_trait]

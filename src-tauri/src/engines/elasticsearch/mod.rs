@@ -43,6 +43,7 @@ mod edits;
 pub mod errors;
 mod grid;
 pub mod mapping;
+mod profile;
 pub mod query_lang;
 pub mod search;
 mod session;
