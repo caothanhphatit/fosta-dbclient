@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { HistoryEntry, SavedQuery } from "../../core/types";
 import { commandText, EMPTY_QUERY, type QueryState } from "./queryModel";
-import { groupSaved, historyTarget, readQueryRequest, sameName, savedQueryOf, savedSummary, stateOfSaved, suggestName } from "./savedQueries";
+import { groupSaved, historyTarget, pipelineOfSaved, readQueryRequest, sameName, savedQueryOf, savedSummary, stateOfSaved, suggestName } from "./savedQueries";
 
 const target = { connectionId: "c1", database: "shop", collection: "orders" };
 
@@ -69,9 +69,18 @@ describe("saved queries", () => {
     const list = [saved("1", "orders query"), saved("2", "Orders Query 2"), saved("3", "orders query 3", "customers")];
     expect(suggestName(list, "shop", "orders")).toBe("orders query 3");
     expect(suggestName([], "shop", "orders")).toBe("orders query");
+    expect(suggestName([], "shop", "orders", "pipeline")).toBe("orders pipeline");
     expect(sameName(list, { database: "shop", collection: "orders", name: " ORDERS QUERY " })?.id).toBe("1");
     expect(sameName(list, { database: "shop", collection: "orders", name: "orders query" }, "1")).toBeNull();
     expect(sameName(list, { database: "shop", collection: "customers", name: "orders query" })).toBeNull();
+  });
+
+  it("keep pipelines as stage texts and summarise them by operator", () => {
+    const query = savedQueryOf("p", "P", EMPTY_QUERY, target, ["{ $match: {} }", "{ $count: 'n' }"]);
+    expect(pipelineOfSaved(query)).toEqual(["{ $match: {} }", "{ $count: 'n' }"]);
+    expect(savedSummary(query)).toBe("$match → $count (2 stages)");
+    expect(pipelineOfSaved(savedQueryOf("q", "Q", EMPTY_QUERY, target, []))).toBeNull();
+    expect(pipelineOfSaved(savedQueryOf("q", "Q", EMPTY_QUERY, target))).toBeNull();
   });
 });
 

@@ -3,7 +3,9 @@
  * call goes through the gateway, which classifies it; `find` and `count` go through `withConfirmation`, so a workspace
  * that asks before reads still asks (null: the user declined). `distinct` serves completion and never asks: it
  * resolves [] instead of failing. `resolveRef` asks only when the user opened the reference (probing never asks). The
- * bulk operations and `applyEdits` (saving pending edits) always go through `withConfirmation`.
+ * bulk operations and `applyEdits` (saving pending edits) always go through `withConfirmation`. `aggregatePreview` asks
+ * only when the user ran it (a preview after an edit never asks); `aggregate` (the full run, `$out` / `$merge` included)
+ * asks per the rules.
  */
 import type { ConnectionApi } from "../../core/connectionApi";
 import type { ApplyResult, RowChangeSet } from "../../core/contract";
@@ -42,6 +44,47 @@ export interface DistinctResult {
   elapsedMs: number;
 }
 
+/** One stage of `mongo.aggregatePreview`: its output on the sample (count, first documents) or the error that stopped it. */
+export interface PreviewStage {
+  index: number;
+  operator: string;
+  count: number | null;
+  elapsedMs: number;
+  documents: Record<string, unknown>[];
+  error: string | null;
+}
+
+export interface AggregatePreviewArgs extends Target {
+  pipeline: unknown[];
+  upTo?: number;
+  sampleSize?: number;
+  sampleMode?: "first" | "random";
+  limit?: number;
+  maxTimeMS?: number;
+}
+
+export interface AggregatePreviewResult {
+  stages: PreviewStage[];
+  sample: { mode: "first" | "random"; size: number; count: number };
+  elapsedMs: number;
+}
+
+export interface AggregateArgs extends Target {
+  pipeline: unknown[];
+  limit?: number;
+  allowDiskUse?: boolean;
+  maxTimeMS?: number;
+}
+
+export interface AggregateResult {
+  documents: Record<string, unknown>[];
+  hasMore: boolean;
+  elapsedMs: number;
+  statement: string;
+  /** The `$out` / `$merge` stage and the collection it wrote; null for a pipeline that returns documents. */
+  wrote: { stage: string; target: string | null } | null;
+}
+
 /** Values asked for value completion, and how long they are kept per field. */
 const DISTINCT_LIMIT = 50;
 const DISTINCT_TTL_MS = 60_000;
@@ -68,6 +111,20 @@ export class MongoApi {
 
   count(args: CountArgs): Promise<CountResult | null> {
     return withConfirmation((confirmation) => this.connection.invokeCapability<CountResult>("mongo.count", args, confirmation));
+  }
+
+  /**
+   * Each stage's output on a bounded sample (reads only). `ask`: the user ran it, so a workspace that asks before reads
+   * asks (null: declined); without it a read that needs asking fails (a preview after an edit).
+   */
+  aggregatePreview(args: AggregatePreviewArgs, ask: boolean): Promise<AggregatePreviewResult | null> {
+    const call = (confirmation: Confirmation | null) => this.connection.invokeCapability<AggregatePreviewResult>("mongo.aggregatePreview", args, confirmation);
+    return ask ? withConfirmation(call) : call(null);
+  }
+
+  /** The full run; with `$out` / `$merge` the gateway asks per the rules (null: declined). */
+  aggregate(args: AggregateArgs): Promise<AggregateResult | null> {
+    return withConfirmation((confirmation) => this.connection.invokeCapability<AggregateResult>("mongo.aggregate", args, confirmation));
   }
 
   /** The match count and a before/after sample of an update (reads only). */

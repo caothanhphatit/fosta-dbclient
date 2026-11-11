@@ -179,6 +179,95 @@ export class FieldEditor {
   }
 }
 
+export interface StageEditorOptions {
+  doc: string;
+  label: string;
+  completion: CompletionSource;
+  /** Ctrl+Enter. */
+  run(): void;
+  changed(): void;
+  focused?(): void;
+}
+
+const stageTheme = EditorView.theme({
+  "&": { border: "1px solid var(--border)", borderRadius: "var(--radius)" },
+  "&.cm-focused": { outline: "none", borderColor: "var(--accent)", boxShadow: "0 0 0 1px var(--accent)" },
+  ".cm-scroller": { minHeight: "72px", maxHeight: "320px", overflow: "auto" },
+  ".cm-content": { padding: "4px 0" },
+  ".cm-gutters": { borderRadius: "var(--radius) 0 0 var(--radius)" },
+  ".mq-error-mark": { textDecoration: "underline wavy var(--danger)", textUnderlineOffset: "3px", textDecorationSkipInk: "none" },
+  ".mq-error-end": { borderBottom: "2px solid var(--danger)", paddingLeft: "6px" },
+});
+
+/**
+ * The editor of one aggregation stage: a stage document over several lines (Enter is a new line, Ctrl+Enter runs the
+ * preview), line numbers, the same highlighting and completion as the query bar, the parse error underlined.
+ */
+export class StageEditor {
+  readonly view: EditorView;
+
+  constructor(parent: HTMLElement, options: StageEditorOptions) {
+    this.view = new EditorView({
+      parent,
+      doc: options.doc,
+      extensions: [
+        Prec.highest(
+          keymap.of([
+            {
+              key: "Mod-Enter",
+              run: () => {
+                options.run();
+                return true;
+              },
+            },
+          ]),
+        ),
+        autocompletion({ override: [options.completion], activateOnTyping: true, icons: false }),
+        Prec.high(keymap.of([{ key: "Tab", run: acceptCompletion }])),
+        keymap.of([...closeBracketsKeymap, ...completionKeymap, ...defaultKeymap, ...historyKeymap]),
+        history(),
+        lineNumbers(),
+        drawSelection(),
+        closeBrackets(),
+        bracketMatching(),
+        jsonMode(),
+        syntaxHighlighting(highlightStyle),
+        EditorView.lineWrapping,
+        EditorView.contentAttributes.of({ "aria-label": options.label, spellcheck: "false", autocapitalize: "off", autocorrect: "off" }),
+        errorField,
+        sharedTheme,
+        stageTheme,
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) options.changed();
+          if (update.focusChanged && update.view.hasFocus) options.focused?.();
+        }),
+      ],
+    });
+  }
+
+  get text(): string {
+    return this.view.state.doc.toString();
+  }
+
+  set text(value: string) {
+    if (value === this.text) return;
+    this.view.dispatch({ changes: { from: 0, to: this.view.state.doc.length, insert: value } });
+  }
+
+  showError(position: number | null): void {
+    this.view.dispatch({ effects: setError.of(position === null ? null : errorRange(this.text, position)) });
+  }
+
+  focus(position?: number): void {
+    if (position !== undefined) this.view.dispatch({ selection: { anchor: Math.min(position, this.view.state.doc.length) }, scrollIntoView: true });
+    this.view.focus();
+  }
+
+  destroy(): void {
+    this.view.destroy();
+  }
+}
+
 /** A read-only JSON viewer with line numbers (the documents' JSON mode). */
 export interface JsonViewer {
   set(text: string): void;

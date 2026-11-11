@@ -3,6 +3,9 @@
  * replaces that query, after asking), and the Saved dropdown lists this collection's saved queries first, then the
  * others of the database, with a search box; a row applies its query (another collection's opens in its own tab), its
  * buttons rename or delete it. The list is read from the backend when the dropdown opens and after each change.
+ *
+ * The Aggregations section uses the same list for pipelines (`pipeline`): Save keeps the stages, and a saved pipeline
+ * opens in the Aggregations section (`applyPipeline`) wherever it is picked; a saved find opens in Documents.
  */
 import { api } from "../../core/api";
 import { confirmDialog, field, openModal, textInput, toast } from "../../core/dialogs";
@@ -11,13 +14,17 @@ import { showError } from "../../core/errorPanel";
 import { placeInViewport } from "../../core/placement";
 import type { SavedQuery } from "../../core/types";
 import type { QueryState } from "./queryModel";
-import { groupSaved, sameName, savedQueryOf, savedSummary, stateOfSaved, suggestName, type SavedQueryTarget } from "./savedQueries";
+import { groupSaved, pipelineOfSaved, sameName, savedQueryOf, savedSummary, stateOfSaved, suggestName, type SavedQueryTarget } from "./savedQueries";
 
 export interface SavedQueriesOptions extends SavedQueryTarget {
   /** The bar's fields now. */
   state(): QueryState;
+  /** The stages to save (the Aggregations section): Save keeps a pipeline, not the bar's fields. */
+  pipeline?(): string[];
   /** Puts a saved query of this collection into the bar and runs it. */
   apply(state: QueryState): void;
+  /** Opens a saved pipeline of this collection in the Aggregations section. */
+  applyPipeline(stages: string[]): void;
   /** Opens a saved query of another collection of the database in that collection's workspace. */
   openElsewhere(saved: SavedQuery): void;
 }
@@ -80,12 +87,17 @@ export class SavedQueries {
     const initial =
       this.applied && this.applied.database === database && this.applied.collection === collection
         ? this.applied.name
-        : suggestName(this.list, database, collection);
-    const name = await promptName("Save query", initial, "Save");
+        : suggestName(this.list, database, collection, this.options.pipeline ? "pipeline" : "query");
+    const stages = this.options.pipeline?.() ?? null;
+    if (stages && stages.length === 0) {
+      toast("Add a stage first: an empty pipeline is not saved.", "error");
+      return;
+    }
+    const name = await promptName(stages ? "Save pipeline" : "Save query", initial, "Save");
     if (name === null) return;
     const existing = sameName(this.list, { database, collection, name });
     if (existing && !(await confirmDialog(`Replace the saved query "${existing.name}" of ${collection}?`, "Replace"))) return;
-    const saved = savedQueryOf(existing?.id ?? newId(), name, this.options.state(), this.options);
+    const saved = savedQueryOf(existing?.id ?? newId(), name, this.options.state(), this.options, stages);
     try {
       this.list = await api.saveSavedQuery(saved);
       this.applied = this.list.find((item) => item.id === saved.id) ?? saved;
@@ -201,6 +213,7 @@ export class SavedQueries {
 
   private row(saved: SavedQuery, elsewhere: boolean, close: () => void, render: () => void): HTMLElement {
     const summary = savedSummary(saved);
+    const pipeline = pipelineOfSaved(saved);
     const rename = h("button", { class: "icon-button", type: "button", title: "Rename", "aria-label": `Rename ${saved.name}` }, icon("edit"));
     const remove = h("button", { class: "icon-button", type: "button", title: "Delete", "aria-label": `Delete ${saved.name}` }, icon("trash"));
     const row = h(
@@ -209,7 +222,13 @@ export class SavedQueries {
       h(
         "div",
         { class: "mq-saved-text" },
-        h("div", { class: "mq-saved-name" }, saved.name, elsewhere ? h("span", { class: "mq-saved-collection" }, saved.collection) : null),
+        h(
+          "div",
+          { class: "mq-saved-name" },
+          saved.name,
+          pipeline ? h("span", { class: "mq-saved-kind" }, "pipeline") : null,
+          elsewhere ? h("span", { class: "mq-saved-collection" }, saved.collection) : null,
+        ),
         h("div", { class: "mq-saved-summary" }, summary.length > 120 ? `${summary.slice(0, 119)}…` : summary),
       ),
       h("span", { class: "mq-saved-actions" }, rename, remove),
@@ -218,6 +237,7 @@ export class SavedQueries {
       close();
       this.applied = saved;
       if (elsewhere) this.options.openElsewhere(saved);
+      else if (pipeline) this.options.applyPipeline(pipeline);
       else this.options.apply(stateOfSaved(saved));
     });
     rename.addEventListener("click", (event) => {

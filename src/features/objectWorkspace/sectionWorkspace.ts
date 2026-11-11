@@ -40,6 +40,8 @@ export interface SectionContext {
   stateChanged(): void;
   /** Shows another section of the same tab (loading it first). */
   show(sectionId: string): Promise<void>;
+  /** Shows another section of the same tab and hands it `request` (its `receive`), e.g. a query to open as a pipeline. */
+  deliver(sectionId: string, request: unknown): Promise<void>;
 }
 
 export type SectionFactory = (ctx: SectionContext) => SectionContent;
@@ -247,6 +249,7 @@ class SectionWorkspace implements WorkspaceTab {
           savedState: this.restored[section.id],
           stateChanged: () => this.onViewChanged?.(),
           show: (id) => this.show(id),
+          deliver: (id, request) => this.deliver(id, request),
         };
         const content = factory(sectionCtx);
         delete this.restored[section.id];

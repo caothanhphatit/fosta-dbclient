@@ -63,6 +63,8 @@ describe("pipeline edits", () => {
     expect(textForOperator(fresh, "$sort")).toBe(templateOf("$sort"));
     expect(textForOperator(stage("y", "{ $set: { a: 1 } }"), "$addFields")).toBe("{ $addFields: { a: 1 } }");
     expect(textForOperator(stage("z", "  "), "$limit")).toBe(templateOf("$limit"));
+    expect(textForOperator(stage("o", "{ $out: 'copy' }"), "$limit")).toBe(templateOf("$limit"));
+    expect(textForOperator(stage("l", "{ $limit: 5 }"), "$skip")).toBe("{ $skip: 5 }");
   });
 
   it("reads the operator of typed text", () => {

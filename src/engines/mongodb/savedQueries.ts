@@ -6,6 +6,7 @@
  */
 import type { ObjectRef } from "../../core/contract";
 import type { HistoryEntry, SavedQuery } from "../../core/types";
+import { pipelineSummary } from "./pipelineModel";
 import { clampLimit, EMPTY_QUERY, parseCommandText, type QueryState } from "./queryModel";
 
 export const ENGINE = "mongodb";
@@ -16,8 +17,11 @@ export interface SavedQueryTarget {
   collection: string;
 }
 
-/** A new saved query of the bar's `state` (the backend sets `updatedAt`). */
-export function savedQueryOf(id: string, name: string, state: QueryState, target: SavedQueryTarget): SavedQuery {
+/**
+ * A new saved query of the bar's `state` (the backend sets `updatedAt`); with `pipeline` (stage texts, the Aggregations
+ * section) it is a saved pipeline.
+ */
+export function savedQueryOf(id: string, name: string, state: QueryState, target: SavedQueryTarget, pipeline: string[] | null = null): SavedQuery {
   return {
     id,
     name: name.trim(),
@@ -33,7 +37,7 @@ export function savedQueryOf(id: string, name: string, state: QueryState, target
       skip: Math.max(0, Math.floor(Number(state.skip) || 0)),
       limit: clampLimit(state.limit),
     },
-    pipeline: null,
+    pipeline: pipeline && pipeline.length > 0 ? [...pipeline] : null,
     updatedAt: 0,
   };
 }
@@ -70,8 +74,16 @@ export interface SavedGroups {
   others: SavedQuery[];
 }
 
-/** One line of what a saved query does: `status: 'paid' · sort { total: -1 } · limit 50`. */
+/** The stages of a saved pipeline; null for a saved find. */
+export function pipelineOfSaved(saved: SavedQuery): string[] | null {
+  const stages = Array.isArray(saved.pipeline) ? saved.pipeline.filter((stage): stage is string => typeof stage === "string") : [];
+  return stages.length > 0 ? stages : null;
+}
+
+/** One line of what a saved query does: `status: 'paid' · sort { total: -1 } · limit 50`, or `$match → $group (2 stages)`. */
 export function savedSummary(saved: SavedQuery): string {
+  const pipeline = pipelineOfSaved(saved);
+  if (pipeline) return pipelineSummary(pipeline);
   const state = stateOfSaved(saved);
   const parts = [state.filter.trim() || "{}"];
   if (state.project.trim()) parts.push(`project ${state.project.trim()}`);
@@ -102,9 +114,9 @@ export function groupSaved(list: readonly SavedQuery[], database: string, collec
 }
 
 /** A name for a new saved query that no saved query of the collection has yet ("orders query", "orders query 2"). */
-export function suggestName(list: readonly SavedQuery[], database: string, collection: string): string {
+export function suggestName(list: readonly SavedQuery[], database: string, collection: string, noun = "query"): string {
   const taken = new Set(list.filter((saved) => saved.database === database && saved.collection === collection).map((saved) => saved.name.toLowerCase()));
-  const base = `${collection} query`;
+  const base = `${collection} ${noun}`;
   if (!taken.has(base.toLowerCase())) return base;
   for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`.toLowerCase())) return `${base} ${n}`;
 }
@@ -120,6 +132,11 @@ export function sameName(list: readonly SavedQuery[], saved: Pick<SavedQuery, "d
 }
 
 // --- Query history → workspace ---------------------------------------------------------------------------------------
+
+/** What the Aggregations section is handed (`receive`): stage texts to open (a saved pipeline, a Documents query). */
+export interface AggregationsRequest {
+  pipeline: string[];
+}
 
 /** What a collection workspace's Documents section is handed (`receive`): a filter, or the whole bar state. */
 export interface DocumentsRequest {

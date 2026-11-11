@@ -165,15 +165,24 @@ export function toggleStage(stages: readonly PipelineStage[], id: string): Pipel
   return stages.map((stage) => (stage.id === id ? { ...stage, enabled: !stage.enabled } : stage));
 }
 
+/** What a stage's value starts with after the operator: `{` a document, `[` an array, `"` a string, `0` a number. */
+function bodyKind(text: string): string | null {
+  const match = /^\s*\{\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*["']?\$[A-Za-z]+["']?\s*:\s*(\S)/.exec(text);
+  if (!match) return null;
+  const c = match[1];
+  return c === "'" || c === '"' ? '"' : /[\d-]/.test(c) ? "0" : c;
+}
+
 /**
  * The text of a stage after picking `operator`: an empty or untouched template becomes the new template; typed text
- * keeps its body under the new operator name; text without an operator becomes the template.
+ * keeps its body under the new operator name when the new operator takes the same kind of value (a document for a
+ * document: `$set` to `$addFields`); otherwise, and for text without an operator, the new template.
  */
 export function textForOperator(stage: PipelineStage, operator: string): string {
   const text = stage.text;
   if (text.trim() === "" || text === templateOf(stage.operator)) return templateOf(operator);
   const current = operatorOfText(text);
-  if (!current) return templateOf(operator);
+  if (!current || bodyKind(text) !== bodyKind(templateOf(operator))) return templateOf(operator);
   return text.replace(/^(\s*\{\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*["']?)\$[A-Za-z]+/, `$1${operator}`);
 }
 

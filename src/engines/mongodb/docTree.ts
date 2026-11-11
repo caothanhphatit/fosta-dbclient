@@ -12,7 +12,7 @@ import { copyText, h, icon, iconButton } from "../../core/dom";
 import { readable, shellText } from "./bson";
 import { documentJson, foldedText, isNested, type Doc, type Json } from "./documents";
 import { refPath } from "./refs";
-import { buildLines, DEFAULT_LIMITS, type TreeLimits, type TreeLine, type TreeState } from "./treeLines";
+import { buildLines, DEFAULT_LIMITS, lineId, type TreeLimits, type TreeLine, type TreeState } from "./treeLines";
 
 /** Items one "Show more" adds. */
 const MORE_STEP = 1000;
@@ -85,11 +85,16 @@ export class DocTree {
     }
   }
 
-  /** Shows `documents` (the first at position `offset` among all matches), every container folded, at the top. */
-  show(documents: readonly Doc[], offset = 0): void {
+  /**
+   * Shows `documents` (the first at position `offset` among all matches) at the top, every container folded but those
+   * at `open` (paths opened in every document, e.g. the array a `$lookup` joined).
+   */
+  show(documents: readonly Doc[], offset = 0, open: readonly (readonly string[])[] = []): void {
     this.documents = documents;
     this.offset = offset;
-    this.state = { expanded: new Set(), limits: new Map() };
+    const expanded = new Set<string>();
+    for (const path of open) documents.forEach((_, doc) => expanded.add(lineId(doc, path)));
+    this.state = { expanded, limits: new Map() };
     this.rebuild();
     this.element.scrollTop = 0;
     this.draw(true);
