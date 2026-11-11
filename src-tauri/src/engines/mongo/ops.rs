@@ -24,6 +24,7 @@
 //! - `mongo.aggregatePreview`, `mongo.aggregate`: see `aggregate.rs`.
 //! - `mongo.schema`: see `schema.rs`.
 //! - `mongo.indexes`, `mongo.createIndex`, `mongo.hideIndex`, `mongo.unhideIndex`, `mongo.dropIndex`: see `indexes.rs`.
+//! - `mongo.validation`, `mongo.setValidation`, `mongo.validationCheck`: see `validation.rs`.
 
 use std::time::{Duration, Instant};
 
@@ -36,7 +37,7 @@ use mongodb::{
 use serde_json::{json, Value as Json};
 
 use super::{
-    aggregate, bulk, indexes, schema,
+    aggregate, bulk, indexes, schema, validation,
     values::{self, ID_FIELD},
 };
 use crate::{
@@ -46,7 +47,7 @@ use crate::{
 };
 
 /// The `invoke` names of this module.
-pub const OPERATIONS: [&str; 15] = [
+pub const OPERATIONS: [&str; 18] = [
     "mongo.find",
     "mongo.count",
     "mongo.distinct",
@@ -62,9 +63,12 @@ pub const OPERATIONS: [&str; 15] = [
     "mongo.hideIndex",
     "mongo.unhideIndex",
     "mongo.dropIndex",
+    "mongo.validation",
+    "mongo.setValidation",
+    "mongo.validationCheck",
 ];
 /// The arguments that hold query documents (checked for server-side JavaScript).
-pub const DOCUMENT_ARGS: [&str; 10] = [
+pub const DOCUMENT_ARGS: [&str; 11] = [
     "filter",
     "projection",
     "sort",
@@ -75,6 +79,7 @@ pub const DOCUMENT_ARGS: [&str; 10] = [
     "partialFilterExpression",
     "wildcardProjection",
     "weights",
+    "validator",
 ];
 
 /// Documents per `mongo.find` page when no limit is given, and the most a page returns.
@@ -114,6 +119,9 @@ pub async fn invoke(client: &Client, name: &str, args: &Json, ctx: &CallContext)
         "mongo.hideIndex" => indexes::set_hidden(client, &coll, args, true).await,
         "mongo.unhideIndex" => indexes::set_hidden(client, &coll, args, false).await,
         "mongo.dropIndex" => indexes::drop_index(client, &coll, args).await,
+        "mongo.validation" => validation::validation(client, &coll).await,
+        "mongo.setValidation" => validation::set_validation(client, &coll, args).await,
+        "mongo.validationCheck" => validation::validation_check(&coll, args, max_time).await,
         _ => bulk::delete_many(&coll, args).await,
     }
 }

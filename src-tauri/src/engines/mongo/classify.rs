@@ -101,8 +101,9 @@ pub fn classify_mongo(text: &str) -> Classification {
 /// Classifies an engine operation by name: `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`, `mongo.schema` and
 /// `mongo.updatePreview` read; `mongo.updateMany` writes (destructive with an empty filter); `mongo.deleteMany` is always
 /// destructive; `mongo.indexes` reads, `mongo.createIndex` / `mongo.hideIndex` / `mongo.unhideIndex` are DDL and
-/// `mongo.dropIndex` is destructive (the `_id_` index, or `*`, is refused). Any of them is administration when it targets
-/// credentials; server-side JavaScript in any query document, update or partial filter and unknown names are refused.
+/// `mongo.dropIndex` is destructive (the `_id_` index, or `*`, is refused); `mongo.validation` and `mongo.validationCheck` read,
+/// `mongo.setValidation` is DDL (`collMod`). Any of them is administration when it targets
+/// credentials; server-side JavaScript in any query document, update, partial filter or validator and unknown names are refused.
 pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo {
     if !OPERATIONS.contains(&name) {
         return StatementInfo::refused(name, name, "unknown operation");
@@ -141,6 +142,8 @@ pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo
             }
             "mongo.dropIndex" => StatementInfo::new(Category::Destructive, name, &excerpt)
                 .with_reason("Drops the index; queries that used it scan instead until it is built again"),
+            "mongo.setValidation" => StatementInfo::new(Category::Ddl, name, &excerpt)
+                .with_reason("Changes the collection's validation rules (collMod); later writes are checked against them"),
             // `mongo.updatePreview` simulates the update in an aggregation: it reads.
             _ => StatementInfo::new(Category::Read, name, &excerpt),
         }
@@ -546,6 +549,52 @@ mod tests {
         let secret = classify_operation(
             "mongo.createIndex",
             &json!({ "database": "admin", "collection": "system.users", "keys": { "user": 1 } }),
+        );
+        assert_eq!(secret.category, Category::Admin);
+    }
+
+    #[test]
+    fn validation_operations_read_or_are_ddl() {
+        use serde_json::json;
+        let args = |extra: serde_json::Value| {
+            let mut args = json!({ "database": "shop", "collection": "orders" });
+            args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            args
+        };
+        let schema = json!({ "$jsonSchema": { "bsonType": "object", "required": ["status"] } });
+        for (name, extra) in [
+            ("mongo.validation", json!({})),
+            ("mongo.validationCheck", json!({ "validator": schema.clone(), "limit": 5 })),
+        ] {
+            let info = classify_operation(name, &args(extra));
+            assert_eq!((info.category, info.refused.as_deref()), (Category::Read, None), "{name}");
+            assert_eq!(info.tables, ["orders"]);
+        }
+        for extra in [
+            json!({ "validator": schema.clone(), "validationLevel": "strict", "validationAction": "error" }),
+            json!({ "validationLevel": "off" }),
+            json!({ "validator": {} }),
+        ] {
+            let info = classify_operation("mongo.setValidation", &args(extra.clone()));
+            assert_eq!((info.category, info.refused.as_deref()), (Category::Ddl, None), "{extra}");
+        }
+        // Server-side JavaScript in a validator, as JSON or text, is refused for the check and for applying it.
+        for validator in [
+            json!({ "$where": "true" }),
+            json!({ "$expr": { "$function": { "body": "f", "args": [], "lang": "js" } } }),
+            json!("{ \"$and\": [ { \"$expr\": { \"$function\": {} } } ] }"),
+        ] {
+            for name in ["mongo.validationCheck", "mongo.setValidation"] {
+                let refused = classify_operation(name, &args(json!({ "validator": validator.clone() })));
+                assert!(
+                    refused.refused.as_deref().is_some_and(|why| why.contains("JavaScript")),
+                    "{name}: {refused:?}"
+                );
+            }
+        }
+        let secret = classify_operation(
+            "mongo.setValidation",
+            &json!({ "database": "admin", "collection": "system.users", "validator": {} }),
         );
         assert_eq!(secret.category, Category::Admin);
     }

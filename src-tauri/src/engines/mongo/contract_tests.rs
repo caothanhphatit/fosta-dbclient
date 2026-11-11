@@ -1586,3 +1586,142 @@ async fn contract_mongo_indexes() {
     run(&handle, &tab, r#"{ "drop": "contract_indexes" }"#, "fosta_contract").await.ok();
     manager.disconnect(CONNECTION).await;
 }
+
+/// The Validation section's operations: reading the rules (none, then a `$jsonSchema` with a level and an action),
+/// checking existing documents against a validator (count and samples, `$jsonSchema` and query operators), applying
+/// through the gateway (Read-only blocks DDL), writes refused by the rules, removing them; server-side JavaScript refused.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mongo.yml"]
+async fn contract_mongo_validation() {
+    let f = fixture();
+    let (manager, handle) = connect(&f).await;
+    let tab = session(&handle).await;
+    run(&handle, &tab, r#"{ "drop": "contract_validation" }"#, "fosta_contract")
+        .await
+        .ok();
+    let documents: Vec<serde_json::Value> = (0..20)
+        .map(|i| {
+            if i % 5 == 0 {
+                json!({ "_id": i, "qty": format!("{i}") })
+            } else {
+                json!({ "_id": i, "status": if i % 2 == 0 { "paid" } else { "open" }, "qty": i })
+            }
+        })
+        .collect();
+    let insert = json!({ "insert": "contract_validation", "documents": documents }).to_string();
+    run(&handle, &tab, &insert, "fosta_contract").await.unwrap();
+    let context = |preset: Preset| Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: CONNECTION.into(),
+        connection_name: CONNECTION.into(),
+        safety: SafetySettings::preset(preset),
+    };
+    let invoke = |name: &'static str, extra: serde_json::Value, preset: Preset| {
+        let mut args = json!({ "database": "fosta_contract", "collection": "contract_validation" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let (manager, context) = (&manager, context(preset));
+        async move { gateway::invoke(manager, &context, gateway::Caller::EngineView, name, args, None).await }
+    };
+
+    // No rules yet: the server's defaults.
+    let rules = invoke("mongo.validation", json!({}), Preset::ReadOnly).await.unwrap();
+    assert_eq!(rules["validator"], serde_json::Value::Null, "{rules}");
+    assert_eq!(rules["validationLevel"], "strict");
+    assert_eq!(rules["validationAction"], "error");
+    assert_eq!(rules["type"], "collection");
+
+    // Checking: 4 documents lack a status and hold a string qty.
+    let schema = json!({ "$jsonSchema": {
+        "bsonType": "object",
+        "required": ["status", "qty"],
+        "properties": { "status": { "enum": ["paid", "open"] }, "qty": { "bsonType": ["int", "long"], "minimum": 0 } },
+    } });
+    let check = invoke(
+        "mongo.validationCheck",
+        json!({ "validator": schema.clone(), "limit": 2 }),
+        Preset::ReadOnly,
+    )
+    .await
+    .unwrap();
+    assert_eq!(check["failing"], 4, "{check}");
+    assert_eq!(check["capped"], false);
+    assert_eq!(check["total"], 20);
+    assert_eq!(check["samples"].as_array().unwrap().len(), 2);
+    assert_eq!(check["samples"][0]["_id"], 0);
+    assert!(check["statement"].as_str().unwrap().contains("$nor"), "{check}");
+    let operators = invoke(
+        "mongo.validationCheck",
+        json!({ "validator": "{ \"qty\": { \"$gte\": 10 } }" }),
+        Preset::ReadOnly,
+    )
+    .await
+    .unwrap();
+    // qty < 10 (1..9 without 5) and the string quantities fail.
+    assert_eq!(operators["failing"], 12, "{operators}");
+    let none = invoke("mongo.validationCheck", json!({ "validator": {} }), Preset::ReadOnly)
+        .await
+        .unwrap();
+    assert_eq!(none["failing"], 0);
+
+    // Applying is DDL: Read-only blocks it, Open applies.
+    let apply = json!({ "validator": schema.clone(), "validationLevel": "moderate", "validationAction": "error" });
+    assert_eq!(
+        invoke("mongo.setValidation", apply.clone(), Preset::ReadOnly)
+            .await
+            .unwrap_err()
+            .code(),
+        Some(gateway::BLOCKED)
+    );
+    let applied = invoke("mongo.setValidation", apply, Preset::Open).await.unwrap();
+    assert!(applied["statement"]
+        .as_str()
+        .unwrap()
+        .starts_with(r#"db.runCommand({"collMod":"contract_validation","validator":"#));
+    let rules = invoke("mongo.validation", json!({}), Preset::ReadOnly).await.unwrap();
+    assert_eq!(rules["validator"]["$jsonSchema"]["required"], json!(["status", "qty"]), "{rules}");
+    assert_eq!(rules["validationLevel"], "moderate");
+    assert_eq!(rules["validationAction"], "error");
+
+    // The server refuses a document that breaks the rules.
+    let bad = json!({ "insert": "contract_validation", "documents": [{ "_id": 100, "qty": 1 }] }).to_string();
+    let refused = run(&handle, &tab, &bad, "fosta_contract").await;
+    assert!(refused.is_err() || format!("{refused:?}").contains("writeErrors"), "{refused:?}");
+
+    // Level and action alone; an empty validator removes the rules.
+    invoke("mongo.setValidation", json!({ "validationAction": "warn" }), Preset::Open)
+        .await
+        .unwrap();
+    let rules = invoke("mongo.validation", json!({}), Preset::ReadOnly).await.unwrap();
+    assert_eq!(rules["validationAction"], "warn");
+    assert_eq!(rules["validationLevel"], "moderate");
+    invoke(
+        "mongo.setValidation",
+        json!({ "validator": {}, "validationLevel": "strict" }),
+        Preset::Open,
+    )
+    .await
+    .unwrap();
+    let rules = invoke("mongo.validation", json!({}), Preset::ReadOnly).await.unwrap();
+    assert_eq!(rules["validator"], serde_json::Value::Null, "{rules}");
+
+    // Server-side JavaScript and bad levels are refused.
+    for extra in [
+        json!({ "validator": { "$expr": { "$function": { "body": "function() { return true }", "args": [], "lang": "js" } } } }),
+        json!({ "validator": { "$where": "true" } }),
+        json!({ "validationLevel": "lax" }),
+        json!({}),
+    ] {
+        assert!(invoke("mongo.setValidation", extra.clone(), Preset::Open).await.is_err(), "{extra}");
+    }
+    assert!(
+        invoke("mongo.validationCheck", json!({ "validator": { "$where": "true" } }), Preset::Open)
+            .await
+            .is_err()
+    );
+
+    run(&handle, &tab, r#"{ "drop": "contract_validation" }"#, "fosta_contract")
+        .await
+        .ok();
+    manager.disconnect(CONNECTION).await;
+}
