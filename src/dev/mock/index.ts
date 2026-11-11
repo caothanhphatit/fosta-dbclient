@@ -102,7 +102,10 @@ import {
 import type { EngineMock, MockSession } from "./types";
 
 const modules = import.meta.glob<EngineMock>(["./engines/*.ts", "!./engines/*.test.ts"], { eager: true });
-const engines = Object.values(modules).sort((a, b) => a.order - b.order);
+// Helper modules next to the engines (mongoSchema.ts, mongoIndexes.ts) export no descriptor: they are not engines.
+const engines = Object.values(modules)
+  .filter((module) => module.descriptor)
+  .sort((a, b) => a.order - b.order);
 const engineById = new Map(engines.map((engine) => [engine.descriptor.id, engine]));
 
 interface Connection {

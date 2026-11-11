@@ -1,0 +1,368 @@
+/* MongoDB collection workspace: the Indexes section (the list and the create form). Colours and spacing come from the shared tokens. */
+
+.ix-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--canvas);
+}
+
+.ix-bar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.ix-bar > .toolbar-end {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  gap: 8px;
+}
+
+.ix-bar .btn,
+.ix-form .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ix-search {
+  width: 240px;
+  max-width: 100%;
+}
+
+.ix-meta,
+.ix-dim {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.ix-info {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.ix-info[hidden] {
+  display: none;
+}
+
+.ix-info-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.ix-info-icon {
+  flex: none;
+}
+
+/* --- The table ------------------------------------------------------------------------------------------------------ */
+
+.ix-table {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ix-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.ix-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) minmax(180px, 2fr) minmax(140px, 1.6fr) 90px minmax(150px, 1.2fr) 64px;
+  align-items: center;
+  min-height: 34px;
+  border-bottom: 1px solid var(--grid-line, var(--border));
+}
+
+.ix-row:not(.ix-head):hover {
+  background: var(--hover);
+}
+
+.ix-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 28px;
+  background: var(--surface);
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.ix-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 8px;
+}
+
+.ix-name {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
+
+.ix-hidden .ix-name,
+.ix-hidden .ix-keys {
+  opacity: 0.6;
+}
+
+.ix-size {
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-actions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 0;
+}
+
+.ix-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ix-sort:hover,
+.ix-sort.on {
+  color: var(--fg);
+}
+
+.ix-empty {
+  padding: 16px 10px;
+  color: var(--fg-3);
+}
+
+.ix-key {
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.ix-key-field {
+  padding: 1px 5px;
+}
+
+.ix-kind {
+  padding: 1px 5px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: 11px;
+}
+
+.ix-kind-asc,
+.ix-kind-desc {
+  color: var(--accent);
+}
+
+.ix-kind-text,
+.ix-kind-2dsphere,
+.ix-kind-2d,
+.ix-kind-hashed {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ix-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ix-badge-unique,
+.ix-badge-id {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ix-badge-hidden {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+}
+
+.ix-badge-ttl,
+.ix-badge-partial {
+  border: 1px solid var(--border);
+}
+
+.ix-ops {
+  font-variant-numeric: tabular-nums;
+}
+
+.ix-unused {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
+  font-size: 11px;
+  cursor: help;
+}
+
+/* --- The create form -------------------------------------------------------------------------------------------------- */
+
+.ix-form {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 60%;
+  padding: 10px;
+  overflow: auto;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.ix-form[hidden] {
+  display: none;
+}
+
+.ix-form-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ix-form-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px 20px;
+}
+
+.ix-form-keys {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.ix-key-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: stretch;
+}
+
+.ix-key-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ix-key-n {
+  width: 16px;
+  color: var(--fg-3);
+  font-size: 11px;
+  text-align: right;
+}
+
+.ix-field-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.ix-kind-select {
+  width: 110px;
+}
+
+.ix-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ix-opt {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.ix-opt-input {
+  min-width: 0;
+}
+
+.ix-opt-label {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.ix-opt.invalid .input,
+.ix-opt-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.ix-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding-left: 138px;
+}
+
+.ix-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.ix-preview {
+  margin: 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.ix-form-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.ix-form-error[hidden] {
+  display: none;
+}
+
+.ix-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

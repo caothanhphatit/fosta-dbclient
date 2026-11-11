@@ -5,13 +5,15 @@
  * resolves [] instead of failing. `resolveRef` asks only when the user opened the reference (probing never asks). The
  * bulk operations and `applyEdits` (saving pending edits) always go through `withConfirmation`. `aggregatePreview` asks
  * only when the user ran it (a preview after an edit never asks); `aggregate` (the full run, `$out` / `$merge` included)
- * asks per the rules. `schema` asks only when the user pressed Analyze.
+ * asks per the rules. `schema` asks only when the user pressed Analyze. `indexes` asks only when the user pressed Refresh;
+ * creating, hiding and dropping an index always go through `withConfirmation` (DDL / destructive per the rules).
  */
 import type { ConnectionApi } from "../../core/connectionApi";
 import type { ApplyResult, RowChangeSet } from "../../core/contract";
 import type { Confirmation } from "../../core/types";
 import { withConfirmation } from "../../features/safety/confirmationDialog";
 import type { deleteArgs, PreviewResult, previewArgs, updateArgs } from "./bulkModel";
+import type { CreateIndexArgs, IndexesResult } from "./indexModel";
 import type { CountArgs, FindArgs, FindPage, Target } from "./queryModel";
 import type { SchemaArgs, SchemaResult } from "./schemaModel";
 
@@ -37,6 +39,20 @@ export interface UpdateManyResult {
 export interface DeleteManyResult {
   deleted: number;
   elapsedMs: number;
+}
+
+export interface CreateIndexResult {
+  name: string;
+  created: boolean;
+  statement: string;
+  elapsedMs: number;
+}
+
+export interface HideIndexResult {
+  name: string;
+  hidden: boolean;
+  changed: boolean;
+  statement: string;
 }
 
 export interface DistinctResult {
@@ -135,6 +151,33 @@ export class MongoApi {
   schema(args: SchemaArgs, ask: boolean): Promise<SchemaResult | null> {
     const call = (confirmation: Confirmation | null) => this.connection.invokeCapability<SchemaResult>("mongo.schema", args, confirmation);
     return ask ? withConfirmation(call) : call(null);
+  }
+
+  /**
+   * The collection's indexes with options, sizes and usage (`mongo.indexes`, reads only). `ask`: the user pressed Refresh,
+   * so a workspace that asks before reads asks (null: declined); without it a read that needs asking fails.
+   */
+  indexes(ask: boolean): Promise<IndexesResult | null> {
+    const call = (confirmation: Confirmation | null) => this.connection.invokeCapability<IndexesResult>("mongo.indexes", { ...this.target }, confirmation);
+    return ask ? withConfirmation(call) : call(null);
+  }
+
+  /** Builds an index (DDL: the gateway asks per the rules; null: declined). */
+  createIndex(args: CreateIndexArgs): Promise<CreateIndexResult | null> {
+    return withConfirmation((confirmation) => this.connection.invokeCapability<CreateIndexResult>("mongo.createIndex", args, confirmation));
+  }
+
+  /** Hides an index from the planner or shows it again (DDL, `collMod`). */
+  setIndexHidden(name: string, hidden: boolean): Promise<HideIndexResult | null> {
+    const operation = hidden ? "mongo.hideIndex" : "mongo.unhideIndex";
+    return withConfirmation((confirmation) => this.connection.invokeCapability<HideIndexResult>(operation, { ...this.target, name }, confirmation));
+  }
+
+  /** Drops an index (destructive: the gateway asks, typed in Guarded workspaces). */
+  dropIndex(name: string): Promise<{ name: string; statement: string } | null> {
+    return withConfirmation((confirmation) =>
+      this.connection.invokeCapability<{ name: string; statement: string }>("mongo.dropIndex", { ...this.target, name }, confirmation),
+    );
   }
 
   /** The match count and a before/after sample of an update (reads only). */

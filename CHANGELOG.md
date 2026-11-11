@@ -68,6 +68,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   filter in the Documents query bar (has the field, is missing, equals a top value, is of a type) and "Copy path"
   copies it. The analysis is kept with the open tabs, its paths feed the query bar's completion, and the assistant
   sees the fields and types (not the values).
+  An Indexes section lists the collection's indexes: keys with their direction or type (text, 2dsphere, hashed,
+  wildcard), properties (unique, sparse, partial filter, TTL, collation, hidden), size, and how many operations used
+  each since when, with an "Unused" hint for indexes no query used in a week. Each index copies as a mongosh
+  `createIndex` line, can be hidden from the query planner and shown again, or dropped (never `_id_`; Guarded
+  workspaces ask for the collection name). "Create index" opens a form with key rows (field completion from the sampled
+  paths, 1 / -1 / text / 2dsphere / hashed), a name, unique / sparse / hidden, a partial filter, TTL, collation and
+  wildcard projection in mongosh syntax, and a live preview of the command; creating goes through the safety gateway
+  as DDL. The sort and search are kept with the open tabs, and the assistant sees the indexes.
 
 ### Changed
 
