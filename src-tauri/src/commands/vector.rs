@@ -5,7 +5,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::gateway_context;
+use super::{gateway_context, keys};
 pub use crate::contract::vector::KeyCell;
 use crate::{
     config::AppConfig,
@@ -125,15 +125,42 @@ pub async fn index_recall(
     invoke(state, &connection_id, "vector.recall", args).await
 }
 
-/// Saves the embedding API settings. An empty key keeps the saved one, unless the URL or the way the key is sent
-/// changed: then the saved key is forgotten, so it is never sent to an endpoint it was not saved for.
-pub fn save_embedding_settings(state: &AppState, settings: Option<EmbeddingSettings>, api_key: Option<String>) -> AppResult<AppConfig> {
-    let saved = state.config.read(|config| config.embedding.clone());
-    remember_embedding_key(saved.as_ref(), settings.as_ref(), api_key)?;
+/// Saves the embedding API settings. An empty key keeps the saved one, unless the endpoint or the way the key is sent
+/// changed: then the saved key is forgotten, so it is never sent to an endpoint it was not saved for. The model and
+/// the dimensions do not matter. `key_ref` picks a key saved for the same API instead of a typed one (see [`keys`]).
+pub fn save_embedding_settings(
+    state: &AppState,
+    settings: Option<EmbeddingSettings>,
+    api_key: Option<String>,
+    key_ref: Option<String>,
+) -> AppResult<AppConfig> {
+    let config = state.config.snapshot();
+    let api_key = typed_or_picked(&config, settings.as_ref(), api_key, key_ref)?;
+    remember_embedding_key(config.embedding.as_ref(), settings.as_ref(), api_key)?;
     state.config.update(|config| {
         config.embedding = settings;
         Ok(())
     })
+}
+
+/// The typed key, else the secret behind `key_ref` when it was saved for the same API as `settings`.
+fn typed_or_picked(
+    config: &AppConfig,
+    settings: Option<&EmbeddingSettings>,
+    api_key: Option<String>,
+    key_ref: Option<String>,
+) -> AppResult<Option<String>> {
+    match (api_key.filter(|key| !key.is_empty()), key_ref.filter(|id| !id.is_empty()), settings) {
+        (Some(key), _, _) => Ok(Some(key)),
+        (None, Some(id), Some(settings)) => keys::resolve(config, &id, &embedding::endpoint(&settings.url)).map(Some),
+        _ => Ok(None),
+    }
+}
+
+/// Whether a key saved for `saved` still belongs to `settings`: the same endpoint (as requests are sent) and the same
+/// way of sending the key.
+fn same_target(saved: &EmbeddingSettings, settings: &EmbeddingSettings) -> bool {
+    embedding::endpoint(&saved.url) == embedding::endpoint(&settings.url) && saved.auth == settings.auth
 }
 
 fn remember_embedding_key(
@@ -141,15 +168,12 @@ fn remember_embedding_key(
     settings: Option<&EmbeddingSettings>,
     api_key: Option<String>,
 ) -> AppResult<()> {
-    let url = |settings: &EmbeddingSettings| settings.url.trim().trim_end_matches('/').to_owned();
     let Some(settings) = settings else {
         return secrets::forget_password(secrets::EMBEDDING_ACCOUNT);
     };
     match api_key.filter(|key| !key.is_empty()) {
         Some(key) => secrets::save_password(secrets::EMBEDDING_ACCOUNT, &key),
-        None if saved.is_some_and(|saved| url(saved) != url(settings) || saved.auth != settings.auth) => {
-            secrets::forget_password(secrets::EMBEDDING_ACCOUNT)
-        }
+        None if saved.is_some_and(|saved| !same_target(saved, settings)) => secrets::forget_password(secrets::EMBEDDING_ACCOUNT),
         None => Ok(()),
     }
 }
@@ -212,5 +236,39 @@ mod tests {
         let store = secrets::testing::memory_store(&[(KEY, "sk")]);
         remember_embedding_key(Some(&saved), None, Some("ignored".into())).unwrap();
         assert!(store.accounts().is_empty());
+    }
+
+    #[test]
+    fn a_model_or_dimensions_change_keeps_the_saved_key() {
+        let saved = settings("https://api.openai.com/v1/embeddings", EmbeddingAuth::Bearer);
+        let mut next = saved.clone();
+        next.model = "text-embedding-3-small".into();
+        next.dimensions = Some(512);
+        let store = secrets::testing::memory_store(&[(KEY, "sk")]);
+        remember_embedding_key(Some(&saved), Some(&next), None).unwrap();
+        assert_eq!(store.secrets.lock().unwrap()[KEY], "sk");
+        // The base URL and the full URL send requests to the same place.
+        let base = settings("https://api.openai.com/v1", EmbeddingAuth::Bearer);
+        remember_embedding_key(Some(&saved), Some(&base), None).unwrap();
+        assert_eq!(store.accounts(), [KEY]);
+    }
+
+    #[test]
+    fn a_picked_key_is_used_only_for_the_same_api() {
+        let config = keys::tests::config();
+        let store = secrets::testing::memory_store(&[("ai:work", "sk-work")]);
+        let same = settings("https://api.openai.com/v1/embeddings", EmbeddingAuth::Bearer);
+        let picked = typed_or_picked(&config, Some(&same), None, Some("ai:work".into())).unwrap();
+        assert_eq!(picked.as_deref(), Some("sk-work"));
+        remember_embedding_key(config.embedding.as_ref(), Some(&same), picked).unwrap();
+        assert_eq!(store.secrets.lock().unwrap()[KEY], "sk-work");
+        // Another host: refused, nothing saved.
+        let store = secrets::testing::memory_store(&[("ai:work", "sk-work")]);
+        let elsewhere = settings("https://evil.example.com/v1/embeddings", EmbeddingAuth::Bearer);
+        assert!(typed_or_picked(&config, Some(&elsewhere), None, Some("ai:work".into())).is_err());
+        assert_eq!(store.accounts(), ["ai:work"]);
+        // A typed key wins over a picked one.
+        let typed = typed_or_picked(&config, Some(&elsewhere), Some("typed".into()), Some("ai:work".into())).unwrap();
+        assert_eq!(typed.as_deref(), Some("typed"));
     }
 }

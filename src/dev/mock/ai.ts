@@ -4,8 +4,9 @@
  */
 import type { Channel } from "@tauri-apps/api/core";
 import { errorText } from "../../core/errors";
-import type { AiConnection, AiSettings, AppConfig, ChatEvent, ChatRequest } from "../../core/types";
+import type { AiConnection, AiSettings, AppConfig, ChatEvent, ChatRequest, EmbeddingSettings, KeyTarget, SavedKeyRef } from "../../core/types";
 import { baseUrlOf, connectionSettings, endpointProblem, providerPreset } from "../../features/assistant/aiProviders";
+import { embeddingEndpoint, embeddingKeyKept, sameApi } from "../../features/vector/embeddingKeys";
 import { mockError } from "./errors";
 import { state } from "./state";
 
@@ -17,6 +18,74 @@ import { state } from "./state";
 /** Keys per LLM connection id, for this page load only. */
 const browserKeys = new Map<string, string>();
 export const chatRuns = new Map<string, AbortController>();
+/** The embedding key, for this page load only. */
+let embeddingKey: string | null = null;
+
+/** A saved key the dialogs can pick by reference, like the backend's `commands::keys`. */
+interface KeyOwner {
+  id: string;
+  label: string;
+  endpoint: string;
+  secret: string | null;
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function keyOwners(): KeyOwner[] {
+  const owners: KeyOwner[] = [];
+  const embedding = state.config.embedding;
+  if (embedding && embedding.auth !== "none") {
+    const endpoint = embeddingEndpoint(embedding.url);
+    owners.push({ id: "app:embedding", label: `Embedding API (${hostOf(endpoint)})`, endpoint, secret: embeddingKey });
+  }
+  for (const connection of state.config.aiConnections) {
+    const endpoint = baseUrlOf(connectionSettings(connection));
+    if (endpoint)
+      owners.push({ id: `ai:${connection.id}`, label: `${connection.name} (${hostOf(endpoint)})`, endpoint, secret: browserKeys.get(connection.id) ?? null });
+  }
+  return owners;
+}
+
+/** The saved keys that may be used for `target`: only those saved for the same API. */
+export function savedApiKeys(target: KeyTarget): SavedKeyRef[] {
+  const endpoint = target.kind === "embedding" ? embeddingEndpoint(target.url) : baseUrlOf({ provider: target.provider, baseUrl: target.baseUrl, model: "" });
+  const own = target.kind === "ai" && target.connectionId ? `ai:${target.connectionId}` : null;
+  return keyOwners()
+    .filter((owner) => owner.id !== own && owner.secret && sameApi(owner.endpoint, endpoint))
+    .map(({ id, label }) => ({ id, label }));
+}
+
+/** The secret behind `keyRef`, refused unless it was saved for the same API as `endpoint`. */
+export function resolveKeyRef(keyRef: string, endpoint: string): string {
+  const owner = keyOwners().find((item) => item.id === keyRef);
+  if (!owner) throw mockError("ERROR", "The saved key you picked no longer exists; type the key");
+  if (!sameApi(owner.endpoint, endpoint))
+    throw mockError("ERROR", `The key saved for ${owner.label} belongs to another endpoint and is not sent to ${hostOf(endpoint)}; type the key`);
+  if (!owner.secret) throw mockError("ERROR", `No key is saved for ${owner.label} any more; type the key`);
+  return owner.secret;
+}
+
+/** Like the backend: an empty key keeps the saved one unless the endpoint or the way it is sent changed. */
+export function saveEmbeddingSettings(settings: EmbeddingSettings | null, apiKey: string | null, keyRef: string | null): AppConfig {
+  const saved = state.config.embedding;
+  if (!settings) embeddingKey = null;
+  else if (apiKey) embeddingKey = apiKey;
+  else if (keyRef) embeddingKey = resolveKeyRef(keyRef, embeddingEndpoint(settings.url));
+  else if (saved && !embeddingKeyKept(saved, settings)) embeddingKey = null;
+  state.config = { ...state.config, embedding: settings };
+  return state.config;
+}
+
+/** Only for tests: the embedding key the mock holds. */
+export function mockEmbeddingKey(): string | null {
+  return embeddingKey;
+}
 
 /** Mirrors the backend: the active connection must exist; else the first one with its default model. */
 function repairActive(next: AppConfig): AppConfig {
@@ -26,7 +95,7 @@ function repairActive(next: AppConfig): AppConfig {
   return { ...next, aiActive: first ? { connectionId: first.id, model: first.defaultModel } : null };
 }
 
-export function saveAiConnection(connection: AiConnection, apiKey: string | null): AppConfig {
+export function saveAiConnection(connection: AiConnection, apiKey: string | null, keyRef: string | null = null): AppConfig {
   const item = { ...connection, name: connection.name.trim(), defaultModel: connection.defaultModel.trim(), baseUrl: connection.baseUrl.trim() };
   if (!item.name) throw mockError("ERROR", "Name is required");
   if (!item.defaultModel) throw mockError("ERROR", "Default model is required");
@@ -35,6 +104,7 @@ export function saveAiConnection(connection: AiConnection, apiKey: string | null
   const previous = state.config.aiConnections.find((existing) => existing.id === item.id);
   const url = (text: string) => text.trim().replace(/\/+$/, "");
   // Like the backend: a saved key is never kept for another provider or endpoint.
+  if (!apiKey && keyRef) apiKey = resolveKeyRef(keyRef, baseUrlOf(connectionSettings(item)));
   if (apiKey) browserKeys.set(item.id, apiKey);
   else if (previous && (previous.provider !== item.provider || url(previous.baseUrl) !== url(item.baseUrl))) browserKeys.delete(item.id);
   const aiConnections = previous
@@ -61,9 +131,10 @@ export function setAiActive(connectionId: string, model: string): AppConfig {
   return state.config;
 }
 
-/** The typed key, else the one kept for `connectionId`. */
+/** The typed key, else the picked one (`keyRef`), else the one kept for `connectionId`. */
 export function draftKey(payload: Record<string, unknown>): string {
   const typed = typeof payload.apiKey === "string" ? payload.apiKey : "";
+  if (!typed && typeof payload.keyRef === "string" && payload.keyRef) return resolveKeyRef(payload.keyRef, baseUrlOf(payload.settings as AiSettings));
   return typed || browserKeys.get(String(payload.connectionId ?? "")) || "";
 }
 

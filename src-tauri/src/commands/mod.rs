@@ -12,6 +12,7 @@ pub mod diagnostics;
 pub mod engines;
 pub mod files;
 pub mod history;
+pub mod keys;
 pub mod lang;
 pub mod mcp;
 pub mod objects;
@@ -142,18 +143,20 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<serde_json::Value> = $crate::commands::vector::vector_health;
             [async] index_recall(connection_id: String, database: String, table: String, column: String, k: u32, queries: u32)
                 -> $crate::error::AppResult<serde_json::Value> = $crate::commands::vector::index_recall;
-            [sync] save_embedding_settings(settings: Option<$crate::embedding::EmbeddingSettings>, api_key: Option<String>)
+            [sync] save_embedding_settings(settings: Option<$crate::embedding::EmbeddingSettings>, api_key: Option<String>, key_ref: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::vector::save_embedding_settings;
             [async] test_embedding() -> $crate::error::AppResult<usize> = $crate::commands::vector::test_embedding;
+            [sync] saved_api_keys(target: $crate::commands::keys::KeyTarget)
+                -> $crate::error::AppResult<Vec<$crate::commands::keys::SavedKeyRef>> = $crate::commands::keys::saved_api_keys;
 
-            [sync] save_ai_connection(connection: $crate::ai::AiConnection, api_key: Option<String>)
+            [sync] save_ai_connection(connection: $crate::ai::AiConnection, api_key: Option<String>, key_ref: Option<String>)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::ai::save_ai_connection;
             [sync] delete_ai_connection(id: String) -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::ai::delete_ai_connection;
             [sync] set_ai_active(connection_id: String, model: String)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::ai::set_ai_active;
-            [async] list_ai_models(settings: $crate::ai::AiSettings, api_key: Option<String>, connection_id: Option<String>)
+            [async] list_ai_models(settings: $crate::ai::AiSettings, api_key: Option<String>, connection_id: Option<String>, key_ref: Option<String>)
                 -> $crate::error::AppResult<Vec<String>> = $crate::commands::ai::list_ai_models;
-            [async] test_ai(settings: $crate::ai::AiSettings, api_key: Option<String>, connection_id: Option<String>)
+            [async] test_ai(settings: $crate::ai::AiSettings, api_key: Option<String>, connection_id: Option<String>, key_ref: Option<String>)
                 -> $crate::error::AppResult<String> = $crate::commands::ai::test_ai;
             [sync] ai_cancel(id: String) -> () = $crate::commands::ai::ai_cancel;
             [sync] set_assistant_read_queries(enabled: bool)

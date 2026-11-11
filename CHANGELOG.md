@@ -10,6 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - A "Community (Discord)" link in the settings menu and on the welcome screen, and the Discord invite in the README.
+- The embedding and AI provider dialogs can use a key already saved for the same API ("Use the key saved for …") instead of
+  having it typed again; only keys saved for the same host and path are offered.
+
+### Fixed
+
+- Editing the embedding settings keeps the saved key when only the model or dimensions change, and the dialog shows it is
+  kept. An endpoint given as a base URL (`…/v1`) gets `/embeddings` added; it was posted as it was and failed with HTTP 404.
 
 ## [0.2.0] - 2026-11-09
 

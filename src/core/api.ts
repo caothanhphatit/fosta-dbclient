@@ -60,7 +60,9 @@ import type {
   HistoryQuery,
   InstallKind,
   KeyCell,
+  KeyTarget,
   RecallReport,
+  SavedKeyRef,
   SchemaGraph,
   StatementCategory,
   TaskDef,
@@ -212,17 +214,23 @@ export const api = {
     invoke<HealthCheck[]>("vector_health", { connectionId, database, table, column, sample }),
   indexRecall: (connectionId: string, database: string, table: string, column: string, k: number, queries: number) =>
     invoke<RecallReport>("index_recall", { connectionId, database, table, column, k, queries }),
-  saveEmbeddingSettings: (settings: EmbeddingSettings | null, apiKey: string | null) => invoke<AppConfig>("save_embedding_settings", { settings, apiKey }),
+  /** An empty key keeps the saved one while the endpoint stays; `keyRef` uses a key saved for the same API instead. */
+  saveEmbeddingSettings: (settings: EmbeddingSettings | null, apiKey: string | null, keyRef: string | null = null) =>
+    invoke<AppConfig>("save_embedding_settings", { settings, apiKey, keyRef }),
   testEmbedding: () => invoke<number>("test_embedding"),
-  /** Upserts an LLM connection; an empty key keeps the saved one. */
-  saveAiConnection: (connection: AiConnection, apiKey: string | null) => invoke<AppConfig>("save_ai_connection", { connection, apiKey }),
+  /** The saved keys that may be used for `target`, as references (never the secrets). */
+  savedApiKeys: (target: KeyTarget) => invoke<SavedKeyRef[]>("saved_api_keys", { target }),
+  /** Upserts an LLM connection; an empty key keeps the saved one; `keyRef` uses a key saved for the same API instead. */
+  saveAiConnection: (connection: AiConnection, apiKey: string | null, keyRef: string | null = null) =>
+    invoke<AppConfig>("save_ai_connection", { connection, apiKey, keyRef }),
   deleteAiConnection: (id: string) => invoke<AppConfig>("delete_ai_connection", { id }),
   setAiActive: (connectionId: string, model: string) => invoke<AppConfig>("set_ai_active", { connectionId, model }),
   /** An empty key falls back to the one saved for `connectionId`. */
-  listAiModels: (settings: AiSettings, apiKey: string | null, connectionId: string | null = null) =>
-    invoke<string[]>("list_ai_models", { settings, apiKey, connectionId }),
+  listAiModels: (settings: AiSettings, apiKey: string | null, connectionId: string | null = null, keyRef: string | null = null) =>
+    invoke<string[]>("list_ai_models", { settings, apiKey, connectionId, keyRef }),
   /** One short exchange with the settings as typed (unsaved); an empty key means `connectionId`'s saved one. */
-  testAi: (settings: AiSettings, apiKey: string | null, connectionId: string | null = null) => invoke<string>("test_ai", { settings, apiKey, connectionId }),
+  testAi: (settings: AiSettings, apiKey: string | null, connectionId: string | null = null, keyRef: string | null = null) =>
+    invoke<string>("test_ai", { settings, apiKey, connectionId, keyRef }),
   /**
    * Desktop: writes into Downloads and returns the full path. Web: the browser downloads the file; returns its name.
    * `base64` for binary data.

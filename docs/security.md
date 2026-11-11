@@ -41,6 +41,12 @@ permissions of its folder: the installed app keeps its data under your user prof
 A saved password is tied to its server. If you change a connection's host, port, user, SSH route, TLS settings or command without
 typing the password again, the saved one is deleted instead of being sent to the new target.
 
+API keys work the same way. An AI provider's key stays with its provider and endpoint, the embedding key with its endpoint
+URL and the way it is sent; the model, the dimensions and the name do not matter. Instead of typing a key again you can
+pick one already saved for the same API (same scheme, host and port, one path inside the other, such as
+`https://api.openai.com/v1` and `…/v1/embeddings`): the dialog only gets a reference and a label, and the app copies the
+secret itself. Keys saved for another host are not offered, and a reference to one is refused.
+
 ## Safety rules
 
 Every statement the app runs (query tabs, grid edits, filters, imports, consoles, the assistant) is classified as read, write, DDL,

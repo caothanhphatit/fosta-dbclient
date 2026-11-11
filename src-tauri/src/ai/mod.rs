@@ -164,7 +164,7 @@ pub struct AiSettings {
 }
 
 impl AiSettings {
-    fn base_url(&self) -> AppResult<String> {
+    pub(crate) fn base_url(&self) -> AppResult<String> {
         let trimmed = self.base_url.trim().trim_end_matches('/');
         if !trimmed.is_empty() {
             if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {

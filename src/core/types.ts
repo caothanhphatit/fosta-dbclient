@@ -141,6 +141,15 @@ export interface EmbeddingSettings {
   dimensions: number | null;
 }
 
+/** A saved API key as the UI sees it: a reference (`ai:<id>`, `app:embedding`) and a label, never the secret. */
+export interface SavedKeyRef {
+  id: string;
+  label: string;
+}
+
+/** What a saved key is wanted for; only keys saved for the same API (same host, one path inside the other) are offered. */
+export type KeyTarget = { kind: "embedding"; url: string } | { kind: "ai"; provider: AiProvider; baseUrl: string; connectionId: string | null };
+
 /** Identity of a workspace; what the workspace dialog edits. */
 export interface WorkspaceMeta {
   id: string;

@@ -2,6 +2,7 @@
 
 use crate::{
     ai::{self, AiConnection, AiProvider, AiSettings, ChatRequest, ChatSink},
+    commands::keys,
     config::AppConfig,
     error::{AppError, AppResult, PASSWORD_REQUIRED},
     gateway::{assistant::reads_allowed, Context},
@@ -9,11 +10,27 @@ use crate::{
 };
 
 /// Adds or updates an LLM connection; an empty key keeps the saved one, unless the provider or endpoint changed:
-/// then the saved key is forgotten, so it is never sent to an endpoint it was not saved for.
-pub fn save_ai_connection(state: &AppState, connection: AiConnection, api_key: Option<String>) -> AppResult<AppConfig> {
+/// then the saved key is forgotten, so it is never sent to an endpoint it was not saved for. The name and the default
+/// model do not matter. `key_ref` picks a key saved for the same API instead of a typed one (see [`keys`]).
+pub fn save_ai_connection(
+    state: &AppState,
+    connection: AiConnection,
+    api_key: Option<String>,
+    key_ref: Option<String>,
+) -> AppResult<AppConfig> {
     let connection = connection.normalized()?;
-    let saved = state.config.read(|config| config.ai_connection(&connection.id).ok().cloned());
-    remember_ai_key(saved.as_ref(), &connection, api_key)?;
+    let config = state.config.snapshot();
+    let saved = config.ai_connection(&connection.id).ok();
+    let api_key = match (api_key.filter(|key| !key.is_empty()), key_ref.filter(|id| !id.is_empty())) {
+        (Some(key), _) => Some(key),
+        (None, Some(id)) => Some(keys::resolve(
+            &config,
+            &id,
+            &keys::ai_endpoint(connection.provider, &connection.base_url)?,
+        )?),
+        (None, None) => None,
+    };
+    remember_ai_key(saved, &connection, api_key)?;
     state.config.update(|config| {
         config.put_ai_connection(connection);
         Ok(())
@@ -51,14 +68,21 @@ pub async fn list_ai_models(
     settings: AiSettings,
     api_key: Option<String>,
     connection_id: Option<String>,
+    key_ref: Option<String>,
 ) -> AppResult<Vec<String>> {
-    let api_key = draft_key(state, &settings, api_key, connection_id.as_deref())?;
+    let api_key = draft_key(state, &settings, api_key, connection_id.as_deref(), key_ref)?;
     ai::list_models(&settings, api_key).await
 }
 
 /// "Test connection" in the dialog: tries the settings as typed, before saving.
-pub async fn test_ai(state: &AppState, settings: AiSettings, api_key: Option<String>, connection_id: Option<String>) -> AppResult<String> {
-    let api_key = draft_key(state, &settings, api_key, connection_id.as_deref())?;
+pub async fn test_ai(
+    state: &AppState,
+    settings: AiSettings,
+    api_key: Option<String>,
+    connection_id: Option<String>,
+    key_ref: Option<String>,
+) -> AppResult<String> {
+    let api_key = draft_key(state, &settings, api_key, connection_id.as_deref(), key_ref)?;
     ai::probe(&settings, api_key).await
 }
 
@@ -100,10 +124,21 @@ pub fn ai_cancel(state: &AppState, id: String) {
 }
 
 /// The key typed in the dialog, else `connection_id`'s saved key, but only while the dialog still points at the
-/// saved provider and endpoint; a saved key is never sent to an endpoint it was not saved for.
-fn draft_key(state: &AppState, settings: &AiSettings, supplied: Option<String>, connection_id: Option<&str>) -> AppResult<Option<String>> {
+/// saved provider and endpoint; a saved key is never sent to an endpoint it was not saved for. `key_ref` picks a key
+/// saved for the same API instead (see [`keys`]).
+fn draft_key(
+    state: &AppState,
+    settings: &AiSettings,
+    supplied: Option<String>,
+    connection_id: Option<&str>,
+    key_ref: Option<String>,
+) -> AppResult<Option<String>> {
     if let Some(key) = supplied.filter(|key| !key.is_empty()) {
         return Ok(Some(key));
+    }
+    if let Some(id) = key_ref.filter(|id| !id.is_empty()) {
+        let config = state.config.snapshot();
+        return keys::resolve(&config, &id, &settings.base_url()?).map(Some);
     }
     let Some(id) = connection_id else {
         return Ok(None);
@@ -232,5 +267,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(store.secrets.lock().unwrap()[KEY], "new");
+    }
+
+    #[test]
+    fn a_model_change_keeps_the_key_and_a_picked_key_must_fit() {
+        const KEY: &str = "ai:work";
+        let config = keys::tests::config();
+        let saved = config.ai_connection("work").unwrap().clone();
+        let store = secrets::testing::memory_store(&[(KEY, "sk"), ("app:embedding", "emb")]);
+        let other_model = AiConnection {
+            default_model: "gpt-5-mini".into(),
+            ..saved.clone()
+        };
+        remember_ai_key(Some(&saved), &other_model, None).unwrap();
+        assert_eq!(store.secrets.lock().unwrap()[KEY], "sk");
+        // The embedding key was saved for api.openai.com/v1/embeddings: it fits OpenAI, not Ollama.
+        let openai = keys::ai_endpoint(AiProvider::Openai, "").unwrap();
+        assert_eq!(keys::resolve(&config, "app:embedding", &openai).unwrap(), "emb");
+        let ollama = keys::ai_endpoint(AiProvider::Custom, "http://localhost:11434/v1").unwrap();
+        assert!(keys::resolve(&config, "app:embedding", &ollama).is_err());
     }
 }

@@ -2,7 +2,7 @@ import { capabilities } from "../../core/capabilities";
 import { api, errorText } from "../../core/api";
 import { field, openModal, textInput } from "../../core/dialogs";
 import { h, icon, iconButton } from "../../core/dom";
-import type { AiConnection, AiSettings, AppConfig } from "../../core/types";
+import type { AiConnection, AiSettings, AppConfig, SavedKeyRef } from "../../core/types";
 import { AI_PROVIDERS, apiKeyProblem, endpointProblem, providerPreset, type ProviderPreset } from "./aiProviders";
 
 const CUSTOM_MODEL = "__custom__";
@@ -18,6 +18,40 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
     const apiKey = textInput("", { type: "password", placeholder: existing ? "Saved, leave empty to keep (same provider and URL only)" : "" });
     /** The saved key only belongs to the provider it was saved for. */
     const savedKeyOwner = () => (existing !== null && existing.provider === preset.value ? existing.id : null);
+    /** Keys saved for the same API elsewhere (another provider entry, the embedding API), by reference only. */
+    const keySource = h("select", { class: "input" });
+    const pickedKey = () => keySource.value || null;
+    let keysTicket = 0;
+    const showKeyInput = () => {
+      keySource.hidden = keySource.options.length < 2;
+      apiKey.hidden = keySource.value !== "";
+    };
+    const loadKeys = async () => {
+      const ticket = ++keysTicket;
+      let refs: SavedKeyRef[] = [];
+      try {
+        const custom = preset.value === "custom";
+        if (!custom || !endpointProblem(baseUrl.value, preset.value))
+          refs = await api.savedApiKeys({
+            kind: "ai",
+            provider: preset.value,
+            baseUrl: custom ? baseUrl.value.trim() : "",
+            connectionId: existing?.id ?? null,
+          });
+      } catch {
+        refs = [];
+      }
+      if (ticket !== keysTicket) return;
+      keySource.replaceChildren(
+        h("option", { value: "" }, savedKeyOwner() ? "Keep this provider's saved key, or type a new one" : "Type a key"),
+        ...refs.map((ref) => h("option", { value: ref.id }, `Use the key saved for ${ref.label}`)),
+      );
+      showKeyInput();
+    };
+    keySource.addEventListener("change", () => {
+      showKeyInput();
+      void loadModels();
+    });
     const hint = h("p", { class: "form-intro provider-hint" });
     /** Only Custom asks for a URL; the built-in providers have theirs fixed. */
     const endpointField = field("Endpoint", baseUrl, "The base URL that has /chat/completions under it");
@@ -53,7 +87,7 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
     const loadModels = async () => {
       const wanted = currentModel() || preset.model;
       const draft: AiSettings = { provider: preset.value, baseUrl: preset.value === "custom" ? baseUrl.value.trim() : "", model: wanted || "-" };
-      const hasKey = Boolean(apiKey.value.trim()) || savedKeyOwner() !== null;
+      const hasKey = Boolean(apiKey.value.trim()) || savedKeyOwner() !== null || pickedKey() !== null;
       const problem = endpointProblem(draft.baseUrl, preset.value);
       if (problem) {
         models = [];
@@ -70,7 +104,7 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
       const ticket = ++loading;
       modelStatus.textContent = "Loading the provider's models…";
       try {
-        const loaded = await api.listAiModels(draft, apiKey.value || null, savedKeyOwner());
+        const loaded = await api.listAiModels(draft, pickedKey() ? null : apiKey.value || null, savedKeyOwner(), pickedKey());
         if (ticket !== loading) return;
         models = loaded;
         renderModels(wanted);
@@ -103,6 +137,7 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
       baseUrl.value = "";
       describeProvider(next);
       renderModels(next.model);
+      void loadKeys();
       void loadModels();
     };
     for (const card of cards) {
@@ -110,9 +145,13 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
     }
     describeProvider(preset);
     renderModels(existing?.defaultModel ?? preset.model);
+    void loadKeys();
     void loadModels();
     apiKey.addEventListener("change", () => void loadModels());
-    baseUrl.addEventListener("change", () => void loadModels());
+    baseUrl.addEventListener("change", () => {
+      void loadKeys();
+      void loadModels();
+    });
 
     const readSettings = (): AiSettings => {
       const model = currentModel();
@@ -125,13 +164,13 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
       const settings = readSettings();
       const label = name.value.trim();
       if (!label) throw new Error("Name is required");
-      const keyProblem = apiKeyProblem(settings.provider, apiKey.value, savedKeyOwner() !== null);
+      const keyProblem = apiKeyProblem(settings.provider, pickedKey() ? "" : apiKey.value, savedKeyOwner() !== null || pickedKey() !== null);
       if (keyProblem) {
         apiKey.focus();
         throw new Error(keyProblem);
       }
       const connection: AiConnection = { id, name: label, provider: settings.provider, baseUrl: settings.baseUrl, defaultModel: settings.model };
-      saved = await api.saveAiConnection(connection, apiKey.value || null);
+      saved = await api.saveAiConnection(connection, pickedKey() ? null : apiKey.value || null, pickedKey());
     };
 
     const body = h(
@@ -146,7 +185,14 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
       hint,
       field("Name", name, "Shown in the model switcher of the chat"),
       endpointField,
-      field("API key", apiKey, `Stored in ${capabilities().secretStore}`),
+      h(
+        "div",
+        { class: "field" },
+        h("span", { class: "field-label" }, "API key"),
+        keySource,
+        apiKey,
+        h("span", { class: "field-hint" }, `Stored in ${capabilities().secretStore}`),
+      ),
       h(
         "div",
         { class: "field" },
@@ -165,7 +211,7 @@ export function aiDialog(existing: AiConnection | null): Promise<AppConfig | nul
       try {
         const settings = readSettings();
         const started = performance.now();
-        const reply = await api.testAi(settings, apiKey.value || null, savedKeyOwner());
+        const reply = await api.testAi(settings, pickedKey() ? null : apiKey.value || null, savedKeyOwner(), pickedKey());
         testStatus.classList.add("ok");
         testStatus.textContent = `${providerPreset(settings.provider).label} · ${settings.model} replied "${reply}" in ${Math.round(performance.now() - started)} ms`;
       } catch (error) {

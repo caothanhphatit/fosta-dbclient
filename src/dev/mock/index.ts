@@ -54,15 +54,28 @@ import type {
   Confirmation,
   ConnectionProfile,
   Diagnostics,
+  EmbeddingSettings,
   HistoryEntry,
   HistoryQuery,
   InstallKind,
+  KeyTarget,
   StatementCategory,
   TaskDef,
   Workspace,
 } from "../../core/types";
 import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf, unmarksLooserThanReadOnly, withoutConfirmation } from "../../features/safety/safety";
-import { chatRuns, deleteAiConnection, draftKey, fetchModels, probeChat, saveAiConnection, setAiActive, streamChat } from "./ai";
+import {
+  chatRuns,
+  deleteAiConnection,
+  draftKey,
+  fetchModels,
+  probeChat,
+  saveAiConnection,
+  saveEmbeddingSettings,
+  savedApiKeys,
+  setAiActive,
+  streamChat,
+} from "./ai";
 import { checkTestPassword, deleteConnection, parseConnectionString, profiles, saveConnection } from "./connections";
 import { mockError, NOT_CONNECTED, SESSION_LOST } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
@@ -482,7 +495,13 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "delete_task":
       return deleteTask(str("id"));
     case "save_embedding_settings":
-      return state.config;
+      return saveEmbeddingSettings(
+        (payload.settings as EmbeddingSettings | null) ?? null,
+        (payload.apiKey as string | null) ?? null,
+        (payload.keyRef as string | null) ?? null,
+      );
+    case "saved_api_keys":
+      return savedApiKeys(payload.target as KeyTarget);
     case "capabilities":
       return { edition: "desktop", tasks: true, revealFile: true, browserDownloads: false, secretStore: "Windows Credential Manager", inContainer: false };
     case "task_statuses":
@@ -592,7 +611,7 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
 
     // Assistant
     case "save_ai_connection":
-      return saveAiConnection(payload.connection as AiConnection, (payload.apiKey as string | null) ?? null);
+      return saveAiConnection(payload.connection as AiConnection, (payload.apiKey as string | null) ?? null, (payload.keyRef as string | null) ?? null);
     case "delete_ai_connection":
       return deleteAiConnection(str("id"));
     case "set_ai_active":
