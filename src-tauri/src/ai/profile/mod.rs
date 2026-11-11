@@ -8,12 +8,14 @@
 //! - [`infer`]: relations inferred from column names
 //! - [`redact`]: system and credential objects left out, sensitive columns and secret-looking text redacted
 //! - [`store`]: the files, caps, refresh merge and cleanup
+//! - [`digest`]: what a chat sees: the prompt digest and the `search_profile` / `get_object_profile` tools
 //!
 //! [`values`] reads value hints, only under the read gate; later phases fill the other fields that are already in the
 //! model: the model's summary and descriptions (P5), engine extras (P6). The structural build reads no rows and sends
 //! nothing anywhere.
 
 pub mod build;
+pub mod digest;
 pub mod fingerprint;
 pub mod infer;
 pub mod model;
