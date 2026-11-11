@@ -1,4 +1,4 @@
-# Only package.json/lock, index.html, tsconfig.json, vite.config.ts, src/ and src-tauri/ go into the image build.
+# Only package.json/lock, index.html, tsconfig.json, vite.config.ts, src/, src-tauri/, docs/ and CHANGELOG.md go into the image build.
 **/node_modules
 dist
 src-tauri/target
@@ -12,3 +12,6 @@ scripts
 deploy
 *.md
 **/*.test.ts
+# The assistant embeds the user docs and the changelog (src-tauri/src/ai/app_help.rs).
+!CHANGELOG.md
+!docs/**

@@ -7,7 +7,7 @@
 #     keywords: [plain words, comma separated, no brackets or quotes]
 #     action: optional UI action id (verb:target), handled by the frontend action registry
 #     body: |
-#       Steps, indented by six spaces. UI labels are quoted exactly as the app shows them.
+#       Steps, indented by four spaces. UI labels are quoted exactly as the app shows them.
 #
 # Groups: Workspaces and safety, Connections, Data and queries, Schema tools, Vector search, Assistant and MCP,
 # MongoDB, Redis, Elasticsearch and OpenSearch, ClickHouse, Oracle, App.

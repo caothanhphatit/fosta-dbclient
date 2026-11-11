@@ -12,6 +12,7 @@
 //! - [`http`]: HTTP client, error mapping and Server-Sent Events parsing
 
 mod anthropic;
+pub(crate) mod app_help;
 pub(crate) mod catalog;
 mod collections;
 mod http;

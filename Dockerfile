@@ -34,6 +34,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && echo "fn main() {}" > src/server/main.rs \
     && cargo build --release --locked --no-default-features --features web --bin fosta-studio-server \
     && rm -rf src
+# The assistant embeds the user docs and the changelog (ai/app_help.rs, include_str! from ../docs).
+COPY docs ../docs
+COPY CHANGELOG.md ../CHANGELOG.md
 COPY src-tauri/src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     find src -name '*.rs' -exec touch {} + \
