@@ -472,3 +472,120 @@ async fn engines_without_extras_are_left_alone() {
     assert_eq!(profile, before);
     assert!(!engine.calls.lock().unwrap().iter().any(|call| call == "invoke"));
 }
+
+/// Against the MongoDB container (`db-studio-dev-mongo-1`, root / studio-root on 127.0.0.1:27017): nested paths,
+/// references, gated hints and fingerprints that stay put across builds.
+#[tokio::test]
+#[ignore = "needs the MongoDB container (dev/compose); run with --ignored --test-threads=1"]
+async fn live_mongo_extras() {
+    use crate::contract::{CollectSink, ConnectSecrets, ConnectionSpec, RunOptions, RunRequest};
+    let env = |name: &str, default: &str| std::env::var(format!("FOSTA_CONTRACT_MONGO_{name}")).unwrap_or_else(|_| default.into());
+    let spec = ConnectionSpec {
+        engine: "mongodb".into(),
+        host: env("HOST", "127.0.0.1"),
+        port: env("PORT", "27017").parse().unwrap_or(27017),
+        user: env("USER", "root"),
+        database: Some("admin".into()),
+        ..ConnectionSpec::default()
+    };
+    let manager = ConnectionManager::default();
+    manager
+        .connect("c", spec, ConnectSecrets::password(&env("PASSWORD", "studio-root")))
+        .await
+        .expect("connect");
+    let handle = manager.handle("c").unwrap();
+    let oid = |index: usize| json!({ "$oid": format!("{index:024x}") });
+    let customers: Vec<Json> = (0..10usize)
+        .map(|index| json!({ "_id": oid(index + 1), "name": format!("c{index}") }))
+        .collect();
+    const STATUSES: [&str; 3] = ["new", "paid", "shipped"];
+    let orders: Vec<Json> = (0..60usize)
+        .map(|index| {
+            json!({
+                "_id": index,
+                "status": STATUSES[index % 3],
+                "customerId": oid(index % 10 + 1),
+                "code": if index % 2 == 0 { json!(index) } else { json!(format!("C{index}")) },
+                "contact": { "email": format!("user{index}@example.com"), "password": format!("secret-{index}") },
+                "items": [{ "sku": format!("p{}", index % 4), "qty": 1 }],
+            })
+        })
+        .collect();
+    let session = handle
+        .call("opened a session", |conn| async move {
+            conn.open_session(&SessionOptions::default(), &CallContext::default()).await
+        })
+        .await
+        .unwrap()
+        .session;
+    for command in [
+        json!({ "drop": "orders" }),
+        json!({ "drop": "customers" }),
+        json!({ "insert": "customers", "documents": customers }),
+        json!({ "insert": "orders", "documents": orders }),
+        json!({ "createIndexes": "orders", "indexes": [{ "key": { "status": 1 }, "name": "status_1" }] }),
+    ] {
+        let request = RunRequest {
+            text: command.to_string(),
+            database: Some("fosta_extras".into()),
+            offset: 0,
+        };
+        let mut sink = CollectSink::default();
+        // Dropping a collection that is not there fails; that is fine.
+        let _ = handle.run(Arc::clone(&session), request, RunOptions::default(), &mut sink).await;
+    }
+    let (store, dir) = store("live-mongo");
+    let runs = AiRuns::default();
+    let build = |values: bool| {
+        let reads = BuildReads {
+            sampler: Sampler {
+                manager: &manager,
+                context: open(),
+            },
+            values,
+        };
+        learn_with(&runs, &store, &handle, "fosta_extras", "r", Some(reads), values, &quiet)
+    };
+    let first = build(true).await.unwrap();
+    let profile = store.load("c", "fosta_extras").unwrap().unwrap();
+    let orders = profile.object("orders").unwrap();
+    let column = |name: &str| orders.column(name).unwrap_or_else(|| panic!("{name}: {:?}", orders.columns));
+    assert_eq!(column("contact.email").presence, Some(100.0));
+    assert_eq!(column("items.sku").type_name, "string");
+    assert!(
+        column("items").type_name.starts_with("array<object"),
+        "{}",
+        column("items").type_name
+    );
+    let code = &column("code").type_name;
+    assert!(code.contains("int") && code.contains("string"), "{code}");
+    assert!(column("contact.password").sensitive);
+    let reference = profile
+        .relations
+        .iter()
+        .find(|relation| relation.from == "orders" && relation.columns == ["customerId"])
+        .unwrap();
+    assert_eq!((reference.source, reference.to.as_str()), (RelationSource::MongoRef, "customers"));
+    assert!(reference.confidence > 0.9, "{reference:?}");
+    let hint = |column: &str| orders.value_hints.iter().find(|hint| hint.column == column).cloned();
+    assert_eq!(hint("status").unwrap().values, STATUSES);
+    assert_eq!(hint("contact.email").unwrap().format.as_deref(), Some("email"));
+    assert!(hint("contact.email").unwrap().values.is_empty());
+    assert!(hint("contact.password").is_none() && hint("_id").is_none());
+    let extras = first.extras.unwrap();
+    assert_eq!(extras.failed, 0, "{extras:?}");
+    assert!(profile.data_read);
+    // A second build samples other documents; the fingerprints stay.
+    let again = build(true).await.unwrap();
+    assert!(again.diff.is_empty(), "{:?}", again.diff);
+    let second = store.load("c", "fosta_extras").unwrap().unwrap();
+    assert_eq!(profile.fingerprint, second.fingerprint);
+    // Without the values gate (an explicit opt-out) the fields stay and the hints go.
+    build(false).await.unwrap();
+    let gated = store.load("c", "fosta_extras").unwrap().unwrap();
+    let orders = gated.object("orders").unwrap();
+    assert!(orders.column("contact.email").is_some() && orders.value_hints.is_empty());
+    assert!(!gated.data_read);
+    manager.disconnect("c").await;
+    let _ = std::fs::remove_dir_all(dir);
+}

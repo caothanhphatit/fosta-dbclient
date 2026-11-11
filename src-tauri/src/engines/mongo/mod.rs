@@ -20,6 +20,7 @@ pub mod descriptor;
 mod explain;
 mod indexes;
 mod ops;
+mod profile;
 mod schema;
 mod session;
 mod tabular;

@@ -10,16 +10,16 @@ use super::{
     catalog,
     classify::{classify_mongo, classify_operation},
     connect::{self, Topology},
-    descriptor, ops,
+    descriptor, ops, profile,
     session::{MongoSession, LANGUAGE},
     tabular, url,
 };
 use crate::{
     contract::{
         classify_common, ApplyResult, BrowseRequest, CallContext, CapabilitySet, Category, Classification, ClassifyInput, ConnectRequest,
-        Connection, ConnectionSpec, DatabaseAdmin, Engine, EngineDescriptor, NodeKey, NodeKind, ObjectDescription, ObjectRef,
-        OpenedSession, Page, ParsedConnection, RowChangeSet, SchemaGraph, SchemaGraphSource, ServerInfo, SessionOptions, StatementInfo,
-        TabularData, TreeChildren, TreeRequest,
+        Connection, ConnectionSpec, DatabaseAdmin, Engine, EngineDescriptor, ExtrasRead, NodeKey, NodeKind, ObjectDescription, ObjectRef,
+        OpenedSession, Page, ParsedConnection, ProfileEnrichment, ProfileExtras, RowChangeSet, SchemaGraph, SchemaGraphSource, ServerInfo,
+        SessionOptions, StatementInfo, TabularData, TreeChildren, TreeRequest,
     },
     error::{AppError, AppResult},
 };
@@ -170,6 +170,10 @@ impl Connection for MongoConnection {
         Some(self)
     }
 
+    fn profile_extras(&self) -> Option<&dyn ProfileExtras> {
+        Some(self)
+    }
+
     async fn ping(&self) -> AppResult<()> {
         self.client.database("admin").run_command(doc! { "ping": 1 }).await?;
         Ok(())
@@ -198,6 +202,21 @@ impl TabularData for MongoConnection {
 impl SchemaGraphSource for MongoConnection {
     async fn schema_graph(&self, database: &str, _ctx: &CallContext) -> AppResult<SchemaGraph> {
         catalog::schema_graph(&self.client, database).await
+    }
+}
+
+#[async_trait]
+impl ProfileExtras for MongoConnection {
+    async fn metadata(&self, database: &str, objects: &[ObjectRef], _ctx: &CallContext) -> AppResult<ProfileEnrichment> {
+        profile::metadata(&self.client, database, objects).await
+    }
+
+    fn reads(&self, database: &str, objects: &[ObjectRef]) -> Vec<ExtrasRead> {
+        profile::reads(database, objects)
+    }
+
+    fn interpret(&self, _database: &str, answers: &[(ExtrasRead, serde_json::Value)]) -> ProfileEnrichment {
+        profile::interpret(answers)
     }
 }
 
