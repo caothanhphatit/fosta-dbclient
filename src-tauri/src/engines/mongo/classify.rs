@@ -1,16 +1,18 @@
 //! MongoDB database commands written as JSON (the query tab's input), classified by the command name: the first key
-//! of the object. Aggregations with `$out` / `$merge` write; deletes and multi-updates with an empty filter are
-//! destructive. The engine operations (`mongo.find` …) are classified by name: reads, the bulk update (a write, destructive
-//! with an empty filter), the bulk delete (destructive) and the aggregations (a read; with `$merge` a
-//! write, with `$out` DDL; the preview refuses both), the index listing (a read), creating, hiding and unhiding an index
-//! (DDL) and dropping one (destructive; never `_id_`); they refuse server-side JavaScript and refuse names they do not
-//! know.
+//! of the object. Aggregations with `$merge` write and with `$out` (which drops and replaces its target) are
+//! destructive; deletes and multi-updates with a filter that matches everything are destructive, and so is a TTL index
+//! (`expireAfterSeconds`, which deletes documents on its own). The engine operations (`mongo.find` …) are classified by
+//! name: reads, the bulk update (a write, destructive with a match-all filter), the bulk delete (destructive) and the
+//! aggregations (a read; with `$merge` a write, with `$out` destructive; the preview refuses both, and every
+//! aggregation refuses change streams), the index listing (a read), creating, hiding and unhiding an index (DDL; a TTL
+//! index destructive) and dropping one (destructive; never `_id_`); they refuse server-side JavaScript, database or
+//! collection names with surrounding whitespace, and names they do not know.
 
 use super::{
-    aggregate::{pipeline_arg, read_targets, write_stage, write_target},
-    bulk::filter_is_empty,
+    aggregate::{pipeline_arg, read_targets, stream_stage, write_stage, write_target},
+    bulk::{filter_matches_everything, matches_everything},
     indexes::protected_index,
-    ops::{denied_operator, OPERATIONS},
+    ops::{denied_operator, namespace_args, OPERATIONS},
 };
 use crate::{
     contract::classify::{Category, Classification, StatementInfo},
@@ -50,10 +52,31 @@ const MONGO_READ: [&str; 27] = [
 /// Commands that only read but expose users, credentials, other sessions' operations (with their literal values), server
 /// logs or the host and command line: administration, so neither the assistant nor a Read-only workspace runs them.
 const MONGO_SENSITIVE_READ: [&str; 5] = ["usersInfo", "getLog", "currentOp", "hostInfo", "getCmdLineOpts"];
-/// Collections holding users, roles and keys (credential hashes); reading them is administration.
-const SYSTEM_SECRET_COLLECTIONS: [&str; 3] = ["system.users", "system.roles", "system.keys"];
-/// Aggregation stages that read server or session internals.
-const SENSITIVE_STAGES: [&str; 3] = ["$currentOp", "$listSessions", "$listLocalSessions"];
+/// Collections holding users, roles and keys (credential hashes, also as left by mongorestore and auth upgrades),
+/// other sessions' queries with their literal values (`system.profile`), every write to every database (`oplog.rs`)
+/// and the server's command line (`startup_log`); reading them is administration, in any database.
+const SYSTEM_SECRET_COLLECTIONS: [&str; 8] = [
+    "system.users",
+    "system.roles",
+    "system.keys",
+    "system.backup_users",
+    "system.new_users",
+    "system.profile",
+    "oplog.rs",
+    "startup_log",
+];
+/// Databases every collection of which is administration: `local` holds the oplog, the replica set's configuration
+/// and the startup log.
+const SECRET_DATABASES: [&str; 1] = ["local"];
+/// Aggregation stages that read server or session internals, or other sessions' queries with their literal values.
+const SENSITIVE_STAGES: [&str; 6] = [
+    "$currentOp",
+    "$listSessions",
+    "$listLocalSessions",
+    "$planCacheStats",
+    "$listSampledQueries",
+    "$queryStats",
+];
 const SENSITIVE_READ_REASON: &str =
     "Shows users, credentials, other sessions' operations, server logs or the host; treated as administration";
 const MONGO_WRITE: [&str; 5] = ["insert", "update", "delete", "findAndModify", "bulkWrite"];
@@ -99,16 +122,23 @@ pub fn classify_mongo(text: &str) -> Classification {
 }
 
 /// Classifies an engine operation by name: `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`, `mongo.schema` and
-/// `mongo.updatePreview` read; `mongo.updateMany` writes (destructive with an empty filter); `mongo.deleteMany` is always
-/// destructive; `mongo.indexes` reads, `mongo.createIndex` / `mongo.hideIndex` / `mongo.unhideIndex` are DDL and
-/// `mongo.dropIndex` is destructive (the `_id_` index, or `*`, is refused); `mongo.validation` and `mongo.validationCheck` read,
-/// `mongo.setValidation` is DDL (`collMod`); `mongo.explain` reads (refused with `$out` / `$merge`). Any of them is administration when it targets
-/// credentials; server-side JavaScript in any query document, update, partial filter or validator and unknown names are refused.
+/// `mongo.updatePreview` read; `mongo.updateMany` writes (destructive with a match-all filter); `mongo.deleteMany` is always
+/// destructive; `mongo.indexes` reads, `mongo.createIndex` / `mongo.hideIndex` / `mongo.unhideIndex` are DDL (a TTL index is
+/// destructive) and `mongo.dropIndex` is destructive (the `_id_` index, or `*`, is refused); `mongo.validation` and
+/// `mongo.validationCheck` read, `mongo.setValidation` is DDL (`collMod`); `mongo.explain` reads (refused with `$out` /
+/// `$merge` or a change stream). Any of them is administration when it targets credentials, other sessions' queries or the
+/// `local` database; server-side JavaScript in any query document, update, partial filter or validator, padded or missing
+/// database and collection names, and unknown names are refused.
 pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo {
     if !OPERATIONS.contains(&name) {
         return StatementInfo::refused(name, name, "unknown operation");
     }
     let excerpt = format!("{name} {args}");
+    // The same check (and the same untrimmed names) as the call itself, so both see one namespace.
+    let database = match namespace_args(args) {
+        Ok((database, _)) => database,
+        Err(error) => return StatementInfo::refused(name, &excerpt, error.message()),
+    };
     if let Some(operator) = denied_operator(args) {
         return StatementInfo::refused(name, &excerpt, &format!("{operator} runs JavaScript on the server"));
     }
@@ -117,22 +147,25 @@ pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo
         .and_then(|collection| collection.as_str())
         .map(|collection| vec![collection.to_owned()])
         .unwrap_or_default();
+    let secret_database = SECRET_DATABASES.contains(&database);
     if matches!(name, "mongo.aggregatePreview" | "mongo.aggregate" | "mongo.explain") {
-        return classify_aggregation(name, args, &excerpt, tables);
+        return classify_aggregation(name, args, &excerpt, tables, secret_database);
     }
     if matches!(name, "mongo.dropIndex" | "mongo.hideIndex" | "mongo.unhideIndex") && protected_index(args) {
         return StatementInfo::refused(name, &excerpt, "the _id index (or every index at once) cannot be dropped or hidden");
     }
-    let info = if touches_secrets(args) {
+    let info = if secret_database || touches_secrets(args) {
         StatementInfo::new(Category::Admin, name, &excerpt).with_reason(SENSITIVE_READ_REASON)
     } else {
         match name {
-            "mongo.updateMany" if filter_is_empty(args) => StatementInfo::new(Category::Destructive, name, &excerpt)
-                .with_reason("An empty filter updates every document in the collection"),
+            "mongo.updateMany" if filter_matches_everything(args) => StatementInfo::new(Category::Destructive, name, &excerpt)
+                .with_reason("The filter matches every document, so this updates the whole collection"),
             "mongo.updateMany" => StatementInfo::new(Category::Write, name, &excerpt),
-            "mongo.deleteMany" if filter_is_empty(args) => StatementInfo::new(Category::Destructive, name, &excerpt)
-                .with_reason("An empty filter deletes every document in the collection"),
+            "mongo.deleteMany" if filter_matches_everything(args) => StatementInfo::new(Category::Destructive, name, &excerpt)
+                .with_reason("The filter matches every document, so this deletes the whole collection"),
             "mongo.deleteMany" => StatementInfo::new(Category::Destructive, name, &excerpt).with_reason("Deletes every matching document"),
+            "mongo.createIndex" if is_ttl(args) => StatementInfo::new(Category::Destructive, name, &excerpt)
+                .with_reason("A TTL index (expireAfterSeconds) deletes documents on its own once their date has passed"),
             "mongo.createIndex" => StatementInfo::new(Category::Ddl, name, &excerpt).with_reason("Builds a new index on the collection"),
             "mongo.hideIndex" => {
                 StatementInfo::new(Category::Ddl, name, &excerpt).with_reason("Hides the index from the query planner (collMod)")
@@ -153,13 +186,23 @@ pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo
 
 /// An aggregation: the collections it reads (`$lookup`, `$graphLookup`, `$unionWith`) and writes are its tables, and
 /// reading credentials through any of them is administration. `mongo.aggregatePreview` only reads, so `$out` / `$merge`
-/// are refused there; `mongo.aggregate` with `$merge` writes and with `$out` (which creates or replaces the target
-/// collection) is DDL. A pipeline that does not parse is refused (it could not run either).
-fn classify_aggregation(name: &str, args: &serde_json::Value, excerpt: &str, mut tables: Vec<String>) -> StatementInfo {
+/// are refused there; `mongo.aggregate` with `$merge` writes and with `$out` (which drops and replaces the target
+/// collection, possibly the source itself) is destructive. Change streams never end and are refused everywhere. A
+/// pipeline that does not parse is refused (it could not run either).
+fn classify_aggregation(
+    name: &str,
+    args: &serde_json::Value,
+    excerpt: &str,
+    mut tables: Vec<String>,
+    secret_database: bool,
+) -> StatementInfo {
     let stages = match pipeline_arg(args) {
         Ok(stages) => stages.unwrap_or_default(),
         Err(error) => return StatementInfo::refused(name, excerpt, error.message()),
     };
+    if let Some(stage) = stream_stage(&stages) {
+        return StatementInfo::refused(name, excerpt, &format!("{stage} opens a change stream, which never ends"));
+    }
     let writes = write_stage(&stages);
     if let (Some(stage), "mongo.aggregatePreview") = (writes, name) {
         return StatementInfo::refused(name, excerpt, &format!("{stage} writes into a collection; a preview only reads"));
@@ -172,17 +215,22 @@ fn classify_aggregation(name: &str, args: &serde_json::Value, excerpt: &str, mut
             tables.push(table);
         }
     }
-    let info = if touches_secrets(args) || touches_secrets(&serde_json::Value::Array(stages)) {
+    let info = if secret_database || touches_secrets(args) || touches_secrets(&serde_json::Value::Array(stages)) {
         StatementInfo::new(Category::Admin, name, excerpt).with_reason(SENSITIVE_READ_REASON)
     } else {
         match writes {
-            Some("$out") => StatementInfo::new(Category::Ddl, name, excerpt)
-                .with_reason("$out creates or replaces the target collection with the result"),
+            Some("$out") => StatementInfo::new(Category::Destructive, name, excerpt)
+                .with_reason("$out drops the target collection (which can be the source itself) and replaces it with the result"),
             Some(_) => StatementInfo::new(Category::Write, name, excerpt).with_reason("$merge writes the result into a collection"),
             None => StatementInfo::new(Category::Read, name, excerpt),
         }
     };
     info.with_tables(tables)
+}
+
+/// Index options (or a `collMod` index change) that make a TTL index: any `expireAfterSeconds`, 0 included.
+fn is_ttl(options: &serde_json::Value) -> bool {
+    options.get("expireAfterSeconds").is_some_and(|seconds| !seconds.is_null())
 }
 
 /// A flag such as `showPrivileges` that is set: anything but absent, false, 0 or null.
@@ -195,17 +243,23 @@ fn flag_set(command: &serde_json::Value, key: &str) -> bool {
     }
 }
 
-/// Whether any string in the command names a credential collection (a `find` target, a `$lookup` / `$unionWith` source)
-/// or any key is a stage that reads other sessions.
+/// Whether any string in the command names a sensitive collection (a `find` target, a `$lookup` / `$unionWith` source),
+/// any `{ db, coll }` names the `local` database, or any key is a stage that reads other sessions.
 fn touches_secrets(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::String(text) => SYSTEM_SECRET_COLLECTIONS
             .iter()
             .any(|collection| text == collection || text.ends_with(&format!(".{collection}"))),
         serde_json::Value::Array(items) => items.iter().any(touches_secrets),
-        serde_json::Value::Object(object) => object
-            .iter()
-            .any(|(key, item)| SENSITIVE_STAGES.contains(&key.as_str()) || touches_secrets(item)),
+        serde_json::Value::Object(object) => {
+            object
+                .get("db")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|database| SECRET_DATABASES.contains(&database))
+                || object
+                    .iter()
+                    .any(|(key, item)| SENSITIVE_STAGES.contains(&key.as_str()) || touches_secrets(item))
+        }
         _ => false,
     }
 }
@@ -217,27 +271,47 @@ fn mongo_category(name: &str, command: &serde_json::Value) -> (Category, Option<
         return (Category::Admin, Some(SENSITIVE_READ_REASON.to_owned()));
     }
     if name == "aggregate" {
-        let writes = command
+        let stages = command
             .get("pipeline")
             .and_then(|pipeline| pipeline.as_array())
-            .is_some_and(|stages| {
-                stages
-                    .iter()
-                    .any(|stage| stage.get("$out").is_some() || stage.get("$merge").is_some())
-            });
-        return if writes {
-            (Category::Write, Some("$out / $merge write the result into a collection".to_owned()))
-        } else {
-            (Category::Read, None)
+            .cloned()
+            .unwrap_or_default();
+        return match write_stage(&stages) {
+            Some("$out") => (
+                Category::Destructive,
+                Some("$out drops the target collection (which can be the source itself) and replaces it with the result".to_owned()),
+            ),
+            Some(_) => (Category::Write, Some("$merge writes the result into a collection".to_owned())),
+            None => (Category::Read, None),
         };
     }
+    if name == "createIndexes"
+        && command
+            .get("indexes")
+            .and_then(|indexes| indexes.as_array())
+            .is_some_and(|indexes| indexes.iter().any(is_ttl))
+    {
+        return (
+            Category::Destructive,
+            Some("A TTL index (expireAfterSeconds) deletes documents on its own once their date has passed".to_owned()),
+        );
+    }
+    if name == "collMod" && command.get("index").is_some_and(is_ttl) {
+        return (
+            Category::Destructive,
+            Some("Changing a TTL index's expireAfterSeconds can delete documents on its own".to_owned()),
+        );
+    }
     if name == "delete" && mongo_matches_everything(command, "deletes") {
-        return (Category::Destructive, Some("An empty filter deletes every document".to_owned()));
+        return (
+            Category::Destructive,
+            Some("The filter matches every document, so this deletes them all".to_owned()),
+        );
     }
     if name == "update" && mongo_updates_everything(command) {
         return (
             Category::Destructive,
-            Some("An empty filter with multi updates every document".to_owned()),
+            Some("The filter matches every document and multi is set, so this updates them all".to_owned()),
         );
     }
     if name == "explain" {
@@ -276,17 +350,16 @@ const ADMIN_MONGO: [&str; 8] = [
 ];
 
 fn mongo_matches_everything(command: &serde_json::Value, list: &str) -> bool {
-    command.get(list).and_then(|items| items.as_array()).is_some_and(|items| {
-        items
-            .iter()
-            .any(|item| item.get("q").and_then(|q| q.as_object()).is_some_and(|q| q.is_empty()))
-    })
+    command
+        .get(list)
+        .and_then(|items| items.as_array())
+        .is_some_and(|items| items.iter().any(|item| item.get("q").is_some_and(matches_everything)))
 }
 
 fn mongo_updates_everything(command: &serde_json::Value) -> bool {
     command.get("updates").and_then(|items| items.as_array()).is_some_and(|items| {
         items.iter().any(|item| {
-            let empty = item.get("q").and_then(|q| q.as_object()).is_some_and(|q| q.is_empty());
+            let empty = item.get("q").is_some_and(matches_everything);
             let multi = item.get("multi").and_then(|multi| multi.as_bool()).unwrap_or(false);
             empty && multi
         })
@@ -307,7 +380,25 @@ mod tests {
         );
         assert_eq!(
             category(r#"{ "aggregate": "c", "pipeline": [ { "$out": "copy" } ], "cursor": {} }"#),
-            Category::Write
+            Category::Destructive
+        );
+        assert_eq!(
+            category(r#"{ "createIndexes": "c", "indexes": [ { "key": { "at": 1 }, "name": "at_1", "expireAfterSeconds": 0 } ] }"#),
+            Category::Destructive
+        );
+        assert_eq!(
+            category(r#"{ "collMod": "c", "index": { "name": "at_1", "expireAfterSeconds": 60 } }"#),
+            Category::Destructive
+        );
+        assert_eq!(
+            category(r#"{ "delete": "c", "deletes": [ { "q": { "$expr": true }, "limit": 0 } ] }"#),
+            Category::Destructive
+        );
+        assert_eq!(
+            category(
+                r#"{ "update": "c", "updates": [ { "q": { "_id": { "$exists": true } }, "u": { "$set": { "b": 2 } }, "multi": true } ] }"#
+            ),
+            Category::Destructive
         );
         assert_eq!(
             category(r#"{ "aggregate": "c", "pipeline": [ { "$merge": { "into": "x" } } ], "cursor": {} }"#),
@@ -364,6 +455,15 @@ mod tests {
             r#"{ "find": "system.users" }"#,
             r#"{ "count": "system.keys" }"#,
             r#"{ "aggregate": "orders", "pipeline": [ { "$lookup": { "from": "system.users", "as": "u", "pipeline": [] } } ], "cursor": {} }"#,
+            r#"{ "find": "system.backup_users" }"#,
+            r#"{ "find": "system.new_users" }"#,
+            r#"{ "find": "system.profile" }"#,
+            r#"{ "find": "oplog.rs" }"#,
+            r#"{ "find": "startup_log" }"#,
+            r#"{ "aggregate": 1, "pipeline": [ { "$queryStats": {} } ], "cursor": {} }"#,
+            r#"{ "aggregate": "c", "pipeline": [ { "$planCacheStats": {} } ], "cursor": {} }"#,
+            r#"{ "aggregate": 1, "pipeline": [ { "$listSampledQueries": {} } ], "cursor": {} }"#,
+            r#"{ "aggregate": "c", "pipeline": [ { "$unionWith": { "db": "local", "coll": "x" } } ], "cursor": {} }"#,
         ] {
             assert_eq!(category(admin), Category::Admin, "{admin}");
         }
@@ -438,6 +538,29 @@ mod tests {
         let secret = classify_operation("mongo.find", &json!({ "database": "admin", "collection": "system.users" }));
         assert_eq!(secret.category, Category::Admin);
         assert_eq!(secret.refused, None);
+        for (database, collection) in [
+            ("admin", "system.backup_users"),
+            ("admin", "system.new_users"),
+            ("shop", "system.profile"),
+            ("local", "startup_log"),
+            ("local", "oplog.rs"),
+            ("local", "system.replset"),
+            ("local", "anything"),
+        ] {
+            let info = classify_operation("mongo.find", &json!({ "database": database, "collection": collection }));
+            assert_eq!(info.category, Category::Admin, "{database}.{collection}");
+        }
+        // Names are classified exactly as the call uses them: padded, empty or missing names are refused, not trimmed.
+        for args in [
+            json!({ "database": "admin", "collection": " system.users" }),
+            json!({ "database": "admin ", "collection": "system.users" }),
+            json!({ "database": "shop", "collection": "" }),
+            json!({ "collection": "orders" }),
+            json!({ "database": "shop", "collection": "a\u{0}" }),
+        ] {
+            let info = classify_operation("mongo.find", &args);
+            assert!(info.refused.is_some(), "{args}");
+        }
     }
 
     #[test]
@@ -464,7 +587,39 @@ mod tests {
         assert_eq!((merge.category, merge.refused.as_deref()), (Category::Write, None));
         assert_eq!(merge.tables, ["orders", "totals"]);
         let out = classify_operation("mongo.aggregate", &args(json!(["{ \"$out\": \"copy\" }"])));
-        assert_eq!(out.category, Category::Ddl);
+        assert_eq!(out.category, Category::Destructive);
+        // Emptying the source through $out is as destructive as a drop.
+        let emptied = classify_operation(
+            "mongo.aggregate",
+            &args(json!([{ "$match": { "_id": null } }, { "$out": "orders" }])),
+        );
+        assert_eq!(emptied.category, Category::Destructive);
+        // Change streams never end: refused for the preview, the run and explain.
+        for name in ["mongo.aggregatePreview", "mongo.aggregate"] {
+            for pipeline in [
+                json!([{ "$changeStream": {} }]),
+                json!(["{ \"$changeStreamSplitLargeEvent\": {} }"]),
+            ] {
+                let info = classify_operation(name, &args(pipeline.clone()));
+                assert!(
+                    info.refused.as_deref().is_some_and(|why| why.contains("change stream")),
+                    "{name}: {pipeline}"
+                );
+            }
+        }
+        let explained = classify_operation(
+            "mongo.explain",
+            &json!({ "database": "shop", "collection": "orders", "kind": "aggregate", "pipeline": [{ "$changeStream": {} }] }),
+        );
+        assert!(explained.refused.as_deref().is_some_and(|why| why.contains("change stream")));
+        // Anything in the local database is administration.
+        let oplog = classify_operation(
+            "mongo.aggregate",
+            &json!({ "database": "local", "collection": "anything", "pipeline": [] }),
+        );
+        assert_eq!(oplog.category, Category::Admin);
+        let queries = classify_operation("mongo.aggregatePreview", &args(json!([{ "$queryStats": {} }])));
+        assert_eq!(queries.category, Category::Admin);
         assert_eq!(out.tables, ["orders", "copy"]);
         // Other collections read are tables; credentials read through them are administration.
         let lookup = classify_operation(
@@ -575,6 +730,19 @@ mod tests {
         );
         assert_eq!((create.category, create.refused.as_deref()), (Category::Ddl, None));
         assert_eq!(create.tables, ["orders"]);
+        // A TTL index deletes documents by itself.
+        for seconds in [json!(0), json!(3600)] {
+            let ttl = info(
+                "mongo.createIndex",
+                json!({ "keys": { "createdAt": 1 }, "expireAfterSeconds": seconds }),
+            );
+            assert_eq!((ttl.category, ttl.refused.as_deref()), (Category::Destructive, None), "{seconds}");
+        }
+        let plain = info(
+            "mongo.createIndex",
+            json!({ "keys": { "createdAt": 1 }, "expireAfterSeconds": null }),
+        );
+        assert_eq!(plain.category, Category::Ddl);
         for name in ["mongo.hideIndex", "mongo.unhideIndex"] {
             assert_eq!(info(name, json!({ "name": "status_1" })).category, Category::Ddl, "{name}");
         }
@@ -676,6 +844,17 @@ mod tests {
             assert_eq!(category("mongo.deleteMany", args(empty.clone())), Category::Destructive, "{empty}");
         }
         assert_eq!(category("mongo.deleteMany", args(some)), Category::Destructive);
+        // Filters that trivially match everything are as destructive as an empty one.
+        for all in [
+            json!({ "$expr": true }),
+            json!({ "_id": { "$exists": true } }),
+            json!({ "$and": [{}] }),
+            json!("{ \"$or\": [ {}, { \"a\": 1 } ] }"),
+        ] {
+            let info = classify_operation("mongo.updateMany", &args(all.clone()));
+            assert_eq!(info.category, Category::Destructive, "{all}");
+            assert!(info.reason.as_deref().is_some_and(|why| why.contains("every document")), "{all}");
+        }
         let no_filter = json!({ "database": "shop", "collection": "orders", "update": { "$inc": { "n": 1 } } });
         assert_eq!(category("mongo.updateMany", no_filter), Category::Destructive);
         // Server-side JavaScript anywhere, including the update (a pipeline with $function), is refused.

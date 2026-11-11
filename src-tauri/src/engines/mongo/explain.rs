@@ -101,6 +101,9 @@ pub fn explained_command(collection: &str, args: &Json, verbosity: &str, max_tim
                 "{stage} writes into a collection; explain only reads, so leave it out"
             )));
         }
+        if let Some(stage) = aggregate::stream_stage(&stages) {
+            return Err(aggregate::stream_error(stage));
+        }
         let pipeline = stages
             .into_iter()
             .enumerate()

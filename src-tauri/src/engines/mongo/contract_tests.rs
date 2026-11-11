@@ -945,7 +945,7 @@ async fn contract_mongo_aggregations() {
         .unwrap()
         .starts_with("db.getCollection(\"contract_items\").aggregate(["));
 
-    // $merge writes: blocked in Read-only, confirmed in Guarded; $out (DDL) replaces the collection.
+    // $merge writes: blocked in Read-only, confirmed in Guarded; $out (destructive) replaces the collection.
     let merge = json!({ "pipeline": [{ "$match": { "_id": { "$lte": 10 } } }, { "$merge": { "into": "contract_agg_out" } }] });
     assert_eq!(
         invoke("mongo.aggregate", merge.clone(), Preset::ReadOnly, None)
@@ -985,9 +985,36 @@ async fn contract_mongo_aggregations() {
         }
     };
     assert_eq!(total().await, Some(10));
-    let out = confirmed(json!({ "pipeline": [{ "$match": { "_id": { "$lte": 3 } } }, { "$out": "contract_agg_out" }] })).await;
+    let out_args = json!({ "pipeline": [{ "$match": { "_id": { "$lte": 3 } } }, { "$out": "contract_agg_out" }] });
+    // $out drops and replaces its target: destructive, so Guarded asks for the typed confirmation.
+    let ask = invoke("mongo.aggregate", out_args.clone(), Preset::Guarded, None)
+        .await
+        .unwrap_err();
+    assert!(ask.payload().unwrap()["expected"].as_str().is_some(), "{ask}");
+    let out = confirmed(out_args).await;
     assert_eq!(out["wrote"]["stage"], "$out");
     assert_eq!(total().await, Some(3));
+    // A change stream never ends: refused before it reaches the server, for the run and for explain.
+    for (name, extra) in [
+        ("mongo.aggregate", json!({ "pipeline": [{ "$changeStream": {} }] })),
+        (
+            "mongo.explain",
+            json!({ "kind": "aggregate", "pipeline": [{ "$changeStream": {} }] }),
+        ),
+    ] {
+        let refused = invoke(name, extra, Preset::Open, None).await.unwrap_err();
+        assert!(refused.to_string().contains("change stream"), "{name}: {refused}");
+    }
+    // Names are used as given: a padded collection name is refused instead of trimmed.
+    let padded = invoke(
+        "mongo.aggregate",
+        json!({ "collection": " contract_items", "pipeline": [] }),
+        Preset::Open,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(padded.to_string().contains("leading or trailing spaces"), "{padded}");
     run(&handle, &tab, r#"{ "drop": "contract_agg_out" }"#, "fosta_contract").await.ok();
     manager.disconnect(CONNECTION).await;
 }
@@ -1193,6 +1220,22 @@ async fn contract_mongo_document_edits_and_bulk() {
     .await
     .unwrap();
     assert_eq!(all["modified"].as_u64(), Some(3));
+    // Filters that trivially match everything ask the same typed confirmation as an empty one.
+    for filter in [
+        json!({ "$expr": true }),
+        json!({ "_id": { "$exists": true } }),
+        json!({ "$and": [{}] }),
+    ] {
+        let ask = invoke(
+            "mongo.updateMany",
+            json!({ "filter": filter, "update": { "$set": { "seen": true } } }),
+            Preset::Guarded,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(ask.payload().unwrap()["level"], "typed", "{filter}");
+    }
 
     // deleteMany is destructive: typed in Guarded even with a filter.
     let delete = json!({ "filter": { "status": "paid" } });
@@ -1495,8 +1538,19 @@ async fn contract_mongo_indexes() {
         .starts_with(r#"db.getCollection("contract_indexes").createIndex({"status":1,"createdAt":-1}, {"name":"status_1_createdAt_-1""#));
     let again = invoke("mongo.createIndex", compound, Preset::Open, None).await.unwrap();
     assert_eq!(again["created"], false);
+    // A TTL index deletes documents on its own: destructive, typed in Guarded.
+    let ttl = json!({ "keys": { "createdAt": 1 }, "name": "ttl_created", "expireAfterSeconds": 86_400 });
+    let ask = invoke("mongo.createIndex", ttl.clone(), Preset::Guarded, None).await.unwrap_err();
+    assert_eq!(ask.payload().unwrap()["level"], "typed", "{ask}");
+    let ask = invoke("mongo.createIndex", ttl.clone(), Preset::Open, None).await.unwrap_err();
+    assert_eq!(ask.code(), Some(gateway::CONFIRMATION_REQUIRED), "{ask}");
+    let payload = ask.payload().unwrap();
+    let confirmation = gateway::Confirmation {
+        token: payload["token"].as_str().unwrap().to_owned(),
+        typed: payload["expected"].as_str().map(str::to_owned),
+    };
+    invoke("mongo.createIndex", ttl, Preset::Open, Some(confirmation)).await.unwrap();
     for extra in [
-        json!({ "keys": { "createdAt": 1 }, "name": "ttl_created", "expireAfterSeconds": 86_400 }),
         json!({ "keys": { "title": "text" }, "weights": { "title": 5 }, "defaultLanguage": "english" }),
         json!({ "keys": { "meta.$**": 1 } }),
         json!({ "keys": { "title": 1 }, "name": "title_hidden", "hidden": true, "sparse": true }),

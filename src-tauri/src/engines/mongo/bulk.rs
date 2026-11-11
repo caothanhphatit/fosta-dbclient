@@ -10,7 +10,8 @@
 //!   or an aggregation pipeline (no replacement documents, no upsert).
 //! - `mongo.deleteMany { database, collection, filter? }` → `{ deleted, elapsedMs }`.
 //!
-//! The classifier makes `updateMany` a write (destructive with an empty filter) and `deleteMany` always destructive;
+//! The classifier makes `updateMany` a write (destructive with a filter that matches everything, see
+//! [`matches_everything`]) and `deleteMany` always destructive;
 //! server-side JavaScript is refused in every argument. The writes have no time bound (the driver has none for them).
 
 use std::time::{Duration, Instant};
@@ -96,14 +97,56 @@ pub fn update_arg(args: &Json) -> AppResult<Update> {
     }
 }
 
-/// Whether the filter argument matches every document (absent, empty text or `{}`). A filter that does not parse
-/// counts as empty here, so it is classified the stricter way (running it fails anyway).
-pub fn filter_is_empty(args: &Json) -> bool {
+/// Whether the filter argument matches every document: absent, empty text, `{}` or a trivially-true form
+/// ([`matches_everything`]). A filter that does not parse counts as matching everything here, so it is classified the
+/// stricter way (running it fails anyway).
+pub fn filter_matches_everything(args: &Json) -> bool {
     match json_arg(args, "filter") {
         Ok(None) => true,
-        Ok(Some(Json::Object(object))) => object.is_empty(),
-        Ok(Some(_)) => false,
+        Ok(Some(filter)) => matches_everything(&filter),
         Err(_) => true,
+    }
+}
+
+/// Whether a filter document trivially matches every document: `{}`, `{ $expr: true }` (or any constant truthy
+/// expression, `$literal` included), `{ _id: { $exists: true } }`, `{ $jsonSchema: {} }`, `{ $comment: … }` alone,
+/// `{ $and: [ … ] }` of such filters or `{ $or: [ … ] }` with one of them. This catches pasted or injected match-all
+/// filters; it is a guard against mistakes, not a proof (an expression such as `{ $eq: [1, 1] }` is not evaluated).
+pub fn matches_everything(filter: &Json) -> bool {
+    let Some(object) = filter.as_object() else {
+        return false;
+    };
+    object.iter().all(|(key, value)| match key.as_str() {
+        "$comment" => true,
+        "$and" => value.as_array().is_some_and(|items| items.iter().all(matches_everything)),
+        "$or" => value.as_array().is_some_and(|items| items.iter().any(matches_everything)),
+        "$expr" => constant_truthy(value),
+        "$jsonSchema" => value.as_object().is_some_and(|schema| schema.is_empty()),
+        ID_FIELD => value
+            .as_object()
+            .is_some_and(|condition| !condition.is_empty() && condition.iter().all(|(op, flag)| op == "$exists" && literal_truthy(flag))),
+        _ => false,
+    })
+}
+
+/// An aggregation expression that is a constant and true: `true`, a non-zero number, a text that is not a field path
+/// (`$…`), an array, or `{ $literal: <truthy> }`.
+fn constant_truthy(value: &Json) -> bool {
+    match value {
+        Json::String(text) => !text.starts_with('$'),
+        Json::Object(object) if object.len() == 1 => object.get("$literal").is_some_and(literal_truthy),
+        Json::Array(_) => true,
+        other => literal_truthy(other),
+    }
+}
+
+/// A value MongoDB treats as true: anything but `false`, `0`, `null` (and missing).
+fn literal_truthy(value: &Json) -> bool {
+    match value {
+        Json::Null => false,
+        Json::Bool(on) => *on,
+        Json::Number(number) => number.as_f64() != Some(0.0),
+        _ => true,
     }
 }
 
@@ -349,13 +392,49 @@ mod tests {
 
     #[test]
     fn empty_filters_are_detected() {
-        assert!(filter_is_empty(&json!({})));
-        assert!(filter_is_empty(&json!({ "filter": "  " })));
-        assert!(filter_is_empty(&json!({ "filter": {} })));
-        assert!(filter_is_empty(&json!({ "filter": "{}" })));
-        assert!(filter_is_empty(&json!({ "filter": "{ nope" })));
-        assert!(!filter_is_empty(&json!({ "filter": { "a": 1 } })));
-        assert!(!filter_is_empty(&json!({ "filter": "{ \"a\": 1 }" })));
+        assert!(filter_matches_everything(&json!({})));
+        assert!(filter_matches_everything(&json!({ "filter": "  " })));
+        assert!(filter_matches_everything(&json!({ "filter": {} })));
+        assert!(filter_matches_everything(&json!({ "filter": "{}" })));
+        assert!(filter_matches_everything(&json!({ "filter": "{ nope" })));
+        assert!(!filter_matches_everything(&json!({ "filter": { "a": 1 } })));
+        assert!(!filter_matches_everything(&json!({ "filter": "{ \"a\": 1 }" })));
+    }
+
+    #[test]
+    fn trivially_true_filters_match_everything() {
+        for all in [
+            json!({ "$expr": true }),
+            json!({ "$expr": 1 }),
+            json!({ "$expr": "yes" }),
+            json!({ "$expr": { "$literal": true } }),
+            json!({ "_id": { "$exists": true } }),
+            json!({ "_id": { "$exists": 1 } }),
+            json!({ "$and": [{}] }),
+            json!({ "$and": [{ "$expr": true }, { "_id": { "$exists": true } }] }),
+            json!({ "$or": [{ "status": "paid" }, {}] }),
+            json!({ "$jsonSchema": {} }),
+            json!({ "$comment": "all of them" }),
+            json!({ "$comment": "x", "$expr": true }),
+        ] {
+            assert!(matches_everything(&all), "{all}");
+            assert!(filter_matches_everything(&json!({ "filter": all.to_string() })), "{all} as text");
+        }
+        for some in [
+            json!({ "$expr": false }),
+            json!({ "$expr": 0 }),
+            json!({ "$expr": "$flag" }),
+            json!({ "$expr": { "$eq": ["$a", 1] } }),
+            json!({ "_id": { "$exists": false } }),
+            json!({ "_id": { "$exists": true, "$gt": 5 } }),
+            json!({ "status": { "$exists": true } }),
+            json!({ "$and": [{}, { "a": 1 }] }),
+            json!({ "$or": [{ "a": 1 }, { "b": 2 }] }),
+            json!({ "$jsonSchema": { "required": ["a"] } }),
+            json!({ "$comment": "x", "a": 1 }),
+        ] {
+            assert!(!matches_everything(&some), "{some}");
+        }
     }
 
     #[test]

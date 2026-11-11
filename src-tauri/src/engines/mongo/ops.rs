@@ -214,9 +214,33 @@ pub(super) fn collation_arg(args: &Json) -> AppResult<Option<Collation>> {
         .transpose()
 }
 
+/// A `database` or `collection` argument exactly as given: a non-empty string with no leading or trailing whitespace
+/// and no NUL. Names are never trimmed, so the classifier (which calls this too) and the call see the same namespace.
+pub fn name_arg<'a>(args: &'a Json, key: &str) -> AppResult<&'a str> {
+    let name = args
+        .get(key)
+        .and_then(Json::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| AppError::new(format!("{key} is required")))?;
+    if name.trim() != name {
+        return Err(AppError::new(format!(
+            "The {key} name {} has leading or trailing spaces",
+            name_json(name)
+        )));
+    }
+    if name.contains('\0') {
+        return Err(AppError::new(format!("The {key} name holds a NUL character")));
+    }
+    Ok(name)
+}
+
+/// The database and collection of a call, checked by [`name_arg`].
+pub fn namespace_args(args: &Json) -> AppResult<(&str, &str)> {
+    Ok((name_arg(args, "database")?, name_arg(args, "collection")?))
+}
+
 fn collection(client: &Client, args: &Json) -> AppResult<Collection<Document>> {
-    let database = text_arg(args, "database")?;
-    let collection = text_arg(args, "collection")?;
+    let (database, collection) = namespace_args(args)?;
     Ok(client.database(database).collection(collection))
 }
 
@@ -507,6 +531,22 @@ mod tests {
         assert!(matches!(hint_arg(&json!({ "hint": "name_1" })).unwrap(), Some(Hint::Name(name)) if name == "name_1"));
         assert!(matches!(hint_arg(&json!({ "hint": { "name": 1 } })).unwrap(), Some(Hint::Keys(_))));
         assert!(hint_arg(&json!({})).unwrap().is_none());
+    }
+
+    #[test]
+    fn names_are_used_exactly_as_given() {
+        let args = json!({ "database": "shop", "collection": "orders" });
+        assert_eq!(namespace_args(&args).unwrap(), ("shop", "orders"));
+        for bad in [
+            json!({ "database": "admin", "collection": " system.users" }),
+            json!({ "database": "admin ", "collection": "x" }),
+            json!({ "database": "shop", "collection": "a\u{0}b" }),
+            json!({ "database": "shop", "collection": "  " }),
+            json!({ "database": "shop" }),
+            json!({ "database": "shop", "collection": 5 }),
+        ] {
+            assert!(namespace_args(&bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

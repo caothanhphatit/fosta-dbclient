@@ -16,8 +16,10 @@
 //!   the whole preview: each run gets what is left of it.
 //! - `mongo.aggregate { database, collection, pipeline, limit?, allowDiskUse?, collation?, hint?, maxTimeMS? }` →
 //!   `{ documents, hasMore, elapsedMs, statement, wrote }`: at most `limit` documents (default 50, at most 1000). With
-//!   `$out` / `$merge` (classified as DDL / a write) nothing is returned and `wrote` names the stage and the target
-//!   collection; otherwise `wrote` is null.
+//!   `$out` / `$merge` (classified as destructive / a write) nothing is returned and `wrote` names the stage and the
+//!   target collection; otherwise `wrote` is null.
+//!
+//! Change streams (`$changeStream`) never end, so the preview, the full run and `mongo.explain` refuse them.
 
 use std::time::{Duration, Instant};
 
@@ -63,8 +65,9 @@ const FIRST_STAGES: [&str; 13] = [
     "$listLocalSessions",
     "$querySettings",
 ];
-/// Stages that never end (change streams): not previewed.
-const STREAM_STAGES: [&str; 2] = ["$changeStream", "$changeStreamSplitLargeEvent"];
+/// Stages that never end (change streams): refused by the preview, the full run and explain alike (the cursor is
+/// tailable, so collecting it would keep the connection busy until the user cancels).
+pub const STREAM_STAGES: [&str; 2] = ["$changeStream", "$changeStreamSplitLargeEvent"];
 /// Stages that read another collection of the same database, with the key that names it.
 const LOOKUP_STAGES: [(&str, &str); 3] = [("$lookup", "from"), ("$graphLookup", "from"), ("$unionWith", "coll")];
 
@@ -112,6 +115,21 @@ fn operator(stage: &Json) -> &str {
         .and_then(|object| object.keys().next())
         .map(String::as_str)
         .unwrap_or_default()
+}
+
+/// The first change-stream stage of the pipeline (they are only valid at the top level).
+pub fn stream_stage(stages: &[Json]) -> Option<&'static str> {
+    stages
+        .iter()
+        .map(operator)
+        .find_map(|op| STREAM_STAGES.iter().find(|stream| **stream == op).copied())
+}
+
+/// The error for a pipeline that opens a change stream.
+pub fn stream_error(stage: &str) -> AppError {
+    AppError::new(format!(
+        "{stage} opens a change stream, which never ends; the workspace does not run, preview or explain change streams"
+    ))
 }
 
 /// The first `$out` / `$merge` anywhere in the stages (the server allows them last only, this looks everywhere).
@@ -243,10 +261,8 @@ pub async fn aggregate_preview(coll: &Collection<Document>, args: &Json, max_tim
             "{stage} writes into a collection, so it is not previewed; preview the stages before it, or run the whole aggregation"
         )));
     }
-    if let Some(stage) = stages.iter().map(operator).find(|op| STREAM_STAGES.contains(op)) {
-        return Err(AppError::new(format!(
-            "{stage} opens a change stream, which a preview cannot sample"
-        )));
+    if let Some(stage) = stream_stage(&stages) {
+        return Err(stream_error(stage));
     }
     let pipeline = to_bson(&stages)?;
     let collation = collation_arg(args)?;
@@ -354,6 +370,9 @@ pub async fn aggregate_preview(coll: &Collection<Document>, args: &Json, max_tim
 
 pub async fn aggregate(coll: &Collection<Document>, args: &Json, max_time: Duration) -> AppResult<Json> {
     let stages = pipeline_arg(args)?.unwrap_or_default();
+    if let Some(stage) = stream_stage(&stages) {
+        return Err(stream_error(stage));
+    }
     let mut pipeline = to_bson(&stages)?;
     let writes = write_stage(&stages);
     let limit = u64_arg(args, "limit")?.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -433,6 +452,11 @@ mod tests {
             Some("r.t")
         );
         assert_eq!(write_stage(&[json!({ "$match": { "out": 1 } })]), None);
+        assert_eq!(
+            stream_stage(&[json!({ "$changeStream": {} }), json!({ "$match": {} })]),
+            Some("$changeStream")
+        );
+        assert_eq!(stream_stage(&[json!({ "$match": { "$changeStream": 1 } })]), None);
     }
 
     #[test]
