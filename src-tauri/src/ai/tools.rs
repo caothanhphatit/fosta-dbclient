@@ -26,6 +26,7 @@ pub(super) const MAX_CELL_CHARS: usize = 200;
 /// The whole query result sent to the model.
 pub(super) const MAX_RESULT_CHARS: usize = 16_000;
 pub(super) const READ_QUERY: &str = "run_read_query";
+pub(super) const SEARCH_APP_HELP: &str = "search_app_help";
 
 pub(super) struct ToolSpec {
     pub(super) name: &'static str,
@@ -103,6 +104,16 @@ pub(super) fn tool_definitions(read_queries: bool, collections: bool) -> Vec<Too
                 "additionalProperties": false
             }),
         },
+        ToolSpec {
+            name: SEARCH_APP_HELP,
+            description: "Searches Fosta Studio's own help (how-to entries and the user docs) and returns the three best sections with the steps and the exact UI labels. Use it when the user asks how to do something in the app (port-forward, SSH, export, MCP, settings, shortcuts) instead of guessing; quote UI labels in English as returned.",
+            schema: json!({
+                "type": "object",
+                "properties": { "query": { "type": "string", "description": "A few words about the feature or task, e.g. \"bind a connection to a command\"." } },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        },
     ];
     if read_queries {
         tools.push(ToolSpec {
@@ -137,6 +148,7 @@ pub(super) fn describe_call(call: &ToolCall, context: &ChatContext) -> String {
         "open_table" => format!("Opened {}", argument("table").unwrap_or_default()),
         "open_query" => String::from("Opened a query tab"),
         READ_QUERY => String::from("Running a read-only query"),
+        SEARCH_APP_HELP => format!("Looked up \"{}\" in the app help", argument("query").unwrap_or_default()),
         name @ (collections::OPEN_WORKSPACE | collections::SAMPLE_DOCUMENTS) => collections::describe(name, &call.input),
         other => format!("Called {other}"),
     }
@@ -153,6 +165,11 @@ pub(super) async fn run_tool(
 ) -> Result<String, String> {
     // Every tool is registered with the gateway as metadata-only or view-opening; anything else is refused.
     gateway::assistant_tool_effect(&call.name).map_err(|error| error.to_string())?;
+    // The app's own help is embedded text: no connection, no database content.
+    if call.name == SEARCH_APP_HELP {
+        let query = call.input.get("query").and_then(Value::as_str).unwrap_or_default();
+        return Ok(super::app_help::search_app_help(query));
+    }
     let connection_id = context.connection_id.as_deref().ok_or("No connection is open")?;
     let handle = db.handle(connection_id).map_err(|error| error.to_string())?;
     let ctx = CallContext::default();
@@ -589,6 +606,7 @@ mod tests {
             ("open_diagram", json!({ "focus_table": "items" })),
             ("open_table", json!({ "table": "items", "filter": "name = 'x'" })),
             ("open_query", json!({ "sql": "DELETE FROM items" })),
+            (SEARCH_APP_HELP, json!({ "query": "port forward" })),
         ];
         let defined: Vec<&str> = tool_definitions(false, false).iter().map(|tool| tool.name).collect();
         assert_eq!(defined.len(), inputs.len(), "every tool is exercised here");
@@ -607,6 +625,8 @@ mod tests {
             outputs[2]
         );
         assert!(outputs[3].contains("- items: id int?, name text?"), "{}", outputs[3]);
+        // The app help needs no connection and reads no database.
+        assert!(outputs[7].contains("Commands"), "{}", outputs[7]);
         // Unknown objects are a clear error, not a guess.
         let missing = run_tool(&db, &context, None, &call("describe_table", json!({ "table": "nope" })), &events).await;
         assert!(missing.unwrap_err().contains("no table, view or collection nope"));
