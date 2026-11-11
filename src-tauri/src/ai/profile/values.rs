@@ -30,7 +30,7 @@ use super::{
 use crate::{
     contract::{cancelled, CancellationToken, Capability, ColumnInfo, NodeKind, ObjectRef, Value, ValueKind},
     error::AppResult,
-    gateway::{self, Context},
+    gateway::{self, assistant::ReadAudit, Context},
     runtime::{ConnectionManager, Handle},
 };
 
@@ -337,7 +337,7 @@ async fn read_sql(
         .engine
         .distinct_values_statement(&reference, &info, SAMPLE_ROWS, limit)
         .ok_or_else(|| crate::contract::unsupported_capability("value sampling"))?;
-    let result = gateway::assistant::read(sampler.manager, &sampler.context, &statement, database).await?;
+    let result = gateway::assistant::read_audited(sampler.manager, &sampler.context, &statement, database, ReadAudit::Failures).await?;
     let more = result.rows.len() > MAX_ENUM_VALUES || result.truncated;
     let values = result.rows.iter().filter_map(|row| row.first().and_then(text_of)).collect();
     Ok((values, more))
@@ -351,7 +351,8 @@ async fn read_mongo(sampler: &Sampler<'_>, database: &str, object: &ObjectProfil
         "limit": MAX_ENUM_VALUES,
         "maxTimeMS": MONGO_MAX_TIME_MS,
     });
-    let result = gateway::assistant::invoke_read(sampler.manager, &sampler.context, "mongo.distinct", args).await?;
+    let result =
+        gateway::assistant::invoke_read_audited(sampler.manager, &sampler.context, "mongo.distinct", args, ReadAudit::Failures).await?;
     let more = result.get("truncated").and_then(Json::as_bool).unwrap_or(false);
     let values = result
         .get("values")
@@ -359,6 +360,41 @@ async fn read_mongo(sampler: &Sampler<'_>, database: &str, object: &ObjectProfil
         .map(|values| values.iter().filter_map(json_text_of).collect())
         .unwrap_or_default();
     Ok((values, more))
+}
+
+/// The one audit entry of a build's value reads (each failed read has its own, each refusal too).
+fn audit_values(sampler: &Sampler<'_>, handle: &Handle, database: &str, path: Path, outcome: &ValuesOutcome) {
+    if outcome.columns == 0 {
+        return;
+    }
+    let read = match path {
+        Path::Sql => "SELECT DISTINCT",
+        Path::Mongo => "mongo.distinct",
+    };
+    let stopped = outcome.skipped.as_deref().map(|why| format!("; {why}")).unwrap_or_default();
+    gateway::assistant::audit_batch(
+        sampler.manager,
+        &sampler.context,
+        handle.engine.id(),
+        format!(
+            "Learning {}: {} value reads ({read}, at most {SAMPLE_ROWS} rows each)",
+            shown(database),
+            outcome.columns
+        ),
+        format!(
+            "{} reads, {} failed, {} value hints{stopped}",
+            outcome.columns, outcome.failed, outcome.hinted
+        ),
+    );
+}
+
+/// A database name as the audit log shows it.
+pub(super) fn shown(database: &str) -> String {
+    if database.is_empty() {
+        "this connection".to_owned()
+    } else {
+        database.to_owned()
+    }
 }
 
 /// Reads value hints into `profile` (see the module docs). Stops with `cancel` (the error is `CANCELLED`); a refusal by
@@ -401,6 +437,7 @@ pub async fn sample_except(
         let mut hints = Vec::new();
         for column_index in columns {
             if cancel.is_cancelled() {
+                audit_values(sampler, handle, &database, path, &outcome);
                 return Err(cancelled());
             }
             let Some(remaining) = BUDGET.checked_sub(started.elapsed()).filter(|left| !left.is_zero()) else {
@@ -421,11 +458,15 @@ pub async fn sample_except(
                     Path::Mongo => read_mongo(sampler, &database, object, column).await,
                 }
             };
+            // Counted when started, so a cancelled read is in the audit entry too.
+            outcome.columns += 1;
             let outcome_of_read = tokio::select! {
                 read = tokio::time::timeout(remaining, read) => read,
-                _ = cancel.cancelled() => return Err(cancelled()),
+                _ = cancel.cancelled() => {
+                    audit_values(sampler, handle, &database, path, &outcome);
+                    return Err(cancelled());
+                }
             };
-            outcome.columns += 1;
             match outcome_of_read {
                 Ok(Ok((values, more))) => {
                     if let Some(hint) = hint_of(column, &values, more) {
@@ -457,6 +498,7 @@ pub async fn sample_except(
     progress(Progress::new(Step::Values, total, total));
     outcome.hinted = profile.objects.iter().map(|object| object.value_hints.len()).sum();
     profile.data_read = outcome.hinted > 0;
+    audit_values(sampler, handle, &database, path, &outcome);
     Ok(outcome)
 }
 

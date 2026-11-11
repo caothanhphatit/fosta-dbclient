@@ -152,7 +152,9 @@ the profile has them and reads are still allowed. What comes back is treated as 
 stripped, descriptions are cut to 200 characters, and your own descriptions are never replaced. In chats the profile is
 passed to the model as untrusted data like the rest of the database context, without value hints where reads are off.
 Builds, refreshes, summaries (provider, model, objects, tokens, whether data was sent) and deletions are written to the
-audit log. Settings → "Assistant may learn databases" and Edit workspace → "Assistant may learn databases" turn learning and
+audit log. The reads of a build are written as one entry per phase (the engine's reads, value sampling) with what was
+read and the counts, so that a build does not push older entries out; a read that fails, and every refusal, gets an
+entry of its own. Settings → "Assistant may learn databases" and Edit workspace → "Assistant may learn databases" turn learning and
 summaries off; what was learned before stays until you delete it.
 
 Profiles are stored in `fosta-studio-profiles/` next to the other files, one `<sha256 of connection and database>.json` per

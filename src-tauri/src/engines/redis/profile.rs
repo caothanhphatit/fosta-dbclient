@@ -2,18 +2,15 @@
 //! bounded `redis.scan` of key names (with their types and TTLs, no value read) is grouped into patterns such as
 //! `user:{id}:profile` (segments split at `:`, and at `/` or `|` inside them; an IPv6 address stays one segment): segments
 //! that look like numbers, UUIDs, hashes, emails, dates, IP addresses, phone numbers, mixed identifiers, base64 or other
-//! token-like text become placeholders, the others are scrubbed of secret-looking text, and a segment whose spellings
-//! are mostly seen once (`user:alice:profile`, `user:bob:profile`…) becomes `{name}`. Each pattern is a profile object
-//! of kind `keyPattern` with its key count and types in the sample.
+//! token-like text become placeholders (the assistant's profile scrubs each remaining segment), and a segment whose
+//! spellings are mostly seen once (`user:alice:profile`, `user:bob:profile`…) becomes `{name}`. Each pattern is a profile
+//! object of kind `keyPattern` with its key count and types in the sample.
 
 use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{json, Value as Json};
 
-use crate::{
-    ai::profile::redact,
-    contract::{ExtrasRead, ObjectExtras, ObjectRef, ProfileEnrichment, KEY_PATTERN},
-};
+use crate::contract::{ExtrasRead, ObjectExtras, ObjectRef, ProfileEnrichment, KEY_PATTERN};
 
 /// Keys read in the sample (one SCAN page, bounded in time by the scan itself), and the patterns kept.
 pub const SAMPLE_KEYS: u64 = 5_000;
@@ -44,6 +41,34 @@ fn is_date(text: &str) -> bool {
                 }))
 }
 
+/// A phone number: 7 to 15 digits with an optional leading `+` and the usual separators, with a `+` or a separator.
+fn is_phone(text: &str) -> bool {
+    let digits = text.chars().filter(char::is_ascii_digit).count();
+    let body = text.strip_prefix('+').unwrap_or(text);
+    (7..=15).contains(&digits)
+        && body.chars().all(|c| c.is_ascii_digit() || matches!(c, '-' | '.' | ' ' | '(' | ')'))
+        && (text.starts_with('+') || body.chars().any(|c| matches!(c, '-' | ' ' | '(' | ')')))
+        && !is_date(body)
+}
+
+/// Base64: token characters with `+` or `=`, or with `/` among upper case, lower case and digits (`user/alice` is a path).
+fn is_base64(text: &str) -> bool {
+    let digits = text.chars().any(|c| c.is_ascii_digit());
+    let mixed = text.chars().any(|c| c.is_ascii_uppercase()) && text.chars().any(|c| c.is_ascii_lowercase()) && digits;
+    text.len() >= 8
+        && (text.contains(['+', '=']) || (text.contains('/') && mixed))
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_'))
+}
+
+/// Token-like text: base64, longer than 32 characters, or 16 or more mixing letters and digits.
+fn is_token(text: &str) -> bool {
+    let letters = text.chars().any(|c| c.is_ascii_alphabetic());
+    let digits = text.chars().any(|c| c.is_ascii_digit());
+    is_base64(text) || text.chars().count() > 32 || (text.len() >= 16 && letters && digits)
+}
+
 /// The placeholder a segment stands for, or none for a word kept as it is.
 pub fn placeholder(segment: &str) -> Option<&'static str> {
     if segment.is_empty() {
@@ -61,10 +86,10 @@ pub fn placeholder(segment: &str) -> Option<&'static str> {
     if segment.contains('@') {
         return Some("{email}");
     }
-    if redact::is_ip(segment) {
+    if segment.parse::<std::net::IpAddr>().is_ok() {
         return Some("{ip}");
     }
-    if redact::is_phone_like(segment) {
+    if is_phone(segment) {
         return Some("{phone}");
     }
     if segment.contains(['+', '=']) {
@@ -82,15 +107,15 @@ pub fn placeholder(segment: &str) -> Option<&'static str> {
     {
         return Some("{id}");
     }
-    if redact::is_token_like(segment) {
+    if is_token(segment) {
         return Some("{token}");
     }
     None
 }
 
-/// A segment as it shows in a pattern: its placeholder, else the segment with secret-looking text redacted.
+/// A segment as it shows in a pattern: its placeholder, else the segment.
 fn shown_segment(segment: &str) -> String {
-    placeholder(segment).map_or_else(|| redact::scrub(segment), str::to_owned)
+    placeholder(segment).map_or_else(|| segment.to_owned(), str::to_owned)
 }
 
 /// The `:`-separated segments of a key, an IPv6 address (`ratelimit:2001:db8::1`) kept as one segment.
@@ -129,7 +154,7 @@ fn tokens_of(name: &str) -> Vec<String> {
         if index > 0 {
             tokens.push(DELIMITER.to_string());
         }
-        if !segment.contains(INNER) || redact::is_base64_like(segment) || placeholder(segment) == Some("{ip}") {
+        if !segment.contains(INNER) || is_base64(segment) || placeholder(segment) == Some("{ip}") {
             tokens.push(shown_segment(segment));
             continue;
         }
@@ -407,7 +432,7 @@ mod tests {
                 assert!(!pattern.contains(secret), "{pattern} holds {secret}");
             }
         }
-        // A literal segment that looks like a secret is redacted.
+        // A credential-like segment is a token.
         assert_eq!(shown_segment("AKIAIOSFODNN7EXAMPLE"), "{token}");
         assert_eq!(tokens_of("a/b"), ["a", "/", "b"]);
     }

@@ -69,6 +69,8 @@ pub(crate) struct State {
     builds: AtomicUsize,
     /// Another index spec: the metadata basis changes.
     reindexed: std::sync::atomic::AtomicBool,
+    /// `doc.sample` fails.
+    failing: std::sync::atomic::AtomicBool,
 }
 
 struct DocConn {
@@ -159,6 +161,9 @@ impl Connection for DocConn {
 
     async fn invoke(&self, name: &str, args: Json, _ctx: &CallContext) -> AppResult<Json> {
         self.state.invoked.lock().unwrap().push(name.to_owned());
+        if name == "doc.sample" && self.state.failing.load(Ordering::Relaxed) {
+            return Err(crate::error::AppError::new("the sample failed"));
+        }
         Ok(json!({ "name": name, "args": args, "build": self.state.builds.load(Ordering::Relaxed) }))
     }
 
@@ -595,5 +600,38 @@ async fn live_mongo_extras() {
     assert!(orders.column("contact.email").is_some() && orders.value_hints.is_empty());
     assert!(!gated.data_read);
     manager.disconnect("c").await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_build_writes_one_audit_entry_for_its_reads_and_one_per_failure() {
+    let (mut manager, _, state) = setup();
+    let path = std::env::temp_dir().join(format!("fosta-extras-audit-{}.jsonl", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    manager.gateway = crate::gateway::Gateway::with_audit(crate::audit::AuditLog::new(path.clone(), 1000));
+    let handle = manager.handle("c").unwrap();
+    let (store, dir) = store("audit");
+    let (outcome, _) = learn(&manager, &handle, &store, Some((open(), true))).await;
+    assert_eq!(outcome.extras.unwrap().reads, 3);
+    let entries = crate::audit::AuditLog::new(path.clone(), 1000).read_all().unwrap();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let summary = &entries[0];
+    assert_eq!((summary.caller.as_str(), summary.category.as_str()), ("assistant", "read"));
+    assert!(
+        summary.statement.contains("doc.sample × 2") && summary.statement.contains("doc.keys × 1"),
+        "{}",
+        summary.statement
+    );
+    assert!(summary.detail.starts_with("3 reads, 0 failed"), "{}", summary.detail);
+    // Failed reads are audited one by one, with the summary.
+    state.failing.store(true, Ordering::Relaxed);
+    let _ = std::fs::remove_file(&path);
+    let (outcome, _) = learn(&manager, &handle, &store, Some((open(), true))).await;
+    assert_eq!(outcome.extras.unwrap().failed, 2);
+    let entries = crate::audit::AuditLog::new(path.clone(), 1000).read_all().unwrap();
+    let failed = entries.iter().filter(|entry| entry.detail.starts_with("failed:")).count();
+    assert_eq!((entries.len(), failed), (3, 2), "{entries:?}");
+    assert!(entries.iter().any(|entry| entry.detail.starts_with("3 reads, 2 failed")));
+    let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_dir_all(dir);
 }

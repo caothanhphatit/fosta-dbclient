@@ -475,6 +475,40 @@ pub fn field_path(path: &str) -> String {
     out.join(".")
 }
 
+/// Separators of the segments of a key pattern (`user:{id}:profile`, `cache/{name}`).
+const KEY_SEPARATORS: [char; 3] = [':', '/', '|'];
+
+/// A key pattern an engine reported, with every segment that is not a placeholder checked again: emails, IP addresses,
+/// phone numbers, identifiers and token-like text become placeholders, the rest is scrubbed. An address with `:` (IPv6)
+/// is expected as the engine's `{ip}`.
+pub fn key_pattern(pattern: &str) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    for piece in pattern.split_inclusive(KEY_SEPARATORS) {
+        let (segment, separator) = match piece.char_indices().last() {
+            Some((at, c)) if KEY_SEPARATORS.contains(&c) => (&piece[..at], &piece[at..]),
+            _ => (piece, ""),
+        };
+        let placeholder = segment.starts_with('{') && segment.ends_with('}') && !segment.contains(|c: char| c.is_whitespace());
+        out.push_str(&if placeholder || segment.is_empty() || segment == "…" {
+            segment.to_owned()
+        } else if segment.find('@').is_some_and(|at| at > 0) {
+            "{email}".to_owned()
+        } else if is_ip(segment) {
+            "{ip}".to_owned()
+        } else if is_phone_like(segment) {
+            "{phone}".to_owned()
+        } else if is_identifier(segment) {
+            "{id}".to_owned()
+        } else if is_token_like(segment) {
+            "{token}".to_owned()
+        } else {
+            scrub(segment)
+        });
+        out.push_str(separator);
+    }
+    out
+}
+
 /// Labels of an email's domain looked at after the `@` segment, and the top-level domains that end it.
 const EMAIL_DOMAIN_LABELS: usize = 3;
 const TOP_LEVEL_DOMAINS: [&str; 24] = [
@@ -674,6 +708,18 @@ mod tests {
         ] {
             assert_eq!(scrub(text), text);
         }
+    }
+
+    #[test]
+    fn key_patterns_are_checked_again() {
+        assert_eq!(key_pattern("user:{id}:profile"), "user:{id}:profile");
+        assert_eq!(key_pattern("otp:+15551234567"), "otp:{phone}");
+        assert_eq!(key_pattern("rate:203.0.113.5:hits"), "rate:{ip}:hits");
+        assert_eq!(key_pattern("mail/ann@example.com"), "mail/{email}");
+        assert_eq!(key_pattern("k:sk-abcdefghijklmnopqrstuvwx1234"), "k:{id}");
+        assert_eq!(key_pattern("s:Zm9vYmFy+cXV4=="), "s:{token}");
+        assert_eq!(key_pattern("…"), "…");
+        assert_eq!(key_pattern("{binary}"), "{binary}");
     }
 
     #[test]

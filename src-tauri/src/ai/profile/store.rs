@@ -51,7 +51,7 @@ pub const MAX_NOTE_CHARS: usize = 4_000;
 pub const MAX_DESCRIPTION_CHARS: usize = 2_000;
 const MAX_NOTE_ID_CHARS: usize = 100;
 const MAX_NAME_CHARS: usize = 500;
-/// The engine knowledge describing the Redis key sample (`engines::redis::profile`).
+/// The engine knowledge describing the Redis key sample (Redis profile extras).
 const KEY_SAMPLE_EXTRAS: &str = "keyPatterns";
 
 /// The fields of a profile file a status or a cleanup needs (the rest of the file is skipped).

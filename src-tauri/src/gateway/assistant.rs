@@ -1,7 +1,8 @@
 //! The assistant's read-only query tool (`run_read_query`): one statement, classified by its engine in the engine's
 //! default language and authorized as [`Caller::Assistant`] (Read only, never a confirmation), then run in a session of
 //! its own that is opened read-only, with at most [`MAX_ROWS`] rows and a [`TIMEOUT`]. Every run and every refusal goes
-//! to the audit log and the application log.
+//! to the audit log and the application log; a caller running a bounded batch of reads (a profile build) asks for
+//! [`ReadAudit::Failures`] and writes one summary entry with [`audit_batch`] instead of one entry per run.
 //!
 //! Whether the tool exists at all is the user's choice ([`reads_allowed`]): Settings → "Allow the assistant to run
 //! read-only queries", overridden per workspace. When it is off, the tool is not offered to the model.
@@ -20,7 +21,7 @@ use super::{
     Caller, Context, Gateway, Request, BLOCKED,
 };
 use crate::{
-    audit::Outcome,
+    audit::{AuditEntry, Outcome},
     contract::{
         require, unsupported_capability, CallContext, Canceller, Capability, ClassifyInput, ColumnInfo, Engine, Flow, ResultSink,
         RunOptions, RunRequest, Session, SessionOptions, StreamEvent, Value,
@@ -293,9 +294,55 @@ pub(super) fn run_detail(outcome: &AppResult<ReadResult>) -> String {
     }
 }
 
+/// How a run is written to the audit log. Refusals are audited by the check whatever the mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReadAudit {
+    /// One entry per run, with its row count or error (the chat's tools).
+    #[default]
+    Each,
+    /// Only runs that fail get an entry; the caller writes one summary entry for the whole batch with
+    /// [`audit_batch`] (a profile build's hundreds of bounded reads).
+    Failures,
+}
+
+impl ReadAudit {
+    fn records(self, failed: bool) -> bool {
+        self == Self::Each || failed
+    }
+}
+
+/// The summary entry of a batch of reads run with [`ReadAudit::Failures`]: who (the assistant), where, what
+/// (`statement`) and the counts (`detail`).
+pub fn audit_batch(mgr: &ConnectionManager, context: &Context, engine: &str, statement: String, detail: String) {
+    mgr.gateway.audit(AuditEntry {
+        caller: Caller::Assistant.id(),
+        workspace_id: context.workspace_id.clone(),
+        workspace: context.workspace_name.clone(),
+        connection_id: context.connection_id.clone(),
+        connection: context.connection_name.clone(),
+        engine: engine.to_owned(),
+        category: "read".to_owned(),
+        statement,
+        outcome: Some(Outcome::Ran),
+        detail,
+        ..AuditEntry::default()
+    });
+}
+
 /// Runs one read-only statement for the assistant on `context`'s connection (see the module docs). The run is audited
 /// with its row count; refusals are audited by the check.
 pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, database: Option<&str>) -> AppResult<ReadResult> {
+    read_audited(mgr, context, text, database, ReadAudit::Each).await
+}
+
+/// [`read`], audited as `audit` says.
+pub async fn read_audited(
+    mgr: &ConnectionManager,
+    context: &Context,
+    text: &str,
+    database: Option<&str>,
+    audit: ReadAudit,
+) -> AppResult<ReadResult> {
     let handle = mgr.handle(&context.connection_id)?;
     require(handle.conn.capabilities(), Capability::Query)?;
     let language = default_language(handle.engine)?;
@@ -307,6 +354,9 @@ pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, databa
         who: "the assistant",
     };
     let outcome = run_own_session(&handle, context, &language, text, database, &run).await;
+    if !audit.records(outcome.is_err()) {
+        return outcome;
+    }
     let classification = handle.engine.classify(&ClassifyInput::Statement { language: &language, text });
     mgr.gateway.audit(audit_entry(
         &Request {
@@ -331,6 +381,17 @@ pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, databa
 /// confirmation; unknown operations are refused whatever the rules). It runs read-only within [`TIMEOUT`], and the run is
 /// audited; refusals are audited by the check.
 pub async fn invoke_read(mgr: &ConnectionManager, context: &Context, name: &str, args: serde_json::Value) -> AppResult<serde_json::Value> {
+    invoke_read_audited(mgr, context, name, args, ReadAudit::Each).await
+}
+
+/// [`invoke_read`], audited as `audit` says.
+pub async fn invoke_read_audited(
+    mgr: &ConnectionManager,
+    context: &Context,
+    name: &str,
+    args: serde_json::Value,
+    audit: ReadAudit,
+) -> AppResult<serde_json::Value> {
     let handle = mgr.handle(&context.connection_id)?;
     let classification = handle.engine.classify(&ClassifyInput::Capability { name, args: &args });
     let binding = format!("{name}\u{0}{}", serde_json::to_string(&args)?);
@@ -363,11 +424,13 @@ pub async fn invoke_read(mgr: &ConnectionManager, context: &Context, name: &str,
             TIMEOUT.as_secs()
         )))
     });
-    let detail = match &outcome {
-        Ok(_) => format!("ran in {} ms", started.elapsed().as_millis()),
-        Err(error) => format!("failed: {error}"),
-    };
-    mgr.gateway.audit(audit_entry(&request, Outcome::Ran, &detail));
+    if audit.records(outcome.is_err()) {
+        let detail = match &outcome {
+            Ok(_) => format!("ran in {} ms", started.elapsed().as_millis()),
+            Err(error) => format!("failed: {error}"),
+        };
+        mgr.gateway.audit(audit_entry(&request, Outcome::Ran, &detail));
+    }
     outcome
 }
 

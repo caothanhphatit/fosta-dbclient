@@ -32,9 +32,12 @@ use super::{
     MAX_DETAILED_OBJECTS,
 };
 use crate::{
-    contract::{cancelled, CallContext, CancellationToken, ExtrasRead, FieldShape, ObjectExtras, ObjectRef, ProfileEnrichment, CANCELLED},
+    contract::{
+        cancelled, CallContext, CancellationToken, ExtrasRead, FieldShape, ObjectExtras, ObjectRef, ProfileEnrichment, CANCELLED,
+        KEY_PATTERN,
+    },
     error::{AppError, AppResult},
-    gateway,
+    gateway::{self, assistant::ReadAudit},
     runtime::Handle,
 };
 
@@ -176,6 +179,56 @@ async fn run_reads(
         planned.truncate(MAX_READS);
         outcome.skipped = Some(format!("Only the first {MAX_READS} objects were sampled"));
     }
+    let names: Vec<String> = planned.iter().map(|read| read.name.clone()).collect();
+    let result = read_planned(sampler, planned, cancel, progress, outcome).await;
+    audit_reads(
+        sampler,
+        handle,
+        database,
+        &names[..outcome.reads.min(names.len())],
+        outcome,
+        result.is_err(),
+    );
+    result
+}
+
+/// The one audit entry of a build's extras reads: how many of each, and how they went (each failed read has its own
+/// entry, each refusal too).
+fn audit_reads(sampler: &Sampler<'_>, handle: &Handle, database: &str, names: &[String], outcome: &ExtrasOutcome, stopped: bool) {
+    if names.is_empty() {
+        return;
+    }
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for name in names {
+        match counts.iter_mut().find(|(known, _)| *known == name) {
+            Some((_, count)) => *count += 1,
+            None => counts.push((name, 1)),
+        }
+    }
+    let listed: Vec<String> = counts.iter().map(|(name, count)| format!("{name} × {count}")).collect();
+    let mut detail = format!("{} reads, {} failed", outcome.reads, outcome.failed);
+    if let Some(why) = &outcome.skipped {
+        detail.push_str(&format!("; {why}"));
+    }
+    if stopped {
+        detail.push_str("; the build stopped");
+    }
+    gateway::assistant::audit_batch(
+        sampler.manager,
+        &sampler.context,
+        handle.engine.id(),
+        format!("Learning {}: engine reads ({})", super::values::shown(database), listed.join(", ")),
+        detail,
+    );
+}
+
+async fn read_planned(
+    sampler: &Sampler<'_>,
+    planned: Vec<ExtrasRead>,
+    cancel: &CancellationToken,
+    progress: ProgressFn<'_>,
+    outcome: &mut ExtrasOutcome,
+) -> AppResult<Vec<(ExtrasRead, Json)>> {
     let total = planned.len();
     let started = Instant::now();
     let mut answered = Vec::new();
@@ -191,12 +244,19 @@ async fn run_reads(
             object: read.object.as_ref().map(|object| object.name.clone()),
             ..Progress::new(Step::Describing, done, total)
         });
-        let call = gateway::assistant::invoke_read(sampler.manager, &sampler.context, &read.name, read.args.clone());
+        let call = gateway::assistant::invoke_read_audited(
+            sampler.manager,
+            &sampler.context,
+            &read.name,
+            read.args.clone(),
+            ReadAudit::Failures,
+        );
+        // Counted when started, so a cancelled read is in the audit entry too.
+        outcome.reads += 1;
         let answer = tokio::select! {
             answer = tokio::time::timeout(remaining, call) => answer,
             _ = cancel.cancelled() => return Err(cancelled()),
         };
-        outcome.reads += 1;
         match answer {
             Ok(Ok(value)) => answered.push((read, value)),
             Ok(Err(error)) if gateway::assistant::is_refusal(&error) => {
@@ -363,7 +423,11 @@ struct State {
 /// Applies one enrichment to `profile`.
 fn apply(profile: &mut DatabaseProfile, enrichment: ProfileEnrichment, keep_values: bool, outcome: &mut ExtrasOutcome, state: &mut State) {
     let mut touched = HashSet::new();
-    for extras in enrichment.objects {
+    for mut extras in enrichment.objects {
+        // Key patterns are names an engine derived from data: checked again here.
+        if extras.object.kind == KEY_PATTERN {
+            extras.object.name = redact::key_pattern(&extras.object.name);
+        }
         let index = match position(profile, &extras.object) {
             Some(index) => index,
             None if profile.objects.len() < MAX_DETAILED_OBJECTS => {
