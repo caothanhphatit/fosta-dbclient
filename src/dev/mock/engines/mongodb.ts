@@ -26,6 +26,7 @@ import { DESCRIPTORS, ORDER } from "../descriptors";
 import { mockError, positionAt } from "../errors";
 import { pause } from "../sqlRun";
 import type { EngineMock, RunContext } from "../types";
+import { schemaResult } from "./mongoSchema";
 
 export const descriptor = DESCRIPTORS.mongodb;
 export const order = ORDER.indexOf("mongodb");
@@ -1150,6 +1151,27 @@ function aggregate(args: Doc): Json {
   return unsupported(`${writes} (writing the result into a collection)`);
 }
 
+function schema(args: Doc): Json {
+  const size = bounded(args.sampleSize, DEFAULT_SAMPLE, MAX_SAMPLE);
+  const mode = args.sampleMode ?? "first";
+  if (mode !== "first" && mode !== "random" && mode !== "filtered")
+    throw mockError("ENGINE_ERROR", `sampleMode is "first", "random" or "filtered", not "${String(mode)}"`);
+  const table = operationTable(args);
+  const all = matching(table, mode === "filtered" ? args : {});
+  const sample = mode === "random" ? [...all].sort(() => Math.random() - 0.5).slice(0, size) : all.slice(0, size);
+  const database = String(args.database);
+  return schemaResult(sample, {
+    mode,
+    size,
+    self: String(args.collection),
+    references: args.references !== false,
+    collections: () => catalog.tablesOf(database).map((other) => other.spec.name),
+    idsOf: (collection) => {
+      const other = catalog.resolve(collection, database);
+      return new Set(other ? other.rows.map((row) => JSON.stringify(documentOf(other, row)._id)) : []);
+    },
+  });
+}
 const OPERATIONS: Record<string, (args: Doc) => Json> = {
   "mongo.find": find,
   "mongo.count": count,
@@ -1160,6 +1182,7 @@ const OPERATIONS: Record<string, (args: Doc) => Json> = {
   "mongo.deleteMany": deleteMany,
   "mongo.aggregatePreview": aggregatePreview,
   "mongo.aggregate": aggregate,
+  "mongo.schema": schema,
 };
 
 /** How the gateway classifies an operation (classify.rs `classify_operation`); null for an unknown name. */

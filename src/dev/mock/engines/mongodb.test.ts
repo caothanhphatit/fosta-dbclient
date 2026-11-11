@@ -106,3 +106,33 @@ describe("dev mock: document edits and bulk operations", () => {
     expect(category("mongo.aggregatePreview", [{ $unionWith: "system.users" }])?.category).toBe("admin");
   });
 });
+
+describe("dev mock: mongo.schema", () => {
+  type Entry = Doc & { path: string };
+  const schema = (collection: string, args: Doc = {}) => invoke("mongo.schema", { database: "shop", collection, ...args }) as Doc;
+  const entry = (result: Doc, name: string) => (result.paths as Entry[]).find((item) => item.path === name) as Entry;
+
+  it("analyses paths, types, arrays and references on the sample", () => {
+    const result = schema("orders", { sampleMode: "first", sampleSize: 100 });
+    expect(result.sample).toEqual({ mode: "first", size: 100, count: expect.any(Number) });
+    const paths = (result.paths as Entry[]).map((item) => item.path);
+    expect(paths[0]).toBe("_id");
+    expect(entry(result, "_id").types).toEqual([{ type: "objectId", count: expect.any(Number) }]);
+    const arrays = (result.paths as Entry[]).filter((item) => item.array !== null);
+    expect(arrays.length).toBeGreaterThan(0);
+    const refs = (result.paths as Entry[]).filter((item) => item.reference !== null);
+    expect(refs.length).toBeGreaterThan(0);
+    expect((refs[0].reference as Doc).inferred).toBe(true);
+    expect(schema("orders", { references: false }).paths as Entry[]).toSatisfy((list: Entry[]) => list.every((item) => item.reference === null));
+  });
+
+  it("samples by filter and refuses server-side JavaScript and unknown modes", () => {
+    const all = schema("customers", { sampleMode: "first" });
+    const filtered = schema("customers", { sampleMode: "filtered", filter: '{ "_id": { "$exists": false } }' });
+    expect((all.sample as Doc).count).toBeGreaterThan(0);
+    expect((filtered.sample as Doc).count).toBe(0);
+    expect(() => schema("customers", { sampleMode: "filtered", filter: { $where: "true" } })).toThrow(/JavaScript/);
+    expect(() => schema("customers", { sampleMode: "all" })).toThrow(/sampleMode/);
+    expect(classifyOperation!("mongo.schema", { database: "shop", collection: "customers" })?.[0].category).toBe("read");
+  });
+});
