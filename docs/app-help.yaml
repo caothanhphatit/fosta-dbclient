@@ -1,0 +1,526 @@
+# How-to entries for the in-app assistant (search_app_help), embedded into the app at build time.
+#
+# Format (a strict YAML subset, read by src-tauri/src/ai/app_help.rs):
+#   - id: unique-kebab-id
+#     group: one of the groups below (the capability summary lists titles per group)
+#     title: short title, no ": " and no " #"
+#     keywords: [plain words, comma separated, no brackets or quotes]
+#     action: optional UI action id (verb:target), handled by the frontend action registry
+#     body: |
+#       Steps, indented by six spaces. UI labels are quoted exactly as the app shows them.
+#
+# Groups: Workspaces and safety, Connections, Data and queries, Schema tools, Vector search, Assistant and MCP,
+# MongoDB, Redis, Elasticsearch and OpenSearch, ClickHouse, Oracle, App.
+
+- id: workspaces
+  group: Workspaces and safety
+  title: Workspaces and the rail
+  keywords: [workspace, rail, switch, project, customer, environment, new workspace, delete workspace, badge]
+  action: open_dialog:new_workspace
+  body: |
+    Each workspace (a project, customer or environment) has its own connections, commands, tabs and safety rules.
+    - The rail on the far left lists the workspaces. Click one, or press Ctrl+1 … Ctrl+9, to switch; tabs of other workspaces stay open.
+    - "New" at the bottom of the rail (or right-click a workspace → "New workspace…") creates one: "Workspace name", "Kind", "Color", "Safety", "Assistant queries" and "MCP clients".
+    - Right-click a workspace → "Edit workspace…" or "Delete workspace" (the last workspace cannot be deleted).
+    - Badges on a workspace show open connections, running commands and "!" when its safety rules are relaxed.
+    - Ctrl+Shift+B hides or shows the rail; Ctrl+B hides or shows the sidebar (connections and commands).
+
+- id: edit-workspace
+  group: Workspaces and safety
+  title: Edit a workspace
+  keywords: [edit workspace, rename, kind, color, icon, settings per workspace]
+  action: open_dialog:edit_workspace
+  body: |
+    Right-click the workspace on the rail → "Edit workspace…".
+    - "Workspace name", "Kind" (Local, Test, Staging, Production, Client, Server, Public, Project) and "Color".
+    - "Safety": the rules preset (Open, Guarded, Read-only, Custom).
+    - "Assistant queries": "Follow the setting (off for Read-only and Production)", "Allow read-only queries" or "Never run queries".
+    - "MCP clients": Off, Read-only or Ask before writes.
+    Press "Save". Loosening the rules shows what becomes possible before you save.
+
+- id: safety-presets
+  group: Workspaces and safety
+  title: Safety rules (Open, Guarded, Read-only, Custom)
+  keywords: [safety, rules, preset, open, guarded, read-only, readonly, custom, confirm, typed confirmation, block, gateway, timeout]
+  action: open_dialog:edit_workspace
+  body: |
+    Every statement the app runs (query tabs, grid edits and filters, imports, consoles, the assistant) is classified as Read, Write, DDL, Destructive or Administrative and checked against the workspace's rules. Set them under "Edit workspace…" → "Safety":
+    - "Open": everything runs; DROP, TRUNCATE and UPDATE/DELETE without WHERE ask once first.
+    - "Guarded": writes and DDL need a confirmation; destructive and administrative statements need the table or workspace name typed. 60 s statement timeout. New workspaces start Guarded.
+    - "Read-only": only reads run, in read-only sessions where the engine supports it. 60 s statement timeout.
+    - "Custom": per category "Allow", "Confirm", "Typed confirm" or "Block", plus "Allow several statements per run in query tabs", "Statement timeout (s, 0 = none)" and "Max rows per result".
+    A plain confirmation has a "Don't ask again" box for that kind of statement (typed confirmations and Production workspaces always ask). Blocked, confirmed and relaxed operations go to fosta-studio-audit.jsonl.
+
+- id: production-workspace
+  group: Workspaces and safety
+  title: Production workspaces
+  keywords: [production, prod, shield, read-only, protect, relax rules, live database]
+  action: open_dialog:edit_workspace
+  body: |
+    Set "Kind" to Production (shield icon) under "Edit workspace…". A Production workspace starts Read-only, always asks for confirmation (no "Don't ask again"), and making its rules looser needs the workspace name typed ("Required to relax a Production workspace.").
+    The assistant's read-only queries stay off there unless you allow them, and MCP clients get at most Read-only.
+    For production databases also connect with a database user that can only read: the app's rules are a safety net, not a replacement for database permissions.
+
+- id: commands
+  group: Workspaces and safety
+  title: Commands (port-forward and other background programs)
+  keywords: [command, commands, port forward, port-forward, kubectl, tunnel, background, task, startup, log, restart]
+  action: open_dialog:new_command
+  body: |
+    Commands are background programs of a workspace, such as kubectl port-forward.
+    1. Toolbar "Commands" → "New command…" (or "New command" in the Commands panel of the sidebar, or on the welcome screen).
+    2. Fill "Name", "Program" (must be on PATH, e.g. kubectl) and "Arguments"; "Fill kubectl port-forward template" writes a template.
+    3. "Start": "Start with the workspace" or "Start when a connection needs it".
+    4. Optional: "Ready when output contains" (empty: ready when the connection's port accepts connections), "Timeout (s)", "Restart automatically when the process exits".
+    5. "Save".
+    The Commands panel and the toolbar's "Commands" menu start, stop, restart and show the log of each command; the panel shows which connections use it. Child processes are killed when the app exits. In the web edition commands need FOSTA_STUDIO_TASKS=on.
+
+- id: connection-command
+  group: Workspaces and safety
+  title: Bind a connection to a command
+  keywords: [bind, connection command, port forward, port-forward, kubectl, command log, COMMAND_FAILED, before connecting]
+  body: |
+    1. Right-click the connection → "Edit connection…".
+    2. "Command" ("Runs before connecting, e.g. kubectl port-forward"): pick a command of the workspace, or "New command…" for a kubectl port-forward template on the connection's port.
+    3. "Save".
+    Connect reuses the command when it runs, otherwise starts it and waits until it is ready (its ready text appears, or the host and port accept connections; 30 s by default). If it exits or times out, connect fails with COMMAND_FAILED and the last log lines. A command started for connections stops when the last of them disconnects; one started with the workspace or by hand keeps running.
+    Right-click the connection → "Command log" shows its output. MCP clients never start a command; start it in the app first.
+
+- id: new-connection
+  group: Connections
+  title: Add a connection
+  keywords: [new connection, add database, connect, host, port, user, password, test connection, save password, engine]
+  action: open_dialog:new_connection
+  body: |
+    1. Press Ctrl+N, the toolbar's "Connection" button, or "+" next to "Connections" in the sidebar.
+    2. Pick the "Database type" and a "Connection name".
+    3. Choose "Parameters" (host, port, user, password, database) or "Connection URL".
+    4. Optional sections: "SSH tunnel", "TLS / SSL", "Advanced", and "Command" for a port-forward.
+    5. "Test connection", then "Save".
+    "Save password in Windows Credential Manager" keeps the password out of the config file (the web edition uses its encrypted secret file). Engines: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, ClickHouse, Oracle, Redis/Valkey, Elasticsearch, OpenSearch.
+
+- id: connection-string
+  group: Connections
+  title: Connect with a connection string (URL)
+  keywords: [connection string, url, uri, dsn, mongodb+srv, atlas, paste, jdbc]
+  action: open_dialog:new_connection
+  body: |
+    In the connection dialog switch to "Connection URL", paste the string (for example mongodb+srv://… for Atlas, clickhouse://user:pass@host:8123/db, or a SQL Server "Server=…;Database=…" string) and leave the field: the form, TLS and SSH sections are filled from it ("Read the connection URL" errors show where it failed).
+    A password in the URL goes to the secret store, never into the saved URL. For a saved string with several hosts or a replica set, the Parameters tab only labels it; "Use these parameters instead" drops the string.
+    An SSH tunnel needs Host and Port: the hosts of a connection string are not used through a tunnel.
+
+- id: manage-connections
+  group: Connections
+  title: Connect, edit and delete connections
+  keywords: [connect, disconnect, edit connection, delete connection, tree, refresh, new database, search tree]
+  body: |
+    The sidebar tree lists connections → databases → tables, views or collections; the search box filters it.
+    Right-click a connection: "Connect" / "Disconnect", "New query", "Refresh", "New database…" (where the engine supports it), "Command log" (when it has a command), "Edit connection…" and "Delete connection".
+    Double-click a table to open its data; the toolbar "Refresh" reloads the selected database.
+    Changing host, port, user, SSH route, TLS settings or command without typing the password again deletes the saved password instead of sending it to the new target.
+
+- id: ssh-tunnel
+  group: Connections
+  title: SSH tunnel
+  keywords: [ssh, tunnel, bastion, jump host, private key, ssh key, key file, passphrase, agent, host key, known hosts]
+  action: open_dialog:new_connection
+  body: |
+    In the connection dialog open "SSH tunnel" and tick "Connect through an SSH tunnel".
+    - "SSH host", "Port", "SSH user".
+    - "Authentication": "Password" ("SSH password"), "Private key" ("Private key file" and "Key passphrase" for an encrypted key) or "SSH agent".
+    - "Host key": "Accept new hosts, refuse changed keys" (default), "Known hosts only" or "Do not check (unsafe)".
+    Host and Port above are the database as the SSH server sees it (127.0.0.1:3306 when the database runs on the SSH server).
+    Keepalives and automatic reconnect are on; a jump host and the keepalive interval are kept from the saved profile but not edited in the dialog yet. Every engine except SQLite takes a tunnel. Errors start with SSH_ (for example SSH_HOST_KEY_UNKNOWN, which asks you to accept the fingerprint).
+
+- id: tls
+  group: Connections
+  title: TLS / SSL settings
+  keywords: [tls, ssl, certificate, ca, verify, client certificate, mutual tls, sni, pinned, fingerprint, self-signed, encrypt]
+  action: open_dialog:new_connection
+  body: |
+    In the connection dialog open "TLS / SSL" and pick the "Mode": "Disable", "Prefer (TLS when the server offers it)", "Require" (encrypts without checking the certificate), "Verify CA" or "Verify CA and host name".
+    Optional: "CA certificate file", "Client certificate" and "Client key" (mutual TLS), "Server name (SNI)", "Pinned certificate" (SHA-256 fingerprint) and "Accept invalid certificates" (self-signed or test servers only).
+    Through an SSH tunnel the endpoint is 127.0.0.1, so set the server name or use Verify CA. Engines differ: SQL Server has TLS on by default and cannot pin; Redis has no "Prefer"; ClickHouse TLS means HTTPS.
+
+- id: welcome
+  group: Connections
+  title: First start and the welcome screen
+  keywords: [welcome, first database, get started, empty workspace, start screen]
+  action: open_dialog:new_connection
+  body: |
+    With no tab open the welcome screen shows "New connection", "New query" and "New command" plus the keyboard shortcuts. A workspace without connections shows "Connect your first database" with a "New connection" button (Ctrl+N), and the sidebar shows "No connections yet".
+
+- id: data-grid
+  group: Data and queries
+  title: Browse table data
+  keywords: [grid, table data, rows, paging, sort, count, open table, browse, show query, refresh]
+  body: |
+    Double-click a table, view or collection in the tree.
+    - Pager: first, previous, next and last page; "Count" counts the matching rows exactly (may be slow).
+    - Right-click a column header: "Sort ascending", "Sort descending", "Clear sort", "Hide column", "Show all columns", "Columns…".
+    - Toolbar: "Refresh" (F5), "Columns", "Cell editor", "Show query" (the statement the engine ran), "Import", "Export", "Copy as", "Record".
+    - Right-click a cell: "Open in editor", "Copy value", "Copy row", "Copy page as …", "Paste", "Set NULL", "Set empty string", "Add row".
+    Hidden columns are remembered per table; exports still include them.
+
+- id: grid-filters
+  group: Data and queries
+  title: Filter rows
+  keywords: [filter, where, column filter, search rows, contains, equals, between, in list, like, is null]
+  body: |
+    - The filter box in the grid toolbar takes a raw condition in the engine's language (a SQL WHERE condition without WHERE, e.g. status = 'ACTIVE'; JSON for MongoDB; Query DSL for Elasticsearch). Press Enter. It must be a single condition.
+    - The filter row under the headers has one box per column with an operator button: "Contains", "Does not contain", "Starts with", "Ends with", "Equals", "Not equal", "Less than", "Less or equal", "Greater than", "Greater or equal", "Between", "In list", "Not in list", "Like (% and _)", "Not like", "Is NULL", "Is not NULL". It applies after a short pause.
+    A filter suggested by the assistant is only pre-filled: "Apply filter" or "Open without filter".
+
+- id: grid-editing
+  group: Data and queries
+  title: Edit, insert and delete rows
+  keywords: [edit, update cell, insert row, add row, delete row, save, apply, discard, pending changes, ctrl+s]
+  body: |
+    - Edit a cell: double-click it, or select it and press Enter or F2.
+    - "Add" adds a row, "Delete" deletes the selected row.
+    - Edits stay pending in the bar at the bottom: "Apply" (Ctrl+S) saves them in one transaction, "Discard" drops them.
+    - Shift+Enter (or "Cell editor") opens a large editor with line/char counts, word wrap, NULL, and Format / Minify for JSON; binary and vector values open read-only.
+    Saves go through the workspace's safety rules; a Read-only workspace says up front that the grid cannot be saved.
+
+- id: conflict-dialog
+  group: Data and queries
+  title: Save conflicts
+  keywords: [conflict, changed meanwhile, overwrite, take theirs, concurrent edit, keep editing, stale row]
+  body: |
+    A save is checked against the values you loaded; no transaction is held open while you edit. If a row changed meanwhile, the "Conflicts in …" dialog shows "When opened", "Now" and "Yours" per row:
+    - "Overwrite" saves your version of that row anyway (through the safety rules).
+    - "Take theirs" drops your edit and loads the row as it is now.
+    - "Keep editing" closes the dialog.
+    MongoDB documents compare only the edited paths; Redis editors offer Reload or Overwrite.
+
+- id: record-panel
+  group: Data and queries
+  title: Record panel and foreign keys
+  keywords: [record, record panel, row details, foreign key, related, referenced by, follow]
+  body: |
+    Toolbar "Record" shows or hides the record panel: the selected row's fields, with "Open in editor" and "Copy value". It follows foreign keys and lists "Referenced by"; right-click a row → "Open related <table>" opens the referenced row.
+
+- id: import-export
+  group: Data and queries
+  title: Import and export (CSV, JSON, SQL, Markdown)
+  keywords: [export, import, csv, tsv, json, excel, sql insert, markdown, download, file, copy as, delimiter]
+  body: |
+    Export: grid toolbar "Export". Pick the "Format" (CSV, CSV for Excel (UTF-8 with BOM), JSON, SQL INSERT statements, Markdown table), "Rows" (all rows, or "This page only"), and the "File name"; it is saved to your Downloads folder ("Show in folder" afterwards; the web edition downloads it in the browser). "Copy as" copies the current page to the clipboard instead.
+    Import: grid toolbar "Import" (editable tables only). Choose a CSV or JSON file (an array of objects or one object per line), the "Delimiter (CSV)" (Detect, comma, semicolon, tab, pipe), "First row is the header", "Empty values become NULL", map each "File column" to a "Table column", then "Import". Imports are writes under the safety rules.
+
+- id: query-tabs
+  group: Data and queries
+  title: Query tabs
+  keywords: [query, sql editor, new query, run, run statement, completion, ctrl+enter, language, multiple statements, error panel]
+  action: open_view:new_query
+  body: |
+    Ctrl+T, the toolbar "Query" button, or right-click a connection or database → "New query".
+    - "Run" (Ctrl+Enter) runs the selection or everything; "Run statement" (Ctrl+Shift+Enter) runs the statement under the cursor.
+    - The language picker switches the tab's query language where the engine has several (MongoDB "Database command" / "Aggregation pipeline", Elasticsearch "Console" / "ES|QL" / "SQL").
+    - "Refresh names" reloads the names used for completion.
+    Each tab has its own session, results stream in, and errors keep their code, position and statement in an error panel. Several statements per run need the workspace's rules to allow them (Custom).
+
+- id: transactions
+  group: Data and queries
+  title: Transactions in query tabs
+  keywords: [transaction, begin, commit, rollback, auto-commit, autocommit, open transaction]
+  body: |
+    The query toolbar has an "Auto-commit" switch and "Begin", "Commit" and "Rollback". BEGIN/COMMIT typed in the editor work too, across runs, because each tab keeps its own session. The status bar shows the transaction state reported by the database after every run. Closing a tab or the app with an open transaction asks first, and a reminder appears after five minutes. MongoDB and Redis tabs have no transactions and say so.
+
+- id: stop-query
+  group: Data and queries
+  title: Stop a running query
+  keywords: [stop, cancel, kill query, long running, abort]
+  body: |
+    Press "Stop" in the query toolbar. It cancels on the server: KILL QUERY on MariaDB/MySQL and ClickHouse, a cancel request on PostgreSQL, OCIBreak on Oracle, CLIENT UNBLOCK (or closing the tab's connection) on Redis, and dropping the request plus cancelling its tasks on Elasticsearch/OpenSearch.
+
+- id: formatter
+  group: Data and queries
+  title: Format SQL
+  keywords: [format, formatter, beautify, pretty print, indent, shift+alt+f]
+  body: |
+    "Format" in the query toolbar (Shift+Alt+F) formats the selection, or everything, for the tab's SQL dialect. The Elasticsearch console's Format indents JSON bodies.
+
+- id: query-history
+  group: Data and queries
+  title: Query history
+  keywords: [history, past queries, previous runs, recent, clear history, search history]
+  body: |
+    "History" in the query toolbar opens the tab's History panel: every run with text, connection, database, time, duration, rows or error, with "Search history". Select an entry for "Insert" (into the editor, does not run), "New tab", "Copy" and "Delete"; MongoDB query-bar runs also have "Open in collection".
+    History stays on this machine in fosta-studio-history.jsonl (newest 5,000 runs). Turn it off with Settings → "Record query history"; "Clear query history…" deletes it.
+
+- id: design-view
+  group: Schema tools
+  title: Design view (columns, indexes, DDL)
+  keywords: [design, columns, ddl, create table, schema, indexes, foreign keys, structure, table definition]
+  body: |
+    Right-click a table → "Design". It shows the columns (Name, Type, Nullable, Key, Default, Identity / generated, Comment), "Indexes", "Foreign keys", "Referenced by", "Details" (such as "Rows (estimate)") and the "DDL", with "Reload" and "Copy DDL". On Elasticsearch/OpenSearch the design view is "Mapping"; on ClickHouse it adds the sorting key and skipping indexes.
+
+- id: er-diagram
+  group: Schema tools
+  title: ER diagram
+  keywords: [er diagram, diagram, erd, relationships, foreign keys, schema graph, png, svg]
+  body: |
+    Select a database and press the toolbar "Diagram" button, or right-click the database → "ER diagram". The diagram has "Find table…", "Reload", "Auto layout", "Fit", "Zoom out" / "Zoom in", "Types", "Keys only", "Inferred links" and saves as "SVG" or "PNG". The assistant can open it for you, centred on a table.
+
+- id: vector-search
+  group: Vector search
+  title: Vector search
+  keywords: [vector, embedding, similarity, semantic search, find similar, knn, ann, pgvector, top k, distance]
+  body: |
+    Supported on MariaDB 11.7+, PostgreSQL with pgvector, Oracle 23ai, Elasticsearch 8+, OpenSearch with k-NN, ClickHouse and Redis 8.
+    Open a table with a vector column → toolbar "Vector search" (Redis: right-click a search index → "Vector search"). Search by "Text" (embedded with the configured embedding API), "Similar to row" (right-click a row → "Find similar by <column>") or a pasted "Vector". Pick "Column", "Top K" and "Distance" (Auto, Cosine, Euclidean, Inner product), add an optional WHERE, then "Search" (Ctrl+Enter). "Copy SQL", "Copy runnable SQL" and "Plan" (EXPLAIN) show how it ran; a note says when no vector index was used.
+
+- id: vector-health
+  group: Vector search
+  title: Vector health and recall
+  keywords: [vector health, recall, index quality, ann recall, exact search, dimensions, unit length]
+  body: |
+    Toolbar "Vector health" on a table with a vector column (Redis: on a search index). Pick "Column" and "Sample", then "Run checks" for the data checks (vector length, dimensions, index). "Measure recall" compares index results with an exact full scan ("Queries" sets how many; seeded, so a run can be repeated) and shows recall, the worst query and the speed-up.
+
+- id: embedding-settings
+  group: Vector search
+  title: Embedding API settings
+  keywords: [embedding, embedding api, openai, gemini, azure, ollama, model, dimensions, api key, text search]
+  action: open_settings:embedding
+  body: |
+    Toolbar "Embedding" or Settings → "Embedding API…". Pick a "Provider" preset (OpenAI, Gemini (OpenAI-compatible), Azure OpenAI, Ollama (local), or Custom) to fill the "Endpoint URL", "Authentication" and a default "Model"; set "Dimensions" for models that support shortening. Enter the "API key", or use the key already saved for the same API ("Use the key saved for …"). "Save & test" checks it.
+    Use the model that produced the stored vectors. The URL takes a base URL (…/v1) or the full …/embeddings URL. Changing the endpoint asks for the key again; "No key" and local URLs need none.
+
+- id: assistant
+  group: Assistant and MCP
+  title: The AI assistant
+  keywords: [assistant, ai, chat, llm, ask, explain query, fix error, write query, ctrl+shift+a, agent]
+  body: |
+    Ctrl+Shift+A or the toolbar "Assistant" opens the chat panel. Ask in plain words: it looks up tables, columns and relations, writes and explains queries, fixes errors, reads command logs and opens tables, diagrams or query tabs for you. Quick prompts include "Explain", "Optimize", "Fix error", "Translate to…", "Describe", "Query this table" and "Write a query".
+    Every code block has "Run" (your own run, under the workspace's rules), "Insert" (into the active editor), "New tab" and "Copy". "New conversation" starts over. A filter it proposes is only pre-filled for you to apply.
+
+- id: llm-providers
+  group: Assistant and MCP
+  title: LLM providers and API keys
+  keywords: [provider, llm, api key, openai, gemini, claude, anthropic, ollama, model, fosta, custom endpoint, switch model]
+  action: open_settings:llm_providers
+  body: |
+    Settings → "LLM providers…" (or the gear in the assistant panel, or "Add provider…" in its model switcher). Pick the "Provider": Fosta (default), OpenAI, Gemini, Claude, or Custom (any OpenAI-compatible endpoint such as Ollama at http://localhost:11434/v1, LM Studio, OpenRouter). Fill "Name", "API key" and "Default model" ("Endpoint" for Custom), then "Test connection" and "Save".
+    The key is kept in Windows Credential Manager (the encrypted secret file in the web edition) and requests go straight from your machine to the provider. A key already saved for the same provider and URL can be kept.
+
+- id: assistant-read-queries
+  group: Assistant and MCP
+  title: Let the assistant read data
+  keywords: [read-only query, run_read_query, assistant reads data, rows to provider, sample documents, privacy, allow queries]
+  body: |
+    Settings → "Allow the assistant to run read-only queries (rows go to your AI provider)" (on by default) lets the assistant run one read-only statement at a time: at most 50 rows, 10 seconds, cancelled by Stop, shown in the chat and audited. Writes, DDL and admin statements are refused and handed back as code blocks.
+    Per workspace: "Edit workspace…" → "Assistant queries". Read-only and Production workspaces stay off unless you choose "Allow read-only queries". On MongoDB the same setting covers sample_documents (up to 20 documents). Without it the model sees names and types only.
+
+- id: mcp-server
+  group: Assistant and MCP
+  title: MCP server for Claude Code, Cursor, VS Code, Zed
+  keywords: [mcp, model context protocol, claude code, claude desktop, cursor, vs code, vscode, zed, token, ai client, stdio]
+  action: open_settings:mcp
+  body: |
+    1. Settings → "MCP server…" → tick "Run the MCP server" → "Save". The desktop app listens on 127.0.0.1:3910 ("Port" can change) with a random "MCP token" ("Show", "Copy", "Rotate…").
+    2. Copy the ready-made setup for "Claude Code", "Cursor (mcp.json)" or "Claude Desktop (stdio)" from the dialog. Claude Code: claude mcp add --transport http fosta http://127.0.0.1:3910/mcp --header "Authorization: Bearer <token>". Stdio clients (Claude Desktop, Zed) run fosta-studio.exe with the argument mcp.
+    3. For each workspace clients may use: "Edit workspace…" → "MCP clients": Off (default), Read-only, or Ask before writes. Production and Read-only workspaces allow at most Read-only.
+    Tools: list_connections, list_databases, list_tables, describe_table, schema_overview, run_read_query (100 rows by default, 500 at most, 30 s) and run_query, which you approve statement by statement in a dialog naming the client. Clients never see passwords, every call is audited, and the status bar shows "MCP" with the call count. Fosta Studio must be running.
+
+- id: mongo-workspace
+  group: MongoDB
+  title: MongoDB collection workspace
+  keywords: [mongodb, mongo, collection, workspace, sections, documents, open as grid, view]
+  body: |
+    Double-click a collection (or a view) to open its workspace; "Open as grid" in the collection's menu opens the plain grid. The sections are "Documents", "Aggregations", "Schema", "Indexes", "Explain" and "Validation". The filter, sort, stages, analysis and drafts are kept with the open tabs, and every read and write goes through the workspace's safety rules.
+
+- id: mongo-documents
+  group: MongoDB
+  title: MongoDB Documents and the query bar
+  keywords: [mongodb, query bar, find, filter, project, projection, sort, collation, skip, limit, mongosh, objectid, isodate, list, json, table]
+  body: |
+    The "Documents" section's query bar has "Filter", "Project", "Sort", "Collation", "Skip" and "Limit" in mongosh syntax (ObjectId("…"), ISODate("…"), unquoted keys, braces optional) with completion of field paths, operators, BSON constructors and the field's values. Ctrl+Enter runs; ArrowUp / ArrowDown and the history button recall recent filters.
+    View the documents as "List" (an expandable tree), "JSON" or "Table" (nested fields as dotted columns, arrays open in a side panel). Inferred references (an ObjectId field such as customerId matching another collection) open the referenced document in a side panel. "Ask" turns a sentence into a filter.
+
+- id: mongo-editing
+  group: MongoDB
+  title: Edit MongoDB documents
+  keywords: [mongodb, edit document, insert document, duplicate, delete document, rename field, save, review, update many, delete many, bulk]
+  body: |
+    In the List and Table modes: edit a value with its type (String, Number, Double, Int32, Int64, Decimal128, Boolean, Date, ObjectId, Null, or an object / array in mongosh syntax), add, rename and remove fields and array items, "Insert document", "Duplicate document" and delete documents. Edits stay pending until "Save"; "Review…" shows each changed document as a diff. Saves write only the edited dotted paths and open the conflict dialog when someone changed one of them.
+    The query bar's "More" menu has "Update matching documents…" (a before/after preview, simulated without writing) and "Delete matching documents…" for the current filter; deleting is destructive under the rules.
+
+- id: mongo-saved-queries
+  group: MongoDB
+  title: MongoDB saved queries
+  keywords: [mongodb, saved queries, save query, save pipeline, favorites, reuse filter, open in collection]
+  body: |
+    "Save" in the query bar keeps its fields under a name ("Save pipeline" in Aggregations keeps the enabled stages); they are stored with the connection's workspace in fosta-studio.json. The "Saved" dropdown lists the collection's saved queries first, then the others of the database, with search, rename and delete; applying one of another collection opens it in that collection's tab. Query-bar runs in the History panel have "Open in collection".
+
+- id: mongo-aggregations
+  group: MongoDB
+  title: MongoDB aggregation pipeline builder
+  keywords: [mongodb, aggregation, aggregate, pipeline, stage, match, group, lookup, unwind, project, preview, export code, node.js, python]
+  body: |
+    The "Aggregations" section builds a pipeline as stage cards. "Add stage" (or "Add a stage after" on a card) picks an operator with a template; edit it in mongosh syntax with completion of the fields that reach the stage. Turn stages on and off, drag to reorder (or ArrowUp / ArrowDown on the handle), fold, duplicate and delete them.
+    Each card previews its output on a sample ("Sample size", "First" or "Random"); "Auto preview" reruns after each edit, "Preview" on demand; $out / $merge are never previewed. "Run" executes the pipeline on the collection (with $out / $merge confirmed); "Code" exports it as mongosh, Node.js or Python; "Explain" shows its plan. Documents → "More" → "Open as aggregation" turns the query bar into stages. A card's "Ask" explains the stage, suggests the next one or fixes its error.
+
+- id: mongo-schema
+  group: MongoDB
+  title: MongoDB schema analysis
+  keywords: [mongodb, schema, fields, types, analyze, analyse, sample, mixed types, cardinality, references]
+  body: |
+    The "Schema" section: pick the "Sample" ("Random", "First", or documents matching a "Sample filter") and "Sample size" (up to 10,000), then "Analyze". Every field path is listed as a tree with how often it is present, its BSON types (mixed types highlighted), array lengths, frequent values, min / max and inferred references. Select a field for details, "Filter by this field" (puts a filter in the Documents query bar) or "Copy path". The analysis feeds the query bar's completion and "Generate from schema" in Validation.
+
+- id: mongo-indexes
+  group: MongoDB
+  title: MongoDB indexes
+  keywords: [mongodb, index, indexes, create index, drop index, hide index, unused index, ttl, unique, partial, text, 2dsphere]
+  body: |
+    The "Indexes" section lists keys, properties (unique, sparse, partial filter, TTL, collation, hidden), size and usage, with an "Unused" hint. Per index: "Copy as mongosh createIndex", "Create a similar index…", "Hide" / "Unhide" and "Drop index…" (never _id_; Guarded workspaces ask for the collection name).
+    "Create index" opens a form with key rows (1 / -1 / text / 2dsphere / hashed, field completion), name, unique / sparse / hidden, partial filter, TTL, collation and wildcard projection, with a live preview of the command. Creating is DDL under the safety rules.
+
+- id: mongo-explain
+  group: MongoDB
+  title: MongoDB explain (query plan)
+  keywords: [mongodb, explain, query plan, collscan, ixscan, slow query, execution stats, index suggestion, esr, performance]
+  body: |
+    "Explain" in the Documents query bar or the Aggregations header opens the "Explain" section and runs it on the "Documents query" or the "Pipeline". "Verbosity": "Query planner" (the plan only, nothing runs), "Execution stats" (runs within the workspace's timeout) or "All plans".
+    The plan is a tree of stage cards (index, keys, filter, examined against returned, time), the winning plan highlighted and rejected plans folded. Warnings flag collection scans, in-memory sorts, high examined-per-returned ratios and unindexed filtered fields; a suggested index follows the Equality, Sort, Range rule and "Create index…" opens the Indexes form prefilled. "Raw JSON" shows the server's answer.
+
+- id: mongo-validation
+  group: MongoDB
+  title: MongoDB validation rules ($jsonSchema)
+  keywords: [mongodb, validation, validator, jsonschema, schema validation, collmod, validation level, strict, moderate, warn]
+  body: |
+    The "Validation" section shows "Validation level" (strict, moderate, off), "Validation action" (error, warn) and the "Validator (mongosh syntax)" with $jsonSchema completion.
+    - "Generate from schema" builds a $jsonSchema from the Schema analysis (types, required fields above a chosen share, nested documents, optional enums).
+    - "Check existing documents" (Ctrl+Enter) counts the documents the draft would refuse and lists a few.
+    - "Apply" shows a diff and warns when existing documents fail strict rules; it runs collMod as DDL under the safety rules. "Discard" returns to the applied rules; "Remove rules" empties the validator.
+    Server-side JavaScript is refused in validators.
+
+- id: mongo-assistant
+  group: MongoDB
+  title: The assistant in MongoDB
+  keywords: [mongodb, assistant, ask, mongo-filter, mongo-pipeline, apply to query bar, insert as stage, replace stage]
+  body: |
+    In a collection workspace the assistant answers with filter and pipeline blocks in mongosh syntax that you put into the collection with "Apply to query bar", "Open in Aggregations", "Insert as stage(s)" or "Replace stage"; replacing your own filter or stages shows a diff first, and nothing runs until you do. It sees field names, types, indexes, explain warnings and validation rules; documents only where the workspace lets it read data.
+
+- id: redis-keys
+  group: Redis
+  title: Redis key browser and value editors
+  keywords: [redis, valkey, keys, key browser, scan, pattern, ttl, memory, hash, list, set, sorted set, zset, stream, string, json, new key]
+  body: |
+    The tree shows db0 … db15 with key counts; expanding a database lists keys 200 at a time. Double-click a database (or right-click → "Browse keys") for the key browser: a SCAN pattern (a glob such as user:*; plain text matches keys that contain it), "Type" filter, "Memory" per key, "Load more", and "New key" to create a key of any editable type.
+    Open a key for its editor: strings (JSON shown pretty), hashes, lists, sets, sorted sets and streams; RedisJSON is read-only (use JSON.SET in the console). Set or remove the TTL in the header (10m, 2h, 90, 1d, 500ms). Changed keys fail with CONFLICT and offer "Reload" or "Overwrite". Deleting keys needs the typed name.
+
+- id: redis-console
+  group: Redis
+  title: Redis console
+  keywords: [redis, console, redis-cli, command, select database, flush, flushdb, completion]
+  body: |
+    Right-click a database → "New console": one command per line as in redis-cli, with completion of commands and options. The database picker sends SELECT on the tab's own connection. "Stop" unblocks a blocking command. "Flush database…" on a database runs FLUSHDB after a typed confirmation.
+    Commands are classified: GET, SCAN, INFO are reads; SET, DEL, EXPIRE writes; FLUSHALL, FLUSHDB, EVAL destructive; CONFIG SET, KEYS * administrative; SUBSCRIBE and MONITOR are never run. Cluster and Sentinel are not supported yet.
+
+- id: redis-server
+  group: Redis
+  title: Redis server info and slow log
+  keywords: [redis, server, info, slow log, slowlog, memory, clients, hit rate, keyspace]
+  body: |
+    Right-click the connection → "Server info and slow log": version, mode, role, uptime, clients, memory, command count and hit rate, the keyspace per database, every INFO section with a search box, and the "Slow log" (32 to 512 entries). "Refresh" reloads it.
+
+- id: elasticsearch-browse
+  group: Elasticsearch and OpenSearch
+  title: Elasticsearch and OpenSearch indices
+  keywords: [elasticsearch, opensearch, elastic, index, indices, data stream, alias, mapping, documents, cloud id, api key]
+  body: |
+    Connect with host and port (9200), "Node URLs" for several nodes, or a Cloud ID; auth by user and password, API key, bearer token or none. The tree has "Indices", "Data streams" and "Aliases" with document count, size and health.
+    Double-click an index for the document grid (columns typed by the mapping, filters become Query DSL, paging past 10,000 hits with search_after). Its menu has "Mapping" (the design view), "Search in console", "Get mapping", "Copy name" and "Delete index…". Edits are checked against document versions and fail with CONFLICT instead of overwriting.
+
+- id: elasticsearch-devtools
+  group: Elasticsearch and OpenSearch
+  title: Elasticsearch Dev Tools console, ES|QL and SQL
+  keywords: [elasticsearch, opensearch, dev tools, console, kibana, query dsl, esql, es|ql, sql, search request, _search]
+  body: |
+    Open a query tab on the connection and pick the language: "Console" takes Kibana Dev Tools requests (METHOD /path on one line, then a JSON or NDJSON body); each response shows a hits table and the JSON with its HTTP status. Completion offers methods, endpoints, index names, Query DSL keys and fields; Ctrl+Enter runs, "Run statement" runs the request under the cursor, "Format" indents JSON bodies. "ES|QL" (Elasticsearch 8.11+) and "SQL" run one query as a typed table. "Stop" cancels the request and its tasks on the cluster.
+
+- id: clickhouse
+  group: ClickHouse
+  title: ClickHouse tables, parts and mutations
+  keywords: [clickhouse, mergetree, parts, mutations, kill mutation, truncate, materialized view, dictionary, http]
+  body: |
+    ClickHouse connects over its HTTP interface (port 8123; TLS means HTTPS). The tree shows "Tables", "Views", "Materialized views" and "Dictionaries" with engine, rows and size. A table's menu has "Design" (columns, sorting key, skipping indexes, CREATE), "Parts and mutations" and "Truncate…".
+    Grid edits on MergeTree tables run as asynchronous mutations; "Parts and mutations" lists the data parts and the mutations with their state and last failure, with "Kill" (KILL MUTATION, after the rules' confirmation). "Count" counts exactly; otherwise totals come from statistics.
+
+- id: clickhouse-server
+  group: ClickHouse
+  title: ClickHouse running queries and query log
+  keywords: [clickhouse, server, running queries, processes, query log, kill query, slow queries, failed queries]
+  body: |
+    Right-click the connection → "Server: running queries and query log". "Running queries" (system.processes) refreshes every 3 s ("Refresh every 3 s") with "Stop" per query; the query log shows recent finished queries with duration, memory, rows, user and statement, "Failed only", and 50, 100 or 500 rows. The log is written a few seconds after a query ends.
+
+- id: oracle-instant-client
+  group: Oracle
+  title: Oracle Instant Client
+  keywords: [oracle, instant client, oci, oci.dll, libclntsh, ORACLE_CLIENT, download, client folder, libaio]
+  body: |
+    Oracle needs Oracle Instant Client 19c or newer. On the first connect without one, the "Oracle Instant Client is required" prompt offers "Download" (Instant Client Basic Light from Oracle, about 60 MB on Windows x64, pinned checksum, progress and Cancel; Oracle's license applies), "Use folder" (a folder with an installed client, saved as the connection's "Instant Client folder") or "Cancel". The folder is also under the connection dialog's "Advanced" → "Instant Client folder".
+    The Windows client needs the Microsoft Visual C++ 2015-2022 Redistributable; Linux needs libaio. A client loads once per process, so switching clients needs a restart.
+
+- id: oracle-features
+  group: Oracle
+  title: Oracle schemas, PL/SQL and editing
+  keywords: [oracle, plsql, pl/sql, package, procedure, compile errors, service name, rowid, 23ai]
+  body: |
+    Connect with host, port and "Service name" (EZConnect) or a full connect descriptor. The tree shows schemas with tables, views, packages and procedures; PL/SQL source shows with its compile errors. Grid edits go by key or ROWID, Stop uses OCIBreak, and vector tools work on 23ai.
+
+- id: sqlite
+  group: Connections
+  title: SQLite database files
+  keywords: [sqlite, file, db file, memory, attach, rowid, local database]
+  action: open_dialog:new_connection
+  body: |
+    Pick SQLite as the "Database type" and give a database file (read-only, create, or :memory:). Attached databases are listed, and edits go by primary key or rowid. SQLite takes no SSH tunnel or TLS.
+
+- id: settings-menu
+  group: App
+  title: Settings menu
+  keywords: [settings, preferences, options, gear, density, debug logging, diagnostics, log folder, theme]
+  body: |
+    The gear "Settings" button at the bottom of the rail opens the menu: "LLM providers…", "Allow the assistant to run read-only queries (rows go to your AI provider)", "Embedding API…", "MCP server…", "Comfortable density", "Record query history", "Clear query history…", "Debug logging", "Copy diagnostics", "Open log folder", "Check for updates", "Check for updates now" and "Community (Discord)" (plus "Sign out…" in the web edition).
+    The theme button next to it switches light and dark; right-click it for "Light", "Dark" or "Follow system".
+    Configuration (workspaces, connections, commands, providers) lives in fosta-studio.json next to the app; passwords and keys never do.
+
+- id: diagnostics
+  group: App
+  title: Diagnostics and logs for bug reports
+  keywords: [diagnostics, bug report, log, debug logging, log folder, error, support, crash]
+  action: run:copy_diagnostics
+  body: |
+    Settings → "Copy diagnostics" copies the app's diagnostic details for a bug report; "Open log folder" opens the application log; "Debug logging" records more detail. Error panels keep the error code, position and statement. Logs contain no passwords and statements are truncated.
+
+- id: updates
+  group: App
+  title: Updates
+  keywords: [update, upgrade, new version, release, restart to update, what's new, check for updates]
+  action: run:check_for_updates
+  body: |
+    Once a day the app asks GitHub for the latest release (only the app version is sent). Turn it off with Settings → "Check for updates", or use "Check for updates now". A newer version shows "Update X.Y.Z" in the status bar. The installed Windows app downloads it and installs it when you quit, or right away with "Restart to update" (open transactions and unsaved edits are asked about first); a note then links to "What's new". The portable app links to the release page; the web edition shows the Docker commands.
+
+- id: web-edition
+  group: App
+  title: Web edition (Docker)
+  keywords: [web edition, docker, container, browser, server, access token, sign in, host.docker.internal, self-hosted]
+  body: |
+    Run docker run -d --name fosta-studio -p 127.0.0.1:8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio, then open the sign-in address with the access token from docker logs fosta-studio (print it again with /app/fosta-studio-server token; rotate it with rotate-token).
+    Data, including encrypted saved passwords, lives in the /data volume. Inside the container localhost is the container: use host.docker.internal for databases on your machine. Exports download in the browser, commands need FOSTA_STUDIO_TASKS=on, and "Sign out…" ends every session. Update by pulling the image and re-creating the container on the same volume.
+
+- id: shortcuts
+  group: App
+  title: Keyboard shortcuts
+  keywords: [keyboard, shortcuts, hotkeys, keys, ctrl, key bindings]
+  body: |
+    Ctrl+N new connection · Ctrl+T new query · Ctrl+Shift+A assistant panel · Ctrl+B show or hide the sidebar · Ctrl+Shift+B show or hide the workspaces · Ctrl+1 … 9 switch workspace · Ctrl+Enter run (selection or all) · Ctrl+Shift+Enter run the statement under the cursor · Shift+Alt+F format · Enter / F2 edit the selected cell · Shift+Enter cell editor · Ctrl+S save grid changes · F5 reload table. In MongoDB, Ctrl+Enter runs the query bar or previews a stage.
+
+- id: privacy
+  group: App
+  title: What leaves your machine and where data is stored
+  keywords: [privacy, security, stored, passwords, credential manager, audit log, data, secrets, telemetry]
+  body: |
+    Passwords, SSH passphrases and API keys are kept in Windows Credential Manager (the encrypted fosta-studio-secrets.enc in the web edition), never in fosta-studio.json. Query history is in fosta-studio-history.jsonl, open tabs in fosta-studio-tabs.json, and blocked, confirmed and relaxed operations, assistant runs and MCP calls in fosta-studio-audit.jsonl, all on this machine. The assistant sends metadata and what you share to your own AI provider; rows only when you allow read-only queries. The update check sends only the app version.
