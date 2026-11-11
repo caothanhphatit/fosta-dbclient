@@ -34,9 +34,9 @@ Everything lives next to the executable (the portable app), in the app's data fo
 | `fosta-studio-audit.jsonl`                                                                          | Blocked, confirmed and relaxed operations, assistant runs and every MCP call              | Statement excerpts                                                                |
 | Log folder                                                                                          | Application log                                                                           | No passwords; statements are truncated                                            |
 
-On Linux (the web edition's `/data` volume) the app writes these files readable by their owner only (mode `0600`), the
-key files included; files written by an earlier version are restricted on the next start. On Windows a file takes the
-permissions of its folder: the installed app keeps its data under your user profile, the portable app next to the executable.
+On Linux and macOS (and the web edition's `/data` volume) the app writes these files readable by their owner only
+(mode `0600`), the key files included; files written by an earlier version are restricted on the next start. On Windows a
+file takes the permissions of its folder: the installed app keeps its data under your user profile, the portable app next to the executable.
 
 A saved password is tied to its server. If you change a connection's host, port, user, SSH route, TLS settings or command without
 typing the password again, the saved one is deleted instead of being sent to the new target.
@@ -156,9 +156,11 @@ audit log. Settings → "Assistant may learn databases" and Edit workspace → "
 summaries off; what was learned before stays until you delete it.
 
 Profiles are stored in `fosta-studio-profiles/` next to the other files, one `<sha256 of connection and database>.json` per
-database (at most 4 MB), with the same permissions as the files above (owner-only, mode `0600`, on Linux). A file that does
-not parse is moved aside as `.json.corrupt`. They hold structure, your notes and descriptions and, if sampled, short value
-lists; they are not encrypted. Deleting a connection deletes its profiles; "What the assistant knows" → Delete removes one.
+database (at most 4 MB), owner-only like the files above: the folder has mode `0700` and the files `0600` on Linux and
+macOS; on Windows they take the per-user permissions of the app's data folder. A file that does not parse is moved aside
+as `.json.corrupt`. They hold structure, your notes and descriptions and, if sampled, short value lists; they are not
+encrypted. Deleting a connection deletes its profiles; "What the assistant knows" → Delete removes one. Both also remove
+the moved-aside and half-written files, and a deletion while the assistant is learning wins: that build saves nothing.
 
 ## MCP clients
 

@@ -38,6 +38,20 @@ pub fn restrict_to_owner(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Creates a folder of private files (and its missing parents) usable by its owner only: mode 0700 on Unix, also for a
+/// folder an earlier version created with the umask.
+pub fn create_private_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    fs::create_dir_all(path)?;
+    Ok(())
+}
+
 /// Writes through a temporary file and a rename, readable by the owner only.
 pub fn write_private(path: &Path, bytes: &[u8]) -> AppResult<()> {
     let temporary = path.with_extension("tmp");
@@ -71,5 +85,24 @@ mod tests {
         }
         restrict_to_owner(&path.with_extension("missing")).unwrap();
         fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn private_folders_are_owner_only() {
+        let dir = std::env::temp_dir()
+            .join(format!("fosta-private-dir-{}", std::process::id()))
+            .join("inner");
+        let _ = fs::remove_dir_all(dir.parent().unwrap());
+        create_private_dir(&dir).unwrap();
+        create_private_dir(&dir).unwrap();
+        assert!(dir.is_dir());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+            create_private_dir(&dir).unwrap();
+            assert_eq!(fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        }
+        fs::remove_dir_all(dir.parent().unwrap()).unwrap();
     }
 }

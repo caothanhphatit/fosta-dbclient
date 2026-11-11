@@ -112,6 +112,15 @@ pub async fn learn_with(
     // `ai_cancel` fires the run's token; the build watches the contract's token, and stops its engine call within the
     // call's grace period.
     let token = CancellationToken::new();
+    // A cancel that arrives while the build runs on (between engine calls, or from a progress listener) reaches the
+    // build's token at its next step, not only when the select below gets to poll the run.
+    let watched = |step: Progress| {
+        progress(step);
+        if run.is_cancelled() {
+            token.cancel();
+        }
+    };
+    let progress: build::ProgressFn<'_> = &watched;
     let building = async {
         let mut profile = build::build(handle, &connection_id, database, &token, progress).await?;
         let extras_reads = reads.as_ref().map(|reads| extras::ExtrasReads {

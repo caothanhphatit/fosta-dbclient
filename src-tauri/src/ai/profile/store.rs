@@ -30,7 +30,7 @@ use crate::{
     audit::now_millis,
     config,
     contract::KEY_PATTERN,
-    data_files::write_private,
+    data_files::{create_private_dir, write_private},
     error::{AppError, AppResult},
     lock::lock,
 };
@@ -39,6 +39,8 @@ use crate::{
 pub const PROFILES_DIR: &str = "fosta-studio-profiles";
 /// Where a profile file that does not parse is moved (the last one is kept).
 pub const CORRUPT_SUFFIX: &str = ".corrupt";
+/// The suffix of a profile file being written.
+const TEMPORARY_SUFFIX: &str = ".tmp";
 /// The most one profile file may take.
 pub const MAX_PROFILE_BYTES: usize = 4 * 1024 * 1024;
 /// How long a stale check answer is reused.
@@ -102,8 +104,10 @@ pub struct ProfileStore {
     dir: PathBuf,
     /// Serialises read-modify-write of the files.
     guard: Mutex<()>,
-    /// Profiles being built now (one build per profile at a time).
-    learning: Mutex<HashSet<String>>,
+    /// Profiles being built now (one build per profile at a time), by key, with their connection.
+    learning: Mutex<HashMap<String, String>>,
+    /// Profiles deleted while a build ran: the build's write is refused, so a deletion wins.
+    discarded: Mutex<HashSet<String>>,
     /// Recent stale answers by profile key: when, and whether it was stale.
     stale: Mutex<HashMap<String, (Instant, i64, bool)>>,
 }
@@ -117,6 +121,7 @@ pub struct LearningGuard<'a> {
 impl Drop for LearningGuard<'_> {
     fn drop(&mut self) {
         lock(&self.store.learning).remove(&self.key);
+        lock(&self.store.discarded).remove(&self.key);
     }
 }
 
@@ -136,7 +141,8 @@ impl ProfileStore {
         Self {
             dir,
             guard: Mutex::new(()),
-            learning: Mutex::new(HashSet::new()),
+            learning: Mutex::new(HashMap::new()),
+            discarded: Mutex::new(HashSet::new()),
             stale: Mutex::new(HashMap::new()),
         }
     }
@@ -194,9 +200,12 @@ impl ProfileStore {
     /// Claims the build slot of a profile; a second build of the same profile is refused while one runs.
     pub fn begin_learning(&self, connection_id: &str, database: &str) -> AppResult<LearningGuard<'_>> {
         let key = profile_key(connection_id, database);
-        if !lock(&self.learning).insert(key.clone()) {
+        let mut learning = lock(&self.learning);
+        if learning.contains_key(&key) {
             return Err(AppError::new("The assistant is already learning this database"));
         }
+        learning.insert(key.clone(), connection_id.to_owned());
+        drop(learning);
         Ok(LearningGuard { store: self, key })
     }
 
@@ -210,6 +219,11 @@ impl ProfileStore {
     /// instead of carried over, and the profile no longer says data was read.
     pub fn refresh_with(&self, fresh: DatabaseProfile, keep_hints: bool) -> AppResult<(DatabaseProfile, ObjectDiff)> {
         let _guard = lock(&self.guard);
+        if lock(&self.discarded).remove(&profile_key(&fresh.connection_id, &fresh.database)) {
+            return Err(AppError::new(
+                "What the assistant learned was deleted while it was learning, so nothing was saved",
+            ));
+        }
         let path = self.path(&fresh.connection_id, &fresh.database);
         let previous: Option<DatabaseProfile> = self.read(&path, &fresh.connection_id, &fresh.database)?;
         let (mut merged, diff) = merge_with(previous, fresh, keep_hints);
@@ -343,16 +357,31 @@ impl ProfileStore {
         Ok((profile, written))
     }
 
-    /// Deletes one profile; false when there was none.
+    /// Deletes one profile with the files moved aside or left half written; false when there was none. A build of it
+    /// running now saves nothing.
     pub fn delete(&self, connection_id: &str, database: &str) -> AppResult<bool> {
         let _guard = lock(&self.guard);
-        self.forget_stale(&profile_key(connection_id, database));
-        remove(&self.path(connection_id, database))
+        let key = profile_key(connection_id, database);
+        self.discard_running(|running, _| running == key);
+        self.forget_stale(&key);
+        remove_with_leftovers(&self.path(connection_id, database))
     }
 
-    /// Deletes every profile of a connection (it was deleted); returns how many.
+    /// Marks the running builds `matches` picks (by key and connection) so that their write is refused.
+    fn discard_running(&self, matches: impl Fn(&str, &str) -> bool) {
+        let running: Vec<String> = lock(&self.learning)
+            .iter()
+            .filter(|(key, connection)| matches(key, connection))
+            .map(|(key, _)| key.clone())
+            .collect();
+        lock(&self.discarded).extend(running);
+    }
+
+    /// Deletes every profile of a connection (it was deleted), with the files moved aside or left half written; returns
+    /// how many profiles. Builds of the connection running now save nothing.
     pub fn remove_connection(&self, connection_id: &str) -> AppResult<usize> {
         let _guard = lock(&self.guard);
+        self.discard_running(|_, connection| connection == connection_id);
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -361,16 +390,22 @@ impl ProfileStore {
         let mut removed = 0;
         for entry in entries.filter_map(Result::ok) {
             let path = entry.path();
-            if path.extension().is_none_or(|extension| extension != "json") {
-                continue;
-            }
-            let Ok(bytes) = fs::read(&path) else { continue };
-            let Ok(header) = serde_json::from_slice::<ProfileHeader>(&bytes) else {
+            let Some(profile) = profile_file_of(&path) else {
                 continue;
             };
-            if header.connection_id == connection_id && remove(&path)? {
-                self.forget_stale(&profile_key(&header.connection_id, &header.database));
+            let Ok(bytes) = fs::read(&path) else { continue };
+            // Only the connection id is needed: a file moved aside for its version still names its connection.
+            let Ok(owner) = serde_json::from_slice::<FileOwner>(&bytes) else {
+                continue;
+            };
+            if owner.connection_id != connection_id {
+                continue;
+            }
+            if remove_with_leftovers(&profile)? {
                 removed += 1;
+            }
+            if let Some(database) = owner.database {
+                self.forget_stale(&profile_key(connection_id, &database));
             }
         }
         Ok(removed)
@@ -403,11 +438,42 @@ impl ProfileStore {
     /// Caps and writes a profile (owner only), and forgets its stale answer.
     fn write(&self, path: &Path, profile: &mut DatabaseProfile) -> AppResult<()> {
         let bytes = fit(profile)?;
-        fs::create_dir_all(&self.dir)?;
+        create_private_dir(&self.dir)?;
         write_private(path, &bytes)?;
         self.forget_stale(&profile_key(&profile.connection_id, &profile.database));
         Ok(())
     }
+}
+
+/// The connection (and database) a profile file names, also when the rest of it no longer parses as a profile.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileOwner {
+    connection_id: String,
+    database: Option<String>,
+}
+
+/// The profile file `path` belongs to: itself (`<hash>.json`), or the profile of a file moved aside
+/// (`<hash>.json.corrupt`) or left half written (`<hash>.tmp`); none for other files.
+fn profile_file_of(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    let hash = name
+        .strip_suffix(".json")
+        .or_else(|| name.strip_suffix(&format!(".json{CORRUPT_SUFFIX}")))
+        .or_else(|| name.strip_suffix(TEMPORARY_SUFFIX))?;
+    Some(path.with_file_name(format!("{hash}.json")))
+}
+
+/// The file a profile is written to before it is renamed into place (`data_files::write_private`).
+fn temporary_path(path: &Path) -> PathBuf {
+    path.with_extension("tmp")
+}
+
+/// Removes a profile file with its moved-aside and temporary files; whether the profile file was there.
+fn remove_with_leftovers(path: &Path) -> AppResult<bool> {
+    remove(&corrupt_path(path))?;
+    remove(&temporary_path(path))?;
+    remove(path)
 }
 
 fn remove(path: &Path) -> AppResult<bool> {

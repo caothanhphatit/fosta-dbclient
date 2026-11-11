@@ -579,6 +579,72 @@ async fn the_store_caps_sets_aside_damaged_files_and_forgets_deleted_connections
 }
 
 #[tokio::test]
+async fn deletions_remove_leftover_files_and_win_over_a_running_build() {
+    let catalog = Catalog::new();
+    let (_manager, handle) = catalog_handle(&catalog);
+    let (store, dir) = temporary_store("leftovers");
+    let profile = build(&handle, "c", "shop", &CancellationToken::new(), &quiet).await.unwrap();
+    let leftovers = |path: &std::path::Path| {
+        let mut corrupt = path.as_os_str().to_owned();
+        corrupt.push(CORRUPT_SUFFIX);
+        [std::path::PathBuf::from(corrupt), path.with_extension("tmp")]
+    };
+    // A file moved aside for its version (it still names its connection) and a half-written file.
+    store.refresh(profile.clone()).unwrap();
+    let path = store.path("c", "shop");
+    let mut old = serde_json::to_value(&profile).unwrap();
+    old["version"] = serde_json::json!(99);
+    std::fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
+    assert!(store.load("c", "shop").unwrap().is_none());
+    std::fs::write(path.with_extension("tmp"), b"{ half").unwrap();
+    assert!(leftovers(&path).iter().all(|file| file.exists()));
+    assert_eq!(store.remove_connection("c").unwrap(), 0, "no profile left, only leftovers");
+    assert!(leftovers(&path).iter().all(|file| !file.exists()));
+    // Delete removes them too.
+    store.refresh(profile.clone()).unwrap();
+    for file in leftovers(&path) {
+        std::fs::write(file, b"{ not json").unwrap();
+    }
+    assert!(store.delete("c", "shop").unwrap());
+    assert!(!path.exists() && leftovers(&path).iter().all(|file| !file.exists()));
+    // A deletion during a build wins: the build's write is refused, a later build saves again.
+    for delete_connection in [false, true] {
+        let slot = store.begin_learning("c", "shop").unwrap();
+        if delete_connection {
+            store.remove_connection("c").unwrap();
+        } else {
+            store.delete("c", "shop").unwrap();
+        }
+        let refused = store.refresh(profile.clone()).unwrap_err();
+        assert!(refused.to_string().contains("deleted"), "{refused}");
+        assert!(store.load("c", "shop").unwrap().is_none());
+        drop(slot);
+        store.refresh(profile.clone()).unwrap();
+        assert!(store.delete("c", "shop").unwrap());
+    }
+    // Another database's build is not affected.
+    let slot = store.begin_learning("c", "crm").unwrap();
+    store.delete("c", "shop").unwrap();
+    let mut crm = profile.clone();
+    crm.database = "crm".into();
+    store.refresh(crm).unwrap();
+    drop(slot);
+    // Through a whole build: deleted while describing, nothing is stored.
+    let runs = AiRuns::default();
+    let deleting = |progress: Progress| {
+        if progress.step == Step::Describing && progress.done == 1 {
+            store.delete("c", "shop").unwrap();
+        }
+    };
+    let error = learn(&runs, &store, &handle, "shop", "run", None, &deleting).await.unwrap_err();
+    assert!(error.to_string().contains("deleted"), "{error}");
+    assert!(store.load("c", "shop").unwrap().is_none());
+    learn(&runs, &store, &handle, "shop", "run", None, &quiet).await.unwrap();
+    assert!(store.load("c", "shop").unwrap().is_some());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn notes_are_validated() {
     let catalog = Catalog::new();
     let (_manager, handle) = catalog_handle(&catalog);
