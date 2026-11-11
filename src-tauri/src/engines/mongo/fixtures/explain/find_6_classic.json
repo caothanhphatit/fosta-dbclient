@@ -1,0 +1,218 @@
+{
+  "explainVersion": "1",
+  "queryPlanner": {
+    "namespace": "shop.orders",
+    "indexFilterSet": false,
+    "parsedQuery": { "$and": [{ "status": { "$eq": "paid" } }, { "total": { "$gt": 100 } }] },
+    "queryHash": "9A4C3F21",
+    "planCacheKey": "7B1E05D2",
+    "maxIndexedOrSolutionsReached": false,
+    "maxIndexedAndSolutionsReached": false,
+    "maxScansToExplodeReached": false,
+    "winningPlan": {
+      "stage": "SORT",
+      "sortPattern": { "createdAt": -1 },
+      "memLimit": 104857600,
+      "limitAmount": 20,
+      "type": "simple",
+      "inputStage": {
+        "stage": "FETCH",
+        "filter": { "total": { "$gt": 100 } },
+        "inputStage": {
+          "stage": "IXSCAN",
+          "keyPattern": { "status": 1 },
+          "indexName": "status_1",
+          "isMultiKey": false,
+          "multiKeyPaths": { "status": [] },
+          "isUnique": false,
+          "isSparse": false,
+          "isPartial": false,
+          "indexVersion": 2,
+          "direction": "forward",
+          "indexBounds": { "status": ["[\"paid\", \"paid\"]"] }
+        }
+      }
+    },
+    "rejectedPlans": [
+      {
+        "stage": "SORT",
+        "sortPattern": { "createdAt": -1 },
+        "memLimit": 104857600,
+        "limitAmount": 20,
+        "type": "simple",
+        "inputStage": {
+          "stage": "FETCH",
+          "filter": { "status": { "$eq": "paid" } },
+          "inputStage": {
+            "stage": "IXSCAN",
+            "keyPattern": { "total": 1 },
+            "indexName": "total_1",
+            "isMultiKey": false,
+            "multiKeyPaths": { "total": [] },
+            "isUnique": false,
+            "isSparse": false,
+            "isPartial": false,
+            "indexVersion": 2,
+            "direction": "forward",
+            "indexBounds": { "total": ["(100, inf.0]"] }
+          }
+        }
+      }
+    ]
+  },
+  "executionStats": {
+    "executionSuccess": true,
+    "nReturned": 20,
+    "executionTimeMillis": 7,
+    "totalKeysExamined": 1204,
+    "totalDocsExamined": 1204,
+    "executionStages": {
+      "stage": "SORT",
+      "nReturned": 20,
+      "executionTimeMillisEstimate": 5,
+      "works": 1226,
+      "advanced": 20,
+      "needTime": 1205,
+      "needYield": 0,
+      "saveState": 2,
+      "restoreState": 2,
+      "isEOF": 1,
+      "sortPattern": { "createdAt": -1 },
+      "memLimit": 104857600,
+      "limitAmount": 20,
+      "type": "simple",
+      "totalDataSizeSorted": 401320,
+      "usedDisk": false,
+      "spills": 0,
+      "inputStage": {
+        "stage": "FETCH",
+        "filter": { "total": { "$gt": 100 } },
+        "nReturned": 845,
+        "executionTimeMillisEstimate": 4,
+        "works": 1205,
+        "advanced": 845,
+        "needTime": 359,
+        "needYield": 0,
+        "saveState": 2,
+        "restoreState": 2,
+        "isEOF": 1,
+        "docsExamined": 1204,
+        "alreadyHasObj": 0,
+        "inputStage": {
+          "stage": "IXSCAN",
+          "nReturned": 1204,
+          "executionTimeMillisEstimate": 1,
+          "works": 1205,
+          "advanced": 1204,
+          "needTime": 0,
+          "needYield": 0,
+          "saveState": 2,
+          "restoreState": 2,
+          "isEOF": 1,
+          "keyPattern": { "status": 1 },
+          "indexName": "status_1",
+          "isMultiKey": false,
+          "multiKeyPaths": { "status": [] },
+          "isUnique": false,
+          "isSparse": false,
+          "isPartial": false,
+          "indexVersion": 2,
+          "direction": "forward",
+          "indexBounds": { "status": ["[\"paid\", \"paid\"]"] },
+          "keysExamined": 1204,
+          "seeks": 1,
+          "dupsTested": 0,
+          "dupsDropped": 0
+        }
+      }
+    },
+    "allPlansExecution": [
+      {
+        "nReturned": 0,
+        "executionTimeMillisEstimate": 0,
+        "totalKeysExamined": 101,
+        "totalDocsExamined": 101,
+        "executionStages": {
+          "stage": "SORT",
+          "nReturned": 0,
+          "executionTimeMillisEstimate": 0,
+          "works": 101,
+          "advanced": 0,
+          "sortPattern": { "createdAt": -1 },
+          "limitAmount": 20,
+          "inputStage": {
+            "stage": "FETCH",
+            "filter": { "total": { "$gt": 100 } },
+            "nReturned": 71,
+            "executionTimeMillisEstimate": 0,
+            "docsExamined": 101,
+            "inputStage": {
+              "stage": "IXSCAN",
+              "nReturned": 101,
+              "executionTimeMillisEstimate": 0,
+              "keyPattern": { "status": 1 },
+              "indexName": "status_1",
+              "direction": "forward",
+              "indexBounds": { "status": ["[\"paid\", \"paid\"]"] },
+              "keysExamined": 101,
+              "seeks": 1
+            }
+          }
+        }
+      },
+      {
+        "nReturned": 0,
+        "executionTimeMillisEstimate": 0,
+        "totalKeysExamined": 101,
+        "totalDocsExamined": 101,
+        "executionStages": {
+          "stage": "SORT",
+          "nReturned": 0,
+          "executionTimeMillisEstimate": 0,
+          "works": 101,
+          "advanced": 0,
+          "sortPattern": { "createdAt": -1 },
+          "limitAmount": 20,
+          "inputStage": {
+            "stage": "FETCH",
+            "filter": { "status": { "$eq": "paid" } },
+            "nReturned": 23,
+            "executionTimeMillisEstimate": 0,
+            "docsExamined": 101,
+            "inputStage": {
+              "stage": "IXSCAN",
+              "nReturned": 101,
+              "executionTimeMillisEstimate": 0,
+              "keyPattern": { "total": 1 },
+              "indexName": "total_1",
+              "direction": "forward",
+              "indexBounds": { "total": ["(100, inf.0]"] },
+              "keysExamined": 101,
+              "seeks": 1
+            }
+          }
+        }
+      }
+    ]
+  },
+  "command": {
+    "find": "orders",
+    "filter": { "status": "paid", "total": { "$gt": 100 } },
+    "sort": { "createdAt": -1 },
+    "limit": 20,
+    "maxTimeMS": 30000,
+    "$db": "shop"
+  },
+  "serverInfo": { "host": "mongo-dev", "port": 27017, "version": "6.0.14", "gitVersion": "25225db95574916fecab3af75b184409f8713aef" },
+  "serverParameters": {
+    "internalQueryFacetBufferSizeBytes": 104857600,
+    "internalQueryFacetMaxOutputDocSizeBytes": 104857600,
+    "internalLookupStageIntermediateDocumentMaxSizeBytes": 104857600,
+    "internalDocumentSourceGroupMaxMemoryBytes": 104857600,
+    "internalQueryMaxBlockingSortMemoryUsageBytes": 104857600,
+    "internalQueryProhibitBlockingMergeOnMongoS": 0,
+    "internalQueryMaxAddToSetBytes": 104857600,
+    "internalDocumentSourceSetWindowFieldsMaxMemoryBytes": 104857600
+  },
+  "ok": 1
+}

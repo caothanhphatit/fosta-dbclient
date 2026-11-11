@@ -102,7 +102,7 @@ pub fn classify_mongo(text: &str) -> Classification {
 /// `mongo.updatePreview` read; `mongo.updateMany` writes (destructive with an empty filter); `mongo.deleteMany` is always
 /// destructive; `mongo.indexes` reads, `mongo.createIndex` / `mongo.hideIndex` / `mongo.unhideIndex` are DDL and
 /// `mongo.dropIndex` is destructive (the `_id_` index, or `*`, is refused); `mongo.validation` and `mongo.validationCheck` read,
-/// `mongo.setValidation` is DDL (`collMod`). Any of them is administration when it targets
+/// `mongo.setValidation` is DDL (`collMod`); `mongo.explain` reads (refused with `$out` / `$merge`). Any of them is administration when it targets
 /// credentials; server-side JavaScript in any query document, update, partial filter or validator and unknown names are refused.
 pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo {
     if !OPERATIONS.contains(&name) {
@@ -117,7 +117,7 @@ pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo
         .and_then(|collection| collection.as_str())
         .map(|collection| vec![collection.to_owned()])
         .unwrap_or_default();
-    if matches!(name, "mongo.aggregatePreview" | "mongo.aggregate") {
+    if matches!(name, "mongo.aggregatePreview" | "mongo.aggregate" | "mongo.explain") {
         return classify_aggregation(name, args, &excerpt, tables);
     }
     if matches!(name, "mongo.dropIndex" | "mongo.hideIndex" | "mongo.unhideIndex") && protected_index(args) {
@@ -163,6 +163,9 @@ fn classify_aggregation(name: &str, args: &serde_json::Value, excerpt: &str, mut
     let writes = write_stage(&stages);
     if let (Some(stage), "mongo.aggregatePreview") = (writes, name) {
         return StatementInfo::refused(name, excerpt, &format!("{stage} writes into a collection; a preview only reads"));
+    }
+    if let (Some(stage), "mongo.explain") = (writes, name) {
+        return StatementInfo::refused(name, excerpt, &format!("{stage} writes into a collection; explain only reads"));
     }
     for table in read_targets(&stages).into_iter().chain(write_target(&stages)) {
         if !tables.contains(&table) {
@@ -501,6 +504,57 @@ mod tests {
         // A pipeline that does not parse is refused.
         let broken = classify_operation("mongo.aggregate", &args(json!(["{ nope"])));
         assert!(broken.refused.is_some());
+    }
+
+    #[test]
+    fn explains_read_and_refuse_writes_and_server_javascript() {
+        use serde_json::json;
+        let args = |extra: serde_json::Value| {
+            let mut args = json!({ "database": "shop", "collection": "orders" });
+            args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            args
+        };
+        for extra in [
+            json!({ "kind": "find", "filter": { "status": "paid" }, "verbosity": "executionStats" }),
+            json!({ "kind": "find", "filter": "{ \"total\": { \"$gt\": 1 } }", "sort": { "total": -1 }, "verbosity": "allPlansExecution" }),
+            json!({ "kind": "aggregate", "pipeline": [{ "$match": {} }, "{ \"$group\": { \"_id\": \"$c\" } }"] }),
+        ] {
+            let info = classify_operation("mongo.explain", &args(extra.clone()));
+            assert_eq!((info.category, info.refused.as_deref()), (Category::Read, None), "{extra}");
+            assert_eq!(info.tables, ["orders"]);
+        }
+        let lookup = classify_operation(
+            "mongo.explain",
+            &args(
+                json!({ "kind": "aggregate", "pipeline": [{ "$lookup": { "from": "customers", "localField": "c", "foreignField": "_id", "as": "c" } }] }),
+            ),
+        );
+        assert_eq!(lookup.tables, ["orders", "customers"]);
+        for pipeline in [json!([{ "$out": "copy" }]), json!("[{ \"$merge\": { \"into\": \"t\" } }]")] {
+            let info = classify_operation("mongo.explain", &args(json!({ "kind": "aggregate", "pipeline": pipeline })));
+            assert!(
+                info.refused.as_deref().is_some_and(|why| why.contains("explain only reads")),
+                "{info:?}"
+            );
+        }
+        for extra in [
+            json!({ "filter": { "$where": "true" } }),
+            json!({ "filter": "{ \"$expr\": { \"$function\": { \"body\": \"f\", \"args\": [], \"lang\": \"js\" } } }" }),
+            json!({ "kind": "aggregate", "pipeline": [{ "$group": { "_id": null, "x": { "$accumulator": {} } } }] }),
+        ] {
+            let info = classify_operation("mongo.explain", &args(extra.clone()));
+            assert!(info.refused.as_deref().is_some_and(|why| why.contains("JavaScript")), "{extra}");
+        }
+        assert!(
+            classify_operation("mongo.explain", &args(json!({ "kind": "aggregate", "pipeline": ["{ nope"] })))
+                .refused
+                .is_some()
+        );
+        let secret = classify_operation(
+            "mongo.explain",
+            &json!({ "database": "admin", "collection": "system.users", "kind": "find" }),
+        );
+        assert_eq!(secret.category, Category::Admin);
     }
 
     #[test]

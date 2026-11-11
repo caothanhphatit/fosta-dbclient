@@ -1725,3 +1725,98 @@ async fn contract_mongo_validation() {
         .ok();
     manager.disconnect(CONNECTION).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mongo.yml"]
+async fn contract_mongo_explain() {
+    let f = fixture();
+    let (manager, handle) = connect(&f).await;
+    let tab = session(&handle).await;
+    run(&handle, &tab, r#"{ "drop": "contract_explain" }"#, "fosta_contract").await.ok();
+    const STATUSES: [&str; 4] = ["open", "paid", "shipped", "void"];
+    let documents: Vec<serde_json::Value> = (0..500)
+        .map(|i| json!({ "_id": i, "status": STATUSES[i % 4], "total": i, "note": format!("note {i}") }))
+        .collect();
+    let insert = json!({ "insert": "contract_explain", "documents": documents }).to_string();
+    run(&handle, &tab, &insert, "fosta_contract").await.unwrap();
+    let indexes = json!({ "createIndexes": "contract_explain", "indexes": [
+        { "key": { "status": 1 }, "name": "status_1" },
+        { "key": { "total": 1 }, "name": "total_1" },
+    ] })
+    .to_string();
+    run(&handle, &tab, &indexes, "fosta_contract").await.unwrap();
+    let context = Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: CONNECTION.into(),
+        connection_name: CONNECTION.into(),
+        safety: SafetySettings::preset(Preset::ReadOnly),
+    };
+    let explain = |extra: serde_json::Value| {
+        let mut args = json!({ "database": "fosta_contract", "collection": "contract_explain" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let (manager, context) = (&manager, &context);
+        async move { gateway::invoke(manager, context, gateway::Caller::EngineView, "mongo.explain", args, None).await }
+    };
+
+    // A filtered, sorted find: the plan uses an index, the summary has the counters (a read, allowed in Read-only).
+    let found = explain(json!({
+        "kind": "find",
+        "filter": { "status": "paid", "total": { "$gt": 100 } },
+        "sort": { "note": 1 },
+        "limit": 10,
+        "verbosity": "allPlansExecution",
+    }))
+    .await
+    .unwrap();
+    assert_eq!(found["verbosity"], "allPlansExecution");
+    assert!(found["explain"]["queryPlanner"].is_object(), "{found}");
+    assert!(found["statement"]
+        .as_str()
+        .unwrap()
+        .contains(".explain(\"allPlansExecution\").find("));
+    let plan = &found["plan"];
+    assert_eq!(plan["shape"], "find", "{plan}");
+    let summary = &plan["summary"];
+    assert_eq!(summary["nReturned"], 10, "{summary}");
+    assert_eq!(summary["isCollScan"], false, "{summary}");
+    assert_eq!(summary["sortInMemory"], true, "{summary}");
+    assert!(
+        summary["usedIndexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|name| name == "status_1" || name == "total_1"),
+        "{summary}"
+    );
+    assert!(summary["docsExamined"].as_i64().unwrap() >= 10, "{summary}");
+    assert!(!plan["rejectedPlans"].as_array().unwrap().is_empty(), "{plan}");
+
+    // queryPlanner only: no counters; a scan without an index is a COLLSCAN.
+    let scanned = explain(json!({ "filter": "{ \"note\": \"note 7\" }" })).await.unwrap();
+    assert_eq!(scanned["plan"]["summary"]["isCollScan"], true, "{scanned}");
+    assert_eq!(scanned["plan"]["summary"]["nReturned"], serde_json::Value::Null);
+
+    // A pipeline: the group above the query layer (or pushed into it), with the index of the $match.
+    let grouped = explain(json!({
+        "kind": "aggregate",
+        "pipeline": [{ "$match": { "status": "open" } }, { "$group": { "_id": "$status", "n": { "$sum": 1 } } }, { "$sort": { "n": -1 } }],
+        "verbosity": "executionStats",
+    }))
+    .await
+    .unwrap();
+    let plan = &grouped["plan"];
+    assert!(plan.is_object(), "{grouped}");
+    assert_eq!(plan["summary"]["usedIndexes"], json!(["status_1"]), "{plan}");
+    assert_eq!(plan["summary"]["nReturned"], 1, "{plan}");
+
+    // $out / $merge, server-side JavaScript and bad verbosities are refused.
+    assert!(explain(json!({ "kind": "aggregate", "pipeline": [{ "$out": "copy" }] }))
+        .await
+        .is_err());
+    assert!(explain(json!({ "filter": { "$where": "true" } })).await.is_err());
+    assert!(explain(json!({ "verbosity": "everything" })).await.is_err());
+
+    run(&handle, &tab, r#"{ "drop": "contract_explain" }"#, "fosta_contract").await.ok();
+    manager.disconnect(CONNECTION).await;
+}

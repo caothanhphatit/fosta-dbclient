@@ -1,0 +1,159 @@
+{
+  "mergeType": "mongos",
+  "splitPipeline": {
+    "shardsPart": [
+      { "$match": { "status": { "$eq": "paid" } } },
+      { "$group": { "_id": "$customerId", "spent": { "$sum": "$total" } } }
+    ],
+    "mergerPart": [
+      { "$mergeCursors": { "lsid": { "id": { "$binary": { "base64": "2b7aZyQ4Qe2l3m1yR0oT9w==", "subType": "04" } } }, "compareWholeSortKey": false, "tailableMode": "normal", "nss": "shop.orders", "allowPartialResults": false, "recordRemoteOpWaitTime": false } },
+      { "$group": { "_id": "$$ROOT._id", "spent": { "$sum": "$$ROOT.spent" }, "$doingMerge": true } }
+    ]
+  },
+  "shards": {
+    "shard01": {
+      "host": "shard01a:27018",
+      "explainVersion": "1",
+      "stages": [
+        {
+          "$cursor": {
+            "queryPlanner": {
+              "namespace": "shop.orders",
+              "indexFilterSet": false,
+              "parsedQuery": { "status": { "$eq": "paid" } },
+              "queryHash": "C1D3B9F2",
+              "planCacheKey": "77E0A1B5",
+              "maxIndexedOrSolutionsReached": false,
+              "maxIndexedAndSolutionsReached": false,
+              "maxScansToExplodeReached": false,
+              "winningPlan": {
+                "stage": "PROJECTION_SIMPLE",
+                "transformBy": { "customerId": 1, "total": 1, "_id": 0 },
+                "inputStage": {
+                  "stage": "FETCH",
+                  "inputStage": {
+                    "stage": "IXSCAN",
+                    "keyPattern": { "status": 1 },
+                    "indexName": "status_1",
+                    "isMultiKey": false,
+                    "direction": "forward",
+                    "indexBounds": { "status": ["[\"paid\", \"paid\"]"] }
+                  }
+                }
+              },
+              "rejectedPlans": []
+            },
+            "executionStats": {
+              "executionSuccess": true,
+              "nReturned": 400,
+              "executionTimeMillis": 2,
+              "totalKeysExamined": 400,
+              "totalDocsExamined": 400,
+              "executionStages": {
+                "stage": "PROJECTION_SIMPLE",
+                "nReturned": 400,
+                "executionTimeMillisEstimate": 1,
+                "transformBy": { "customerId": 1, "total": 1, "_id": 0 },
+                "inputStage": {
+                  "stage": "FETCH",
+                  "nReturned": 400,
+                  "executionTimeMillisEstimate": 1,
+                  "docsExamined": 400,
+                  "inputStage": {
+                    "stage": "IXSCAN",
+                    "nReturned": 400,
+                    "executionTimeMillisEstimate": 0,
+                    "keyPattern": { "status": 1 },
+                    "indexName": "status_1",
+                    "direction": "forward",
+                    "indexBounds": { "status": ["[\"paid\", \"paid\"]"] },
+                    "keysExamined": 400
+                  }
+                }
+              }
+            }
+          },
+          "nReturned": 400,
+          "executionTimeMillisEstimate": 1
+        },
+        {
+          "$group": { "_id": "$customerId", "spent": { "$sum": "$total" } },
+          "maxAccumulatorMemoryUsageBytes": { "spent": 720 },
+          "usedDisk": false,
+          "spills": 0,
+          "nReturned": 9,
+          "executionTimeMillisEstimate": 2
+        }
+      ]
+    },
+    "shard02": {
+      "host": "shard02a:27018",
+      "explainVersion": "1",
+      "stages": [
+        {
+          "$cursor": {
+            "queryPlanner": {
+              "namespace": "shop.orders",
+              "indexFilterSet": false,
+              "parsedQuery": { "status": { "$eq": "paid" } },
+              "winningPlan": {
+                "stage": "PROJECTION_SIMPLE",
+                "transformBy": { "customerId": 1, "total": 1, "_id": 0 },
+                "inputStage": {
+                  "stage": "FETCH",
+                  "inputStage": {
+                    "stage": "IXSCAN",
+                    "keyPattern": { "status": 1 },
+                    "indexName": "status_1",
+                    "isMultiKey": false,
+                    "direction": "forward",
+                    "indexBounds": { "status": ["[\"paid\", \"paid\"]"] }
+                  }
+                }
+              },
+              "rejectedPlans": []
+            },
+            "executionStats": {
+              "executionSuccess": true,
+              "nReturned": 500,
+              "executionTimeMillis": 3,
+              "totalKeysExamined": 500,
+              "totalDocsExamined": 500,
+              "executionStages": {
+                "stage": "PROJECTION_SIMPLE",
+                "nReturned": 500,
+                "executionTimeMillisEstimate": 1,
+                "inputStage": {
+                  "stage": "FETCH",
+                  "nReturned": 500,
+                  "executionTimeMillisEstimate": 1,
+                  "docsExamined": 500,
+                  "inputStage": {
+                    "stage": "IXSCAN",
+                    "nReturned": 500,
+                    "executionTimeMillisEstimate": 0,
+                    "keyPattern": { "status": 1 },
+                    "indexName": "status_1",
+                    "direction": "forward",
+                    "keysExamined": 500
+                  }
+                }
+              }
+            }
+          },
+          "nReturned": 500,
+          "executionTimeMillisEstimate": 2
+        },
+        {
+          "$group": { "_id": "$customerId", "spent": { "$sum": "$total" } },
+          "usedDisk": false,
+          "spills": 0,
+          "nReturned": 11,
+          "executionTimeMillisEstimate": 3
+        }
+      ]
+    }
+  },
+  "serverInfo": { "host": "mongos", "port": 27017, "version": "6.0.14", "gitVersion": "25225db95574916fecab3af75b184409f8713aef" },
+  "ok": 1
+}

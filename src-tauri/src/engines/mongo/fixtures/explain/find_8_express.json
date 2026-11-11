@@ -1,0 +1,42 @@
+{
+  "explainVersion": "1",
+  "queryPlanner": {
+    "namespace": "shop.orders",
+    "parsedQuery": { "_id": { "$eq": 1042 } },
+    "indexFilterSet": false,
+    "queryHash": "E0C1A6B4",
+    "planCacheShapeHash": "E0C1A6B4",
+    "planCacheKey": "2C7B5A91",
+    "optimizationTimeMillis": 0,
+    "maxIndexedOrSolutionsReached": false,
+    "maxIndexedAndSolutionsReached": false,
+    "maxScansToExplodeReached": false,
+    "prunedSimilarIndexes": false,
+    "winningPlan": {
+      "isCached": false,
+      "stage": "EXPRESS_IXSCAN",
+      "keyPattern": "{ _id: 1 }",
+      "indexName": "_id_"
+    },
+    "rejectedPlans": []
+  },
+  "executionStats": {
+    "executionSuccess": true,
+    "nReturned": 1,
+    "executionTimeMillis": 0,
+    "totalKeysExamined": 1,
+    "totalDocsExamined": 1,
+    "executionStages": {
+      "isCached": false,
+      "stage": "EXPRESS_IXSCAN",
+      "keyPattern": "{ _id: 1 }",
+      "indexName": "_id_",
+      "keysExamined": 1,
+      "docsExamined": 1,
+      "nReturned": 1
+    }
+  },
+  "command": { "find": "orders", "filter": { "_id": 1042 }, "maxTimeMS": 30000, "$db": "shop" },
+  "serverInfo": { "host": "mongo-dev", "port": 27017, "version": "8.0.4", "gitVersion": "bc35ab4305d9920d9d0491c1c9ef9b72383d31f9" },
+  "ok": 1
+}

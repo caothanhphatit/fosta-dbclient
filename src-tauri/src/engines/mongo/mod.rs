@@ -6,7 +6,7 @@
 //! `mongo.updatePreview`, `mongo.updateMany`, `mongo.deleteMany`, and the aggregations `mongo.aggregatePreview`,
 //! `mongo.aggregate`, `mongo.schema`, the shape of a sample, and the index operations `mongo.indexes`, `mongo.createIndex`,
 //! `mongo.hideIndex` / `mongo.unhideIndex` and `mongo.dropIndex`, and the validation rules `mongo.validation`,
-//! `mongo.setValidation` and `mongo.validationCheck`).
+//! `mongo.setValidation` and `mongo.validationCheck`, and the query plans of `mongo.explain`).
 
 pub mod adapter;
 mod aggregate;
@@ -17,6 +17,7 @@ mod connect;
 #[cfg(test)]
 mod contract_tests;
 pub mod descriptor;
+mod explain;
 mod indexes;
 mod ops;
 mod schema;

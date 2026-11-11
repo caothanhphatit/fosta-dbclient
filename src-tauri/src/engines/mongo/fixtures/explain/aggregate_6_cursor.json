@@ -1,0 +1,80 @@
+{
+  "explainVersion": "1",
+  "stages": [
+    {
+      "$cursor": {
+        "queryPlanner": {
+          "namespace": "shop.orders",
+          "indexFilterSet": false,
+          "parsedQuery": {},
+          "queryHash": "5F5FCDAB",
+          "planCacheKey": "5F5FCDAB",
+          "maxIndexedOrSolutionsReached": false,
+          "maxIndexedAndSolutionsReached": false,
+          "maxScansToExplodeReached": false,
+          "winningPlan": {
+            "stage": "PROJECTION_SIMPLE",
+            "transformBy": { "customerId": 1, "total": 1, "_id": 0 },
+            "inputStage": { "stage": "COLLSCAN", "direction": "forward" }
+          },
+          "rejectedPlans": []
+        },
+        "executionStats": {
+          "executionSuccess": true,
+          "nReturned": 5000,
+          "executionTimeMillis": 9,
+          "totalKeysExamined": 0,
+          "totalDocsExamined": 5000,
+          "executionStages": {
+            "stage": "PROJECTION_SIMPLE",
+            "nReturned": 5000,
+            "executionTimeMillisEstimate": 2,
+            "works": 5001,
+            "advanced": 5000,
+            "transformBy": { "customerId": 1, "total": 1, "_id": 0 },
+            "inputStage": {
+              "stage": "COLLSCAN",
+              "nReturned": 5000,
+              "executionTimeMillisEstimate": 1,
+              "works": 5001,
+              "advanced": 5000,
+              "direction": "forward",
+              "docsExamined": 5000
+            }
+          }
+        }
+      },
+      "nReturned": 5000,
+      "executionTimeMillisEstimate": 3
+    },
+    {
+      "$group": { "_id": "$customerId", "spent": { "$sum": "$total" } },
+      "maxAccumulatorMemoryUsageBytes": { "spent": 1152 },
+      "totalOutputDataSizeBytes": 2976,
+      "usedDisk": false,
+      "spills": 0,
+      "spilledDataStorageSize": 0,
+      "numBytesSpilledEstimate": 0,
+      "spilledRecords": 0,
+      "nReturned": 12,
+      "executionTimeMillisEstimate": 8
+    },
+    {
+      "$sort": { "sortKey": { "spent": -1 } },
+      "totalDataSizeSortedBytesEstimate": 3456,
+      "usedDisk": false,
+      "spills": 0,
+      "nReturned": 12,
+      "executionTimeMillisEstimate": 8
+    }
+  ],
+  "serverInfo": { "host": "mongo-dev", "port": 27017, "version": "6.0.14", "gitVersion": "25225db95574916fecab3af75b184409f8713aef" },
+  "command": {
+    "aggregate": "orders",
+    "pipeline": [{ "$group": { "_id": "$customerId", "spent": { "$sum": "$total" } } }, { "$sort": { "spent": -1 } }],
+    "cursor": {},
+    "maxTimeMS": 30000,
+    "$db": "shop"
+  },
+  "ok": 1
+}

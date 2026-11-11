@@ -1,0 +1,146 @@
+{
+  "queryPlanner": {
+    "mongosPlannerVersion": 1,
+    "winningPlan": {
+      "stage": "SHARD_MERGE",
+      "shards": [
+        {
+          "explainVersion": "1",
+          "shardName": "shard01",
+          "connectionString": "shard01/shard01a:27018,shard01b:27018",
+          "serverInfo": { "host": "shard01a", "port": 27018, "version": "7.0.12", "gitVersion": "b6513ce0781db6818e24619e8a461eae90bc94fc" },
+          "namespace": "shop.orders",
+          "indexFilterSet": false,
+          "parsedQuery": { "status": { "$eq": "paid" } },
+          "queryHash": "3E61B2C0",
+          "planCacheKey": "0F9C2A44",
+          "optimizationTimeMillis": 0,
+          "maxIndexedOrSolutionsReached": false,
+          "maxIndexedAndSolutionsReached": false,
+          "maxScansToExplodeReached": false,
+          "winningPlan": {
+            "stage": "SHARDING_FILTER",
+            "inputStage": {
+              "stage": "FETCH",
+              "inputStage": {
+                "stage": "IXSCAN",
+                "keyPattern": { "status": 1 },
+                "indexName": "status_1",
+                "isMultiKey": false,
+                "direction": "forward",
+                "indexBounds": { "status": ["[\"paid\", \"paid\"]"] }
+              }
+            }
+          },
+          "rejectedPlans": [
+            {
+              "stage": "SHARDING_FILTER",
+              "inputStage": {
+                "stage": "FETCH",
+                "inputStage": {
+                  "stage": "IXSCAN",
+                  "keyPattern": { "status": 1, "placedAt": -1 },
+                  "indexName": "status_1_placedAt_-1",
+                  "isMultiKey": false,
+                  "direction": "forward",
+                  "indexBounds": { "status": ["[\"paid\", \"paid\"]"], "placedAt": ["[MaxKey, MinKey]"] }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "explainVersion": "1",
+          "shardName": "shard02",
+          "connectionString": "shard02/shard02a:27018,shard02b:27018",
+          "serverInfo": { "host": "shard02a", "port": 27018, "version": "7.0.12", "gitVersion": "b6513ce0781db6818e24619e8a461eae90bc94fc" },
+          "namespace": "shop.orders",
+          "indexFilterSet": false,
+          "parsedQuery": { "status": { "$eq": "paid" } },
+          "queryHash": "3E61B2C0",
+          "planCacheKey": "0F9C2A44",
+          "maxIndexedOrSolutionsReached": false,
+          "maxIndexedAndSolutionsReached": false,
+          "maxScansToExplodeReached": false,
+          "winningPlan": {
+            "stage": "SHARDING_FILTER",
+            "inputStage": { "stage": "COLLSCAN", "filter": { "status": { "$eq": "paid" } }, "direction": "forward" }
+          },
+          "rejectedPlans": []
+        }
+      ]
+    }
+  },
+  "executionStats": {
+    "nReturned": 1150,
+    "executionTimeMillis": 6,
+    "totalKeysExamined": 400,
+    "totalDocsExamined": 3000,
+    "executionStages": {
+      "stage": "SHARD_MERGE",
+      "nReturned": 1150,
+      "executionTimeMillis": 6,
+      "totalKeysExamined": 400,
+      "totalDocsExamined": 3000,
+      "totalChildMillis": 9,
+      "shards": [
+        {
+          "shardName": "shard01",
+          "executionSuccess": true,
+          "nReturned": 400,
+          "executionTimeMillis": 3,
+          "totalKeysExamined": 400,
+          "totalDocsExamined": 400,
+          "executionStages": {
+            "stage": "SHARDING_FILTER",
+            "nReturned": 400,
+            "executionTimeMillisEstimate": 2,
+            "chunkSkips": 0,
+            "inputStage": {
+              "stage": "FETCH",
+              "nReturned": 400,
+              "executionTimeMillisEstimate": 2,
+              "docsExamined": 400,
+              "inputStage": {
+                "stage": "IXSCAN",
+                "nReturned": 400,
+                "executionTimeMillisEstimate": 0,
+                "keyPattern": { "status": 1 },
+                "indexName": "status_1",
+                "direction": "forward",
+                "indexBounds": { "status": ["[\"paid\", \"paid\"]"] },
+                "keysExamined": 400,
+                "seeks": 1
+              }
+            }
+          }
+        },
+        {
+          "shardName": "shard02",
+          "executionSuccess": true,
+          "nReturned": 750,
+          "executionTimeMillis": 6,
+          "totalKeysExamined": 0,
+          "totalDocsExamined": 2600,
+          "executionStages": {
+            "stage": "SHARDING_FILTER",
+            "nReturned": 750,
+            "executionTimeMillisEstimate": 5,
+            "chunkSkips": 0,
+            "inputStage": {
+              "stage": "COLLSCAN",
+              "filter": { "status": { "$eq": "paid" } },
+              "nReturned": 750,
+              "executionTimeMillisEstimate": 5,
+              "direction": "forward",
+              "docsExamined": 2600
+            }
+          }
+        }
+      ]
+    }
+  },
+  "serverInfo": { "host": "mongos", "port": 27017, "version": "7.0.12", "gitVersion": "b6513ce0781db6818e24619e8a461eae90bc94fc" },
+  "command": { "find": "orders", "filter": { "status": "paid" }, "maxTimeMS": 30000, "$db": "shop" },
+  "ok": 1
+}

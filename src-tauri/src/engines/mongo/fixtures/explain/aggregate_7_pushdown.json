@@ -1,0 +1,94 @@
+{
+  "explainVersion": "2",
+  "stages": [
+    {
+      "$cursor": {
+        "queryPlanner": {
+          "namespace": "shop.orders",
+          "indexFilterSet": false,
+          "parsedQuery": { "status": { "$in": ["open", "paid", "shipped"] } },
+          "queryHash": "8E2B4C61",
+          "planCacheKey": "A39F0D17",
+          "optimizationTimeMillis": 0,
+          "maxIndexedOrSolutionsReached": false,
+          "maxIndexedAndSolutionsReached": false,
+          "maxScansToExplodeReached": false,
+          "winningPlan": {
+            "queryPlan": {
+              "stage": "GROUP",
+              "planNodeId": 2,
+              "inputStage": {
+                "stage": "IXSCAN",
+                "planNodeId": 1,
+                "keyPattern": { "status": 1 },
+                "indexName": "status_1",
+                "isMultiKey": false,
+                "direction": "forward",
+                "indexBounds": { "status": ["[\"open\", \"open\"]", "[\"paid\", \"paid\"]", "[\"shipped\", \"shipped\"]"] }
+              }
+            },
+            "slotBasedPlan": {
+              "slots": "$$RESULT=s9",
+              "stages": "[2] project [s9 = newObj(\"_id\", s5, \"n\", s8)] \n[2] group [s5] [s8 = count()] spillSlots[s7] mergingExprs[sum(s7)] \n[1] ixseek KS(...) KS(...) s4 [] @\"3b1d\" @\"status_1\" true \n"
+            }
+          },
+          "rejectedPlans": []
+        },
+        "executionStats": {
+          "executionSuccess": true,
+          "nReturned": 3,
+          "executionTimeMillis": 4,
+          "totalKeysExamined": 4812,
+          "totalDocsExamined": 0,
+          "executionStages": {
+            "stage": "project",
+            "planNodeId": 2,
+            "nReturned": 3,
+            "executionTimeMillisEstimate": 3,
+            "opens": 1,
+            "closes": 1,
+            "inputStage": {
+              "stage": "group",
+              "planNodeId": 2,
+              "nReturned": 3,
+              "executionTimeMillisEstimate": 3,
+              "usedDisk": false,
+              "spills": 0,
+              "inputStage": {
+                "stage": "ixseek",
+                "planNodeId": 1,
+                "nReturned": 4812,
+                "executionTimeMillisEstimate": 1,
+                "indexName": "status_1",
+                "numReads": 4815,
+                "seeks": 3
+              }
+            }
+          }
+        }
+      },
+      "nReturned": 3,
+      "executionTimeMillisEstimate": 3
+    },
+    {
+      "$sort": { "sortKey": { "n": -1 } },
+      "totalDataSizeSortedBytesEstimate": 612,
+      "usedDisk": false,
+      "spills": 0,
+      "nReturned": 3,
+      "executionTimeMillisEstimate": 3
+    }
+  ],
+  "serverInfo": { "host": "mongo-dev", "port": 27017, "version": "7.0.12", "gitVersion": "b6513ce0781db6818e24619e8a461eae90bc94fc" },
+  "command": {
+    "aggregate": "orders",
+    "pipeline": [
+      { "$match": { "status": { "$in": ["paid", "shipped", "open"] } } },
+      { "$group": { "_id": "$status", "n": { "$sum": 1 } } },
+      { "$sort": { "n": -1 } }
+    ],
+    "cursor": {},
+    "$db": "shop"
+  },
+  "ok": 1
+}

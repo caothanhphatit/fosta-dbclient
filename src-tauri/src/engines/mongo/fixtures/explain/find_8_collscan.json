@@ -1,0 +1,33 @@
+{
+  "explainVersion": "1",
+  "queryPlanner": {
+    "namespace": "shop.orders",
+    "parsedQuery": { "note": { "$regex": "late" } },
+    "indexFilterSet": false,
+    "queryHash": "1F0A9E33",
+    "planCacheShapeHash": "1F0A9E33",
+    "planCacheKey": "6B9D7A10",
+    "optimizationTimeMillis": 0,
+    "maxIndexedOrSolutionsReached": false,
+    "maxIndexedAndSolutionsReached": false,
+    "maxScansToExplodeReached": false,
+    "prunedSimilarIndexes": false,
+    "winningPlan": {
+      "isCached": false,
+      "stage": "COLLSCAN",
+      "filter": { "note": { "$regex": "late" } },
+      "direction": "forward"
+    },
+    "rejectedPlans": []
+  },
+  "queryShapeHash": "0E3A7C9B2D4F6A8E1C5B7D9F0A2C4E6B8D0F1A3C5E7B9D1F3A5C7E9B1D3F5A7C",
+  "command": { "find": "orders", "filter": { "note": { "$regex": "late" } }, "maxTimeMS": 30000, "$db": "shop" },
+  "serverInfo": { "host": "mongo-dev", "port": 27017, "version": "8.0.4", "gitVersion": "bc35ab4305d9920d9d0491c1c9ef9b72383d31f9" },
+  "serverParameters": {
+    "internalQueryFacetBufferSizeBytes": 104857600,
+    "internalQueryMaxBlockingSortMemoryUsageBytes": 104857600,
+    "internalQueryFrameworkControl": "trySbeRestricted",
+    "internalQueryPlannerIgnoreIndexWithCollationForRegex": 1
+  },
+  "ok": 1
+}
