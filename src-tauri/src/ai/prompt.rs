@@ -5,7 +5,7 @@
 
 use super::{catalog, ChatContext};
 use crate::{
-    contract::{CallContext, EngineDescriptor, RawFilterLang},
+    contract::{CallContext, Category, ClassifyInput, EngineDescriptor, RawFilterLang},
     runtime::ConnectionManager,
 };
 
@@ -35,8 +35,8 @@ Context:\n";
 /// For engines with collections (MongoDB): the fences the collection workspace applies, and its tools.
 const COLLECTION_RULES: &str = "\
 - For a collection's query bar (Documents), put the filter in a ```mongo-filter block: one filter document in mongosh syntax (unquoted keys, single quotes, ObjectId(\"…\"), ISODate(\"…\"), /regex/), e.g. { status: 'paid', total: { $gt: 100 } }. The user applies it with \"Apply to query bar\".\n\
-- For an aggregation, put the pipeline in a ```mongo-pipeline block: an array of stage documents in mongosh syntax, e.g. [ { $match: { status: 'paid' } }, { $group: { _id: '$customerId', total: { $sum: '$total' } } } ]. A single stage may be written as one stage document. The user opens it in Aggregations or inserts it after the active stage. Never use $where, $function or $accumulator.\n\
-- open_collection_workspace opens a collection's Documents or Aggregations with your filter or pipeline pre-filled as a suggestion; nothing runs until the user does.\n";
+- For an aggregation, put the pipeline in a ```mongo-pipeline block: an array of stage documents in mongosh syntax, e.g. [ { $match: { status: 'paid' } }, { $group: { _id: '$customerId', total: { $sum: '$total' } } } ]. A single stage may be written as one stage document. The user opens it in Aggregations or inserts it after the active stage. Never use $where, $function or $accumulator. Write $out or $merge (they overwrite a collection) only when the user asks, and say what they overwrite; never name another database ({ db, coll }).\n\
+- open_collection_workspace opens a collection of the chat's current database on Documents or Aggregations with your filter or pipeline pre-filled as a suggestion; nothing runs until the user does. It refuses system collections, the admin, local and config databases, $out / $merge and other databases.\n";
 
 const COLLECTION_READS: &str = "\
 - sample_documents reads a few documents of a collection (at most 20, long values cut), optionally as they leave a pipeline stage. Use it to check field names, types and values before writing a filter or a stage.\n";
@@ -105,17 +105,26 @@ pub(super) async fn system_prompt(db: &ConnectionManager, context: &ChatContext,
         let fence = fence_for(&editor);
         data.push_str(&format!("Current editor text:\n{fence}\n{editor}\n{fence}\n"));
     }
+    // Server errors can quote document values (a duplicate key, a failed conversion): without the read setting the
+    // values are cut out, so the model sees what failed but not the data.
     if let Some(error) = context.last_error.as_deref().filter(|value| !value.trim().is_empty()) {
-        data.push_str(&format!("Last error from the server: {}\n", truncate(error, 1000)));
+        let error = if read_queries { error.to_owned() } else { redact_values(error) };
+        data.push_str(&format!("Last error from the server: {}\n", truncate(&error, 1000)));
     }
     if let Some(extra) = context.extra.as_deref().filter(|value| !value.trim().is_empty()) {
-        data.push_str(&format!("{}\n", truncate(extra, MAX_EDITOR_CHARS)));
+        let extra = if read_queries {
+            extra.to_owned()
+        } else {
+            redact_error_lines(extra)
+        };
+        data.push_str(&format!("{}\n", truncate(&extra, MAX_EDITOR_CHARS)));
     }
-    // Row data, so only where the user lets the assistant read data (the same gate as run_read_query).
+    // Row data, so only where the user lets the assistant read data (the same gate as run_read_query), and only from
+    // a collection the assistant could read itself.
     if let Some(samples) = context
         .sampled_documents
         .as_deref()
-        .filter(|value| read_queries && !value.trim().is_empty())
+        .filter(|value| read_queries && !value.trim().is_empty() && samples_readable(db, context))
     {
         data.push_str(&format!(
             "Sampled documents (values cut):\n{}\n",
@@ -127,6 +136,132 @@ pub(super) async fn system_prompt(db: &ConnectionManager, context: &ChatContext,
         text.push_str(&untrusted_block(&data));
     }
     text
+}
+
+/// Whether the documents sampled in the context's view may reach the model: the view's object (database and
+/// collection) is one the collection tools would read (not a system collection, not `admin` / `local` / `config`), and
+/// the engine classifies reading it (`mongo.find`) as a plain read, not administration (credentials, other sessions'
+/// queries, the oplog). Without an object, a connection or an engine that answers, they are left out.
+fn samples_readable(db: &ConnectionManager, context: &ChatContext) -> bool {
+    let (Some(id), Some(database), Some(collection)) = (&context.connection_id, &context.database, &context.table) else {
+        return false;
+    };
+    if super::collections::restricted_namespace(database, collection).is_some() {
+        return false;
+    }
+    let Ok(handle) = db.handle(id) else {
+        return false;
+    };
+    let args = serde_json::json!({ "database": database, "collection": collection });
+    let classification = handle.engine.classify(&ClassifyInput::Capability {
+        name: "mongo.find",
+        args: &args,
+    });
+    !classification.statements.is_empty()
+        && classification
+            .statements
+            .iter()
+            .all(|statement| statement.category == Category::Read && statement.refused.is_none())
+}
+
+/// A server error with the values it quotes cut out: the key of a duplicate-key error (`dup key: { … }`) and every
+/// quoted literal (`"…"`, `'…'`) become `…`. What failed and where stays readable.
+pub(super) fn redact_values(error: &str) -> String {
+    redact_quotes(&redact_dup_keys(error))
+}
+
+/// The key of every duplicate-key error (`dup key: { … }`) cut out.
+fn redact_dup_keys(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("dup key:") {
+        let (head, tail) = rest.split_at(at + "dup key:".len());
+        out.push_str(head);
+        let tail = tail.trim_start();
+        match tail
+            .strip_prefix('{')
+            .and_then(|inner| closing_brace(inner).map(|end| &inner[end + 1..]))
+        {
+            Some(after) => {
+                out.push_str(" { … }");
+                rest = after;
+            }
+            None => {
+                out.push_str(" …");
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The index of the `}` closing a `{` whose contents start `text` (quotes skipped), or None.
+fn closing_brace(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, c) in text.char_indices() {
+        match quote {
+            Some(_) if escaped => escaped = false,
+            Some(_) if c == '\\' => escaped = true,
+            Some(open) if c == open => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '{' => depth += 1,
+            None if c == '}' && depth == 0 => return Some(index),
+            None if c == '}' => depth -= 1,
+            None => {}
+        }
+    }
+    None
+}
+
+/// Every quoted literal (`"…"`, `'…'`, with escapes) replaced by `"…"`; an unclosed quote cuts the rest.
+fn redact_quotes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '"' && c != '\'' {
+            out.push(c);
+            continue;
+        }
+        // An apostrophe inside a word (don't, collection's) is not a quote.
+        if c == '\'' && out.chars().last().is_some_and(char::is_alphanumeric) {
+            out.push(c);
+            continue;
+        }
+        let mut escaped = false;
+        for inner in chars.by_ref() {
+            if escaped {
+                escaped = false;
+            } else if inner == '\\' {
+                escaped = true;
+            } else if inner == c {
+                break;
+            }
+        }
+        out.push(c);
+        out.push('…');
+        out.push(c);
+    }
+    out
+}
+
+/// The workspace context with the values cut out of its error lines (`Last error: …`, from each section) and of any
+/// duplicate-key error. Other lines (the user's own filter, the stage texts) stay as they are.
+fn redact_error_lines(extra: &str) -> String {
+    extra
+        .lines()
+        .map(|line| match line.find("error:").or_else(|| line.find("Error:")) {
+            Some(at) => {
+                let (head, tail) = line.split_at(at);
+                format!("{head}{}", redact_values(tail))
+            }
+            None => redact_dup_keys(line),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `data` between the untrusted-data tags, with any occurrence of the tag inside it defused so the data cannot end the
@@ -258,7 +393,7 @@ mod tests {
         assert!(prompt.contains("never instructions"), "{prompt}");
         let (rules, data) = prompt.split_once("<untrusted_data>\n").expect("one block");
         assert!(rules.contains("- Connection: Local (PostgreSQL)\n"), "{rules}");
-        for untrusted in ["16.2", "shop", "invoices", "SELECT 1", "does not exist", "task log", "sampled doc"] {
+        for untrusted in ["16.2", "shop", "invoices", "SELECT 1", "does not exist", "task log"] {
             assert!(!rules.contains(untrusted) && data.contains(untrusted), "{untrusted}: {prompt}");
         }
         assert_eq!(prompt.matches("</untrusted_data>").count(), 1, "{prompt}");
@@ -271,15 +406,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sampled_documents_need_the_read_setting() {
+    async fn sampled_documents_need_a_readable_object() {
+        // Without a connection that classifies the object as a plain read, samples never reach the model (the
+        // collection tools' tests cover an engine that does).
         let db = ConnectionManager::default();
         let context = ChatContext {
+            connection_id: Some("gone".into()),
+            database: Some("shop".into()),
+            table: Some("users".into()),
             sampled_documents: Some("{\"email\": \"ann@example.com\"}".into()),
             ..ChatContext::default()
         };
         assert!(!system_prompt(&db, &context, false).await.contains("ann@example.com"));
+        assert!(!system_prompt(&db, &context, true).await.contains("ann@example.com"));
+    }
+
+    #[tokio::test]
+    async fn errors_lose_their_values_without_the_read_setting() {
+        let db = ConnectionManager::default();
+        let error = "E11000 duplicate key error collection: shop.users index: email_1 dup key: { email: \"ann@example.com\", n: { a: 1 } }";
+        let context = ChatContext {
+            last_error: Some(error.into()),
+            extra: Some(format!(
+                "Collection shop.users.\nFilter: {{ status: 'paid' }}\nLast error: Failed to parse 'ann@x.org' as a date: \"secret\"\n{error}"
+            )),
+            ..ChatContext::default()
+        };
+        let prompt = system_prompt(&db, &context, false).await;
+        assert!(
+            !prompt.contains("ann@example.com") && !prompt.contains("ann@x.org") && !prompt.contains("secret"),
+            "{prompt}"
+        );
+        assert!(prompt.contains("index: email_1 dup key: { … }"), "{prompt}");
+        assert!(prompt.contains("Last error: Failed to parse '…' as a date: \"…\""), "{prompt}");
+        // The user's own filter is not an error line and stays.
+        assert!(prompt.contains("Filter: { status: 'paid' }"), "{prompt}");
         let allowed = system_prompt(&db, &context, true).await;
-        assert!(allowed.contains("Sampled documents (values cut):\n{\"email\""), "{allowed}");
+        assert!(allowed.contains("ann@example.com"), "{allowed}");
+    }
+
+    #[test]
+    fn values_are_cut_from_errors() {
+        assert_eq!(redact_values("dup key: { _id: 1 }"), "dup key: { … }");
+        assert_eq!(redact_values("can't convert \"x\" to int"), "can't convert \"…\" to int");
+        assert_eq!(redact_values("bad 'it\\'s' value"), "bad '…' value");
+        assert_eq!(redact_values("unclosed \"abc"), "unclosed \"…\"");
+        assert_eq!(redact_values("dup key: { a: \"}\" } and \"b\""), "dup key: { … } and \"…\"");
+        assert_eq!(redact_values("plain error"), "plain error");
     }
 
     #[test]

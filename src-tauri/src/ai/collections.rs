@@ -1,8 +1,12 @@
 //! The collection tools, offered on connections whose engine filters with MongoDB JSON (`FilterSupport::raw`):
 //!
 //! - `open_collection_workspace` (OpenView) opens a collection's workspace on Documents or Aggregations with a filter,
-//!   sort and projection, or pipeline stages, pre-filled and marked as suggested by the assistant. Nothing runs: the
-//!   user reviews the suggestion and runs it.
+//!   sort and projection, or pipeline stages, pre-filled and marked as suggested by the assistant. Nothing runs, not
+//!   even Documents' first page: the user reviews the suggestion and runs it.
+//!
+//! Both are pinned to the chat's connection and database, refuse system collections (`system.*`) and the `admin`,
+//! `local` and `config` databases, and refuse suggestions or pipelines that write (`$out`, `$merge`), run JavaScript on
+//! the server, or name another database (`{ db, coll }` in `$lookup`, `$unionWith`, `$merge.into`).
 //! - `sample_documents` (ReadRows, only where the user lets the assistant read data, like `run_read_query`) reads at
 //!   most [`MAX_SAMPLE`] documents of the chat's database through the gateway (`gateway::assistant::invoke_read`:
 //!   `mongo.find`, or `mongo.aggregatePreview` for what leaves a pipeline stage on a bounded sample). Values are cut
@@ -33,6 +37,11 @@ const MAX_COLUMNS: usize = 12;
 const SECTIONS: [&str; 2] = ["documents", "aggregations"];
 /// Operators that run JavaScript on the server; a suggestion holding one is refused (the query bar refuses it too).
 const DENIED: [&str; 3] = ["$where", "$function", "$accumulator"];
+/// Stages that write into a collection (`$out` drops and replaces its target); the tools never suggest or run them.
+const WRITE_STAGES: [&str; 2] = ["$out", "$merge"];
+/// Databases the collection tools never open or read: users and credentials (`admin`), the oplog and the startup log
+/// (`local`), the cluster's metadata and sessions (`config`).
+const RESTRICTED_DATABASES: [&str; 3] = ["admin", "local", "config"];
 
 /// Whether the chat's connection has collections (its engine filters with MongoDB JSON).
 pub(super) fn has_collections(db: &ConnectionManager, context: &ChatContext) -> bool {
@@ -46,7 +55,7 @@ pub(super) fn has_collections(db: &ConnectionManager, context: &ChatContext) -> 
 pub(super) fn definitions(read_rows: bool) -> Vec<ToolSpec> {
     let names = json!({
         "connection": { "type": "string", "description": "Leave out: always the chat's connection." },
-        "database": { "type": "string", "description": "Database name; defaults to the current one." },
+        "database": { "type": "string", "description": "Leave out: always the chat's current database (another one is refused)." },
         "collection": { "type": "string", "description": "Collection (or view) name; defaults to the one the user is looking at." }
     });
     let mut open = names.clone();
@@ -75,7 +84,7 @@ pub(super) fn definitions(read_rows: bool) -> Vec<ToolSpec> {
     );
     let mut tools = vec![ToolSpec {
         name: OPEN_WORKSPACE,
-        description: "Opens a collection's workspace in the app on its Documents section (query bar) or its Aggregations section (pipeline builder), with your filter, sort and projection, or your pipeline stages, pre-filled and marked as suggested by you. Nothing runs: the user reviews it and runs it. The user sees the documents; you do not.",
+        description: "Opens a collection's workspace of the chat's current database in the app on its Documents section (query bar) or its Aggregations section (pipeline builder), with your filter, sort and projection, or your pipeline stages, pre-filled and marked as suggested by you. Nothing runs: the user reviews it and runs it. The user sees the documents; you do not. System collections, the admin, local and config databases, stages that write ($out, $merge) and stages naming another database are refused.",
         schema: json!({ "type": "object", "properties": open, "required": ["section"], "additionalProperties": false }),
     }];
     if read_rows {
@@ -155,25 +164,131 @@ fn collection(input: &Value, context: &ChatContext) -> Result<String, String> {
         .ok_or_else(|| String::from("`collection` is required"))
 }
 
+/// The chat's own database: the collection tools are pinned to it, so data cannot point the model at another one.
+fn pinned_database(input: &Value, context: &ChatContext, tool: &str) -> Result<String, String> {
+    let database = context
+        .database
+        .clone()
+        .ok_or("Refused: no database is selected in the chat. Ask the user to open the collection first.")?;
+    if let Some(asked) = text(input, "database").filter(|asked| *asked != database) {
+        return Err(format!(
+            "Refused: {tool} works only in the chat's current database `{database}`, not `{asked}`. Leave `database` \
+             out; the user opens other databases themselves."
+        ));
+    }
+    Ok(database)
+}
+
+/// Whether the collection tools refuse this namespace: system collections (`system.*`: users, roles, the profiler) and
+/// the `admin`, `local` and `config` databases. Also used for the sampled documents of the prompt.
+pub(super) fn restricted_namespace(database: &str, collection: &str) -> Option<String> {
+    let database = database.trim();
+    let collection = collection.trim();
+    if RESTRICTED_DATABASES
+        .iter()
+        .any(|restricted| restricted.eq_ignore_ascii_case(database))
+    {
+        return Some(format!(
+            "Refused: the `{database}` database holds server internals (users, the oplog, sessions); the assistant does \
+             not open or read it."
+        ));
+    }
+    if collection.starts_with("system.") {
+        return Some(format!(
+            "Refused: `{collection}` is a system collection; the assistant does not open or read system collections."
+        ));
+    }
+    None
+}
+
+/// Whether `text` holds `operator` as a whole word (`$out`, not `$outcome`).
+fn mentions(text: &str, operator: &str) -> bool {
+    text.match_indices(operator).any(|(at, _)| {
+        !text[at + operator.len()..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_alphanumeric() || next == '_')
+    })
+}
+
+/// Whether mongosh `text` has `key` as an object key (`{ db: …`, `, "db": …`), not as part of a longer name or a value.
+fn has_key(text: &str, key: &str) -> bool {
+    text.match_indices(key).any(|(at, _)| {
+        let before = text[..at].trim_end_matches(['"', '\'']).trim_end();
+        let after = text[at + key.len()..].trim_start_matches(['"', '\'']).trim_start();
+        (before.ends_with('{') || before.ends_with(',')) && after.starts_with(':')
+    })
+}
+
+/// The refusal for a suggestion (mongosh text): server-side JavaScript, a stage that writes, or a `{ db, coll }` that
+/// names a database (the database cannot be compared reliably in mongosh text, so any is refused).
+fn refuse_text(text: &str) -> Result<(), String> {
+    if let Some(operator) = DENIED.iter().find(|operator| text.contains(*operator)) {
+        return Err(format!(
+            "Refused: {operator} runs JavaScript on the server, which the app does not run."
+        ));
+    }
+    if let Some(stage) = WRITE_STAGES.iter().find(|stage| mentions(text, stage)) {
+        return Err(format!(
+            "Refused: {stage} writes into a collection ({}); suggestions only read. If the user asked for it, write the \
+             pipeline in a ```mongo-pipeline block and say what it overwrites.",
+            if *stage == "$out" {
+                "it drops and replaces the target"
+            } else {
+                "it changes the target"
+            }
+        ));
+    }
+    if has_key(text, "db") && has_key(text, "coll") {
+        return Err(String::from(
+            "Refused: a stage that names a database ({ db, coll }) reaches outside the chat's database. Name the \
+             collection alone (it is read in the chat's database).",
+        ));
+    }
+    Ok(())
+}
+
+/// The refusal for a pipeline given as JSON: a stage that writes, or a `{ db, coll }` naming another database than the
+/// chat's (`$lookup` / `$graphLookup` `from`, `$unionWith`, `$merge.into`, `$out`), at any depth.
+fn refuse_json(value: &Value, database: &str) -> Result<(), String> {
+    match value {
+        Value::Object(map) => {
+            if let Some(stage) = WRITE_STAGES.iter().find(|stage| map.contains_key(**stage)) {
+                return Err(format!("Refused: {stage} writes into a collection; sample_documents only reads."));
+            }
+            if let Some(other) = map.get("db").and_then(Value::as_str).filter(|other| *other != database) {
+                if map.contains_key("coll") {
+                    return Err(format!(
+                        "Refused: the pipeline reads `{other}`, another database than the chat's `{database}`. Name \
+                         collections of `{database}` alone."
+                    ));
+                }
+            }
+            map.values().try_for_each(|inner| refuse_json(inner, database))
+        }
+        Value::Array(items) => items.iter().try_for_each(|inner| refuse_json(inner, database)),
+        _ => Ok(()),
+    }
+}
+
 fn suggestion(input: &Value, key: &str) -> Result<Option<String>, String> {
     let Some(value) = text(input, key) else {
         return Ok(None);
     };
-    match DENIED.iter().find(|operator| value.contains(*operator)) {
-        Some(operator) => Err(format!(
-            "Refused: {operator} runs JavaScript on the server, which the app does not run."
-        )),
-        None => Ok(Some(value)),
-    }
+    refuse_text(&value)?;
+    Ok(Some(value))
 }
 
-/// `open_collection_workspace`: the view request only, nothing is read or run.
+/// `open_collection_workspace`: the view request only, nothing is read or run. Pinned to the chat's connection and
+/// database; system collections and the admin, local and config databases are refused. The UI opens the section
+/// without running it (Documents waits for Find), so what the assistant opens never runs on its own.
 pub(super) fn open_workspace(context: &ChatContext, input: &Value, events: &dyn ChatSink) -> Result<String, String> {
     check_connection(input, context)?;
-    let database = text(input, "database")
-        .or_else(|| context.database.clone())
-        .ok_or("No database selected; pass `database`.")?;
+    let database = pinned_database(input, context, OPEN_WORKSPACE)?;
     let collection = collection(input, context)?;
+    if let Some(refused) = restricted_namespace(&database, &collection) {
+        return Err(refused);
+    }
     let section = text(input, "section").unwrap_or_else(|| String::from("documents"));
     if !SECTIONS.contains(&section.as_str()) {
         return Err(format!("`section` is documents or aggregations, not `{section}`"));
@@ -190,13 +305,12 @@ pub(super) fn open_workspace(context: &ChatContext, input: &Value, events: &dyn 
             for stage in stages {
                 let text = match stage {
                     Value::String(text) => text.trim().to_owned(),
-                    other => other.to_string(),
+                    other => {
+                        refuse_json(other, &database)?;
+                        other.to_string()
+                    }
                 };
-                if let Some(operator) = DENIED.iter().find(|operator| text.contains(*operator)) {
-                    return Err(format!(
-                        "Refused: {operator} runs JavaScript on the server, which the app does not run."
-                    ));
-                }
+                refuse_text(&text)?;
                 if !text.is_empty() {
                     texts.push(text);
                 }
@@ -233,7 +347,10 @@ pub(super) fn open_workspace(context: &ChatContext, input: &Value, events: &dyn 
              reviews it and runs it. You do not see the documents."
         )
     } else {
-        format!("Opened the {section} of {database}.{collection}. The user sees the documents; you do not.")
+        format!(
+            "Opened the {section} of {database}.{collection}. Nothing has run: the user runs it. You do not see the \
+             documents."
+        )
     })
 }
 
@@ -265,17 +382,11 @@ pub(super) async fn sample(
     )?;
     check_connection(input, context)?;
     // Pinned to the chat's database, like run_read_query: data cannot point the model at another one.
-    let database = context
-        .database
-        .clone()
-        .ok_or("Refused: no database is selected in the chat. Ask the user to open the collection first.")?;
-    if let Some(asked) = text(input, "database").filter(|asked| *asked != database) {
-        return Err(format!(
-            "Refused: sample_documents reads only in the chat's current database `{database}`, not `{asked}`. Leave \
-             `database` out."
-        ));
-    }
+    let database = pinned_database(input, context, SAMPLE_DOCUMENTS)?;
     let collection = collection(input, context)?;
+    if let Some(refused) = restricted_namespace(&database, &collection) {
+        return Err(refused);
+    }
     let limit = input
         .get("limit")
         .and_then(Value::as_u64)
@@ -291,6 +402,9 @@ pub(super) async fn sample(
         Some(Value::Array(stages)) => Some(stages),
         Some(_) => return Err(String::from("`pipeline` is an array of stage documents")),
     };
+    if let Some(stages) = &stages {
+        stages.iter().try_for_each(|stage| refuse_json(stage, &database))?;
+    }
     let (operation, args, statement) = match stages {
         None => {
             let shown = filter.clone().unwrap_or_else(|| json!({}));
@@ -514,6 +628,10 @@ mod tests {
 
         fn classify(&self, input: &ClassifyInput<'_>) -> Classification {
             match input {
+                // A collection the engine rates as administration (as MongoDB does credentials or the oplog).
+                ClassifyInput::Capability { args, .. } if args["collection"] == "audited" => {
+                    Classification::single(StatementInfo::new(Category::Admin, "x", "x"))
+                }
                 ClassifyInput::Capability { name, .. } if matches!(*name, "mongo.find" | "mongo.aggregatePreview") => {
                     Classification::single(StatementInfo::new(Category::Read, name, name))
                 }
@@ -643,6 +761,61 @@ mod tests {
         drop(db);
     }
 
+    #[test]
+    fn opening_a_workspace_is_pinned_and_refuses_internals_and_writes() {
+        let (_, _, context) = setup();
+        let quiet = |_: ChatEvent| {};
+        let refused = |context: &ChatContext, input: Value| open_workspace(context, &input, &quiet).unwrap_err();
+        // Another database (the chat's is shop), system collections and server databases.
+        assert!(refused(
+            &context,
+            json!({ "section": "documents", "database": "admin", "collection": "system.users" })
+        )
+        .contains("current database `shop`"));
+        assert!(refused(&context, json!({ "section": "documents", "database": "billing" })).contains("current database `shop`"));
+        assert!(refused(&context, json!({ "section": "documents", "collection": "system.profile" })).contains("system collection"));
+        for database in ["admin", "local", "config", "Admin"] {
+            let inside: ChatContext =
+                serde_json::from_value(json!({ "connectionId": "m", "database": database, "table": "anything" })).unwrap();
+            assert!(
+                refused(&inside, json!({ "section": "documents" })).contains("server internals"),
+                "{database}"
+            );
+        }
+        let nowhere: ChatContext = serde_json::from_value(json!({ "connectionId": "m", "table": "orders" })).unwrap();
+        assert!(refused(&nowhere, json!({ "section": "documents", "database": "shop" })).contains("no database is selected"));
+        // Stages that write, as text or JSON, and stages naming a database.
+        for pipeline in [
+            json!(["{ $match: {} }", "{ $out: 'orders' }"]),
+            json!(["{ \"$merge\": { \"into\": \"totals\" } }"]),
+            json!([{ "$out": "orders" }]),
+            json!(["{ $lookup: { from: { db: 'billing', coll: 'cards' }, localField: 'c', foreignField: '_id', as: 'c' } }"]),
+            json!(["{ $unionWith: { \"db\": \"shop\", \"coll\": \"x\" } }"]),
+            json!([{ "$unionWith": { "db": "billing", "coll": "cards" } }]),
+        ] {
+            let why = refused(&context, json!({ "section": "aggregations", "pipeline": pipeline }));
+            assert!(why.starts_with("Refused:"), "{pipeline}: {why}");
+        }
+        // Field names that only look like them are fine.
+        let fine = json!({ "section": "aggregations", "pipeline": ["{ $project: { outcome: '$outcome', db_name: 1, mergeKey: '$merged' } }", "{ $group: { _id: '$db' } }"] });
+        assert!(open_workspace(&context, &fine, &quiet).is_ok());
+        assert!(open_workspace(&context, &json!({ "section": "documents", "filter": "{ db: 'x' }" }), &quiet).is_ok());
+    }
+
+    #[test]
+    fn suggestion_text_checks() {
+        assert!(mentions("{ $out: 'x' }", "$out") && !mentions("'$outcome'", "$out"));
+        assert!(has_key("{ db: 'a', coll: 'b' }", "db") && has_key("{\"x\": 1, \"db\" : 2}", "db"));
+        assert!(!has_key("{ admin_db: 1 }", "db") && !has_key("{ a: 'db' }", "db"));
+        assert!(refuse_json(&json!({ "$lookup": { "from": { "db": "shop", "coll": "x" } } }), "shop").is_ok());
+        assert!(refuse_json(
+            &json!({ "$facet": { "a": [{ "$lookup": { "from": { "db": "other", "coll": "x" } } }] } }),
+            "shop"
+        )
+        .is_err());
+        assert!(restricted_namespace("shop", "orders").is_none());
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn sampling_reads_through_the_gateway_with_cut_values() {
         let (db, engine, context) = setup();
@@ -653,6 +826,21 @@ mod tests {
         let allowed = reads();
         let other = sample(&db, &context, Some(&allowed), &json!({ "database": "admin" }), &quiet).await;
         assert!(other.unwrap_err().contains("current database `shop`"));
+        for input in [
+            json!({ "collection": "system.users" }),
+            json!({ "pipeline": [{ "$unionWith": { "db": "admin", "coll": "system.users" } }] }),
+            json!({ "pipeline": [{ "$lookup": { "from": { "db": "billing", "coll": "cards" }, "localField": "a", "foreignField": "b", "as": "c" } }] }),
+            json!({ "pipeline": [{ "$match": {} }, { "$out": "orders" }] }),
+            json!({ "pipeline": "[{ \"$merge\": { \"into\": \"orders\" } }]" }),
+        ] {
+            let refused = sample(&db, &context, Some(&allowed), &input, &quiet).await.unwrap_err();
+            assert!(refused.starts_with("Refused:"), "{input}: {refused}");
+        }
+        let inside: ChatContext = serde_json::from_value(json!({ "connectionId": "m", "database": "local", "table": "oplog.rs" })).unwrap();
+        assert!(sample(&db, &inside, Some(&allowed), &json!({}), &quiet)
+            .await
+            .unwrap_err()
+            .contains("server internals"));
         assert!(engine.calls.lock().unwrap().is_empty(), "refused before the engine");
 
         let seen = Arc::new(Mutex::new(Vec::<Value>::new()));
@@ -718,6 +906,38 @@ mod tests {
         // Other engines do not get them.
         let plain = super::super::prompt::system_prompt(&db, &ChatContext::default(), true).await;
         assert!(!plain.contains("mongo-filter"), "{plain}");
+    }
+
+    #[tokio::test]
+    async fn sampled_documents_reach_the_prompt_only_from_a_readable_collection() {
+        let (db, _, context) = setup();
+        let with = |database: &str, table: &str| ChatContext {
+            database: Some(database.into()),
+            table: Some(table.into()),
+            sampled_documents: Some("{\"email\": \"ann@example.com\"}".into()),
+            ..context.clone()
+        };
+        let prompt = |context: ChatContext, reads: bool| {
+            let db = &db;
+            async move { super::super::prompt::system_prompt(db, &context, reads).await }
+        };
+        let allowed = prompt(with("shop", "orders"), true).await;
+        assert!(allowed.contains("Sampled documents (values cut):\n{\"email\""), "{allowed}");
+        // Not without the read setting, not from system collections or server databases, not from what the engine
+        // rates as administration.
+        assert!(!prompt(with("shop", "orders"), false).await.contains("ann@example.com"));
+        for (database, table) in [
+            ("admin", "system.users"),
+            ("shop", "system.profile"),
+            ("local", "oplog.rs"),
+            ("config", "x"),
+            ("shop", "audited"),
+        ] {
+            assert!(
+                !prompt(with(database, table), true).await.contains("ann@example.com"),
+                "{database}.{table}"
+            );
+        }
     }
 
     #[test]
