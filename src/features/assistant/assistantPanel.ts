@@ -15,6 +15,8 @@ import { capabilityOf, defaultLanguage, engineInfo, isKnownFence, languageForFen
 import { ChatRun, queryToolCall } from "./chatRun";
 import { ModelSwitcher } from "./modelSwitcher";
 import type { ObjectRef } from "../../core/contract";
+import type { ProfileStatus } from "../../core/profileTypes";
+import { staleBadge } from "./profileView";
 import type { AiActive, AiConnection, AppConfig, ChatContext, ChatEvent, ChatMessage, DriverId, UiAction } from "../../core/types";
 
 /** What the UI knows about where the user is. Getters are read at send time. */
@@ -54,6 +56,12 @@ export interface AssistantHost {
   editProvider(connection: AiConnection | null): void;
   configChanged(config: AppConfig): void;
   close(): void;
+  /** Opens "Learn this database" for `database` of `connectionId` (a refresh when a profile exists). */
+  learn(connectionId: string, database: string): void;
+  /** Opens the "What the assistant knows" tab. */
+  openKnowledge(connectionId: string, database: string): void;
+  /** Whether the settings let the assistant learn databases on `connectionId`. */
+  canLearn(connectionId: string): boolean;
 }
 
 interface QuickAction {
@@ -94,6 +102,9 @@ export class AssistantPanel {
   private readonly switcher: ModelSwitcher;
   private configured = false;
   private activeRequest: string | null = null;
+  private readonly learnButton: HTMLButtonElement;
+  /** The profile status of the chat's connection and database (`key`), fetched when they change. */
+  private knowledge: { key: string; status: ProfileStatus | null } = { key: "", status: null };
 
   constructor(host: AssistantHost) {
     this.host = host;
@@ -115,6 +126,10 @@ export class AssistantPanel {
       focusComposer: () => this.composer.focus(),
     });
 
+    this.learnButton = iconButton("book", "Learn this database", () => {
+      const context = this.host.context();
+      if (context.connectionId) this.host.learn(context.connectionId, context.database ?? "");
+    });
     const header = h(
       "div",
       { class: "assistant-header" },
@@ -122,6 +137,7 @@ export class AssistantPanel {
       h("span", { class: "assistant-title" }, "Assistant"),
       this.modelBadge,
       spacer(),
+      this.learnButton,
       iconButton("plus", "New conversation", () => this.reset()),
       iconButton("settings", "LLM providers", () => host.configure()),
       iconButton("x", "Close panel", () => host.close()),
@@ -184,8 +200,89 @@ export class AssistantPanel {
   /** Re-reads the host context: chip under the header and quick actions. */
   refreshContext(): void {
     const context = this.host.context();
-    this.contextRow.replaceChildren(...contextChip(context));
-    this.actions.replaceChildren(...this.quickActions(context).map((action) => this.actionChip(action)));
+    const key = context.connectionId ? `${context.connectionId}|${context.database ?? ""}` : "";
+    if (key !== this.knowledge.key) {
+      this.knowledge = { key, status: null };
+      if (context.connectionId) void this.loadKnowledge(context.connectionId, context.database ?? "", false);
+    }
+    this.renderContext(context);
+  }
+
+  /** Re-reads what the assistant knows about the chat's database (after learning, deleting or editing it). */
+  knowledgeChanged(connectionId: string, database: string): void {
+    if (this.knowledge.key === `${connectionId}|${database}`) void this.loadKnowledge(connectionId, database, true);
+  }
+
+  /** A status read elsewhere ("What the assistant knows") for the chat's database: shown without asking again. */
+  setKnowledge(connectionId: string, database: string, status: ProfileStatus): void {
+    const key = `${connectionId}|${database}`;
+    if (this.knowledge.key !== key) return;
+    this.knowledge = { key, status };
+    this.renderContext(this.host.context());
+  }
+
+  /** Checks again whether the chat's database changed (the panel was opened; the backend caches the answer). */
+  recheckKnowledge(): void {
+    const context = this.host.context();
+    if (context.connectionId) void this.loadKnowledge(context.connectionId, context.database ?? "", false);
+  }
+
+  private async loadKnowledge(connectionId: string, database: string, force: boolean): Promise<void> {
+    const key = `${connectionId}|${database}`;
+    let status: ProfileStatus | null = null;
+    try {
+      status = await api.profileStatus(connectionId, database, force);
+    } catch {
+      // Unknown: no badge and no chip.
+    }
+    if (this.knowledge.key !== key) return;
+    this.knowledge = { key, status };
+    this.renderContext(this.host.context());
+  }
+
+  private renderContext(context: AssistantContext): void {
+    const connectionId = context.connectionId;
+    // An engine with several databases learns one of them: the chat needs one picked.
+    const needsDatabase = Boolean(connectionId) && !context.database && capabilityOf(connectionId!, "multipleDatabases");
+    const allowed = connectionId ? this.host.canLearn(connectionId) && !needsDatabase : false;
+    this.learnButton.disabled = !connectionId || !allowed;
+    this.learnButton.title = !connectionId
+      ? "Learn this database (connect first)"
+      : needsDatabase
+        ? "Learn this database (select a database in the tree first)"
+        : allowed
+          ? this.knowledge.status?.exists
+            ? "Learn this database again (refresh what the assistant knows)"
+            : "Learn this database: save its structure so the assistant knows it in every chat"
+          : "Learning databases is turned off (Settings → Assistant may learn databases)";
+    const status = this.knowledge.status;
+    const database = context.database ?? "";
+    const knows: HTMLElement[] = [];
+    if (connectionId && status?.exists) {
+      const link = h(
+        "button",
+        { class: "assistant-knows", type: "button", title: "What the assistant knows about this database" },
+        icon("book"),
+        `Knows ${status.objects} objects`,
+      );
+      link.addEventListener("click", () => this.host.openKnowledge(connectionId, database));
+      knows.push(link);
+      if (status.stale && allowed) knows.push(staleBadge(() => this.host.learn(connectionId, database)));
+    }
+    this.contextRow.replaceChildren(...contextChip(context), ...(knows.length ? [spacer(), ...knows] : []));
+    const chips = this.quickActions(context).map((action) => this.actionChip(action));
+    // A new chat on a database the assistant has not learned: offer to learn it first.
+    if (connectionId && allowed && status && !status.exists && this.conversation.messages.length === 0) {
+      const learn = h(
+        "button",
+        { class: "chat-chip learn-chip", type: "button", title: "Save the structure so the assistant knows it in every chat" },
+        icon("book"),
+        "Learn this database",
+      );
+      learn.addEventListener("click", () => this.host.learn(connectionId, database));
+      chips.unshift(learn);
+    }
+    this.actions.replaceChildren(...chips);
     this.actions.hidden = this.actions.childElementCount === 0;
   }
 
@@ -207,6 +304,7 @@ export class AssistantPanel {
     this.stop();
     this.conversation.messages = [];
     this.conversation.log.replaceChildren();
+    this.renderContext(this.host.context());
   }
 
   private async send(extra?: string, samples?: string): Promise<void> {
@@ -218,6 +316,9 @@ export class AssistantPanel {
     let context: AssistantContext = extra ? { ...current, extra: () => extra } : current;
     if (samples !== undefined) context = { ...context, samples: () => samples };
     this.append({ role: "user", content: text });
+    // The "Learn this database" chip is for new chats only.
+    this.actions.querySelector(".learn-chip")?.remove();
+    this.actions.hidden = this.actions.childElementCount === 0;
     const bubble = this.bubble("assistant");
     const body = bubble.querySelector<HTMLElement>(".chat-body")!;
     const id = crypto.randomUUID();

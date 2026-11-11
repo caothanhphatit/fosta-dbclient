@@ -58,6 +58,11 @@ export function shellMenus(host: MenuHost): ShellMenus {
         icon: host.config()?.assistantReadQueries !== false ? "check" : undefined,
         run: () => void setAssistantReadQueries(host.config()?.assistantReadQueries === false),
       },
+      {
+        label: "Assistant may learn databases",
+        icon: host.config()?.assistantLearn !== false ? "check" : undefined,
+        run: () => void setAssistantLearn(host.config()?.assistantLearn === false),
+      },
       { label: "Embedding API…", icon: "vector", run: () => void host.configureEmbedding() },
       { label: "MCP server…", icon: "plug", run: () => void openMcpSettings() },
       "separator",
@@ -117,6 +122,23 @@ export function shellMenus(host: MenuHost): ShellMenus {
     try {
       applyConfig(await api.setAssistantReadQueries(enabled));
       setStatus(enabled ? "The assistant may run read-only queries; their rows are sent to your AI provider" : "The assistant no longer runs queries");
+    } catch (error) {
+      showError(error, "Change the assistant setting");
+    }
+  }
+
+  /**
+   * Settings → Assistant: whether "Learn this database" may study and save database structure for the assistant (on by
+   * default; each workspace can override it). Turning it off keeps what was learned; it can be deleted from its view.
+   */
+  async function setAssistantLearn(enabled: boolean): Promise<void> {
+    try {
+      applyConfig(await api.setAssistantLearn(enabled));
+      setStatus(
+        enabled
+          ? "The assistant may learn databases (Learn this database)"
+          : "The assistant no longer learns databases; what it learned before stays until you delete it",
+      );
     } catch (error) {
       showError(error, "Change the assistant setting");
     }

@@ -100,6 +100,10 @@ export interface TreeHost {
   stateChanged?(): void;
   /** A Refresh reloaded part of a connection's tree (`database`: the one it was in; null: the whole connection). */
   refreshed?(connectionId: string, database: string | null): void;
+  /** "Learn this database" for `database` of the connection (empty: an engine without databases). */
+  learnDatabase?(profile: ConnectionProfile, database: string): void;
+  /** Opens "What the assistant knows" about `database`. */
+  openKnowledge?(profile: ConnectionProfile, database: string): void;
 }
 
 export class ConnectionTree {
@@ -514,6 +518,10 @@ export class ConnectionTree {
       ? (connectInfo(id)?.connectionActions ?? []).filter((action) => action.target.kind !== "builtin" || !CONNECTION_BUILTINS.has(action.target.name))
       : [];
     if (extra.length) items.push("separator", ...this.actionItems(conn, null, extra, false));
+    // The connection's own (default) database; an engine with several databases needs one set to learn from here.
+    const database = conn.profile.database ?? "";
+    if (database || !(connected ? capabilityOf(id, "multipleDatabases") : hasCapability(engine, "multipleDatabases")))
+      items.push("separator", ...this.knowledgeItems(conn, database, connected));
     const commandId = conn.profile.commandId;
     if (commandId && capabilities().tasks && this.host.openCommandLog)
       items.push("separator", { label: "Command log", icon: "logs", run: () => this.host.openCommandLog?.(commandId) });
@@ -547,6 +555,17 @@ export class ConnectionTree {
       items.push({ label: "New query", icon: "query", run: () => this.host.openQuery(conn.profile.id, node.object?.database ?? conn.profile.database) });
     }
     items.push(...this.actionItems(conn, node, node.actions, true));
+    if (node.kind === "database") items.push("separator", ...this.knowledgeItems(conn, node.object?.name ?? node.label, conn.state === "connected"));
+    return items;
+  }
+
+  /** "Learn this database" and "What the assistant knows" for `database` of `conn`. */
+  private knowledgeItems(conn: ConnectionNode, database: string, connected: boolean): MenuItem[] {
+    const profile = conn.profile;
+    const items: MenuItem[] = [];
+    if (this.host.learnDatabase)
+      items.push({ label: "Learn this database…", icon: "book", disabled: !connected, run: () => this.host.learnDatabase?.(profile, database) });
+    if (this.host.openKnowledge) items.push({ label: "What the assistant knows", icon: "sparkle", run: () => this.host.openKnowledge?.(profile, database) });
     return items;
   }
 

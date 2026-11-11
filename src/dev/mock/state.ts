@@ -229,6 +229,7 @@ export const state: { config: AppConfig; history: HistoryEntry[]; historySequenc
     aiConnections,
     aiActive: scriptedAssistant ? { connectionId: "scripted", model: "scripted" } : null,
     queryHistory: true,
+    assistantLearn: true,
   },
   history: [],
   historySequence: 0,

@@ -21,6 +21,7 @@ import type {
   TreeChildren,
   TreeRequest,
 } from "./contract";
+import type { DatabaseProfile, LearnOutcome, ProfileNote, ProfileProgress, ProfileStatus, SummaryCost, SummaryOutcome } from "./profileTypes";
 import { errorCode as codeOf, errorText as textOf, NOT_CONNECTED } from "./errors";
 export { NOT_CONNECTED, SESSION_LOST } from "./errors";
 import { downloadInBrowser, invoke as transportInvoke, invokeStreaming, isTauri, listen, type InvokeOptions, type UnlistenFn } from "./transport";
@@ -274,6 +275,31 @@ export const api = {
   setQueryHistory: (enabled: boolean) => invoke<AppConfig>("set_query_history", { enabled }),
   /** Settings → "Allow the assistant to run read-only queries". */
   setAssistantReadQueries: (enabled: boolean) => invoke<AppConfig>("set_assistant_read_queries", { enabled }),
+  /** Settings → "Assistant may learn databases"; each workspace can override it. */
+  setAssistantLearn: (enabled: boolean) => invoke<AppConfig>("set_assistant_learn", { enabled }),
+
+  // --- "Learn this database": what the assistant knows about one database of a connection ---
+  /**
+   * Builds (or refreshes) the profile; nothing is sent to a model. Values are sampled only where the assistant may read
+   * data and `sampleValues` is not false. Streams `profile-progress` (`onProfileProgress`); `aiCancel(runId)` stops it.
+   */
+  profileLearn: (connectionId: string, database: string, runId: string, sampleValues: boolean | null = null) =>
+    invoke<LearnOutcome>("profile_learn", { connectionId, database, runId, sampleValues }),
+  profileGet: (connectionId: string, database: string) => invoke<DatabaseProfile | null>("profile_get", { connectionId, database }),
+  /** Whether a profile exists and whether the structure changed since (checked at most every ten minutes unless `force`). */
+  profileStatus: (connectionId: string, database: string, force = false) => invoke<ProfileStatus>("profile_status", { connectionId, database, force }),
+  profileUpdateNotes: (connectionId: string, database: string, notes: ProfileNote[]) =>
+    invoke<DatabaseProfile>("profile_update_notes", { connectionId, database, notes }),
+  /** The user's description of one object; null clears it. */
+  profileUpdateDescription: (connectionId: string, database: string, object: string, description: string | null) =>
+    invoke<DatabaseProfile>("profile_update_description", { connectionId, database, object, description }),
+  profileDelete: (connectionId: string, database: string) => invoke<boolean>("profile_delete", { connectionId, database }),
+  /** What the model's summary would send (nothing is sent). */
+  profileSummaryEstimate: (connectionId: string, database: string, model: string | null = null, onlyChanged = false) =>
+    invoke<SummaryCost>("profile_summary_estimate", { connectionId, database, model, onlyChanged }),
+  /** The model writes the summary and object descriptions; streams `profile-progress` (step `summary`), stops with `aiCancel(runId)`. */
+  profileSummarize: (connectionId: string, database: string, runId: string, model: string | null, onlyChanged: boolean) =>
+    invoke<SummaryOutcome>("profile_summarize", { connectionId, database, runId, model, onlyChanged }),
   /** App version, OS, open connections, recent errors and the log folder, for bug reports. */
   diagnostics: () => invoke<Diagnostics>("diagnostics"),
   setDebugLogging: (enabled: boolean) => invoke<AppConfig>("set_debug_logging", { enabled }),
@@ -298,6 +324,11 @@ export const api = {
   /** The user's answer to an MCP client's `run_query`; `typed` for typed confirmations. */
   mcpAnswer: (id: string, approve: boolean, typed: string | null) => invoke<void>("mcp_answer", { id, approve, typed }),
 };
+
+/** The steps of a running `profileLearn` or `profileSummarize`. */
+export function onProfileProgress(handler: (progress: ProfileProgress) => void): Promise<UnlistenFn> {
+  return listen<ProfileProgress>("profile-progress", handler);
+}
 
 export function onMcpApproval(handler: (approval: McpApproval) => void): Promise<UnlistenFn> {
   return listen<McpApproval>("mcp-approval", handler);

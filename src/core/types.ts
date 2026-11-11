@@ -161,6 +161,8 @@ export interface WorkspaceMeta {
   safety?: SafetySettings;
   /** Overrides "Allow the assistant to run read-only queries" here; always present in a loaded config. */
   assistantQueries?: AssistantQueries;
+  /** Overrides "Assistant may learn databases" here (allow / deny / follow the setting); always present in a loaded config. */
+  assistantLearn?: AssistantQueries;
   /** What MCP clients may do here (default off; Production and Read-only workspaces at most read-only). */
   mcp?: McpAccess;
 }
@@ -315,6 +317,8 @@ export interface AppConfig {
   debugLogging?: boolean;
   /** Settings → "Allow the assistant to run read-only queries" (default on; Read-only and Production workspaces off). */
   assistantReadQueries?: boolean;
+  /** Settings → "Assistant may learn databases" (default on; each workspace can override it). */
+  assistantLearn?: boolean;
   /** Settings file version; 2 since the engine contract. */
   configVersion?: number;
   /** Settings → "Check for updates" and what the last check found. */

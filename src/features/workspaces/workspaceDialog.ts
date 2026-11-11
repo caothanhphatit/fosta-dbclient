@@ -60,6 +60,18 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
       ).map(([value, label]) => h("option", { value }, label)),
     );
     assistantQueries.value = existing?.assistantQueries ?? "default";
+    const assistantLearn = h(
+      "select",
+      { class: "input" },
+      ...(
+        [
+          ["default", "Follow the setting"],
+          ["allow", "Allow learning databases"],
+          ["deny", "Never learn databases"],
+        ] as [AssistantQueries, string][]
+      ).map(([value, label]) => h("option", { value }, label)),
+    );
+    assistantLearn.value = existing?.assistantLearn ?? "default";
     refreshMcp();
     const swatches = WORKSPACE_COLORS.map((option) => {
       const swatch = h("button", { class: `swatch color-${option}${option === color ? " active" : ""}`, type: "button", title: option, "aria-label": option });
@@ -108,6 +120,11 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
         "Whether the assistant may run read-only queries itself here (Settings → Allow the assistant to run read-only queries). The rows it reads are sent to your AI provider.",
       ),
       field(
+        "Assistant may learn databases",
+        assistantLearn,
+        'Whether "Learn this database" may study and save the structure of this workspace\'s databases for the assistant (Settings → Assistant may learn databases).',
+      ),
+      field(
         "MCP clients",
         mcpSelect,
         "What AI clients connected to Settings → MCP server may do here. Ask before writes: you approve every statement. Production and Read-only workspaces: at most read-only.",
@@ -140,6 +157,7 @@ export function workspaceDialog(existing: WorkspaceMeta | null): Promise<AppConf
                 icon: iconName,
                 safety: rules,
                 assistantQueries: assistantQueries.value as AssistantQueries,
+                assistantLearn: assistantLearn.value as AssistantQueries,
                 mcp: cappedAccess(mcpSelect.value as McpAccess, iconName, rules),
               },
               relaxing ? relaxName.value.trim() : null,

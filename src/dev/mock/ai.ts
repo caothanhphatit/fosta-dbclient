@@ -251,7 +251,7 @@ export const SCRIPTED_HOST = "scripted.mock";
 function scriptedAppActions(request: ChatRequest): { id: string; label: string }[] {
   const question = request.messages[request.messages.length - 1]?.content ?? "";
   if (/unknown action/i.test(question)) return [{ id: "run:format_disk", label: "Format the disk" }];
-  if (/\bmcp\b/i.test(question)) return [{ id: "open_settings:mcp", label: "Open MCP server settings" }];
+  if (/\bmcp\b/i.test(question)) return [{ id: "open_settings:mcp", label: "MCP server for Claude Code, Cursor, VS Code, Zed" }];
   return [];
 }
 

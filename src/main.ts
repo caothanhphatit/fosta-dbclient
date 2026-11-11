@@ -36,6 +36,9 @@ import type { AssistantSuggestion } from "./core/assistantFences";
 import type { ObjectRef } from "./core/contract";
 import { aiDialog } from "./features/assistant/aiDialog";
 import { AssistantPanel, type AssistantContext } from "./features/assistant/assistantPanel";
+import { learnDialog, type LearnTarget } from "./features/assistant/learnDialog";
+import { learningAllowed } from "./features/assistant/profileLogic";
+import { ProfileView } from "./features/assistant/profileView";
 import { connectionDialog } from "./features/connections/connectionDialog";
 import { ConnectionTree } from "./features/connections/tree";
 import { TasksPanel } from "./features/tasks/tasksPanel";
@@ -126,6 +129,9 @@ const assistant = new AssistantPanel({
   editProvider: (connection) => void editAiProvider(connection),
   configChanged: applyConfig,
   close: () => showAssistant(false),
+  learn: (connectionId, database) => void learnDatabase(connectionId, database),
+  openKnowledge: (connectionId, database) => openKnowledge(connectionId, database),
+  canLearn: (connectionId) => learningAllowed(currentConfig, connectionId),
 });
 
 const rail = new WorkspaceRail({
@@ -158,6 +164,8 @@ const tree = new ConnectionTree({
   refreshed: (connectionId, database) => navigation.refreshQueryNames(connectionId, database),
   configChanged: applyConfig,
   status: setStatus,
+  learnDatabase: (profile, database) => void learnDatabase(profile.id, database),
+  openKnowledge: (profile, database) => openKnowledge(profile.id, database),
   stateChanged: () => {
     refreshActivity();
     assistant.refreshContext();
@@ -241,6 +249,40 @@ function performAssistantAction(action: UiAction): void {
   }
 }
 
+function learnTarget(connectionId: string, database: string): LearnTarget {
+  const name = currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name;
+  return { connectionId, database, connectionName: name ?? connectionId };
+}
+
+/** "Learn this database" (connecting first); a refresh with `onlyChanged` describes only new or changed objects. */
+async function learnDatabase(connectionId: string, database: string, onlyChanged = false): Promise<{ learned: boolean }> {
+  if (!(await tree.ensureConnected(connectionId))) return { learned: false };
+  const result = await learnDialog(currentConfig, learnTarget(connectionId, database), {
+    onlyChanged,
+    openKnowledge: () => openKnowledge(connectionId, database),
+  });
+  if (result.learned) assistant.knowledgeChanged(connectionId, database);
+  return result;
+}
+
+/** The "What the assistant knows" tab of one database (not restored on the next start). */
+function openKnowledge(connectionId: string, database: string): void {
+  const target = learnTarget(connectionId, database);
+  tabs.open({
+    key: `${workspaceId()}|${connectionId}|knows|${database}`,
+    title: `${database || target.connectionName} · assistant knows`,
+    icon: "book",
+    connection: target.connectionName,
+    database,
+    create: () =>
+      new ProfileView(target, {
+        learn: (item, onlyChanged) => learnDatabase(item.connectionId, item.database, onlyChanged),
+        changed: (item) => assistant.knowledgeChanged(item.connectionId, item.database),
+        statusSeen: (item, status) => assistant.setKnowledge(item.connectionId, item.database, status),
+      }),
+  });
+}
+
 function openQueryWithText(text: string): void {
   const context = assistantContext();
   const connectionId = context.connectionId ?? tree.activeContext()?.connectionId;
@@ -260,6 +302,7 @@ function showAssistant(visible: boolean): void {
   }
   if (visible) {
     assistant.refreshContext();
+    assistant.recheckKnowledge();
     assistant.focus();
   }
 }

@@ -6,6 +6,7 @@ import type { QueryView } from "../features/query/queryView";
 import { TableView } from "../features/table/tableView";
 import type { LogTabContent } from "../features/tasks/tasksPanel";
 import { isWorkspaceTab } from "../features/objectWorkspace/sectionWorkspace";
+import { ProfileView } from "../features/assistant/profileView";
 
 const LOG_TAIL_LINES = 80;
 
@@ -60,6 +61,10 @@ export function assistantContext(active: TabContent | null, config: AppConfig | 
   }
   if (active instanceof TableView) {
     return withConnection(active.target.connectionId, { kind: "table", database: active.target.database, table: active.target.table });
+  }
+  if (active instanceof ProfileView) {
+    // "What the assistant knows": the chat is about that database.
+    return withConnection(active.target.connectionId, { database: active.target.database || undefined });
   }
   if (isLogTab(active)) {
     const task = active.task;

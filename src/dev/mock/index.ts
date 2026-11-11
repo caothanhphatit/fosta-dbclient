@@ -19,6 +19,9 @@
  * Tree paging demo: `__fostaMock.setTreePageSize(2)` caps every `tree_children` page at 2 nodes, so the tree shows its
  * "Load more" row; `setTreePageSize(null)` restores the requested limit.
  *
+ * Learn this database (`profiles.ts`): every `profile_*` command over the engines' schema graphs, with progress events and
+ * a scripted summary; `__fostaMock.profileStale("c-local", "shop")` marks a learned profile stale.
+ *
  * MCP server (`mcp.ts`): Settings → MCP server works; `__fostaMock.mcpApproval()` (or `"typed"`, or `?mcpApproval` in the
  * address) shows an incoming `run_query` approval from Claude Code.
  *
@@ -64,6 +67,7 @@ import type {
   TaskDef,
   Workspace,
 } from "../../core/types";
+import type { ProfileNote } from "../../core/profileTypes";
 import { PRODUCTION_ICON, presetSettings, relaxations, safetyOf, unmarksLooserThanReadOnly, withoutConfirmation } from "../../features/safety/safety";
 import {
   chatRuns,
@@ -82,6 +86,18 @@ import { mockError, NOT_CONNECTED, SESSION_LOST } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
 import { mockCheckUpdate, mockInstallKind, mockRestart, mockUpdaterCheck, mockUpdaterDownload, mockWhatsNew, setInstallKind } from "./update";
 import { mockMcpAnswer, mockMcpStatus, mockMcpToken, mockRotateMcpToken, mockSetMcpSettings, simulateMcpApproval } from "./mcp";
+import {
+  cancelProfileRun,
+  markProfileStale,
+  profileDelete,
+  profileGet,
+  profileLearn,
+  profileStatus,
+  profileSummarize,
+  profileSummaryEstimate,
+  profileUpdateDescription,
+  profileUpdateNotes,
+} from "./profiles";
 import { deleteSavedQuery, listSavedQueries, renameSavedQuery, saveSavedQuery } from "./savedQueries";
 import { VECTOR_DIMS } from "./shop";
 import { state } from "./state";
@@ -424,6 +440,7 @@ function saveWorkspace(meta: Workspace, relaxConfirmation: unknown) {
                 icon: meta.icon,
                 safety: after,
                 assistantQueries: meta.assistantQueries ?? item.assistantQueries,
+                assistantLearn: meta.assistantLearn ?? item.assistantLearn,
                 mcp: meta.mcp ?? item.mcp,
               }
             : item,
@@ -433,7 +450,15 @@ function saveWorkspace(meta: Workspace, relaxConfirmation: unknown) {
         ...config,
         workspaces: [
           ...config.workspaces,
-          { ...meta, safety: after, assistantQueries: meta.assistantQueries ?? "default", mcp: meta.mcp ?? "off", connections: [], tasks: [] },
+          {
+            ...meta,
+            safety: after,
+            assistantQueries: meta.assistantQueries ?? "default",
+            assistantLearn: meta.assistantLearn ?? "default",
+            mcp: meta.mcp ?? "off",
+            connections: [],
+            tasks: [],
+          },
         ],
       };
   return state.config;
@@ -639,8 +664,42 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
     case "ai_chat":
       return streamChat(payload.request as ChatRequest, payload.onEvent as Channel<ChatEvent>);
     case "ai_cancel":
-      chatRuns.get(str("id"))?.abort();
+      if (!cancelProfileRun(str("id"))) chatRuns.get(str("id"))?.abort();
       return null;
+    case "set_assistant_learn":
+      state.config = { ...state.config, assistantLearn: Boolean(payload.enabled) };
+      return state.config;
+
+    // "Learn this database" (profiles.ts)
+    case "profile_learn": {
+      const { engine } = connection(str("connectionId"));
+      const database = str("database");
+      return profileLearn(str("connectionId"), database, str("runId"), (payload.sampleValues as boolean | null | undefined) ?? null, {
+        engine: engine.descriptor.id,
+        graph: engine.schemaGraph?.(database) ?? null,
+        connected: true,
+      });
+    }
+    case "profile_get":
+      return profileGet(str("connectionId"), str("database"));
+    case "profile_status":
+      return profileStatus(str("connectionId"), str("database"), connections.has(str("connectionId")));
+    case "profile_update_notes":
+      return profileUpdateNotes(str("connectionId"), str("database"), payload.notes as ProfileNote[]);
+    case "profile_update_description":
+      return profileUpdateDescription(str("connectionId"), str("database"), str("object"), (payload.description as string | null | undefined) ?? null);
+    case "profile_delete":
+      return profileDelete(str("connectionId"), str("database"));
+    case "profile_summary_estimate":
+      return profileSummaryEstimate(str("connectionId"), str("database"), (payload.model as string | null | undefined) ?? null, Boolean(payload.onlyChanged));
+    case "profile_summarize":
+      return profileSummarize(
+        str("connectionId"),
+        str("database"),
+        str("runId"),
+        (payload.model as string | null | undefined) ?? null,
+        Boolean(payload.onlyChanged),
+      );
 
     // Engines and connections
     case "engine_descriptors":
@@ -789,6 +848,8 @@ declare global {
       setTreePageSize(size: number | null): void;
       setInstallKind(kind: InstallKind): void;
       mcpApproval(level?: "confirm" | "typed"): string;
+      /** Marks a learned profile stale ("Schema changed — refresh"); false when nothing was learned there. */
+      profileStale(connectionId: string, database: string): boolean;
       /** Drops every session and open connection, like a restart of the backend (lost sessions, NOT_CONNECTED). */
       restartBackend(): void;
     };
@@ -820,6 +881,7 @@ export function installDevMock(): void {
     },
     setInstallKind,
     mcpApproval: simulateMcpApproval,
+    profileStale: markProfileStale,
     restartBackend: () => {
       // Like a restart of the app's backend or the web server: every session and open connection is gone.
       for (const id of connections.keys()) dropped.add(id);
