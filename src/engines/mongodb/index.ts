@@ -6,6 +6,8 @@
  *   or a table,
  * - the `mongo-command` console language; the grid and the design view are the shared ones (`../shared.ts`).
  * - query-history entries of the query bar reopen in their collection workspace (`historyTarget`).
+ * - the assistant's `mongo-filter` and `mongo-pipeline` blocks get "Apply to query bar", "Open in Aggregations",
+ *   "Insert as stage(s)" and "Replace stage" (`assistantFences.ts`).
  *
  * Views are chunks of their own; styles are `mongodb.css`, imported by the views (never `src/styles.css`).
  */
@@ -47,6 +49,10 @@ const mongodb: EngineUiModule = {
   languages: { "mongo-command": mongoCommandLanguage },
   // A query-bar run in the query history reopens in its collection workspace, with the bar filled in.
   historyTarget: async (entry) => (await import("./savedQueries")).historyTarget(entry),
+  assistantFences: {
+    "mongo-filter": async () => (await import("./assistantFences")).filterFenceActions,
+    "mongo-pipeline": async () => (await import("./assistantFences")).pipelineFenceActions,
+  },
 };
 
 export default mongodb;

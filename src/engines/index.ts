@@ -9,6 +9,7 @@ import type { IconName } from "../core/dom";
 import { defaultLanguage, engineInfo } from "../core/engines";
 import { defaultLanguageSupport, jsonLanguageSupport, sqlLanguageSupport, type LanguageSupport } from "../core/language";
 import type { AppError } from "../core/contract";
+import { setFenceActionResolver, type FenceActions } from "../core/assistantFences";
 import { toAppError } from "../core/errors";
 import {
   registerViews,
@@ -40,6 +41,8 @@ export interface EngineUiModule {
    * null when it only reopens as text.
    */
   historyTarget?(entry: HistoryEntry): Promise<HistoryTarget | null>;
+  /** Buttons the assistant panel shows under a code block of these fence tags ("Apply to query bar"), by tag. */
+  assistantFences?: Record<string, () => Promise<FenceActions>>;
 }
 
 const modules = import.meta.glob<{ default: EngineUiModule }>("./*/index.ts");
@@ -52,6 +55,10 @@ setIconResolver(engineIcon);
 setConnectErrorHandler(async (id, error, context) => {
   const module = await ensureEngine(id);
   return module?.connectError ? module.connectError(toAppError(error), context) : false;
+});
+setFenceActionResolver(async (id, tag) => {
+  const load = (await ensureEngine(id))?.assistantFences?.[tag];
+  return load ? load() : null;
 });
 setHistoryTargetResolver(async (entry) => {
   const module = await ensureEngine(entry.driver);

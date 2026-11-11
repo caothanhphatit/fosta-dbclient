@@ -4,7 +4,8 @@
  * switch, fold, and a menu (duplicate, insert after, move, delete); under it the stage's editor (mongosh syntax,
  * completion of the fields reaching this stage) beside its preview strip: the count and time of the stage's output on
  * the sample and its first documents as small document trees (a `$lookup`'s joined array opened), or why the stage did
- * not run. The section owns the pipeline: the card reports edits and draws what it is given.
+ * not run. "Ask" asks the assistant to explain the stage, suggest the next one or fix its error. The section owns the
+ * pipeline: the card reports edits and draws what it is given.
  */
 import type { CompletionSchema } from "../../lang/types";
 import { showMenuBelow } from "../../core/contextMenu";
@@ -17,6 +18,7 @@ import type { Doc } from "./documents";
 import type { PreviewStage } from "./mongoApi";
 import { operatorOfText, specOf, STAGE_SPECS, type PipelineStage } from "./pipelineModel";
 import { StageEditor } from "./queryEditor";
+import type { StageQuestion } from "./assistantModel";
 
 /** Documents a preview strip draws (the rest are counted). */
 const STRIP_DOCUMENTS = 5;
@@ -45,6 +47,8 @@ export interface StageCardOptions {
   focused(): void;
   /** Ctrl+Enter in the editor. */
   run(): void;
+  /** "Ask": a question about this stage for the assistant; none: no button. */
+  ask?(question: StageQuestion): void;
 }
 
 export class StageCard {
@@ -108,6 +112,22 @@ export class StageCard {
         { label: "Delete stage", icon: "trash", danger: true, run: () => options.remove() },
       ]),
     );
+    const ask = options.ask;
+    const askButton = ask
+      ? h(
+          "button",
+          { class: "tool-button ag-ask", type: "button", title: "Ask the assistant about this stage", "aria-haspopup": "menu" },
+          icon("sparkle"),
+          h("span", {}, "Ask"),
+        )
+      : null;
+    askButton?.addEventListener("click", () =>
+      showMenuBelow(askButton, [
+        { label: "Explain this stage", icon: "view", run: () => ask?.("explain") },
+        { label: "Suggest the next stage", icon: "plus", run: () => ask?.("next") },
+        { label: "Fix the error", icon: "health", disabled: !this.element.classList.contains("failed"), run: () => ask?.("fix") },
+      ]),
+    );
     const head = h(
       "div",
       { class: "ag-card-head" },
@@ -116,6 +136,7 @@ export class StageCard {
       this.operatorButton,
       this.description,
       this.status,
+      askButton,
       toggle,
       this.collapseButton,
       more,

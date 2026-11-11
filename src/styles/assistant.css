@@ -402,3 +402,16 @@
   pointer-events: none;
   opacity: 0.5;
 }
+
+/* An engine's fence button reported a problem (a parse error): shown under the block instead of applying. */
+.chat-code-error {
+  padding: 6px 11px;
+  border-top: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--danger-soft);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.chat-code-error[hidden] {
+  display: none;
+}

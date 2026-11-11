@@ -52,7 +52,10 @@ export function assistantContext(active: TabContent | null, config: AppConfig | 
       kind: "table",
       database: object?.database ?? undefined,
       table: object ? (object.schema ? `${object.schema}.${object.name}` : object.name) : undefined,
+      object,
       extra: () => active.workspaceContext(),
+      // Row data, apart from the context: the backend drops it where the assistant may not read data.
+      samples: () => active.workspaceSamples(),
     });
   }
   if (active instanceof TableView) {

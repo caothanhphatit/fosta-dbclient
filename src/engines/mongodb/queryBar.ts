@@ -4,7 +4,8 @@
  * `queryModel.ts`; a field that does not parse is underlined at the error and named under the bar. Ctrl+Enter (or
  * Enter on a one-line field) runs; ArrowUp / ArrowDown in the filter and the history button recall recent filters of
  * this collection (this tab's, then the query history's). Save keeps the fields under a name and the Saved button lists
- * the saved queries (`savedQueriesMenu.ts`).
+ * the saved queries (`savedQueriesMenu.ts`). "Ask" turns a sentence into a filter through the assistant; what it suggests
+ * is filled in and marked, and runs only when the user presses Find.
  */
 import { api } from "../../core/api";
 import { showMenuBelow, type MenuItem } from "../../core/contextMenu";
@@ -47,6 +48,8 @@ export interface QueryBarOptions {
   actions?(): MenuItem[];
   /** Save and the Saved dropdown; none: no buttons. */
   saved?: SavedQueries;
+  /** "Ask": sends the sentence to the assistant (which answers with a filter); none: no button. */
+  ask?(request: string): void;
 }
 
 export class QueryBar {
@@ -59,6 +62,14 @@ export class QueryBar {
   private readonly optionsButton: HTMLButtonElement;
   private readonly collationButton: HTMLButtonElement;
   private readonly errorLine = h("div", { class: "mq-error", role: "alert", hidden: true });
+  private readonly suggestedLine = h("div", { class: "mq-suggested", role: "status", hidden: true });
+  private readonly askRow: HTMLElement | null;
+  private readonly askInput = h("input", {
+    class: "input mq-ask-input",
+    type: "text",
+    placeholder: "Describe the documents, e.g. paid orders over 100 from last week",
+    "aria-label": "Describe the documents you want",
+  });
   private historyFilters: string[] | null = null;
   /** The position in the recall list while stepping with ArrowUp / ArrowDown; -1 is the text being typed. */
   private recallIndex = -1;
@@ -98,6 +109,16 @@ export class QueryBar {
     reset.addEventListener("click", () => options.reset());
     const find = h("button", { class: "btn primary mq-find", type: "button", title: "Run the query (Ctrl+Enter)" }, "Find");
     find.addEventListener("click", () => options.run());
+    const askButton = options.ask
+      ? h(
+          "button",
+          { class: "tool-button mq-ask", type: "button", title: "Ask the assistant for a filter in plain language", "aria-expanded": "false" },
+          icon("sparkle"),
+          h("span", {}, "Ask"),
+        )
+      : null;
+    this.askRow = askButton ? this.buildAskRow(askButton) : null;
+    askButton?.addEventListener("click", () => this.setAskOpen(this.askRow?.hidden ?? false, askButton));
 
     const projectHost = h("div", { class: "mq-editor" });
     const sortHost = h("div", { class: "mq-editor" });
@@ -129,6 +150,7 @@ export class QueryBar {
         { class: "mq-row" },
         this.labelled("Filter", filterHost, "mq-grow"),
         historyButton,
+        askButton,
         savedButton,
         this.optionsButton,
         saveButton,
@@ -136,12 +158,68 @@ export class QueryBar {
         find,
         this.moreButton(),
       ),
+      this.askRow,
       this.optionsRow,
       this.collationRow,
+      this.suggestedLine,
       this.errorLine,
     );
     this.setOptionsOpen(initial.options || !!initial.project.trim() || !!initial.sort.trim() || initial.skip > 0 || !!initial.collation.trim(), false);
     this.setCollationOpen(!!initial.collation.trim(), false);
+  }
+
+  /** The row under the filter where a sentence goes to the assistant (Enter asks, Escape closes). */
+  private buildAskRow(button: HTMLButtonElement): HTMLElement {
+    const send = h("button", { class: "btn primary", type: "button" }, "Ask");
+    const cancel = h("button", { class: "btn", type: "button" }, "Cancel");
+    const submit = () => {
+      const text = this.askInput.value.trim();
+      if (!text) return;
+      this.options.ask?.(text);
+      this.askInput.value = "";
+      this.setAskOpen(false, button);
+    };
+    send.addEventListener("click", submit);
+    cancel.addEventListener("click", () => this.setAskOpen(false, button));
+    this.askInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submit();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        this.setAskOpen(false, button);
+        button.focus();
+      }
+    });
+    return h("div", { class: "mq-row mq-ask-row", hidden: true }, icon("sparkle", "mq-ask-icon"), this.askInput, send, cancel);
+  }
+
+  private setAskOpen(open: boolean, button: HTMLButtonElement): void {
+    if (!this.askRow) return;
+    this.askRow.hidden = !open;
+    button.classList.toggle("active", open);
+    button.setAttribute("aria-expanded", String(open));
+    if (open) this.askInput.focus();
+  }
+
+  /**
+   * Marks the fields the assistant filled in (until the next run or edit): its suggestion has not run. Null clears it.
+   */
+  markSuggested(fields: readonly QueryField[] | null): void {
+    this.suggestedLine.hidden = !fields || fields.length === 0;
+    for (const [field, editor] of this.editors) editor.view.dom.classList.toggle("mq-suggested-field", !!fields?.includes(field));
+    if (!fields || fields.length === 0) {
+      this.suggestedLine.replaceChildren();
+      return;
+    }
+    const names = fields.map((field) => FIELD_LABELS[field]).join(", ");
+    const dismiss = h("button", { class: "link-button", type: "button" }, "Dismiss");
+    dismiss.addEventListener("click", () => this.markSuggested(null));
+    this.suggestedLine.replaceChildren(
+      icon("sparkle", "mq-ask-icon"),
+      h("span", {}, `${names} suggested by the assistant; not run yet. Press Find to run it.`),
+      dismiss,
+    );
   }
 
   /** The "More" button with the bar's actions (null without any). */
@@ -217,6 +295,7 @@ export class QueryBar {
   /** A run happened: the recall list starts over from the text being typed. */
   ran(): void {
     this.recallIndex = -1;
+    this.markSuggested(null);
   }
 
   dispose(): void {

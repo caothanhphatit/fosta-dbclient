@@ -1004,3 +1004,83 @@
   font-size: 10.5px;
   font-weight: 600;
 }
+
+/* --- The assistant: Ask, suggested fields, the review diff ------------------------------------------------------- */
+
+.mq-ask .icon,
+.mq-ask-icon {
+  color: var(--accent);
+}
+
+.mq-ask-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.mq-ask-row {
+  align-items: center;
+}
+
+.mq-ask-row[hidden],
+.mq-suggested[hidden] {
+  display: none;
+}
+
+.mq-ask-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.mq-suggested {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.mq-suggested-field {
+  outline: 1px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: -1px;
+}
+
+.mq-review-note {
+  margin: 0 0 8px;
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.mq-diff {
+  max-height: 50vh;
+  margin: 0;
+  padding: 6px 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--editor-bg);
+  font: 12px/1.5 var(--font-mono);
+}
+
+.mq-diff-line {
+  padding: 0 10px;
+  white-space: pre;
+}
+
+.mq-diff-removed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.mq-diff-added {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+  color: var(--success);
+}
+
+.ag-ask .icon {
+  color: var(--accent);
+}

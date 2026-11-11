@@ -362,6 +362,8 @@ export interface ChatContext {
   editorText?: string;
   lastError?: string;
   extra?: string;
+  /** Documents sampled in the view, already cut; the backend gives them to the model only where reads are allowed. */
+  sampledDocuments?: string;
 }
 
 export interface ChatRequest {
@@ -378,7 +380,18 @@ export type UiAction =
   | { kind: "openDiagram"; database: string; focusTable: string | null }
   /** The filter is only pre-filled as a suggestion; nothing runs until the user applies it. */
   | { kind: "openTable"; database: string; table: string; suggestedFilter: string | null }
-  | { kind: "openQuery"; database: string | null; sql: string };
+  | { kind: "openQuery"; database: string | null; sql: string }
+  /** A collection's workspace section with the assistant's suggestion pre-filled; nothing runs until the user does. */
+  | {
+      kind: "openCollectionWorkspace";
+      database: string;
+      collection: string;
+      section: string;
+      suggestedFilter: string | null;
+      suggestedSort: string | null;
+      suggestedProject: string | null;
+      suggestedPipeline: string[] | null;
+    };
 
 /** A read-only query the assistant ran (`run_read_query`): what it sent and what it got, cells as text. */
 export interface ChatQuery {

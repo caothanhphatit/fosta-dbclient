@@ -25,6 +25,11 @@ export interface SectionContent extends TabContent {
   saveState?(): unknown;
   /** What the assistant should know about this section now (the filter, the active stage, sampled fields, the last error). */
   assistantContext?(): string | null;
+  /**
+   * Documents the section sampled (already cut), for the assistant. They are row data: kept apart from
+   * `assistantContext`, the backend gives them to the model only where the workspace lets the assistant read data.
+   */
+  assistantSamples?(): string | null;
   /** A request from outside the tab (another tab's link, e.g. a filter to run); see `WorkspaceTab.deliver`. */
   receive?(request: unknown): void;
 }
@@ -69,6 +74,8 @@ export interface WorkspaceTab extends TabContent {
   viewState(): WorkspaceViewState;
   /** The tab's context for the assistant (bounded). */
   workspaceContext(): string;
+  /** The shown section's sampled documents for the assistant (`SectionContent.assistantSamples`), or null. */
+  workspaceSamples(): string | null;
   /** The saved view changed (another section shown, a section's state): set by navigation to save the open tabs. */
   onViewChanged: (() => void) | null;
 }
@@ -232,6 +239,14 @@ class SectionWorkspace implements WorkspaceTab {
         return { title: section.title, text, active: section.id === this.active };
       });
     return workspaceContextText(header, parts);
+  }
+
+  workspaceSamples(): string | null {
+    try {
+      return this.loaded.get(this.active)?.content?.assistantSamples?.() ?? null;
+    } catch {
+      return null;
+    }
   }
 
   private load(section: WorkspaceSection): Loaded {

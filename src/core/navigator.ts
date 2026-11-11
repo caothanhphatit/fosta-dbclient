@@ -18,4 +18,10 @@ export interface Navigator {
   openVectorSearch(target: TableTarget, column: string, seed?: KeyCell[]): void;
   openVectorHealth(target: TableTarget, column: string): void;
   configureEmbedding(): void;
+  /**
+   * Opens the assistant panel and sends `prompt` (an inline "Ask" in a view). `extra` is the context of this message
+   * only (the filter, the stage and its error); `samples` are sampled documents, which reach the model only where the
+   * workspace lets the assistant read data.
+   */
+  askAssistant?(prompt: string, extra?: string, samples?: string): void;
 }

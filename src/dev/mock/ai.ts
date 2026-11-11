@@ -240,12 +240,55 @@ function systemPrompt(context: ChatRequest["context"]): string {
   return lines.join("\n");
 }
 
+/**
+ * An LLM connection whose endpoint host is this name answers with scripted replies instead of calling a provider
+ * (Custom provider, endpoint http://scripted.mock/v1): enough to try the code-fence buttons (the collection workspace's
+ * mongo-filter / mongo-pipeline blocks) without a key.
+ */
+export const SCRIPTED_HOST = "scripted.mock";
+
+/** The scripted answer to the last user message. */
+export function scriptedReply(request: ChatRequest): string {
+  const question = request.messages[request.messages.length - 1]?.content ?? "";
+  if (/broken/i.test(question)) return "This one does not parse:\n\n```mongo-filter\n{ status: }\n```";
+  if (/next stage/i.test(question)) return "Sort the groups by their total, largest first:\n\n```mongo-pipeline\n{ $sort: { total: -1 } }\n```";
+  if (/fix it/i.test(question)) return "The stage needs one operator; this keeps the paid orders:\n\n```mongo-pipeline\n{ $match: { status: 'paid' } }\n```";
+  if (/explain/i.test(question)) return "This stage keeps the documents that match its filter and passes them on unchanged.";
+  if (/mongo-filter|filter/i.test(question)) return "Paid orders over 100:\n\n```mongo-filter\n{ status: 'paid', total: { $gt: 100 } }\n```";
+  return [
+    "Paid orders over 100:",
+    "",
+    "```mongo-filter",
+    "{ status: 'paid', total: { $gt: 100 } }",
+    "```",
+    "",
+    "Totals per customer of the paid orders:",
+    "",
+    "```mongo-pipeline",
+    "[",
+    "  { $match: { status: 'paid' } },  // paid only",
+    "  { $group: { _id: '$customerId', total: { $sum: '$total' }, orders: { $sum: 1 } } },",
+    "  { $sort: { total: -1 } }",
+    "]",
+    "```",
+  ].join("\n");
+}
+
 /** Streams the provider's reply through the channel the UI passed, like the backend does. */
 export async function streamChat(request: ChatRequest, channel: Channel<ChatEvent>): Promise<string> {
   const { settings, apiKey } = chatSettings(request);
   const internals = (window as unknown as { __TAURI_INTERNALS__: { runCallback(id: number, data: unknown): void } }).__TAURI_INTERNALS__;
   let index = 0;
   const emit = (message: ChatEvent) => internals.runCallback(channel.id, { index: index++, message });
+  if (hostOf(baseUrlOf(settings)) === SCRIPTED_HOST) {
+    const text = scriptedReply(request);
+    for (const piece of text.match(/[\s\S]{1,40}/g) ?? []) {
+      emit({ type: "text", text: piece });
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    emit({ type: "done" });
+    return text;
+  }
   const preset = providerPreset(settings.provider);
   const anthropic = preset.wire === "anthropic";
   const system = systemPrompt(request.context);

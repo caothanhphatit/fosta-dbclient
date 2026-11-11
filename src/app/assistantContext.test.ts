@@ -13,7 +13,7 @@ const config = {
   workspaces: [{ connections: [{ id: "c1", name: "Shop Mongo", driver: "mongodb" }] }],
 } as unknown as AppConfig;
 
-function workspaceTab(sections: { title: string; text: string; active: boolean }[]): WorkspaceTab {
+function workspaceTab(sections: { title: string; text: string; active: boolean }[], samples: string | null = null): WorkspaceTab {
   return {
     element: {} as HTMLElement,
     connectionId: "c1",
@@ -23,6 +23,7 @@ function workspaceTab(sections: { title: string; text: string; active: boolean }
     deliver: async () => undefined,
     viewState: () => ({ section: "documents", state: {} }),
     workspaceContext: () => workspaceContextText("MongoDB workspace of collection shop.orders", sections),
+    workspaceSamples: () => samples,
     onViewChanged: null,
   };
 }
@@ -39,6 +40,17 @@ describe("assistantContext of an engine workspace tab", () => {
       serverVersion: "8.0.4",
     });
     expect(context.extra?.()).toContain('[Documents]\nfilter: { "status": "NEW" }');
+  });
+
+  it("keeps sampled documents apart from the context, for the backend's read gate", () => {
+    const context = assistantContext(
+      workspaceTab([{ title: "Aggregations", text: "Active stage: 2", active: true }], '{"email":"ann@example.com"}'),
+      config,
+      tree,
+    );
+    expect(context.object).toMatchObject({ name: "orders", kind: "collection" });
+    expect(context.extra?.()).not.toContain("ann@example.com");
+    expect(context.samples?.()).toBe('{"email":"ann@example.com"}');
   });
 
   it("keeps the sections' context within the limit", () => {

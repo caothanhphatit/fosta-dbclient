@@ -2,9 +2,11 @@
  * The assistant panel: a chat docked on the right of the workspace. Every code block the model writes carries "Run"
  * (the user's own run through the workspace rules, results under the block), "Insert" and "New tab". Where the user
  * allows it, the model also runs read-only queries itself; each shows as an expandable tool call. What the panel offers
- * per engine (code-fence tags, quick prompts, translation targets) comes from the engine descriptors.
+ * per engine (code-fence tags, quick prompts, translation targets) comes from the engine descriptors; an engine module may
+ * add buttons of its own for fence tags it applies itself (`core/assistantFences.ts`: a MongoDB filter for the query bar).
  */
 import { api, errorText } from "../../core/api";
+import { fenceActionsOf, type FenceAction } from "../../core/assistantFences";
 import { capabilities } from "../../core/capabilities";
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
@@ -12,6 +14,7 @@ import { copyText, h, icon, iconButton, iconOrDefault, spacer, type IconName } f
 import { capabilityOf, defaultLanguage, engineInfo, isKnownFence, languageForFence, visibleEngines, type EngineInfo } from "../../core/engines";
 import { ChatRun, queryToolCall } from "./chatRun";
 import { ModelSwitcher } from "./modelSwitcher";
+import type { ObjectRef } from "../../core/contract";
 import type { AiActive, AiConnection, AppConfig, ChatContext, ChatEvent, ChatMessage, DriverId, UiAction } from "../../core/types";
 
 /** What the UI knows about where the user is. Getters are read at send time. */
@@ -23,11 +26,15 @@ export interface AssistantContext {
   serverVersion?: string;
   database?: string;
   table?: string;
+  /** The object of the active workspace tab (a collection), for fences that apply to it. */
+  object?: ObjectRef | null;
   /** Text of the active query editor (selection or all). */
   editorText?: () => string;
   lastError?: () => string | null;
   /** Free-form extra context, e.g. "Command kubectl … Last log lines: …". */
   extra?: () => string;
+  /** Documents sampled in the view, already cut; the backend sends them only where reads are allowed. */
+  samples?: () => string | null;
 }
 
 export interface AssistantHost {
@@ -35,6 +42,8 @@ export interface AssistantHost {
   /** Puts `text` into the active query editor, or opens a query tab for it. */
   insertSql(text: string): void;
   openQuery(text: string): void;
+  /** Opens (or selects) an object's workspace on `section` and hands the section `request`. */
+  openWorkspace(connectionId: string, object: ObjectRef, section: string, request: unknown): void;
   /** Opens what the model asked for (diagram, table, query tab) on the current connection. */
   perform(action: UiAction): void;
   /** Opens the LLM provider dialog for the active connection (or a new one). */
@@ -185,11 +194,11 @@ export class AssistantPanel {
   /**
    * Sends a prepared question, e.g. from an "Ask assistant" button elsewhere.
    * `extra` is added to the context of this message only (a task log, say),
-   * so the answer does not depend on which tab happens to be active.
+   * so the answer does not depend on which tab happens to be active; `samples` likewise (sampled documents).
    */
-  ask(prompt: string, extra?: string): void {
+  ask(prompt: string, extra?: string, samples?: string): void {
     this.composer.value = prompt;
-    void this.send(extra);
+    void this.send(extra, samples);
   }
 
   private reset(): void {
@@ -198,13 +207,14 @@ export class AssistantPanel {
     this.conversation.log.replaceChildren();
   }
 
-  private async send(extra?: string): Promise<void> {
+  private async send(extra?: string, samples?: string): Promise<void> {
     const text = this.composer.value.trim();
     if (!text || this.activeRequest || !this.configured) return;
     this.composer.value = "";
     this.growComposer();
     const current = this.host.context();
-    const context: AssistantContext = extra ? { ...current, extra: () => extra } : current;
+    let context: AssistantContext = extra ? { ...current, extra: () => extra } : current;
+    if (samples !== undefined) context = { ...context, samples: () => samples };
     this.append({ role: "user", content: text });
     const bubble = this.bubble("assistant");
     const body = bubble.querySelector<HTMLElement>(".chat-body")!;
@@ -473,9 +483,43 @@ export class AssistantPanel {
         codeButton("query", "New tab", "Open in a new query tab", () => this.host.openQuery(code)),
       );
     }
-    bar.append(codeButton("copy", "Copy", "Copy to clipboard", () => void copyText(code).then(() => toast("Copied"))));
+    const copy = codeButton("copy", "Copy", "Copy to clipboard", () => void copyText(code).then(() => toast("Copied")));
+    bar.append(copy);
+    if (connectionId && code.trim()) {
+      // The engine's own buttons for this fence (a filter for the query bar, a pipeline for Aggregations).
+      const problem = h("div", { class: "chat-code-error", role: "alert" });
+      problem.hidden = true;
+      block.append(problem);
+      const target = {
+        connectionId,
+        database: context.database ?? null,
+        object: context.object ?? null,
+        openWorkspace: (object: ObjectRef, section: string, request: unknown) => this.host.openWorkspace(connectionId, object, section, request),
+      };
+      void fenceActionsOf(context.driver, fenceTag).then((actions) => {
+        for (const action of actions?.(code, target) ?? []) copy.before(fenceButton(action, problem));
+      });
+    }
     return block;
   }
+}
+
+/** An engine's button for a fence; what it reports (a parse error) shows under the block instead of applying. */
+function fenceButton(action: FenceAction, problem: HTMLElement): HTMLElement {
+  return codeButton(action.icon, action.label, action.title, () => {
+    void Promise.resolve()
+      .then(() => action.run())
+      .then(
+        (message) => {
+          problem.textContent = message ?? "";
+          problem.hidden = !message;
+        },
+        (error: unknown) => {
+          problem.textContent = errorText(error);
+          problem.hidden = false;
+        },
+      );
+  });
 }
 
 function codeButton(iconName: IconName, label: string, title: string, run: () => void): HTMLElement {
@@ -545,5 +589,6 @@ function chatContext(context: AssistantContext): ChatContext {
     editorText: context.editorText?.() || undefined,
     lastError: context.lastError?.() ?? undefined,
     extra: context.extra?.() || undefined,
+    sampledDocuments: context.samples?.() || undefined,
   };
 }

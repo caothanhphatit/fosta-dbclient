@@ -31,6 +31,8 @@ import { h, icon, iconButton } from "./core/dom";
 import { TabManager } from "./core/tabs";
 import { describeTheme, initTheme, onThemeChange, toggleTheme } from "./core/theme";
 import type { AiConnection, AppConfig, ConnectionProfile, UiAction, Workspace, WorkspaceMeta } from "./core/types";
+import type { AssistantSuggestion } from "./core/assistantFences";
+import type { ObjectRef } from "./core/contract";
 import { aiDialog } from "./features/assistant/aiDialog";
 import { AssistantPanel, type AssistantContext } from "./features/assistant/assistantPanel";
 import { connectionDialog } from "./features/connections/connectionDialog";
@@ -87,6 +89,10 @@ const navigation = new AppNavigation(tabs, {
     currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name ?? connectionId,
   historyEnabled: () => currentConfig?.queryHistory !== false,
   ensureConnected: (connectionId): Promise<boolean> => tree.ensureConnected(connectionId),
+  askAssistant: (prompt, extra, samples) => {
+    showAssistant(true);
+    assistant.ask(prompt, extra, samples);
+  },
   taskOf: (taskId) => currentConfig?.workspaces.flatMap((item) => item.tasks).find((task) => task.id === taskId),
   writesBlocked: (connectionId) => writesBlocked(connectionSafety(currentConfig?.workspaces ?? [], connectionId)),
 });
@@ -99,6 +105,7 @@ const assistant = new AssistantPanel({
     else openQueryWithText(text);
   },
   openQuery: openQueryWithText,
+  openWorkspace: (connectionId, object, section, request) => navigation.openWorkspace(connectionId, object, section, request),
   perform: performAssistantAction,
   configure: () => void configureAssistant(),
   editProvider: (connection) => void editAiProvider(connection),
@@ -197,6 +204,20 @@ function performAssistantAction(action: UiAction): void {
     case "openQuery":
       navigation.openQuery(profile.id, action.database ?? context.database ?? null, action.sql);
       break;
+    case "openCollectionWorkspace": {
+      // Kind as the active tab knows it (a view opens in the same workspace); a collection otherwise.
+      const same = context.object && context.object.database === action.database && context.object.name === action.collection;
+      const object: ObjectRef = { database: action.database, schema: null, name: action.collection, kind: same ? context.object!.kind : "collection" };
+      const suggestion = {
+        filter: action.suggestedFilter,
+        sort: action.suggestedSort,
+        project: action.suggestedProject,
+        pipeline: action.suggestedPipeline,
+      };
+      const suggested = Object.values(suggestion).some((value) => value !== null && value !== undefined);
+      navigation.openWorkspace(profile.id, object, action.section, suggested ? ({ assistant: suggestion } satisfies AssistantSuggestion) : null);
+      break;
+    }
   }
 }
 

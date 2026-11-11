@@ -9,8 +9,14 @@
  * the query history. Code exports the enabled stages as mongosh, Node.js or Python; Save / Saved keep pipelines with
  * the saved queries. The stages, the sample options and the active stage are kept with the open tabs (a pipeline too
  * large to keep is left out; save it by name).
+ *
+ * The assistant's pipelines (a `mongo-pipeline` block, `open_collection_workspace`) replace the stages (after a diff when
+ * there are stages), go in after the active stage, or replace the active stage (after a diff); they are marked as
+ * suggested and not previewed until the user asks. Each card's "Ask" explains the stage, suggests the next one or fixes
+ * its error.
  */
 import { api } from "../../core/api";
+import { suggestionOf, type Suggestion } from "../../core/assistantFences";
 import type { ObjectRef } from "../../core/contract";
 import { confirmDialog, openModal, toast } from "../../core/dialogs";
 import { formatNumber, h, icon, iconButton } from "../../core/dom";
@@ -21,6 +27,7 @@ import type { HistoryEntry, SavedQuery } from "../../core/types";
 import type { SectionContent, SectionContext } from "../../features/objectWorkspace/sectionWorkspace";
 import { gatewayProblem } from "../../features/safety/safety";
 import { SchemaCache } from "../../lang/schemaCache";
+import { needsReview, pipelineText, sampledDocumentsText, stageQuestion, type StageQuestion } from "./assistantModel";
 import { exportPipeline } from "./codegen";
 import { openCodeExport } from "./codeExportDialog";
 import { DocTree } from "./docTree";
@@ -41,6 +48,7 @@ import {
   PREVIEW_LIMIT,
   previewPlan,
   readAggregationsState,
+  parseStage,
   removeStage,
   sampledFields,
   savedStateOf,
@@ -55,6 +63,7 @@ import {
   type SampleMode,
 } from "./pipelineModel";
 import { EMPTY_QUERY, oneLine, type DocumentsMode, type QueryState } from "./queryModel";
+import { reviewChange } from "./reviewDialog";
 import { pipelineOfSaved, stateOfSaved, type AggregationsRequest, type DocumentsRequest } from "./savedQueries";
 import { SavedQueries } from "./savedQueriesMenu";
 import { StageCard, type StagePreview } from "./stageCard";
@@ -238,6 +247,11 @@ class AggregationsSection implements SectionContent {
 
   /** Stages handed over by another section or tab (the Documents query, a saved pipeline). */
   receive(request: unknown): void {
+    const suggestion = suggestionOf(request);
+    if (suggestion) {
+      void this.applySuggestion(suggestion);
+      return;
+    }
     const pipeline = (request as AggregationsRequest | null)?.pipeline;
     if (Array.isArray(pipeline)) void this.setPipeline(pipeline.filter((stage): stage is string => typeof stage === "string"));
   }
@@ -268,6 +282,90 @@ class AggregationsSection implements SectionContent {
     if (this.preview) lines.push(`Preview sample: ${this.preview.sample.mode} ${this.preview.sample.size} documents (${this.preview.sample.count} read).`);
     if (this.lastError) lines.push(`Last error: ${this.lastError}`);
     return lines.join("\n");
+  }
+
+  /** Documents reaching the active stage on the preview sample, cut per field (row data: gated by the backend). */
+  assistantSamples(): string | null {
+    const input = this.inputDocuments(this.active);
+    return input ? sampledDocumentsText(input, `Documents reaching stage ${this.active + 1} (preview sample, values cut)`) : null;
+  }
+
+  // --- The assistant -----------------------------------------------------------------------------------------------
+
+  /**
+   * The assistant's stages: they replace the pipeline (a diff first when it has stages), go in after the active stage,
+   * or replace the active stage (a diff first). Marked as suggested; the preview waits for the user.
+   */
+  private async applySuggestion(suggestion: Suggestion): Promise<void> {
+    const texts = (suggestion.pipeline ?? []).map((text) => text.trim()).filter(Boolean);
+    if (texts.length === 0) return;
+    const active = this.stages[this.active];
+    let next: PipelineStage[];
+    let focus: string;
+    let what: string;
+    if (suggestion.mode === "replaceActive" && active) {
+      const text = texts[0];
+      if (needsReview(active.text, text) && !(await reviewChange(`Replace stage ${this.active + 1}?`, active.text, text))) return;
+      next = updateStage(this.stages, active.id, { text, operator: operatorOfText(text) ?? active.operator });
+      this.cards.get(active.id)?.setText(text);
+      focus = active.id;
+      what = `Stage ${this.active + 1} replaced`;
+    } else if (suggestion.mode === "insert" || suggestion.mode === "replaceActive") {
+      const at = this.stages.length === 0 ? 0 : this.active + 1;
+      const added = stagesOfTexts(texts, nextId);
+      next = [...this.stages.slice(0, at), ...added, ...this.stages.slice(at)];
+      focus = added[0].id;
+      what = `${added.length} ${added.length === 1 ? "stage" : "stages"} inserted at ${at + 1}`;
+    } else {
+      const current = this.stages.map((stage) => stage.text);
+      if (current.length > 0 && needsReview(pipelineText(current), pipelineText(texts))) {
+        const accepted = await reviewChange(
+          `Replace the ${current.length} ${current.length === 1 ? "stage" : "stages"} of the pipeline?`,
+          pipelineText(current),
+          pipelineText(texts),
+        );
+        if (!accepted) return;
+      }
+      next = stagesOfTexts(texts, nextId);
+      focus = next[0].id;
+      what = `Pipeline of ${next.length} ${next.length === 1 ? "stage" : "stages"}`;
+    }
+    if (this.disposed) return;
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
+    this.stages = next;
+    this.active = Math.max(
+      0,
+      next.findIndex((stage) => stage.id === focus),
+    );
+    this.renderList();
+    this.ctx.stateChanged();
+    this.cards.get(focus)?.focus();
+    this.showInfo(`${what}, suggested by the assistant. Nothing has run: press Preview to see it on the sample.`);
+  }
+
+  /** A card's "Ask": the question about stage `index`, with the pipeline, the stage and its error as context. */
+  private ask(index: number, question: StageQuestion): void {
+    const stage = this.stages[index];
+    const askAssistant = this.ctx.view.navigator.askAssistant;
+    if (!stage || !askAssistant) return;
+    this.active = index;
+    for (const [id, card] of this.cards) card.setActive(id === stage.id);
+    const operator = operatorOfText(stage.text) ?? stage.operator;
+    const context = [this.assistantContext() ?? ""];
+    const error = this.stageError(index);
+    if (error) context.push(`Error of stage ${index + 1}: ${error}`);
+    askAssistant(stageQuestion(question, index, operator, `${this.database}.${this.collection}`), context.join("\n"), this.assistantSamples() ?? undefined);
+  }
+
+  /** Why stage `index` fails: it does not parse, or the preview's error for it. */
+  private stageError(index: number): string | null {
+    const stage = this.stages[index];
+    if (!stage) return null;
+    const parsed = parseStage(stage.text);
+    if (!parsed.ok) return parsed.error;
+    const output = this.previewOf(index);
+    return output?.error ?? null;
   }
 
   // --- The pipeline ------------------------------------------------------------------------------------------------
@@ -402,6 +500,7 @@ class AggregationsSection implements SectionContent {
         for (const [other, item] of this.cards) item.setActive(other === id);
       },
       run: () => void this.runPreview(true),
+      ask: this.ctx.view.navigator.askAssistant ? (question) => this.ask(index(), question) : undefined,
     });
     card.handle.addEventListener("pointerdown", () => {
       card.element.draggable = true;

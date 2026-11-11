@@ -50,6 +50,8 @@ export interface NavigationHost {
   taskOf(taskId: string): TaskDef | undefined;
   /** Connects the connection unless it is connected (through the tree, which shows it); true once it is. */
   ensureConnected(connectionId: string): Promise<boolean>;
+  /** Opens the assistant panel and sends a prepared question (see `Navigator.askAssistant`). */
+  askAssistant(prompt: string, extra?: string, samples?: string): void;
 }
 
 /** What `openObject` opens: a tree node, an object reference, or nothing (the connection itself: a console). */
@@ -277,6 +279,10 @@ export class AppNavigation implements Navigator {
     const profile = this.profile(connectionId);
     if (!profile) return;
     void this.openObject(profile, object, "data", { columnFilters });
+  }
+
+  askAssistant(prompt: string, extra?: string, samples?: string): void {
+    this.host.askAssistant(prompt, extra, samples);
   }
 
   openWorkspace(connectionId: string, object: ObjectRef, section: string, request: unknown): void {

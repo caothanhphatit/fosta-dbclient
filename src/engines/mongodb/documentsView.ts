@@ -11,8 +11,12 @@
  * On a collection where the rules allow writes, the documents can be edited (`documentEditing.ts`): edits stay pending,
  * shown in the views and the pending bar, until Save sends them through `apply_edits`. The query bar's More menu updates
  * or deletes every document the filter matches (`bulkDialogs.ts`), after a preview.
+ *
+ * The assistant's suggestions (a `mongo-filter` block applied, `open_collection_workspace`) fill the bar without running
+ * it, after a diff when they replace the user's own text; the bar's "Ask" sends a sentence to the assistant.
  */
 import { api } from "../../core/api";
+import { suggestionOf, type Suggestion } from "../../core/assistantFences";
 import type { ObjectRef } from "../../core/contract";
 import type { MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
@@ -48,7 +52,9 @@ import {
   type PageCursor,
   type QueryState,
 } from "./queryModel";
+import { filterQuestion, needsReview, sampledDocumentsText } from "./assistantModel";
 import { refFields, RefResolver } from "./refs";
+import { reviewChange } from "./reviewDialog";
 import { stagesFromQuery } from "./pipelineModel";
 import { pipelineOfSaved, readQueryRequest, stateOfSaved, type AggregationsRequest, type DocumentsRequest } from "./savedQueries";
 import { SavedQueries } from "./savedQueriesMenu";
@@ -175,6 +181,14 @@ class DocumentsSection implements SectionContent {
       },
       changed: () => this.ctx.stateChanged(),
       actions: () => this.moreActions(),
+      ask: ctx.view.navigator.askAssistant
+        ? (request) =>
+            ctx.view.navigator.askAssistant?.(
+              filterQuestion(this.collection, request),
+              this.assistantContext() ?? undefined,
+              this.assistantSamples() ?? undefined,
+            )
+        : undefined,
       saved: new SavedQueries({
         connectionId: ctx.view.connection.connectionId,
         database: this.database,
@@ -331,10 +345,39 @@ class DocumentsSection implements SectionContent {
    * query of this collection, a query-history entry reopened here).
    */
   receive(request: unknown): void {
+    const suggestion = suggestionOf(request);
+    if (suggestion) {
+      void this.applySuggestion(suggestion);
+      return;
+    }
     const asked = typeof request === "object" && request !== null ? (request as DocumentsRequest) : {};
     const query = readQueryRequest(asked.query);
     if (query) this.applyQuery(query);
     else if (typeof asked.filter === "string") this.applyQuery({ ...EMPTY_QUERY, limit: this.bar.state().limit, filter: asked.filter });
+  }
+
+  /**
+   * The assistant's filter, sort or projection: put into the bar and marked, never run. Replacing text of the user's own
+   * shows the change first.
+   */
+  private async applySuggestion(suggestion: Suggestion): Promise<void> {
+    const current = this.bar.state();
+    const fields = (["filter", "sort", "project"] as const).filter((field) => typeof suggestion[field] === "string" && suggestion[field] !== current[field]);
+    if (fields.length === 0) {
+      this.bar.focus();
+      return;
+    }
+    const next: QueryState = { ...current };
+    for (const field of fields) next[field] = (suggestion[field] ?? "").trim();
+    const text = (state: QueryState) => fields.map((field) => `// ${FIELD_LABELS[field]}\n${state[field].trim() || "(empty)"}`).join("\n\n");
+    if (fields.some((field) => needsReview(current[field], next[field]))) {
+      const accepted = await reviewChange(`Replace the ${fields.map((field) => FIELD_LABELS[field].toLowerCase()).join(" and ")}?`, text(current), text(next));
+      if (!accepted || this.disposed) return;
+    }
+    this.bar.setState(next);
+    this.bar.markSuggested(fields);
+    this.ctx.stateChanged();
+    this.bar.focus();
   }
 
   /** Puts `state` into the bar (the options row opens when it has options) and runs it. */
@@ -356,6 +399,11 @@ class DocumentsSection implements SectionContent {
     }
     const request: DocumentsRequest = { query: stateOfSaved(saved) };
     this.ctx.view.navigator.openWorkspace(this.ctx.view.connection.connectionId, object, "documents", request);
+  }
+
+  /** The first documents shown, cut per field (they reach the model only where the assistant may read data). */
+  assistantSamples(): string | null {
+    return this.page ? sampledDocumentsText(this.page.documents, `Documents shown in ${this.collection} (first of the page, values cut)`) : null;
   }
 
   assistantContext(): string | null {

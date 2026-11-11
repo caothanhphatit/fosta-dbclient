@@ -219,6 +219,11 @@ pub struct ChatContext {
     /// Free-form extra context, e.g. the tail of a command log.
     #[serde(default)]
     pub extra: Option<String>,
+    /// Documents sampled in the view (a collection workspace: what reaches the active stage), already cut by the UI.
+    /// Row data: it reaches the model only where the user lets the assistant read data (the same gate as
+    /// `run_read_query`); otherwise the prompt leaves it out.
+    #[serde(default)]
+    pub sampled_documents: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
