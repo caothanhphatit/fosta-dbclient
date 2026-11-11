@@ -30,6 +30,7 @@ pub mod descriptor;
 pub mod edit;
 pub mod guard;
 pub mod ops;
+mod profile;
 pub mod scan;
 pub mod session;
 pub mod tree;

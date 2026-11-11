@@ -24,7 +24,7 @@ use super::{
     console::{split_lines, tokenize},
     descriptor,
     edit::RedisEdit,
-    ops,
+    ops, profile,
     session::{RedisSession, LANGUAGE},
     vector::{self, RedisVectors, OPERATIONS as VECTOR_OPERATIONS, SEARCH_MODULE},
 };
@@ -32,8 +32,8 @@ use crate::{
     contract::{
         classify_common, require, unsupported_capability, vector as shared_vector, AuthMethodId, CallContext, Capability, CapabilitySet,
         Category, Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, Engine, EngineDescriptor, EngineError,
-        NodeAction, NodeKind, ObjectDescription, ObjectRef, OpenedSession, ParsedConnection, ServerInfo, SessionOptions, StatementInfo,
-        TlsConfig, TlsMode, TreeChildren, TreeRequest,
+        ExtrasRead, NodeAction, NodeKind, ObjectDescription, ObjectRef, OpenedSession, ParsedConnection, ProfileEnrichment, ProfileExtras,
+        ServerInfo, SessionOptions, StatementInfo, TlsConfig, TlsMode, TreeChildren, TreeRequest,
     },
     error::{AppError, AppResult},
 };
@@ -375,6 +375,10 @@ impl Connection for RedisConnection {
         }
     }
 
+    fn profile_extras(&self) -> Option<&dyn ProfileExtras> {
+        Some(self)
+    }
+
     async fn ping(&self) -> AppResult<()> {
         self.base.ping().await
     }
@@ -382,6 +386,16 @@ impl Connection for RedisConnection {
     async fn close(&self) {
         self.others.lock().await.clear();
         self.vectors.lock().await.take();
+    }
+}
+
+impl ProfileExtras for RedisConnection {
+    fn reads(&self, database: &str, _objects: &[ObjectRef]) -> Vec<ExtrasRead> {
+        profile::reads(database)
+    }
+
+    fn interpret(&self, database: &str, answers: &[(ExtrasRead, serde_json::Value)]) -> ProfileEnrichment {
+        profile::interpret(database, answers)
     }
 }
 
