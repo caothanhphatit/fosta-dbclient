@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use super::{
     catalog, collections,
+    profile::digest::{self, ChatProfile},
     prompt::{truncate, untrusted_block},
     ChatContext, ChatEvent, ChatSink, ToolCall, UiAction, Wire,
 };
@@ -34,9 +35,10 @@ pub(super) struct ToolSpec {
     pub(super) schema: Value,
 }
 
-/// The tools offered to the model; `read_queries` adds `run_read_query` (the user allows it for the workspace), and
-/// `collections` (a document engine) the collection tools (`super::collections`; `sample_documents` only with reads).
-pub(super) fn tool_definitions(read_queries: bool, collections: bool) -> Vec<ToolSpec> {
+/// The tools offered to the model; `read_queries` adds `run_read_query` (the user allows it for the workspace),
+/// `collections` (a document engine) the collection tools (`super::collections`; `sample_documents` only with reads),
+/// and `profile` (a learned profile of the chat's database) `search_profile` and `get_object_profile`.
+pub(super) fn tool_definitions(read_queries: bool, collections: bool, profile: bool) -> Vec<ToolSpec> {
     let database = json!({ "type": "string", "description": "Database name; defaults to the current one." });
     let mut tools = vec![
         ToolSpec {
@@ -115,6 +117,28 @@ pub(super) fn tool_definitions(read_queries: bool, collections: bool) -> Vec<Too
             }),
         },
     ];
+    if profile {
+        tools.push(ToolSpec {
+            name: digest::SEARCH_PROFILE,
+            description: "Searches what the app learned about the current database (object and column names, descriptions, the user's notes; parts of names and small typos match) and returns the ten best objects as one-line signatures. Use it to find the tables for a question when the prompt's profile does not show them.",
+            schema: json!({
+                "type": "object",
+                "properties": { "query": { "type": "string", "description": "A few words or a name, e.g. \"invoice lines\" or \"customer email\"." } },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        });
+        tools.push(ToolSpec {
+            name: digest::GET_OBJECT_PROFILE,
+            description: "Returns everything the app learned about one table, view or collection of the current database: every column (type, nullability, key, default, comment), keys, indexes, relations in and out, value hints and the user's notes. Prefer it to describe_table for objects in the profile.",
+            schema: json!({
+                "type": "object",
+                "properties": { "name": { "type": "string", "description": "Object name (schema.name where the profile shows one)." } },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+        });
+    }
     if read_queries {
         tools.push(ToolSpec {
             name: READ_QUERY,
@@ -149,13 +173,14 @@ pub(super) fn describe_call(call: &ToolCall, context: &ChatContext) -> String {
         "open_query" => String::from("Opened a query tab"),
         READ_QUERY => String::from("Running a read-only query"),
         SEARCH_APP_HELP => format!("Looked up \"{}\" in the app help", argument("query").unwrap_or_default()),
+        digest::SEARCH_PROFILE => format!("Searched the profile for \"{}\"", argument("query").unwrap_or_default()),
+        digest::GET_OBJECT_PROFILE => format!("Read the profile of {}", argument("name").unwrap_or_default()),
         name @ (collections::OPEN_WORKSPACE | collections::SAMPLE_DOCUMENTS) => collections::describe(name, &call.input),
         other => format!("Called {other}"),
     }
 }
 
-/// Runs one tool call. `reads` is the gateway context when the user allows read-only queries; without it
-/// `run_read_query` is refused even if the model calls it unasked.
+/// Runs one tool call without a learned profile (see [`run_tool_with`]).
 pub(super) async fn run_tool(
     db: &ConnectionManager,
     context: &ChatContext,
@@ -163,12 +188,39 @@ pub(super) async fn run_tool(
     call: &ToolCall,
     events: &dyn ChatSink,
 ) -> Result<String, String> {
+    run_tool_with(db, context, reads, None, call, events).await
+}
+
+/// Runs one tool call. `reads` is the gateway context when the user allows read-only queries; without it
+/// `run_read_query` is refused even if the model calls it unasked. `profile` is the learned profile of the chat's own
+/// connection and database (value hints already dropped without reads); the profile tools answer from it only.
+pub(super) async fn run_tool_with(
+    db: &ConnectionManager,
+    context: &ChatContext,
+    reads: Option<&gateway::Context>,
+    profile: Option<&ChatProfile>,
+    call: &ToolCall,
+    events: &dyn ChatSink,
+) -> Result<String, String> {
     // Every tool is registered with the gateway as metadata-only or view-opening; anything else is refused.
     gateway::assistant_tool_effect(&call.name).map_err(|error| error.to_string())?;
+    let text = |key: &str| call.input.get(key).and_then(Value::as_str).unwrap_or_default();
     // The app's own help is embedded text: no connection, no database content.
     if call.name == SEARCH_APP_HELP {
-        let query = call.input.get("query").and_then(Value::as_str).unwrap_or_default();
-        return Ok(super::app_help::search_app_help(query));
+        return Ok(super::app_help::search_app_help(text("query")));
+    }
+    // The stored profile: no engine call. It is pinned to the chat's connection and database by how it was loaded; the
+    // tools take no database argument.
+    if call.name == digest::SEARCH_PROFILE || call.name == digest::GET_OBJECT_PROFILE {
+        let profile = profile.ok_or(
+            "Nothing has been learned about this database. Use list_tables and describe_table, or suggest the user run \
+             \"Learn this database\" in the assistant panel.",
+        )?;
+        return if call.name == digest::SEARCH_PROFILE {
+            Ok(digest::search_profile(profile, text("query")))
+        } else {
+            digest::get_object_profile(profile, text("name"))
+        };
     }
     let connection_id = context.connection_id.as_deref().ok_or("No connection is open")?;
     let handle = db.handle(connection_id).map_err(|error| error.to_string())?;
@@ -607,13 +659,17 @@ mod tests {
             ("open_table", json!({ "table": "items", "filter": "name = 'x'" })),
             ("open_query", json!({ "sql": "DELETE FROM items" })),
             (SEARCH_APP_HELP, json!({ "query": "port forward" })),
+            (digest::SEARCH_PROFILE, json!({ "query": "customer" })),
+            (digest::GET_OBJECT_PROFILE, json!({ "name": "orders" })),
         ];
-        let defined: Vec<&str> = tool_definitions(false, false).iter().map(|tool| tool.name).collect();
+        let defined: Vec<&str> = tool_definitions(false, false, true).iter().map(|tool| tool.name).collect();
+        // A learned profile without reads: its value hints are dropped.
+        let profile = ChatProfile::new(digest::fixtures::shop(), false, false);
         assert_eq!(defined.len(), inputs.len(), "every tool is exercised here");
         let mut outputs = Vec::new();
         for (name, input) in inputs {
             assert!(defined.contains(&name), "{name}");
-            let outcome = run_tool(&db, &context, None, &call(name, input), &events).await;
+            let outcome = run_tool_with(&db, &context, None, Some(&profile), &call(name, input), &events).await;
             assert!(outcome.is_ok(), "{name}: {outcome:?}");
             outputs.push(outcome.unwrap());
         }
@@ -627,6 +683,23 @@ mod tests {
         assert!(outputs[3].contains("- items: id int?, name text?"), "{}", outputs[3]);
         // The app help needs no connection and reads no database.
         assert!(outputs[7].contains("Commands"), "{}", outputs[7]);
+        // The profile tools answer from the stored profile (no engine call), hints dropped without reads.
+        assert!(outputs[8].contains("- customers("), "{}", outputs[8]);
+        assert!(
+            outputs[9].contains("- customer_id int NULL") && !outputs[9].contains("values seen"),
+            "{}",
+            outputs[9]
+        );
+        // Without a profile they say so instead of guessing.
+        let unlearned = run_tool(
+            &db,
+            &context,
+            None,
+            &call(digest::GET_OBJECT_PROFILE, json!({ "name": "orders" })),
+            &events,
+        )
+        .await;
+        assert!(unlearned.unwrap_err().contains("Nothing has been learned"));
         // Unknown objects are a clear error, not a guess.
         let missing = run_tool(&db, &context, None, &call("describe_table", json!({ "table": "nope" })), &events).await;
         assert!(missing.unwrap_err().contains("no table, view or collection nope"));
@@ -683,7 +756,7 @@ mod tests {
 
     #[test]
     fn the_query_tool_is_only_offered_when_allowed() {
-        let names = |allowed: bool| -> Vec<&'static str> { tool_definitions(allowed, false).iter().map(|tool| tool.name).collect() };
+        let names = |allowed: bool| -> Vec<&'static str> { tool_definitions(allowed, false, false).iter().map(|tool| tool.name).collect() };
         assert!(!names(false).contains(&READ_QUERY));
         assert!(names(true).contains(&READ_QUERY));
         assert_eq!(names(true).len(), names(false).len() + 1);
@@ -692,16 +765,28 @@ mod tests {
     #[test]
     fn every_offered_tool_is_registered_with_the_gateway() {
         use gateway::AssistantToolEffect::{OpenView, ReadMetadata, ReadRows};
-        for (reads, collections) in [(false, false), (true, false), (false, true), (true, true)] {
-            for tool in tool_definitions(reads, collections) {
-                let effect = gateway::assistant_tool_effect(tool.name).unwrap_or_else(|error| panic!("{}: {error}", tool.name));
-                // Row data only where the user allows reads.
-                assert!(reads || effect != ReadRows, "{}", tool.name);
-                assert!(matches!(effect, ReadMetadata | ReadRows | OpenView));
+        for reads in [false, true] {
+            for collections in [false, true] {
+                for profile in [false, true] {
+                    for tool in tool_definitions(reads, collections, profile) {
+                        let effect = gateway::assistant_tool_effect(tool.name).unwrap_or_else(|error| panic!("{}: {error}", tool.name));
+                        // Row data only where the user allows reads.
+                        assert!(reads || effect != ReadRows, "{}", tool.name);
+                        assert!(matches!(effect, ReadMetadata | ReadRows | OpenView));
+                    }
+                }
             }
         }
+        let with_profile: Vec<&str> = tool_definitions(false, false, true).iter().map(|tool| tool.name).collect();
+        assert!(with_profile.contains(&digest::SEARCH_PROFILE) && with_profile.contains(&digest::GET_OBJECT_PROFILE));
+        assert!(!tool_definitions(true, true, false)
+            .iter()
+            .any(|tool| tool.name == digest::SEARCH_PROFILE || tool.name == digest::GET_OBJECT_PROFILE));
+        for name in [digest::SEARCH_PROFILE, digest::GET_OBJECT_PROFILE] {
+            assert_eq!(gateway::assistant_tool_effect(name).unwrap(), ReadMetadata, "{name}");
+        }
         let names = |reads: bool, collections: bool| -> Vec<&'static str> {
-            tool_definitions(reads, collections).iter().map(|tool| tool.name).collect()
+            tool_definitions(reads, collections, false).iter().map(|tool| tool.name).collect()
         };
         assert!(!names(true, false).contains(&collections::OPEN_WORKSPACE));
         assert!(names(false, true).contains(&collections::OPEN_WORKSPACE));
@@ -890,9 +975,18 @@ mod tests {
             "context": { "connectionId": "shop", "connectionName": "Local MariaDB", "driverLabel": "MariaDB", "database": "shop" }
         }))
         .unwrap();
-        let reply = crate::ai::chat(&settings, Some(key), &db, &crate::ai::AiRuns::default(), request, None, &channel)
-            .await
-            .expect("chat");
+        let reply = crate::ai::chat(
+            &settings,
+            Some(key),
+            &db,
+            &crate::ai::AiRuns::default(),
+            None,
+            request,
+            None,
+            &channel,
+        )
+        .await
+        .expect("chat");
         let events = seen.lock().unwrap().clone();
         assert!(events.iter().any(|event| event.contains("openDiagram")), "no diagram action");
         assert!(reply.contains("```"), "no code block");

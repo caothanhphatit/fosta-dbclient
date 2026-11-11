@@ -95,7 +95,17 @@ pub async fn ai_chat(state: &AppState, request: ChatRequest, on_event: &dyn Chat
         .connection_id
         .as_deref()
         .and_then(|connection_id| read_query_context(&config, connection_id));
-    ai::chat(&settings, api_key, &state.engines, &state.ai, request, reads, on_event).await
+    ai::chat(
+        &settings,
+        api_key,
+        &state.engines,
+        &state.ai,
+        Some(&state.profiles),
+        request,
+        reads,
+        on_event,
+    )
+    .await
 }
 
 /// Settings → "Allow the assistant to run read-only queries"; each workspace can override it.

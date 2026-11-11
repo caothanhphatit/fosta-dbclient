@@ -23,7 +23,10 @@ mod tools;
 
 pub(crate) use tools::{framed, metadata_tool};
 
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -32,8 +35,9 @@ use tokio_util::sync::CancellationToken;
 
 use self::{
     http::{http_client, send},
-    prompt::system_prompt,
-    tools::{append_tool_results, describe_call, run_tool, tool_definitions, ToolSpec},
+    profile::ProfileStore,
+    prompt::system_prompt_with,
+    tools::{append_tool_results, describe_call, run_tool_with, tool_definitions, ToolSpec},
 };
 use crate::{
     error::{AppError, AppResult},
@@ -359,11 +363,15 @@ struct Turn {
 
 /// Streams one reply. `reads` is the gateway context of the chat's connection when the user allows the assistant to run
 /// read-only queries there (`gateway::assistant::reads_allowed`); `None` leaves the query tool out entirely.
+/// `profiles`: where learned profiles are kept; the chat's connection and database's profile, if any, goes into the
+/// prompt and backs the profile tools.
+#[allow(clippy::too_many_arguments)]
 pub async fn chat(
     settings: &AiSettings,
     api_key: Option<String>,
     db: &ConnectionManager,
     runs: &AiRuns,
+    profiles: Option<&Arc<ProfileStore>>,
     request: ChatRequest,
     reads: Option<gateway::Context>,
     events: &dyn ChatSink,
@@ -373,7 +381,7 @@ pub async fn chat(
     // Stopping drops the run; a query the model started is cancelled and its session closed by `gateway::assistant`.
     let result = tokio::select! {
         _ = token.cancelled() => Err(AppError::new(STOPPED)),
-        outcome = run(settings, api_key, db, request, reads.as_ref(), events) => outcome,
+        outcome = run(settings, api_key, db, profiles, request, reads.as_ref(), events) => outcome,
     };
     runs.finish(&id);
     let _ = events.send(ChatEvent::Done);
@@ -439,6 +447,7 @@ async fn run(
     settings: &AiSettings,
     api_key: Option<String>,
     db: &ConnectionManager,
+    profiles: Option<&Arc<ProfileStore>>,
     request: ChatRequest,
     reads: Option<&gateway::Context>,
     events: &dyn ChatSink,
@@ -450,9 +459,23 @@ async fn run(
     let context = request.context;
     // The query tool only for the chat's own connection.
     let reads = reads.filter(|reads| context.connection_id.as_deref() == Some(reads.connection_id.as_str()));
-    let system = system_prompt(db, &context, reads.is_some()).await;
+    let profile = match (profiles, context.connection_id.as_deref()) {
+        (Some(store), Some(connection_id)) => {
+            let handle = db.handle(connection_id).ok();
+            let database = context.database.as_deref().unwrap_or_default();
+            profile::digest::for_chat(store, handle.as_ref(), connection_id, database, reads.is_some()).await
+        }
+        _ => None,
+    };
+    let latest = request
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.as_str());
+    let system = system_prompt_with(db, &context, reads.is_some(), profile.as_ref(), latest).await;
     let tools = if context.connection_id.is_some() {
-        tool_definitions(reads.is_some(), collections::has_collections(db, &context))
+        tool_definitions(reads.is_some(), collections::has_collections(db, &context), profile.is_some())
     } else {
         Vec::new()
     };
@@ -475,7 +498,7 @@ async fn run(
             let _ = events.send(ChatEvent::Tool {
                 label: describe_call(call, &context),
             });
-            let outcome = run_tool(db, &context, reads, call, events).await;
+            let outcome = run_tool_with(db, &context, reads, profile.as_ref(), call, events).await;
             results.push((call, outcome));
         }
         append_tool_results(settings.provider.wire(), &mut history, &results);

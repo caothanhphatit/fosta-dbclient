@@ -823,6 +823,8 @@ pub fn assistant_tool_effect(name: &str) -> AppResult<AssistantToolEffect> {
         "list_databases" | "list_tables" | "describe_table" | "schema_overview" => Ok(AssistantToolEffect::ReadMetadata),
         // The app's embedded help text: reads no database at all.
         "search_app_help" => Ok(AssistantToolEffect::ReadMetadata),
+        // The learned profile of the chat's own database (value hints only where reads are allowed now).
+        "search_profile" | "get_object_profile" => Ok(AssistantToolEffect::ReadMetadata),
         "run_read_query" | "sample_documents" => Ok(AssistantToolEffect::ReadRows),
         "open_diagram" | "open_table" | "open_query" | "open_collection_workspace" => Ok(AssistantToolEffect::OpenView),
         other => Err(AppError::new(format!("The assistant has no tool called {other}"))),
@@ -1060,6 +1062,9 @@ mod tests {
             "list_tables",
             "describe_table",
             "schema_overview",
+            "search_app_help",
+            "search_profile",
+            "get_object_profile",
             "open_diagram",
             "open_table",
             "open_query",
