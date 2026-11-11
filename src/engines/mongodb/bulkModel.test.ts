@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deleteArgs, matchesEverything, parseUpdate, previewArgs, previewModel, runLabel, updateArgs } from "./bulkModel";
+import { deleteArgs, deleteHeadline, matchesEverything, parseUpdate, previewArgs, previewModel, runLabel, updateArgs } from "./bulkModel";
 import { defaultType, duplicateText, initialText, parseDocumentInput, parseInput } from "./valueInput";
 
 const target = { database: "shop", collection: "orders" };
@@ -52,6 +52,9 @@ describe("bulk update model", () => {
     expect(runLabel("update", 1)).toBe("Update 1 document");
     expect(runLabel("delete", 1200)).toBe("Delete 1,200 documents");
     expect(runLabel("delete", null)).toBe("Delete matching documents");
+    expect(deleteHeadline(0)).toBe("No documents match the filter.");
+    expect(deleteHeadline(1)).toBe("1 document matches: the delete removes it.");
+    expect(deleteHeadline(2500)).toBe("2,500 documents match: the delete removes every one of them.");
   });
 });
 

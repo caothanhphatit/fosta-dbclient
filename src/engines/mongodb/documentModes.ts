@@ -3,9 +3,11 @@
  * and keeps while the tab is open; switching modes shows the same page at the same document (each mode tells the
  * index of its top document and scrolls to one; the section anchors it by `_id`, `anchor.ts`).
  *
- * - List: the virtualised document tree (`docTree.ts`), readable BSON, inferred references.
+ * - List: the virtualised document tree (`docTree.ts`), readable BSON, inferred references; values, fields and documents
+ *   are edited from it (double-click, the card tools, the menu) when the section allows edits.
  * - JSON: the page as Extended JSON in a read-only editor.
- * - Table: the page flattened to dotted-path columns (`flatten.ts`) in the shared grid, read-only; arrays and deep
+ * - Table: the page flattened to dotted-path columns (`flatten.ts`) in the shared grid (no inline editing: a double-click
+ *   or the menu opens the value editor, edits are marked per cell); arrays and deep
  *   documents are one cell that opens in the side panel.
  */
 import type { ColumnInfo, Value, ValueKind as GridKind } from "../../core/contract";
@@ -14,7 +16,7 @@ import { h } from "../../core/dom";
 import { DataGrid, gridSetup, type CellView } from "../../features/grid/grid";
 import { documentAtLine, jsonDocumentLines } from "./anchor";
 import { bsonType, readable, shellText, type BsonType } from "./bson";
-import { DocTree, type TreeRefs } from "./docTree";
+import { DocTree, type TreeEditing, type TreeRefs } from "./docTree";
 import { foldedText, isNested, type Doc, type Json } from "./documents";
 import { columnTypeText, flatten, isOddCell, MAX_COLUMNS, type FlatTable } from "./flatten";
 import { createJsonViewer } from "./queryEditor";
@@ -30,6 +32,8 @@ export interface DocumentsRenderer {
   scrollToDocument(index: number): void;
   /** Draws again what depends on the section (an inferred reference became known). */
   refresh?(): void;
+  /** Shows new versions of the same documents (pending edits applied), keeping the position. */
+  replace?(documents: Doc[]): void;
   dispose?(): void;
 }
 
@@ -38,6 +42,8 @@ export interface RendererContext {
   refs: TreeRefs;
   /** Opens a value (an array, a document) in the side panel. */
   inspect(title: string, value: Json): void;
+  /** Editing (a collection the workspace may write); null: read-only. Indexes are positions in the page. */
+  edit: TreeEditing | null;
 }
 
 export interface ModeSpec {
@@ -58,7 +64,7 @@ class ListRenderer implements DocumentsRenderer {
   readonly element: HTMLElement;
 
   constructor(ctx: RendererContext) {
-    this.tree = new DocTree({ refs: ctx.refs, numbered: true });
+    this.tree = new DocTree({ refs: ctx.refs, numbered: true, edit: ctx.edit ?? undefined });
     this.element = h("div", { class: "md-list" }, this.tree.element);
   }
 
@@ -78,6 +84,10 @@ class ListRenderer implements DocumentsRenderer {
     this.tree.refresh();
   }
 
+  replace(documents: Doc[]): void {
+    this.tree.replace(documents);
+  }
+
   dispose(): void {
     this.tree.dispose();
   }
@@ -92,6 +102,13 @@ class JsonRenderer implements DocumentsRenderer {
     this.viewer.set(JSON.stringify(documents, null, 2));
     this.starts = jsonDocumentLines(documents);
     this.viewer.scrollToLine(0);
+  }
+
+  replace(documents: Doc[]): void {
+    const top = this.viewer.topLine();
+    this.viewer.set(JSON.stringify(documents, null, 2));
+    this.starts = jsonDocumentLines(documents);
+    this.viewer.scrollToLine(top);
   }
 
   topDocument(): number {
@@ -182,6 +199,12 @@ class TableRenderer implements DocumentsRenderer {
     this.grid.element.scrollLeft = left;
   }
 
+  replace(documents: Doc[]): void {
+    this.documents = documents;
+    this.table = flatten(documents);
+    this.refresh();
+  }
+
   dispose(): void {
     this.grid.dispose();
   }
@@ -203,7 +226,9 @@ class TableRenderer implements DocumentsRenderer {
     const setup = gridSetup(columns, rows);
     setup.rowOffset = this.offset;
     setup.clientSort = true;
-    setup.readOnlyReason = "Documents are read-only in the Table mode for now.";
+    setup.readOnlyReason = this.ctx.edit
+      ? "Double-click a value (or use its menu) to edit it; edits stay pending until you save them."
+      : "These documents are read-only here.";
     setup.cellView = (row, column) => this.cellView(row, column);
     setup.onCellOpen = (row, column) => this.open(row, column);
     setup.cellMenu = (row, column) => this.menu(row, column);
@@ -221,10 +246,29 @@ class TableRenderer implements DocumentsRenderer {
     return bsonType(value) === "objectId" && isRefName(path) ? this.ctx.refs.targetOf(path) : null;
   }
 
+  /** The pending-edit mark of a cell (" mt-changed", " mt-added", " mt-deleted"), empty when none. */
+  private mark(row: number, path: string): string {
+    const edit = this.ctx.edit;
+    if (!edit) return "";
+    if (edit.docState(row) === "deleted") return " mt-deleted";
+    const state = edit.pathState(row, path.split("."));
+    return state === "set" ? " mt-changed" : state === "added" ? " mt-added" : state === "inside" ? " mt-changed" : "";
+  }
+
   private cellView(row: number, column: number): CellView {
+    const view = this.plainCellView(row, column);
+    const meta = this.table.columns[column];
+    const mark = meta ? this.mark(row, meta.path) : "";
+    return mark ? { ...view, className: `${view.className ?? ""}${mark}` } : view;
+  }
+
+  private plainCellView(row: number, column: number): CellView {
     const meta = this.table.columns[column];
     const cell = this.table.rows[row]?.[column];
-    if (!meta || !cell || cell.missing) return { text: "", title: "No such field in this document", className: "mt-missing" };
+    if (!meta || !cell || cell.missing) {
+      const title = this.ctx.edit ? "No such field in this document: double-click to add it" : "No such field in this document";
+      return { text: "", title, className: "mt-missing" };
+    }
     const odd = isOddCell(meta, cell) ? " mt-odd" : "";
     const value = cell.value;
     if (isNested(value)) {
@@ -248,7 +292,14 @@ class TableRenderer implements DocumentsRenderer {
 
   private open(row: number, column: number): boolean {
     const cell = this.cell(row, column);
-    if (!cell) return false;
+    const edit = this.ctx.edit;
+    const meta = this.table.columns[column];
+    if (!cell) {
+      // A field this document does not have: add it at that path.
+      if (!edit || !meta || edit.docState(row) === "deleted") return false;
+      edit.editValue(row, meta.path.split("."));
+      return true;
+    }
     if (isNested(cell.value)) {
       this.ctx.inspect(`${cell.path} · document ${this.offset + row + 1}`, cell.value);
       return true;
@@ -258,11 +309,39 @@ class TableRenderer implements DocumentsRenderer {
       this.ctx.refs.open(target, cell.value, cell.path);
       return true;
     }
+    if (edit && edit.docState(row) !== "deleted" && cell.path !== "_id") {
+      edit.editValue(row, cell.path.split("."));
+      return true;
+    }
     return false;
   }
 
-  private menu(row: number, column: number): MenuItem[] {
+  private editItems(row: number, column: number): MenuItem[] {
+    const edit = this.ctx.edit;
+    const meta = this.table.columns[column];
+    if (!edit || !this.documents[row]) return [];
+    if (edit.docState(row) === "deleted") return [{ label: "Restore document", icon: "history", run: () => edit.restoreDocument(row) }, "separator"];
     const items: MenuItem[] = [];
+    if (meta && meta.path !== "_id") {
+      const path = meta.path.split(".");
+      const present = this.cell(row, column) !== null;
+      items.push({ label: present ? "Edit value…" : `Add ${meta.path}…`, icon: "edit", run: () => edit.editValue(row, path) });
+      if (present && path.length > 0) {
+        items.push({ label: "Rename field…", run: () => edit.renameField(row, path) });
+        items.push({ label: "Remove field", icon: "trash", run: () => edit.removeField(row, path) });
+      }
+    }
+    items.push(
+      { label: "Add field to document…", icon: "plus", run: () => edit.addField(row, []) },
+      { label: "Duplicate document…", icon: "layers", run: () => edit.duplicate(row) },
+      { label: "Delete document", icon: "trash", run: () => edit.deleteDocument(row) },
+      "separator",
+    );
+    return items;
+  }
+
+  private menu(row: number, column: number): MenuItem[] {
+    const items: MenuItem[] = this.editItems(row, column);
     const cell = this.cell(row, column);
     if (cell && isNested(cell.value)) {
       items.push({ label: Array.isArray(cell.value) ? "Open items" : "Open document", icon: "expand", run: () => void this.open(row, column) });

@@ -61,7 +61,8 @@
   height: 30px;
 }
 
-.mq-history {
+.mq-history,
+.mq-more {
   padding: 0 7px;
 }
 
@@ -593,4 +594,273 @@
 
 .mq-side-foot[hidden] {
   display: none;
+}
+
+/* --- Editing (List and Table modes) ------------------------------------------------------------------------------------ */
+
+.dt-field.dt-changed,
+.dt-field.dt-added {
+  box-shadow: inset 3px 0 0 var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+}
+
+.dt-field.dt-added {
+  box-shadow: inset 3px 0 0 var(--success);
+  background: color-mix(in srgb, var(--success) 10%, var(--surface));
+}
+
+.dt-field.dt-inside .md-key {
+  color: var(--warning);
+}
+
+.dt-doc-deleted.dt-field,
+.dt-doc-deleted .dt-foot-box,
+.dt-head.dt-doc-deleted {
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+}
+
+.dt-doc-deleted.dt-field .dt-row {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.dt-badge {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+  font-size: 10.5px;
+  line-height: 15px;
+}
+
+.dt-badge-deleted {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.mt-table .cell.mt-changed,
+.mt-table .cell.mt-added {
+  box-shadow: inset 3px 0 0 var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.mt-table .cell.mt-added {
+  box-shadow: inset 3px 0 0 var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.mt-table .cell.mt-deleted {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.mq-pending .pending-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The value, field and document dialogs. */
+.md-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.md-edit-path {
+  overflow: hidden;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-edit select,
+.md-edit-input,
+.md-edit-area {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.md-edit-area {
+  min-height: 60px;
+  resize: vertical;
+}
+
+.md-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.md-edit-hint,
+.md-edit-note {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.md-edit-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.md-diff {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  list-style: none;
+}
+
+.md-diff-line {
+  overflow: hidden;
+  padding: 1px 6px;
+  border-left: 3px solid var(--warning);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-diff-added {
+  border-left-color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+
+.md-diff-removed {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.md-diff-changed {
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.md-review {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.md-review-item {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.md-review-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.md-review-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.md-review-summary {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.md-review-badge {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+  font-size: 11px;
+}
+
+.md-review-new .md-review-badge {
+  background: color-mix(in srgb, var(--success) 18%, transparent);
+  color: var(--success);
+}
+
+.md-review-deleted .md-review-badge {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
+
+.md-review-doc {
+  max-height: 200px;
+  margin: 0;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* Update / Delete matching. */
+.mb-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mb-filter {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mb-filter code {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mb-label {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.mb-warning {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.mb-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.mb-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 46vh;
+  overflow: auto;
+}
+
+.mb-result.mb-stale {
+  opacity: 0.5;
+}
+
+.mb-headline {
+  font-weight: 500;
+}
+
+.mb-sample {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.mb-sample-id {
+  margin-bottom: 4px;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.mb-note {
+  color: var(--fg-3);
+  font-size: 12px;
 }

@@ -7,9 +7,15 @@
  * Every read goes through `mongo.find` / `mongo.count` / `mongo.resolveRef` (`invoke`), so the gateway classifies and
  * may refuse it; its errors are shown in place of the documents. Each run is added to the query history as a shell
  * command.
+ *
+ * On a collection where the rules allow writes, the documents can be edited (`documentEditing.ts`): edits stay pending,
+ * shown in the views and the pending bar, until Save sends them through `apply_edits`. The query bar's More menu updates
+ * or deletes every document the filter matches (`bulkDialogs.ts`), after a preview.
  */
 import { api } from "../../core/api";
 import type { ObjectRef } from "../../core/contract";
+import type { MenuItem } from "../../core/contextMenu";
+import { toast } from "../../core/dialogs";
 import { formatNumber, h, icon, iconButton } from "../../core/dom";
 import { renderError } from "../../core/errorPanel";
 import { errorText } from "../../core/errors";
@@ -18,7 +24,9 @@ import type { SectionContent, SectionContext } from "../../features/objectWorksp
 import { SchemaCache } from "../../lang/schemaCache";
 import { anchorAt, indexOfAnchor, type Anchor } from "./anchor";
 import { readable, shellText } from "./bson";
+import { openDeleteMatching, openUpdateMatching, type BulkContext } from "./bulkDialogs";
 import { DocTree } from "./docTree";
+import { DocumentEditing } from "./documentEditing";
 import { documentPaths, type Doc, type Json } from "./documents";
 import { MODES, type DocumentsRenderer, type RendererContext } from "./documentModes";
 import { MongoApi, type FindResult } from "./mongoApi";
@@ -45,6 +53,8 @@ import "./mongodb.css";
 /** Store keys other sections read (the query of this tab, the field paths seen). */
 export const STORE_QUERY = "mongo.query";
 export const STORE_FIELD_PATHS = "mongo.fieldPaths";
+
+const READ_ONLY_NOTE = "Read-only workspace: documents cannot be edited, added or deleted here. Change the workspace's safety rules to edit.";
 
 /** What another tab hands the section (`receive`): a filter to run, e.g. `{ _id: ObjectId('…') }`. */
 export interface DocumentsRequest {
@@ -79,6 +89,9 @@ class DocumentsSection implements SectionContent {
   private readonly next: HTMLButtonElement;
   private readonly refs: RefResolver;
   private readonly rendererContext: RendererContext;
+  /** Editing (List and Table modes); null on a view and where the rules block writes. */
+  private readonly editing: DocumentEditing | null;
+  private readonly writesBlocked: boolean;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private mode: DocumentsMode;
   private recent: string[];
@@ -101,6 +114,18 @@ class DocumentsSection implements SectionContent {
     this.collection = object?.name ?? "";
     this.isView = object?.kind === "view";
     this.api = new MongoApi(ctx.view.connection, { database: this.database, collection: this.collection });
+    // Edits are offered on collections where the rules allow writes; the gateway checks every save anyway.
+    this.writesBlocked = ctx.view.navigator.writesBlocked(ctx.view.connection.connectionId);
+    this.editing =
+      object && !this.isView && !this.writesBlocked
+        ? new DocumentEditing({
+            api: this.api,
+            object,
+            documents: () => (this.page?.documents ?? []) as Doc[],
+            changed: () => this.editsChanged(),
+            reload: () => this.reload(),
+          })
+        : null;
     const saved: DocumentsSavedState = readSavedState(ctx.savedState);
     this.mode = saved.mode;
     this.recent = saved.recent;
@@ -119,6 +144,7 @@ class DocumentsSection implements SectionContent {
         open: (collection, id, path) => void this.side.openRef(collection, id, path),
       },
       inspect: (title, value) => this.side.inspect(title, value),
+      edit: this.editing?.tree ?? null,
     };
     this.side = new SidePanel({
       resolve: async (collection, id) => {
@@ -149,6 +175,7 @@ class DocumentsSection implements SectionContent {
         void this.run();
       },
       changed: () => this.ctx.stateChanged(),
+      actions: this.isView ? undefined : () => this.bulkActions(),
     });
 
     const modes = h("div", { class: "segmented mq-modes", role: "group", "aria-label": "Show documents as" });
@@ -161,16 +188,27 @@ class DocumentsSection implements SectionContent {
     this.prev = iconButton("prev", "Previous page", () => void this.previous());
     this.next = iconButton("chevron", "Next page", () => void this.forward());
     const refresh = iconButton("refresh", "Run again", () => void this.run(false));
+    const insert = this.editing ? iconButton("plus", "Insert a document…", () => void this.editing?.insert()) : null;
     const toolbar = h(
       "div",
       { class: "toolbar mq-results-bar" },
       modes,
-      h("div", { class: "toolbar-end" }, this.timing, this.range, this.prev, this.next, refresh),
+      h("div", { class: "toolbar-end" }, insert, this.timing, this.range, this.prev, this.next, refresh),
     );
     const main = h("div", { class: "mq-main" }, this.staleNote, this.message, this.results);
     // What the user does in the documents (not the scrolling a mode switch does) moves the anchor.
     for (const type of ["wheel", "keydown", "pointerdown"]) this.results.addEventListener(type, () => (this.userMoved = true), { passive: true });
-    this.element = h("div", { class: "view mq-documents" }, this.bar.element, toolbar, h("div", { class: "mq-body" }, main, this.side.element));
+    const readOnlyBar =
+      !this.isView && this.writesBlocked ? h("div", { class: "readonly-bar", role: "status" }, icon("view"), h("span", {}, READ_ONLY_NOTE)) : null;
+    this.element = h(
+      "div",
+      { class: "view mq-documents" },
+      this.bar.element,
+      readOnlyBar,
+      toolbar,
+      h("div", { class: "mq-body" }, main, this.side.element),
+      this.editing?.bar ?? null,
+    );
     this.setMode(this.mode, false);
     this.updatePager();
     void this.run(false);
@@ -187,6 +225,72 @@ class DocumentsSection implements SectionContent {
 
   saveState(): DocumentsSavedState {
     return { ...this.bar.state(), mode: this.mode, options: this.bar.optionsOpen(), recent: this.recent };
+  }
+
+  hasUnsavedChanges(): boolean {
+    return this.editing !== null && !this.editing.edits.isEmpty();
+  }
+
+  closeWarning(): string | null {
+    return this.editing?.warning() ?? null;
+  }
+
+  /** The page's documents as the views show them: with the pending edits. */
+  private shownDocuments(): Doc[] {
+    const documents = (this.page?.documents ?? []) as Doc[];
+    return this.editing ? this.editing.shown(documents) : documents;
+  }
+
+  /** The pending edits changed: the current mode shows the documents again in place; the others draw on their next show. */
+  private editsChanged(): void {
+    if (!this.page || this.page.documents.length === 0) return;
+    for (const mode of [...this.shown.keys()]) if (mode !== this.mode) this.shown.delete(mode);
+    const renderer = this.renderers.get(this.mode);
+    if (renderer && this.shown.get(this.mode) === this.page) {
+      if (renderer.replace) renderer.replace(this.shownDocuments());
+      else this.shown.delete(this.mode);
+    }
+    if (!this.shown.has(this.mode)) this.draw(null);
+  }
+
+  /** Reads the current page again (after a save) and counts again. */
+  private async reload(): Promise<void> {
+    const cursor = this.cursors[this.cursors.length - 1];
+    if (!this.query || !cursor) return;
+    void this.count(this.query, this.generation);
+    await this.load(cursor);
+  }
+
+  private bulkActions(): MenuItem[] {
+    const blocked = this.writesBlocked ? "The workspace is Read-only" : undefined;
+    return [
+      { label: "Update matching documents…", icon: "edit", detail: blocked ?? "Preview first, then update", run: () => this.bulk("update") },
+      { label: "Delete matching documents…", icon: "trash", danger: true, disabled: this.writesBlocked, detail: blocked, run: () => this.bulk("delete") },
+    ];
+  }
+
+  /** Opens the bulk update or delete for the bar's current filter (as typed now, parsed like a run). */
+  private bulk(kind: "update" | "delete"): void {
+    const state = this.bar.state();
+    const built = buildQuery(state, { database: this.database, collection: this.collection });
+    if (!built.ok) {
+      this.bar.showError(built.error);
+      this.bar.focusError(built.error);
+      return;
+    }
+    if (built.query.find.collation) {
+      toast("Clear the collation first: bulk updates and deletes run without one, so they could match other documents.", "error");
+      return;
+    }
+    const context: BulkContext = {
+      api: this.api,
+      collection: this.collection,
+      filter: built.query.find.filter ?? null,
+      filterText: state.filter,
+      done: () => void this.run(false),
+    };
+    if (kind === "update") openUpdateMatching(context);
+    else openDeleteMatching(context);
   }
 
   /** Runs a filter handed over by another tab (a reference opened in its collection). */
@@ -379,7 +483,7 @@ class DocumentsSection implements SectionContent {
     const renderer = this.renderer(this.mode);
     const fresh = this.shown.get(this.mode) !== page;
     if (fresh) {
-      renderer.show(documents, this.cursors[this.cursors.length - 1]?.offset ?? 0);
+      renderer.show(this.shownDocuments(), this.cursors[this.cursors.length - 1]?.offset ?? 0);
       this.shown.set(this.mode, page);
     }
     if (this.results.firstChild !== renderer.element) this.results.replaceChildren(renderer.element);

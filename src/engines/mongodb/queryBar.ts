@@ -41,6 +41,8 @@ export interface QueryBarOptions {
   reset(): void;
   /** A field or the options row changed (the section saves its state). */
   changed(): void;
+  /** The items of the bar's "More" menu (bulk actions on the matching documents); none: no menu. */
+  actions?(): MenuItem[];
 }
 
 export class QueryBar {
@@ -106,13 +108,26 @@ export class QueryBar {
     this.element = h(
       "div",
       { class: "mq-bar" },
-      h("div", { class: "mq-row" }, this.labelled("Filter", filterHost, "mq-grow"), historyButton, this.optionsButton, reset, find),
+      h("div", { class: "mq-row" }, this.labelled("Filter", filterHost, "mq-grow"), historyButton, this.optionsButton, reset, find, this.moreButton()),
       this.optionsRow,
       this.collationRow,
       this.errorLine,
     );
     this.setOptionsOpen(initial.options || !!initial.project.trim() || !!initial.sort.trim() || initial.skip > 0 || !!initial.collation.trim(), false);
     this.setCollationOpen(!!initial.collation.trim(), false);
+  }
+
+  /** The "More" button with the bar's actions (null without any). */
+  private moreButton(): HTMLButtonElement | null {
+    const actions = this.options.actions;
+    if (!actions) return null;
+    const button = h(
+      "button",
+      { class: "tool-button mq-more", type: "button", title: "Update or delete the documents the filter matches", "aria-label": "More actions" },
+      icon("more"),
+    );
+    button.addEventListener("click", () => showMenuBelow(button, actions()));
+    return button;
   }
 
   state(): QueryState {

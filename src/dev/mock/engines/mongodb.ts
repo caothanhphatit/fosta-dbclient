@@ -4,12 +4,14 @@
  * The console takes database commands as JSON (`find`, `aggregate`, `count`, `distinct`, `insert`, `update`, `delete`,
  * `listCollections`, `ping`, `buildInfo`, …); raw filters are query documents.
  */
-import type { ColumnInfo, ConnectInfo, RunRequest, StreamEvent, Value } from "../../../core/contract";
+import type { ApplyResult, ColumnInfo, ConnectInfo, Field, RowChangeSet, RowConflict, RunRequest, StreamEvent, Value } from "../../../core/contract";
+import { exactValue, getAt, removeAt, sameJson, setAt } from "../../../engines/mongodb/docEdits";
 import type { StatementInfo } from "../../../core/types";
 import { valueToJson } from "../../../core/values";
 import {
   builtin,
   column,
+  conflictError,
   mongoFilter,
   MockCatalog,
   objectIdFor,
@@ -296,7 +298,7 @@ export const connectInfo = (): ConnectInfo => ({
 export const tree: NonNullable<EngineMock["tree"]> = (parent) => catalog.tree(parent);
 export const describe: NonNullable<EngineMock["describe"]> = (object) => catalog.describe(object);
 export const browse: NonNullable<EngineMock["browse"]> = (request) => catalog.browse(request);
-export const apply: NonNullable<EngineMock["apply"]> = (changes) => catalog.apply(changes);
+export const apply: NonNullable<EngineMock["apply"]> = (changes) => (isDocumentEdit(changes) ? applyDocuments(changes) : catalog.apply(changes));
 export const schemaGraph = (database: string) => catalog.schemaGraph(database);
 export const completion = (database: string) => catalog.completion(database);
 export const createDatabase = (name: string, firstCollection: string | null) =>
@@ -509,19 +511,278 @@ function resolveRef(args: Doc): Json {
   return { document: found ? project(found, jsonArg(args, "projection")) : null };
 }
 
+// --- Writes by document (the collection workspace), like tabular.rs apply and bulk.rs ---------------------------------------
+
+/** A mock value of Extended JSON (relaxed or canonical); explicit null is kept as a JSON null (an absent field is NULL). */
+function mockValue(value: Json): Value {
+  if (value === null) return v.json(null);
+  if (typeof value === "string") return v.text(value);
+  if (typeof value === "boolean") return v.bool(value);
+  if (typeof value === "number") return Number.isInteger(value) ? v.int(value) : v.float(value);
+  if (Array.isArray(value)) return v.arr(value.map(mockValue));
+  if (typeof value !== "object") return v.text(String(value));
+  const object = value as Doc;
+  const [key] = Object.keys(object);
+  if (key === "$oid") return v.oid(String(object.$oid));
+  if (key === "$numberDecimal") return v.dec(String(object.$numberDecimal));
+  if (key === "$numberInt") return v.int(Number(object.$numberInt));
+  if (key === "$numberDouble") return v.float(Number(object.$numberDouble));
+  if (key === "$date") {
+    const inner = object.$date;
+    const ms = typeof inner === "object" && inner !== null ? Number((inner as Doc).$numberLong) : Date.parse(String(inner));
+    return v.tstz(new Date(ms).toISOString());
+  }
+  if (key?.startsWith("$")) return v.json(object);
+  return v.doc(Object.entries(object).map(([name, item]) => [name, mockValue(item)]));
+}
+
+/** Writes a document back into the table's row, adding columns for new top-level fields. */
+function rowOf(table: MockTable, document: Doc): Value[] {
+  for (const name of Object.keys(document)) {
+    if (table.columnIndex(name) >= 0) continue;
+    table.spec.columns.push(column(name, "mixed", "other"));
+    for (const row of table.rows) row.push(v.null());
+  }
+  return table.spec.columns.map((spec) => (Object.hasOwn(document, spec.name) ? mockValue(document[spec.name]) : v.null()));
+}
+
+const isDocumentEdit = (set: RowChangeSet) =>
+  set.changes.some((change) =>
+    [...(change.op === "insert" ? change.values : [...change.key, ...(change.op === "update" ? change.values : []), ...change.original])].some(
+      (field) => field.value.t === "other" && (field.value.type === "bson" || field.value.type === "unset"),
+    ),
+  );
+
+const loadedJson = (value: Value): Json => (value.t === "other" && value.type === "bson" ? (JSON.parse(value.v) as Json) : valueToJson(value));
+
+/** The document views' edits: dotted paths, exact values, removed fields; each checked against the loaded values. */
+function applyDocuments(set: RowChangeSet): ApplyResult {
+  const table = operationTable({ database: set.object.database, collection: set.object.name });
+  if (!table) throw serverError(26, "NamespaceNotFound", `ns does not exist: ${set.object.name}`);
+  if (table.spec.kind === "view") throw serverError(166, "CommandNotSupportedOnView", `${table.spec.name} is a view`);
+  const rowOfKey = (key: Field[]) => {
+    const id = loadedJson(key[0]?.value ?? v.null());
+    return table.rows.findIndex((row) => sameJson(documentOf(table, row)._id, plain(id)) || sameJson(documentOf(table, row)._id, id));
+  };
+  const conflicts: RowConflict[] = [];
+  set.changes.forEach((change, index) => {
+    if (change.op === "insert") return;
+    const at = rowOfKey(change.key);
+    const current = at >= 0 ? documentOf(table, table.rows[at]) : null;
+    const fields = (document: Doc): Field[] => [
+      ...Object.entries(document).map(([name, value]) => ({ column: name, value: exactValue(value) })),
+      ...change.original
+        .filter((field) => field.column.includes("."))
+        .map((field) => ({ column: field.column, value: exactValue(getAt(document, field.column.split(".")).value ?? null) })),
+    ];
+    const stale =
+      !current ||
+      (!change.force &&
+        change.original.some((field) => {
+          const now = getAt(current, field.column.split("."));
+          const loaded = loadedJson(field.value);
+          const stored = now.found ? now.value : null;
+          return !sameJson(stored, loaded) && !sameJson(stored, plain(loaded));
+        }));
+    if (stale) {
+      conflicts.push({
+        index,
+        op: change.op,
+        key: change.key,
+        original: change.original,
+        current: current ? fields(current) : null,
+        attempted: change.op === "update" ? change.values : [],
+      });
+    }
+  });
+  if (conflicts.length > 0) throw conflictError(table.object, conflicts, table.spec.name);
+  const result: ApplyResult = { inserted: 0, updated: 0, deleted: 0 };
+  for (const change of set.changes) {
+    if (change.op === "insert") {
+      const document: Doc = Object.fromEntries(change.values.map((field) => [field.column, loadedJson(field.value)]));
+      const withId: Doc = "_id" in document ? document : { _id: { $oid: objectIdFor(Date.now() / 1000, table.rows.length + 1) }, ...document };
+      const id = JSON.stringify(plain(withId._id));
+      if (table.rows.some((row) => JSON.stringify(documentOf(table, row)._id) === id)) {
+        throw serverError(
+          11000,
+          "DuplicateKey",
+          `E11000 duplicate key error collection: ${table.spec.database}.${table.spec.name} index: _id_ dup key: { _id: ${id} }`,
+        );
+      }
+      table.insert(rowOf(table, withId));
+      result.inserted++;
+      continue;
+    }
+    const at = rowOfKey(change.key);
+    if (at < 0) continue;
+    if (change.op === "delete") {
+      table.remove(at);
+      result.deleted++;
+      continue;
+    }
+    let document: Json = documentOf(table, table.rows[at]);
+    for (const field of change.values) {
+      const path = field.column.split(".");
+      if (field.value.t === "other" && field.value.type === "unset") document = removeAt(document, path);
+      else document = setAt(document, path, loadedJson(field.value));
+    }
+    table.rows[at] = rowOf(table, document as Doc);
+    table.bump(at);
+    result.updated++;
+  }
+  return result;
+}
+
+/** The update operators the dev mock (like the preview) simulates; anything else is refused. */
+function simulateUpdate(document: Doc, update: Json): Doc {
+  let result: Json = document;
+  const now = { $date: new Date().toISOString() };
+  if (Array.isArray(update)) {
+    for (const stage of update as Doc[]) {
+      const [name] = Object.keys(stage);
+      if (name !== "$set" && name !== "$addFields") throw mockError("ENGINE_ERROR", `The dev mock simulates $set pipeline stages only (not ${name}).`);
+      for (const [path, value] of Object.entries(stage[name] as Doc)) result = setAt(result, path.split("."), value === "$$NOW" ? now : value);
+    }
+    return result as Doc;
+  }
+  for (const [operator, fields] of Object.entries(update as Doc)) {
+    for (const [path, value] of Object.entries(fields as Doc)) {
+      if (path === "_id" || path.startsWith("_id.")) throw mockError("ENGINE_ERROR", "_id cannot be changed by an update");
+      const parts = path.split(".");
+      const current = getAt(result, parts);
+      switch (operator) {
+        case "$set":
+          result = setAt(result, parts, value);
+          break;
+        case "$unset":
+          result = removeAt(result, parts);
+          break;
+        case "$inc":
+        case "$mul": {
+          const base = current.found ? Number(plain(current.value)) : 0;
+          result = setAt(result, parts, operator === "$inc" ? base + Number(plain(value)) : base * Number(plain(value)));
+          break;
+        }
+        case "$rename":
+          if (current.found) result = setAt(removeAt(result, parts), String(value).split("."), current.value);
+          break;
+        case "$currentDate":
+          result = setAt(result, parts, now);
+          break;
+        case "$push": {
+          const items = typeof value === "object" && value !== null && "$each" in value ? ((value as Doc).$each as Json[]) : [value];
+          result = setAt(result, parts, [...(Array.isArray(current.value) ? current.value : []), ...items]);
+          break;
+        }
+        default:
+          throw mockError("ENGINE_ERROR", `${operator} cannot be previewed: it has no exact aggregation equivalent. Nothing was guessed.`);
+      }
+    }
+  }
+  return result as Doc;
+}
+
+function updateOf(args: Doc): Json {
+  const update = jsonArg(args, "update");
+  if (update === undefined) throw mockError("ENGINE_ERROR", "update is required, e.g. { $set: { status: 'archived' } }");
+  if (!Array.isArray(update) && (typeof update !== "object" || update === null || Object.keys(update).some((key) => !key.startsWith("$")))) {
+    throw mockError("ENGINE_ERROR", "The update must use update operators such as $set; replacing whole documents is not a bulk update");
+  }
+  return update;
+}
+
+function writableTable(args: Doc): MockTable {
+  const table = operationTable(args);
+  if (!table) throw serverError(26, "NamespaceNotFound", `ns does not exist: ${String(args.collection)}`);
+  if (table.spec.kind === "view") throw serverError(166, "CommandNotSupportedOnView", `${table.spec.name} is a view`);
+  return table;
+}
+
+function updatePreview(args: Doc): Json {
+  const update = updateOf(args);
+  const matches = matching(operationTable(args), args).sort((a, b) => compare(a._id, b._id));
+  const size = Math.min(Math.max(Number(args.sample ?? 5) || 5, 1), 20);
+  const sample = matches.slice(0, size).map((before) => {
+    const after = simulateUpdate(before, update);
+    return { before, after, changed: !sameJson(before, after) };
+  });
+  return {
+    matched: matches.length,
+    sample,
+    elapsedMs: 4,
+    statement: `db.getCollection(${JSON.stringify(String(args.collection))}).updateMany(${JSON.stringify(jsonArg(args, "filter") ?? {})}, ${JSON.stringify(update)})`,
+  };
+}
+
+function updateMany(args: Doc): Json {
+  const table = writableTable(args);
+  const update = updateOf(args);
+  const filter = plain(jsonArg(args, "filter"));
+  const predicate = filter === undefined ? () => true : mongoFilter(table, JSON.stringify(filter));
+  let matched = 0;
+  let modified = 0;
+  table.rows.forEach((row, index) => {
+    if (!predicate(row)) return;
+    matched++;
+    const before = documentOf(table, row);
+    const after = simulateUpdate(before, update);
+    if (sameJson(before, after)) return;
+    table.rows[index] = rowOf(table, after);
+    table.bump(index);
+    modified++;
+  });
+  return { matched, modified, elapsedMs: 6 };
+}
+
+function deleteMany(args: Doc): Json {
+  const table = writableTable(args);
+  const filter = plain(jsonArg(args, "filter"));
+  const predicate = filter === undefined ? () => true : mongoFilter(table, JSON.stringify(filter));
+  let deleted = 0;
+  for (let index = table.rows.length - 1; index >= 0; index--) {
+    if (!predicate(table.rows[index])) continue;
+    table.remove(index);
+    deleted++;
+  }
+  return { deleted, elapsedMs: 5 };
+}
+
 const OPERATIONS: Record<string, (args: Doc) => Json> = {
   "mongo.find": find,
   "mongo.count": count,
   "mongo.distinct": distinct,
   "mongo.resolveRef": resolveRef,
+  "mongo.updatePreview": updatePreview,
+  "mongo.updateMany": updateMany,
+  "mongo.deleteMany": deleteMany,
 };
 
-/** `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`; undefined (refused) for any other name. */
+/** How the gateway classifies an operation (classify.rs `classify_operation`); null for an unknown name. */
+export const classifyOperation: NonNullable<EngineMock["classifyOperation"]> = (name, raw) => {
+  if (!Object.hasOwn(OPERATIONS, name)) return null;
+  const args = (raw ?? {}) as Doc;
+  const tables = typeof args.collection === "string" ? [args.collection] : [];
+  const excerpt = `${name} ${JSON.stringify(args)}`.slice(0, 200);
+  let filter: Json;
+  try {
+    filter = jsonArg(args, "filter");
+  } catch {
+    filter = undefined;
+  }
+  const empty = filter === undefined || (typeof filter === "object" && filter !== null && Object.keys(filter).length === 0);
+  const info = (category: StatementInfo["category"], reason: string | null = null): StatementInfo[] => [{ category, kind: name, tables, excerpt, reason }];
+  if (name === "mongo.updateMany") return empty ? info("destructive", "An empty filter updates every document in the collection") : info("write");
+  if (name === "mongo.deleteMany")
+    return info("destructive", empty ? "An empty filter deletes every document in the collection" : "Deletes every matching document");
+  return info("read");
+};
+
+/** `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef` and the bulk operations; undefined (refused) for any other name. */
 export const invoke: NonNullable<EngineMock["invoke"]> = (name, raw) => {
   const operation = Object.hasOwn(OPERATIONS, name) ? OPERATIONS[name] : undefined;
   if (!operation) return undefined;
   const args = (raw ?? {}) as Doc;
-  const operator = deniedOperator(args) ?? ["filter", "projection", "sort"].map((key) => deniedOperator(jsonArg(args, key))).find(Boolean);
+  const operator = deniedOperator(args) ?? ["filter", "projection", "sort", "update"].map((key) => deniedOperator(jsonArg(args, key))).find(Boolean);
   if (operator) throw mockError("BLOCKED", `Refused: ${operator} runs JavaScript on the server.`);
   return operation(args);
 };

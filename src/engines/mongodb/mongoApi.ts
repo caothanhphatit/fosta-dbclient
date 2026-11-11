@@ -2,11 +2,14 @@
  * Typed calls of the `mongo.*` operations (src-tauri/src/engines/mongo/ops.rs) over the injected `ConnectionApi`. Every
  * call goes through the gateway, which classifies it; `find` and `count` go through `withConfirmation`, so a workspace
  * that asks before reads still asks (null: the user declined). `distinct` serves completion and never asks: it
- * resolves [] instead of failing. `resolveRef` asks only when the user opened the reference (probing never asks).
+ * resolves [] instead of failing. `resolveRef` asks only when the user opened the reference (probing never asks). The
+ * bulk operations and `applyEdits` (saving pending edits) always go through `withConfirmation`.
  */
 import type { ConnectionApi } from "../../core/connectionApi";
+import type { ApplyResult, RowChangeSet } from "../../core/contract";
 import type { Confirmation } from "../../core/types";
 import { withConfirmation } from "../../features/safety/confirmationDialog";
+import type { deleteArgs, PreviewResult, previewArgs, updateArgs } from "./bulkModel";
 import type { CountArgs, FindArgs, FindPage, Target } from "./queryModel";
 
 export interface FindResult extends FindPage {
@@ -19,6 +22,17 @@ export interface FindResult extends FindPage {
 export interface CountResult {
   count: number;
   estimated: boolean;
+  elapsedMs: number;
+}
+
+export interface UpdateManyResult {
+  matched: number;
+  modified: number;
+  elapsedMs: number;
+}
+
+export interface DeleteManyResult {
+  deleted: number;
   elapsedMs: number;
 }
 
@@ -54,6 +68,26 @@ export class MongoApi {
 
   count(args: CountArgs): Promise<CountResult | null> {
     return withConfirmation((confirmation) => this.connection.invokeCapability<CountResult>("mongo.count", args, confirmation));
+  }
+
+  /** The match count and a before/after sample of an update (reads only). */
+  updatePreview(args: ReturnType<typeof previewArgs>): Promise<PreviewResult | null> {
+    return withConfirmation((confirmation) => this.connection.invokeCapability<PreviewResult>("mongo.updatePreview", args, confirmation));
+  }
+
+  /** Updates every matching document; the gateway asks per the rules (null: declined). */
+  updateMany(args: ReturnType<typeof updateArgs>): Promise<UpdateManyResult | null> {
+    return withConfirmation((confirmation) => this.connection.invokeCapability<UpdateManyResult>("mongo.updateMany", args, confirmation));
+  }
+
+  /** Deletes every matching document (destructive: the gateway asks, typed in Guarded workspaces). */
+  deleteMany(args: ReturnType<typeof deleteArgs>): Promise<DeleteManyResult | null> {
+    return withConfirmation((confirmation) => this.connection.invokeCapability<DeleteManyResult>("mongo.deleteMany", args, confirmation));
+  }
+
+  /** Saves pending document edits through `apply_edits` (grid save rules: Read-only blocks, confirmations per the rules). */
+  applyEdits(set: RowChangeSet): Promise<ApplyResult | null> {
+    return withConfirmation((confirmation) => this.connection.applyEdits(set, "gridSave", confirmation));
   }
 
   /**

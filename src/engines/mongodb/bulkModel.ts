@@ -103,3 +103,11 @@ export function runLabel(kind: "update" | "delete", matched: number | null): str
   const verb = kind === "update" ? "Update" : "Delete";
   return matched === null ? `${verb} matching documents` : `${verb} ${plural(matched, "document", "documents")}`;
 }
+
+/** What the delete dialog says about the documents the filter matches. */
+export function deleteHeadline(matched: number): string {
+  if (matched === 0) return "No documents match the filter.";
+  return matched === 1
+    ? "1 document matches: the delete removes it."
+    : `${matched.toLocaleString("en-US")} documents match: the delete removes every one of them.`;
+}

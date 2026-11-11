@@ -3,7 +3,8 @@
  * fields, nested documents and arrays folded until opened. Only the lines in view have elements, so a document with
  * thousands of fields or an array of a hundred thousand items scrolls as fast as a small one; opened containers show
  * their first items and a "Show N more" line. Values read as BSON (`bson.ts`); ObjectIds of inferred references
- * (`refs.ts`) get a link to the referenced document.
+ * (`refs.ts`) get a link to the referenced document. With `edit` the lines show pending edits (changed, added, deleted
+ * documents) and offer editing: a double-click on a value, the card tools (add field, duplicate, delete) and the menu.
  */
 import { showContextMenu, type MenuItem } from "../../core/contextMenu";
 import { toast } from "../../core/dialogs";
@@ -30,13 +31,31 @@ export interface TreeRefs {
   open(collection: string, id: Json, path: string): void;
 }
 
+/** Editing the documents shown (List mode of a collection the workspace may write): marks and actions by document index. */
+export interface TreeEditing {
+  /** How a path reads with the pending edits: changed, added, or a container with edits inside. */
+  pathState(doc: number, path: readonly string[]): "set" | "added" | "inside" | null;
+  docState(doc: number): "edited" | "deleted" | null;
+  editValue(doc: number, path: string[]): void;
+  /** Adds a field to the document (or an item to the array) at `parentPath`. */
+  addField(doc: number, parentPath: string[]): void;
+  renameField(doc: number, path: string[]): void;
+  removeField(doc: number, path: string[]): void;
+  duplicate(doc: number): void;
+  deleteDocument(doc: number): void;
+  restoreDocument(doc: number): void;
+}
+
 export interface DocTreeOptions {
   limits?: TreeLimits;
   /** Each document's position among all matches is shown on its card (List mode); off in the side panel. */
   numbered?: boolean;
   refs?: TreeRefs;
   label?: string;
+  edit?: TreeEditing;
 }
+
+const isArrayValue = (value: Json) => Array.isArray(value);
 
 export class DocTree {
   readonly element: HTMLElement;
@@ -59,6 +78,7 @@ export class DocTree {
     this.element.addEventListener("scroll", () => this.draw(false), { passive: true });
     this.element.addEventListener("click", (event) => this.onClick(event));
     this.element.addEventListener("contextmenu", (event) => this.onContextMenu(event));
+    this.element.addEventListener("dblclick", (event) => this.onDoubleClick(event));
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(() => this.schedule());
       this.resizeObserver.observe(this.element);
@@ -78,6 +98,12 @@ export class DocTree {
   /** Draws the lines in view again (a reference target became known). */
   refresh(): void {
     this.draw(true);
+  }
+
+  /** Shows new versions of the same documents (pending edits), keeping what is open and the scroll position. */
+  replace(documents: readonly Doc[]): void {
+    this.documents = documents;
+    this.rebuildKeepingScroll();
   }
 
   /** The index of the document at the top of the view. */
@@ -160,16 +186,36 @@ export class DocTree {
     const attrs = { "data-line": index };
     switch (line.type) {
       case "head": {
+        const edit = this.options.edit;
+        const state = edit?.docState(line.doc) ?? null;
+        const editTools: (HTMLElement | null)[] = !edit
+          ? []
+          : state === "deleted"
+            ? [
+                h("span", { class: "dt-badge dt-badge-deleted" }, "Deleted (pending)"),
+                iconButton("history", "Restore the document (drop the pending delete)", () => edit.restoreDocument(line.doc)),
+              ]
+            : [
+                state === "edited" ? h("span", { class: "dt-badge" }, "Edited") : null,
+                iconButton("plus", "Add a field", () => edit.addField(line.doc, [])),
+                iconButton("layers", "Duplicate the document…", () => edit.duplicate(line.doc)),
+                iconButton("trash", "Delete the document (pending until saved)", () => edit.deleteDocument(line.doc)),
+              ];
         const tools = h(
           "div",
           { class: "dt-tools" },
           this.options.numbered === false ? null : h("span", { class: "md-index" }, String(this.offset + line.doc + 1)),
+          ...editTools,
           iconButton("copy", "Copy document (Extended JSON)", () => this.copyDocument(line.doc, false)),
         );
-        return h("div", { ...attrs, class: "dt-line dt-head" }, tools);
+        return h("div", { ...attrs, class: `dt-line dt-head${state ? ` dt-doc-${state}` : ""}` }, tools);
       }
       case "foot":
-        return h("div", { ...attrs, class: "dt-line dt-foot" }, h("div", { class: "dt-foot-box" }));
+        return h(
+          "div",
+          { ...attrs, class: `dt-line dt-foot${this.options.edit?.docState(line.doc) === "deleted" ? " dt-doc-deleted" : ""}` },
+          h("div", { class: "dt-foot-box" }),
+        );
       case "more": {
         const step = Math.min(line.remaining, MORE_STEP);
         const noun = line.array ? (step === 1 ? "item" : "items") : step === 1 ? "field" : "fields";
@@ -222,7 +268,14 @@ export class DocTree {
       if (value.type === "objectId") parts.push(this.refLink(line));
     }
     const row = h("div", { class: "dt-row", style: `padding-left: ${line.depth * INDENT}px` }, ...parts);
-    const element = h("div", { ...attrs, class: "dt-line dt-field", role: "treeitem", "aria-level": line.depth + 1 }, row);
+    const edit = this.options.edit;
+    const docState = edit?.docState(line.doc) ?? null;
+    const mark = docState === "deleted" ? " dt-doc-deleted" : edit ? (edit.pathState(line.doc, line.path) ?? "") : "";
+    const markClass = mark === "set" ? " dt-changed" : mark === "added" ? " dt-added" : mark === "inside" ? " dt-inside" : mark;
+    if (edit && docState !== "deleted") {
+      row.title = line.container || isNested(line.value) ? "" : "Double-click to edit the value";
+    }
+    const element = h("div", { ...attrs, class: `dt-line dt-field${markClass}`, role: "treeitem", "aria-level": line.depth + 1 }, row);
     if (line.container) element.setAttribute("aria-expanded", String(line.expanded));
     return element;
   }
@@ -290,10 +343,57 @@ export class DocTree {
     this.draw(true);
   }
 
+  /** Double-click on a value edits it (containers open and close with their toggle instead). */
+  private onDoubleClick(event: MouseEvent): void {
+    const edit = this.options.edit;
+    const line = this.lineOf(event.target);
+    if (!edit || line?.type !== "field" || line.container || edit.docState(line.doc) === "deleted") return;
+    if (event.target instanceof Element && event.target.closest("button")) return;
+    event.preventDefault();
+    edit.editValue(line.doc, line.path);
+  }
+
+  /** The editing items of a line's menu. */
+  private editItems(line: TreeLine): MenuItem[] {
+    const edit = this.options.edit;
+    if (!edit || line.type === "more") return [];
+    if (edit.docState(line.doc) === "deleted") return [{ label: "Restore document", icon: "history", run: () => edit.restoreDocument(line.doc) }, "separator"];
+    const items: MenuItem[] = [];
+    if (line.type === "field") {
+      const path = line.path;
+      const parent = path.slice(0, -1);
+      const intoContainer = isNested(line.value);
+      const isId = path.length === 1 && path[0] === "_id";
+      if (!isId) items.push({ label: "Edit value…", icon: "edit", run: () => edit.editValue(line.doc, path) });
+      if (intoContainer) {
+        items.push({
+          label: isArrayValue(line.value) ? `Add item to ${line.key}…` : `Add field to ${line.key}…`,
+          icon: "plus",
+          run: () => edit.addField(line.doc, path),
+        });
+      }
+      items.push({
+        label: line.inArray ? "Add item…" : "Add field here…",
+        icon: intoContainer ? undefined : "plus",
+        run: () => edit.addField(line.doc, parent),
+      });
+      if (!isId && !line.inArray) items.push({ label: "Rename field…", run: () => edit.renameField(line.doc, path) });
+      if (!isId) items.push({ label: line.inArray ? "Remove item" : "Remove field", icon: "trash", run: () => edit.removeField(line.doc, path) });
+      items.push("separator");
+    }
+    items.push(
+      { label: "Add field to document…", icon: line.type === "field" ? undefined : "plus", run: () => edit.addField(line.doc, []) },
+      { label: "Duplicate document…", icon: "layers", run: () => edit.duplicate(line.doc) },
+      { label: "Delete document", icon: "trash", run: () => edit.deleteDocument(line.doc) },
+      "separator",
+    );
+    return items;
+  }
+
   private onContextMenu(event: MouseEvent): void {
     const line = this.lineOf(event.target);
     if (!line || line.type === "more") return;
-    const items: MenuItem[] = [];
+    const items: MenuItem[] = this.editItems(line);
     if (line.type === "field") {
       const path = line.path.join(".");
       items.push(

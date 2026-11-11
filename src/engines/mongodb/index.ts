@@ -2,7 +2,7 @@
  * MongoDB UI module:
  *
  * - `workspace` on a collection or a view: the collection workspace (`workspace.ts`), the default open; its Documents section
- *   has the query bar (mongosh syntax, completion of fields, operators and values) and the documents as a tree, JSON
+ *   has the query bar (mongosh syntax, completion of fields, operators and values) and the documents (editable) as a tree, JSON
  *   or a table,
  * - the `mongo-command` console language; the grid and the design view are the shared ones (`../shared.ts`).
  *

@@ -51,6 +51,8 @@ export interface EngineMock {
   classify?(text: string): StatementInfo[];
   /** Engine operations (`invoke_capability`); undefined for an unknown name. */
   invoke?(name: string, args: unknown): unknown;
+  /** How the gateway classifies an engine operation (rules apply to writes); null or absent: reads. */
+  classifyOperation?(name: string, args: unknown): StatementInfo[] | null;
   schemaGraph?(database: string): SchemaGraph;
   completion?(database: string | null): CompletionSchema;
   createDatabase?(name: string, firstCollection: string | null): void;

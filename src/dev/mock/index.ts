@@ -306,8 +306,11 @@ function applyEdits(connectionId: string, changes: RowChangeSet, caller: Caller 
   return need(engine, "apply", "row edits")(changes);
 }
 
-function invokeCapability(connectionId: string, name: string, args: unknown) {
+function invokeCapability(connectionId: string, name: string, args: unknown, confirmation: Confirmation | null) {
   const { engine } = connection(connectionId);
+  // Engine views call operations as "engineView"; writes go through the rules like the backend gateway.
+  const statements = engine.classifyOperation?.(name, args);
+  if (statements) gate(state.config, connectionId, "engineView" as Caller, statements, confirmation);
   const result = engine.invoke?.(name, args);
   if (result === undefined) refuseOperation(state.config, connectionId, name);
   return result;
@@ -692,7 +695,7 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       return null;
     }
     case "invoke_capability":
-      return invokeCapability(str("connectionId"), str("name"), payload.args ?? null);
+      return invokeCapability(str("connectionId"), str("name"), payload.args ?? null, confirmation);
     case "format_sql":
       // The backend formatter is Rust (src-tauri/src/lang); the browser mock leaves the text unchanged.
       return str("text");
