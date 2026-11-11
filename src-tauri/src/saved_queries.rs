@@ -14,6 +14,11 @@ pub const MAX_NAME_CHARS: usize = 200;
 pub const MAX_FIELD_CHARS: usize = 64 * 1024;
 /// The most stages a saved pipeline keeps.
 pub const MAX_PIPELINE_STAGES: usize = 200;
+/// The longest id, engine id or connection id.
+pub const MAX_ID_CHARS: usize = 200;
+/// The most one saved query takes in the config file (its JSON), and the most all of a workspace's take together.
+pub const MAX_QUERY_BYTES: usize = 256 * 1024;
+pub const MAX_WORKSPACE_BYTES: usize = 8 * 1024 * 1024;
 
 const DEFAULT_LIMIT: u32 = 20;
 
@@ -116,11 +121,41 @@ impl SavedQuery {
                 "A field of a saved query is longer than {MAX_FIELD_CHARS} characters"
             )));
         }
+        let ids = [Some(&self.id), Some(&self.engine), self.connection_id.as_ref()];
+        if ids.into_iter().flatten().any(|id| id.chars().count() > MAX_ID_CHARS) {
+            return Err(AppError::new(format!(
+                "An id of a saved query is longer than {MAX_ID_CHARS} characters"
+            )));
+        }
         if self.query.limit == 0 {
             self.query.limit = DEFAULT_LIMIT;
         }
+        if self.size() > MAX_QUERY_BYTES {
+            return Err(AppError::new(format!(
+                "A saved query takes at most {} KB; this one is {} KB",
+                MAX_QUERY_BYTES / 1024,
+                self.size().div_ceil(1024)
+            )));
+        }
         Ok(self)
     }
+
+    /// What the query takes in the config file: the bytes of its JSON.
+    pub fn size(&self) -> usize {
+        serde_json::to_vec(self).map(|json| json.len()).unwrap_or(usize::MAX)
+    }
+}
+
+/// Refuses a workspace's saved queries whose JSON together takes more than [`MAX_WORKSPACE_BYTES`].
+pub fn check_workspace_size(queries: &[SavedQuery]) -> AppResult<()> {
+    let total: usize = queries.iter().map(SavedQuery::size).fold(0, usize::saturating_add);
+    if total > MAX_WORKSPACE_BYTES {
+        return Err(AppError::new(format!(
+            "The saved queries of a workspace take at most {} MB together; delete some first",
+            MAX_WORKSPACE_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(())
 }
 
 /// A trimmed, non-empty name of at most [`MAX_NAME_CHARS`] characters.
@@ -187,6 +222,46 @@ mod tests {
         assert!(stages.validated().is_err());
         let no_id = SavedQuery { id: "".into(), ..query() };
         assert!(no_id.validated().is_err());
+        for long_id in [
+            SavedQuery {
+                id: "i".repeat(MAX_ID_CHARS + 1),
+                ..query()
+            },
+            SavedQuery {
+                engine: "e".repeat(MAX_ID_CHARS + 1),
+                ..query()
+            },
+            SavedQuery {
+                connection_id: Some("c".repeat(MAX_ID_CHARS + 1)),
+                ..query()
+            },
+        ] {
+            assert!(long_id.validated().unwrap_err().to_string().contains("id"));
+        }
+        // Every field within its own cap, but the query as a whole too big.
+        let big = SavedQuery {
+            pipeline: Some(vec!["x".repeat(MAX_FIELD_CHARS); 5]),
+            ..query()
+        };
+        assert!(big.validated().unwrap_err().to_string().contains("KB"));
+        let fits = SavedQuery {
+            pipeline: Some(vec!["x".repeat(MAX_FIELD_CHARS); 3]),
+            ..query()
+        };
+        assert!(fits.validated().is_ok());
+    }
+
+    #[test]
+    fn a_workspace_keeps_a_bounded_total() {
+        let one = SavedQuery {
+            pipeline: Some(vec!["x".repeat(MAX_FIELD_CHARS); 3]),
+            ..query()
+        }
+        .validated()
+        .unwrap();
+        let fit = MAX_WORKSPACE_BYTES / one.size();
+        assert!(check_workspace_size(&vec![one.clone(); fit]).is_ok());
+        assert!(check_workspace_size(&vec![one; fit + 1]).is_err());
     }
 
     #[test]

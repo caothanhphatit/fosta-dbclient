@@ -567,7 +567,8 @@ impl AppConfig {
         }
         let target = self.workspace_mut(workspace_id)?;
         upsert(&mut target.saved_queries, query, |item| item.id.as_str());
-        Ok(())
+        // The whole workspace stays bounded too (a failed check leaves the config file as it was).
+        saved_queries::check_workspace_size(&target.saved_queries)
     }
 
     /// Renames the saved query `id`; returns the id of its workspace.
