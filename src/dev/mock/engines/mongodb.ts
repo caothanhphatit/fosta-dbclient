@@ -26,6 +26,7 @@ import { DESCRIPTORS, ORDER } from "../descriptors";
 import { mockError, positionAt } from "../errors";
 import { pause } from "../sqlRun";
 import type { EngineMock, RunContext } from "../types";
+import { explainResult, type ExplainHost } from "./mongoExplain";
 import { createIndex, dropIndex, listIndexes, setHidden, type IndexHost } from "./mongoIndexes";
 import { schemaResult } from "./mongoSchema";
 import { getValidation, setValidation, validationCheck, type ValidationHost } from "./mongoValidation";
@@ -1189,6 +1190,12 @@ const validationHost: ValidationHost = {
   matches: (document, filter) => matches(document, filter),
 };
 
+const explainHost: ExplainHost = {
+  indexes: (args) => (listIndexes(indexHost, args) as { indexes: { name: string; key: Doc; options: Doc }[] }).indexes,
+  total: (args) => operationTable(args)?.rows.length ?? 0,
+  matched: (args, filter) => matching(operationTable(args), filter ? { filter } : {}).length,
+};
+
 const OPERATIONS: Record<string, (args: Doc) => Json> = {
   "mongo.find": find,
   "mongo.count": count,
@@ -1205,6 +1212,7 @@ const OPERATIONS: Record<string, (args: Doc) => Json> = {
   "mongo.hideIndex": (args) => setHidden(indexHost, args, true),
   "mongo.unhideIndex": (args) => setHidden(indexHost, args, false),
   "mongo.dropIndex": (args) => dropIndex(indexHost, args),
+  "mongo.explain": (args) => explainResult(explainHost, args, args.kind === "aggregate" ? pipelineOf(args) : []),
   "mongo.validation": (args) => getValidation(validationHost, args),
   "mongo.setValidation": (args) => setValidation(validationHost, args),
   "mongo.validationCheck": (args) => validationCheck(validationHost, args),
@@ -1224,7 +1232,7 @@ export const classifyOperation: NonNullable<EngineMock["classifyOperation"]> = (
   }
   const empty = filter === undefined || (typeof filter === "object" && filter !== null && Object.keys(filter).length === 0);
   const info = (category: StatementInfo["category"], reason: string | null = null): StatementInfo[] => [{ category, kind: name, tables, excerpt, reason }];
-  if (name === "mongo.aggregatePreview" || name === "mongo.aggregate") {
+  if (name === "mongo.aggregatePreview" || name === "mongo.aggregate" || name === "mongo.explain") {
     let stages: Doc[];
     try {
       stages = pipelineOf(args);

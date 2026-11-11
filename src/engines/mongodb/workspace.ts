@@ -1,8 +1,9 @@
 /**
  * The MongoDB collection workspace: the tab a collection opens in by default (double-click, Enter), with its sections.
  * Documents (query bar and the matching documents), Aggregations (the pipeline builder with a per-stage preview),
- * Schema (the shape of a sample: paths, types, presence, values), Indexes (list, usage, create, hide, drop) and
- * Validation (rules, generate from schema, check existing documents, apply); Explain joins as it is built. The grid stays in the node menu ("Open as grid").
+ * Schema (the shape of a sample: paths, types, presence, values), Indexes (list, usage, create, hide, drop), Explain (the
+ * query plan of the Documents query or the pipeline, warnings, an index suggestion) and Validation (rules, generate
+ * from schema, check existing documents, apply). The grid stays in the node menu ("Open as grid").
  */
 import type { ViewContext } from "../../core/views";
 import { createSectionWorkspace, type WorkspaceSection, type WorkspaceTab } from "../../features/objectWorkspace/sectionWorkspace";
@@ -12,6 +13,7 @@ export const SECTIONS: WorkspaceSection[] = [
   { id: "aggregations", title: "Aggregations", icon: "layers", load: async () => (await import("./aggregationsView")).aggregationsSectionFactory },
   { id: "schema", title: "Schema", icon: "diagram", load: async () => (await import("./schemaView")).schemaSectionFactory },
   { id: "indexes", title: "Indexes", icon: "key", load: async () => (await import("./indexesView")).indexesSectionFactory },
+  { id: "explain", title: "Explain", icon: "bolt", load: async () => (await import("./explainView")).explainSectionFactory },
   { id: "validation", title: "Validation", icon: "shield", load: async () => (await import("./validationView")).validationSectionFactory },
 ];
 

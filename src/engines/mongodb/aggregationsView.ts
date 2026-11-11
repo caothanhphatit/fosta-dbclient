@@ -34,6 +34,7 @@ import { DocTree } from "./docTree";
 import { documentPaths, type Doc, type Json } from "./documents";
 import { STORE_FIELD_PATHS, STORE_QUERY } from "./documentsView";
 import { MODES, type DocumentsRenderer, type RendererContext } from "./documentModes";
+import { STORE_PIPELINE, type ExplainRequest } from "./explainModel";
 import { MongoApi, type AggregatePreviewResult, type AggregateResult } from "./mongoApi";
 import {
   clampSampleSize,
@@ -125,6 +126,8 @@ class AggregationsSection implements SectionContent {
     this.sampleMode = saved.sampleMode;
     this.autoPreview = saved.autoPreview;
     this.active = Math.min(saved.active, Math.max(0, this.stages.length - 1));
+    // The Explain section reads the enabled stages as they are now.
+    ctx.store.set(STORE_PIPELINE, () => this.stages.filter((stage) => stage.enabled).map((stage) => stage.text));
 
     this.saved = new SavedQueries({
       connectionId: ctx.view.connection.connectionId,
@@ -192,6 +195,16 @@ class AggregationsSection implements SectionContent {
       h("span", {}, "Preview"),
     );
     previewButton.addEventListener("click", () => void this.runPreview(true));
+    const explainButton = h(
+      "button",
+      { class: "btn", type: "button", title: "Show the query plan of the enabled stages (Explain section)" },
+      icon("bolt"),
+      h("span", {}, "Explain"),
+    );
+    explainButton.addEventListener("click", () => {
+      const stages = this.stages.filter((stage) => stage.enabled).map((stage) => stage.text);
+      void ctx.deliver("explain", { explain: { source: "pipeline", stages } } satisfies ExplainRequest);
+    });
     const codeButton = h(
       "button",
       { class: "tool-button", type: "button", title: "Export the enabled stages as mongosh, Node.js or Python" },
@@ -216,7 +229,7 @@ class AggregationsSection implements SectionContent {
       h("label", { class: "ag-bar-field" }, h("span", { class: "ag-label" }, "Sample"), this.sampleInput),
       modes,
       h("label", { class: "ag-bar-check", title: "Run the preview after each edit" }, this.autoInput, h("span", {}, "Auto preview")),
-      h("div", { class: "toolbar-end" }, previewButton, codeButton, runButton),
+      h("div", { class: "toolbar-end" }, previewButton, explainButton, codeButton, runButton),
     );
     this.results = new ResultsPanel(() => this.ctx.stateChanged());
     this.list.addEventListener("dragover", (event) => this.onDragOver(event));

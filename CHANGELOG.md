@@ -76,6 +76,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   paths, 1 / -1 / text / 2dsphere / hashed), a name, unique / sparse / hidden, a partial filter, TTL, collation and
   wildcard projection in mongosh syntax, and a live preview of the command; creating goes through the safety gateway
   as DDL. The sort and search are kept with the open tabs, and the assistant sees the indexes.
+  An Explain section shows the query plan of the Documents query or of the Aggregations pipeline ("Explain" in the
+  query bar and in the Aggregations header opens it and runs): the planner's choice only, or execution statistics,
+  which run the query within the workspace's timeout (still a read; `$out` / `$merge` are refused). The plan is a tree
+  of stage cards with the index, keys, filter, documents and keys examined against documents returned, and time; the
+  winning plan is highlighted and the rejected plans fold under it. Badges and warnings point out collection scans,
+  in-memory sorts, many documents examined per document returned and filtered fields no index serves, and an index is
+  suggested by the Equality, Sort, Range rule unless one already covers the query ("Create index…" opens the Indexes
+  form prefilled). Classic, slot-based (MongoDB 7 and 8) and sharded plans are read; any other shape shows as raw JSON,
+  which is always one click away. The source and verbosity are kept with the open tabs, and the assistant sees the
+  summary and the warnings.
   A Validation section shows the collection's rules: level (strict, moderate, off), action (error, warn) and the
   validator in a mongosh-syntax editor with `$jsonSchema` completion. "Generate from schema" builds a `$jsonSchema`
   from the analysed sample: a type per field (a list for mixed fields), required fields present in at least a chosen

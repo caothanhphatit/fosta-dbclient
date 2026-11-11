@@ -56,6 +56,7 @@ import { filterQuestion, needsReview, sampledDocumentsText } from "./assistantMo
 import { refFields, RefResolver } from "./refs";
 import { reviewChange } from "./reviewDialog";
 import { stagesFromQuery } from "./pipelineModel";
+import type { ExplainRequest } from "./explainModel";
 import { pipelineOfSaved, readQueryRequest, stateOfSaved, type AggregationsRequest, type DocumentsRequest } from "./savedQueries";
 import { SavedQueries } from "./savedQueriesMenu";
 import "./mongodb.css";
@@ -181,6 +182,7 @@ class DocumentsSection implements SectionContent {
       },
       changed: () => this.ctx.stateChanged(),
       actions: () => this.moreActions(),
+      explain: () => void ctx.deliver("explain", { explain: { source: "query", query: this.bar.state() } } satisfies ExplainRequest),
       ask: ctx.view.navigator.askAssistant
         ? (request) =>
             ctx.view.navigator.askAssistant?.(

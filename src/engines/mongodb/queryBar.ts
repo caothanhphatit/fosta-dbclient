@@ -48,6 +48,8 @@ export interface QueryBarOptions {
   actions?(): MenuItem[];
   /** Save and the Saved dropdown; none: no buttons. */
   saved?: SavedQueries;
+  /** "Explain": shows the query plan of the fields as typed (the Explain section); none: no button. */
+  explain?(): void;
   /** "Ask": sends the sentence to the assistant (which answers with a filter); none: no button. */
   ask?(request: string): void;
 }
@@ -109,6 +111,10 @@ export class QueryBar {
     reset.addEventListener("click", () => options.reset());
     const find = h("button", { class: "btn primary mq-find", type: "button", title: "Run the query (Ctrl+Enter)" }, "Find");
     find.addEventListener("click", () => options.run());
+    const explainButton = options.explain
+      ? h("button", { class: "btn mq-explain", type: "button", title: "Show the query plan of this query (Explain section)" }, "Explain")
+      : null;
+    explainButton?.addEventListener("click", () => options.explain?.());
     const askButton = options.ask
       ? h(
           "button",
@@ -155,6 +161,7 @@ export class QueryBar {
         this.optionsButton,
         saveButton,
         reset,
+        explainButton,
         find,
         this.moreButton(),
       ),

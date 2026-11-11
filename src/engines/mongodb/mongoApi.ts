@@ -6,7 +6,8 @@
  * bulk operations and `applyEdits` (saving pending edits) always go through `withConfirmation`. `aggregatePreview` asks
  * only when the user ran it (a preview after an edit never asks); `aggregate` (the full run, `$out` / `$merge` included)
  * asks per the rules. `schema` asks only when the user pressed Analyze. `indexes` asks only when the user pressed Refresh;
- * creating, hiding and dropping an index always go through `withConfirmation` (DDL / destructive per the rules).
+ * creating, hiding and dropping an index always go through `withConfirmation` (DDL / destructive per the rules). `explain`
+ * asks per the rules (the user pressed Explain).
  * `validation` asks only when the user pressed Refresh; `validationCheck` and `setValidation` (DDL) always go through
  * `withConfirmation`.
  */
@@ -15,6 +16,7 @@ import type { ApplyResult, RowChangeSet } from "../../core/contract";
 import type { Confirmation } from "../../core/types";
 import { withConfirmation } from "../../features/safety/confirmationDialog";
 import type { deleteArgs, PreviewResult, previewArgs, updateArgs } from "./bulkModel";
+import type { ExplainArgs, ExplainResult } from "./explainModel";
 import type { CreateIndexArgs, IndexesResult } from "./indexModel";
 import type { CountArgs, FindArgs, FindPage, Target } from "./queryModel";
 import type { SchemaArgs, SchemaResult } from "./schemaModel";
@@ -174,6 +176,14 @@ export class MongoApi {
   setIndexHidden(name: string, hidden: boolean): Promise<HideIndexResult | null> {
     const operation = hidden ? "mongo.hideIndex" : "mongo.unhideIndex";
     return withConfirmation((confirmation) => this.connection.invokeCapability<HideIndexResult>(operation, { ...this.target, name }, confirmation));
+  }
+
+  /**
+   * The query plan of a find or a pipeline (`mongo.explain`, reads; executionStats runs the query within the workspace's
+   * timeout). The user pressed Explain, so a workspace that asks before reads asks (null: declined).
+   */
+  explain(args: ExplainArgs): Promise<ExplainResult | null> {
+    return withConfirmation((confirmation) => this.connection.invokeCapability<ExplainResult>("mongo.explain", args, confirmation));
   }
 
   /** Drops an index (destructive: the gateway asks, typed in Guarded workspaces). */
