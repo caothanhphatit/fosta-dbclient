@@ -46,6 +46,8 @@ export interface AssistantHost {
   openWorkspace(connectionId: string, object: ObjectRef, section: string, request: unknown): void;
   /** Opens what the model asked for (diagram, table, query tab) on the current connection. */
   perform(action: UiAction): void;
+  /** What clicking a suggested app action (`suggestAppAction`) runs; null for an id this version does not know. */
+  appAction(id: string): (() => void) | null;
   /** Opens the LLM provider dialog for the active connection (or a new one). */
   configure(): void;
   /** Opens the LLM provider dialog for `connection`, or an empty one to add a provider. */
@@ -223,6 +225,7 @@ export class AssistantPanel {
     this.setBusy(true);
     let reply = "";
     let pendingTool: HTMLElement | null = null;
+    let suggestions: HTMLElement | null = null;
     // Code blocks run against the connection the question was about, even if the user moves on.
     const render = () => body.replaceChildren(...this.renderMarkdown(reply, context));
     body.append(h("span", { class: "chat-cursor" }));
@@ -242,6 +245,12 @@ export class AssistantPanel {
           if (pendingTool) pendingTool.replaceWith(call);
           else bubble.before(call);
           pendingTool = null;
+          this.scrollToEnd();
+        } else if (event.type === "action" && event.action.kind === "suggestAppAction") {
+          // Only a button: nothing runs until the user clicks it.
+          suggestions ??= h("div", { class: "chat-app-actions" });
+          if (!suggestions.isConnected) bubble.after(suggestions);
+          suggestions.append(appActionButton(event.action, this.host.appAction(event.action.id)));
           this.scrollToEnd();
         } else if (event.type === "action") {
           this.host.perform(event.action);
@@ -529,6 +538,23 @@ function fenceButton(action: FenceAction, problem: HTMLElement): HTMLElement {
 function codeButton(iconName: IconName, label: string, title: string, run: () => void): HTMLElement {
   const button = h("button", { class: "chat-code-button", type: "button", title }, icon(iconName), label);
   button.addEventListener("click", run);
+  return button;
+}
+
+/**
+ * A suggested app action: a button that runs `run` on click (never before), with a hint that it is the app's own action.
+ * An id this version does not know shows a note instead.
+ */
+export function appActionButton(action: { id: string; label: string }, run: (() => void) | null): HTMLElement {
+  if (!run) return h("div", { class: "chat-app-action-unknown" }, `The assistant suggested an app action this version does not have (${action.id}).`);
+  const button = h(
+    "button",
+    { class: "chat-app-action", type: "button", title: `Runs only when you click (${action.id})` },
+    icon("sparkle"),
+    h("span", { class: "chat-app-action-label" }, action.label),
+    h("span", { class: "chat-app-action-hint" }, "Fosta Studio action"),
+  );
+  button.addEventListener("click", () => run());
   return button;
 }
 

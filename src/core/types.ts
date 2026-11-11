@@ -391,7 +391,9 @@ export type UiAction =
       suggestedSort: string | null;
       suggestedProject: string | null;
       suggestedPipeline: string[] | null;
-    };
+    }
+  /** A button in the chat for one of the app's own actions (`app/appActions.ts`); it runs only when the user clicks it. */
+  | { kind: "suggestAppAction"; id: string; label: string };
 
 /** A read-only query the assistant ran (`run_read_query`): what it sent and what it got, cells as text. */
 export interface ChatQuery {

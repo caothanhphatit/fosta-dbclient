@@ -12,6 +12,7 @@ import { showWelcomeStart, welcomeScreen } from "./app/welcome";
 import { renderStatusContext } from "./app/statusBar";
 import { buildLayout, ASSISTANT_STORAGE_KEY, toggleSidebar } from "./app/layout";
 import { shellMenus } from "./app/menus";
+import { appActionRegistry, isAppActionId } from "./app/appActions";
 import { installOnExit, openRelease, startUpdates } from "./app/update";
 import { COMMUNITY_URL } from "./app/updateLogic";
 import { initMcpApprovals } from "./features/mcp/mcpApproval";
@@ -74,6 +75,19 @@ const menus = shellMenus({
   deleteWorkspace: (current) => deleteWorkspace(current),
 });
 
+/** The app actions the assistant may suggest as chat buttons; each runs on the user's click only. */
+const appActions = appActionRegistry({
+  newConnection: () => void editConnection(null),
+  newWorkspace: () => void createWorkspace(),
+  editWorkspace: () => {
+    if (workspace) void editWorkspace(workspace);
+  },
+  newCommand: () => void tasksPanel.edit(null),
+  newQuery: newQueryFromSelection,
+  llmProviders: () => void configureAssistant(),
+  embeddingSettings: () => void configureEmbedding(),
+});
+
 const navigation = new AppNavigation(tabs, {
   workspaceId,
   profileOf: (connectionId) => currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId),
@@ -107,6 +121,7 @@ const assistant = new AssistantPanel({
   openQuery: openQueryWithText,
   openWorkspace: (connectionId, object, section, request) => navigation.openWorkspace(connectionId, object, section, request),
   perform: performAssistantAction,
+  appAction: (id) => (isAppActionId(id) ? appActions[id] : null),
   configure: () => void configureAssistant(),
   editProvider: (connection) => void editAiProvider(connection),
   configChanged: applyConfig,

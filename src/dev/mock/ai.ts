@@ -247,9 +247,21 @@ function systemPrompt(context: ChatRequest["context"]): string {
  */
 export const SCRIPTED_HOST = "scripted.mock";
 
+/** The app actions the scripted assistant suggests: "mcp" asks for the MCP settings, "unknown action" for an id no version has. */
+function scriptedAppActions(request: ChatRequest): { id: string; label: string }[] {
+  const question = request.messages[request.messages.length - 1]?.content ?? "";
+  if (/unknown action/i.test(question)) return [{ id: "run:format_disk", label: "Format the disk" }];
+  if (/\bmcp\b/i.test(question)) return [{ id: "open_settings:mcp", label: "Open MCP server settings" }];
+  return [];
+}
+
 /** The scripted answer to the last user message. */
 export function scriptedReply(request: ChatRequest): string {
   const question = request.messages[request.messages.length - 1]?.content ?? "";
+  if (/unknown action/i.test(question)) return "This build suggested an action the app does not know; it is shown as a note, not a button.";
+  if (/\bmcp\b/i.test(question)) {
+    return 'Open the gear "Settings" button at the bottom of the rail, then "MCP server…", and turn the server on. The button below opens it for you.';
+  }
   if (/broken/i.test(question)) return "This one does not parse:\n\n```mongo-filter\n{ status: }\n```";
   if (/next stage/i.test(question)) return "Sort the groups by their total, largest first:\n\n```mongo-pipeline\n{ $sort: { total: -1 } }\n```";
   if (/fix it/i.test(question)) return "The stage needs one operator; this keeps the paid orders:\n\n```mongo-pipeline\n{ $match: { status: 'paid' } }\n```";
@@ -285,6 +297,11 @@ export async function streamChat(request: ChatRequest, channel: Channel<ChatEven
   const emit = (message: ChatEvent) => internals.runCallback(channel.id, { index: index++, message });
   if (hostOf(baseUrlOf(settings)) === SCRIPTED_HOST) {
     const text = scriptedReply(request);
+    // Like the backend's search_app_help and suggest_app_action calls: the chat shows a button, nothing runs.
+    for (const action of scriptedAppActions(request)) {
+      emit({ type: "tool", label: "Suggested an app action" });
+      emit({ type: "action", action: { kind: "suggestAppAction", ...action } });
+    }
     for (const piece of text.match(/[\s\S]{1,40}/g) ?? []) {
       emit({ type: "text", text: piece });
       await new Promise((resolve) => setTimeout(resolve, 15));

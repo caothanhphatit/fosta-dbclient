@@ -148,3 +148,53 @@
   margin-top: 3px;
   font-size: 11px;
 }
+
+/* A suggested app action (suggest_app_action): runs only on click. */
+.chat-app-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-app-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chat-app-action:hover {
+  border-color: var(--accent);
+}
+
+.chat-app-action .icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  color: var(--accent);
+}
+
+.chat-app-action-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-app-action-hint {
+  flex: none;
+  color: var(--fg-3);
+  font-size: 11px;
+}
+
+.chat-app-action-unknown {
+  color: var(--fg-3);
+  font-size: 12px;
+}
