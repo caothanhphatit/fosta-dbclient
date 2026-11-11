@@ -873,6 +873,7 @@ pub(crate) mod fixtures {
             text: "One row per checkout".into(),
             source: DescriptionSource::User,
             updated_at: 0,
+            fingerprint: None,
         });
         let mut customers = object(
             "customers",
@@ -1034,6 +1035,7 @@ mod tests {
                 text: "x".repeat(500),
                 source: crate::ai::profile::model::DescriptionSource::Llm,
                 updated_at: 0,
+                fingerprint: None,
             });
             profile.objects.push(table);
             profile.relations.push(relation(

@@ -185,6 +185,10 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<$crate::ai::profile::DatabaseProfile> = $crate::commands::profile::profile_update_description;
             [async] profile_delete(connection_id: String, database: String)
                 -> $crate::error::AppResult<bool> = $crate::commands::profile::profile_delete;
+            [async] profile_summary_estimate(connection_id: String, database: String, model: Option<String>, only_changed: Option<bool>)
+                -> $crate::error::AppResult<$crate::commands::profile::SummaryCost> = $crate::commands::profile::profile_summary_estimate;
+            [async] profile_summarize(connection_id: String, database: String, run_id: String, model: Option<String>, only_changed: bool)
+                -> $crate::error::AppResult<$crate::ai::profile::summary::SummaryOutcome> = $crate::commands::profile::profile_summarize;
 
             [async] history_append(entry: $crate::history::HistoryEntry)
                 -> $crate::error::AppResult<Option<$crate::history::HistoryEntry>> = $crate::commands::history::history_append;

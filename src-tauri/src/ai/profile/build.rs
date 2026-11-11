@@ -51,6 +51,8 @@ pub enum Step {
     /// Reading value hints (only where the assistant may read data and the caller asked for them).
     Values,
     Saving,
+    /// The model writes the database summary and the object descriptions (`profile_summarize`, a run of its own).
+    Summary,
 }
 
 /// One progress report: `done` of `total` in `step` (0 of 0 while the total is unknown), and the object being read.

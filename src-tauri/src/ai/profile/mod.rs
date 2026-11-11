@@ -9,10 +9,10 @@
 //! - [`redact`]: system and credential objects left out, sensitive columns and secret-looking text redacted
 //! - [`store`]: the files, caps, refresh merge and cleanup
 //! - [`digest`]: what a chat sees: the prompt digest and the `search_profile` / `get_object_profile` tools
+//! - [`summary`]: the model's summary and object descriptions, on request, with a cost estimate first
 //!
-//! [`values`] reads value hints, only under the read gate; later phases fill the other fields that are already in the
-//! model: the model's summary and descriptions (P5), engine extras (P6). The structural build reads no rows and sends
-//! nothing anywhere.
+//! [`values`] reads value hints, only under the read gate; engine extras (P6) come later. The structural build reads no
+//! rows and sends nothing anywhere; only [`summary`] sends anything to a model.
 
 pub mod build;
 pub mod digest;
@@ -21,6 +21,7 @@ pub mod infer;
 pub mod model;
 pub mod redact;
 pub mod store;
+pub mod summary;
 pub mod values;
 
 use std::sync::Arc;
@@ -69,6 +70,22 @@ pub async fn learn(
     sampler: Option<Sampler<'_>>,
     progress: build::ProgressFn<'_>,
 ) -> AppResult<LearnOutcome> {
+    learn_with(runs, store, handle, database, run_id, sampler, true, progress).await
+}
+
+/// [`learn`]; without `keep_hints` (the user opted out of value sampling for this build) the stored value hints are
+/// dropped instead of carried over for unchanged objects, and the profile no longer says data was read.
+#[allow(clippy::too_many_arguments)]
+pub async fn learn_with(
+    runs: &AiRuns,
+    store: &Arc<ProfileStore>,
+    handle: &Handle,
+    database: &str,
+    run_id: &str,
+    sampler: Option<Sampler<'_>>,
+    keep_hints: bool,
+    progress: build::ProgressFn<'_>,
+) -> AppResult<LearnOutcome> {
     let connection_id = handle.connection_id.clone();
     let _slot = store.begin_learning(&connection_id, database)?;
     let run = runs.begin(run_id);
@@ -97,7 +114,9 @@ pub async fn learn(
     let writer = Arc::clone(store);
     let (profile, diff, refreshed) = tokio::task::spawn_blocking(move || {
         let existed = writer.header(&fresh.connection_id, &fresh.database)?.is_some();
-        writer.refresh(fresh).map(|(profile, diff)| (profile, diff, existed))
+        writer
+            .refresh_with(fresh, keep_hints)
+            .map(|(profile, diff)| (profile, diff, existed))
     })
     .await
     .map_err(|error| AppError::new(format!("Saving what the assistant learned failed: {error}")))??;

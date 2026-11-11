@@ -498,6 +498,7 @@ async fn merge_keeps_model_knowledge_only_for_unchanged_objects() {
             text: format!("about {}", object.name),
             source: DescriptionSource::Llm,
             updated_at: 1,
+            fingerprint: None,
         });
         object.value_hints = vec![ValueHint {
             column: "status".into(),

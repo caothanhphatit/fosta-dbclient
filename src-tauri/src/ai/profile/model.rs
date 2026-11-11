@@ -251,6 +251,10 @@ pub struct Description {
     pub text: String,
     pub source: DescriptionSource,
     pub updated_at: i64,
+    /// The object's fingerprint when the model wrote the description (none for the user's): a summary run with
+    /// `onlyChanged` describes again the objects whose fingerprint moved on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

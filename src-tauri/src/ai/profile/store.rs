@@ -22,8 +22,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     fingerprint::{self, ObjectDiff},
-    model::{DatabaseProfile, Description, DescriptionSource, ProfileNote, StructureChecks, PROFILE_VERSION},
+    model::{DatabaseProfile, Description, DescriptionSource, ProfileNote, ProfileSummary, StructureChecks, PROFILE_VERSION},
     redact,
+    values::strip_value_hints,
 };
 use crate::{
     audit::now_millis,
@@ -199,10 +200,16 @@ impl ProfileStore {
     /// Stores a fresh build: merged into the stored profile (notes, descriptions, unchanged objects' hints), capped,
     /// written. Returns the stored profile and how its objects changed.
     pub fn refresh(&self, fresh: DatabaseProfile) -> AppResult<(DatabaseProfile, ObjectDiff)> {
+        self.refresh_with(fresh, true)
+    }
+
+    /// [`Self::refresh`]; without `keep_hints` (the user opted out of value sampling) the stored value hints are dropped
+    /// instead of carried over, and the profile no longer says data was read.
+    pub fn refresh_with(&self, fresh: DatabaseProfile, keep_hints: bool) -> AppResult<(DatabaseProfile, ObjectDiff)> {
         let _guard = lock(&self.guard);
         let path = self.path(&fresh.connection_id, &fresh.database);
         let previous: Option<DatabaseProfile> = self.read(&path, &fresh.connection_id, &fresh.database)?;
-        let (mut merged, diff) = merge(previous, fresh);
+        let (mut merged, diff) = merge_with(previous, fresh, keep_hints);
         self.write(&path, &mut merged)?;
         Ok((merged, diff))
     }
@@ -270,6 +277,7 @@ impl ProfileStore {
                 text,
                 source: DescriptionSource::User,
                 updated_at: now_millis(),
+                fingerprint: None,
             });
             Ok(())
         })
@@ -289,6 +297,47 @@ impl ProfileStore {
         change(&mut profile)?;
         self.write(&path, &mut profile)?;
         Ok(profile)
+    }
+
+    /// Stores what a summary run wrote: the model's descriptions of the named objects (never over the user's, unknown names
+    /// ignored), each with the object's fingerprint now, the database summary when there is one, the model and the tokens
+    /// (added to the counters). Returns the stored profile and how many descriptions were written.
+    pub fn apply_summary(&self, connection_id: &str, database: &str, write: &SummaryWrite) -> AppResult<(DatabaseProfile, usize)> {
+        let mut written = 0;
+        let profile = self.update(connection_id, database, |profile| {
+            let now = now_millis();
+            for (name, text) in &write.descriptions {
+                let Some(object) = profile.object_mut(name) else {
+                    continue;
+                };
+                if object
+                    .description
+                    .as_ref()
+                    .is_some_and(|description| description.source == DescriptionSource::User)
+                {
+                    continue;
+                }
+                object.description = Some(Description {
+                    text: redact::cut(text, MAX_DESCRIPTION_CHARS),
+                    source: DescriptionSource::Llm,
+                    updated_at: now,
+                    fingerprint: Some(object.fingerprint.clone()),
+                });
+                written += 1;
+            }
+            if let Some(text) = write.summary.as_deref().filter(|text| !text.trim().is_empty()) {
+                profile.summary = Some(ProfileSummary {
+                    text: redact::cut(text, MAX_DESCRIPTION_CHARS),
+                    model: write.model.clone(),
+                    created_at: now,
+                });
+            }
+            profile.model = Some(write.model.clone());
+            profile.input_tokens = profile.input_tokens.saturating_add(write.input_tokens);
+            profile.output_tokens = profile.output_tokens.saturating_add(write.output_tokens);
+            Ok(())
+        })?;
+        Ok((profile, written))
     }
 
     /// Deletes one profile; false when there was none.
@@ -402,7 +451,16 @@ fn fit(profile: &mut DatabaseProfile) -> AppResult<Vec<u8>> {
 /// `fresh` with what `previous` knew that a build does not recompute: the notes, the first build time, the summary and
 /// the model's counters, the extras, the user's descriptions (of objects still there), and the model's descriptions and
 /// value hints of objects whose fingerprint did not change.
-pub fn merge(previous: Option<DatabaseProfile>, mut fresh: DatabaseProfile) -> (DatabaseProfile, ObjectDiff) {
+pub fn merge(previous: Option<DatabaseProfile>, fresh: DatabaseProfile) -> (DatabaseProfile, ObjectDiff) {
+    merge_with(previous, fresh, true)
+}
+
+/// [`merge`]; without `keep_hints` no value hint is carried over and the fresh build's own hints are dropped too.
+pub fn merge_with(previous: Option<DatabaseProfile>, mut fresh: DatabaseProfile, keep_hints: bool) -> (DatabaseProfile, ObjectDiff) {
+    if !keep_hints {
+        strip_value_hints(&mut fresh);
+        fresh.data_read = false;
+    }
     let Some(previous) = previous else {
         let diff = ObjectDiff {
             added: fresh.objects.iter().map(|object| object.qualified()).collect(),
@@ -425,7 +483,7 @@ pub fn merge(previous: Option<DatabaseProfile>, mut fresh: DatabaseProfile) -> (
             Some(description) if description.source == DescriptionSource::User || unchanged => Some(description),
             _ => object.description.take(),
         };
-        if unchanged && object.value_hints.is_empty() {
+        if keep_hints && unchanged && object.value_hints.is_empty() {
             object.value_hints = before.value_hints;
         }
     }
@@ -442,4 +500,15 @@ pub fn merge(previous: Option<DatabaseProfile>, mut fresh: DatabaseProfile) -> (
     }
     fresh.data_read = fresh.data_read || fresh.objects.iter().any(|object| !object.value_hints.is_empty());
     (fresh, diff)
+}
+
+/// What a summary run hands to [`ProfileStore::apply_summary`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SummaryWrite {
+    /// `(object, description)`: the object as its qualified name.
+    pub descriptions: Vec<(String, String)>,
+    pub summary: Option<String>,
+    pub model: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
 }
