@@ -767,6 +767,231 @@ async fn contract_mongo_engine_operations() {
     manager.disconnect(CONNECTION).await;
 }
 
+/// The collection workspace's edits: nested edits by dotted path (the rest of the top-level field untouched, stored
+/// number types kept), conflicts on a changed path only, Read-only blocking, and the bulk operations with their
+/// confirmations.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mongo.yml"]
+async fn contract_mongo_document_edits_and_bulk() {
+    use crate::engines::mongo::values::{exact, unset};
+    let f = fixture();
+    let (manager, handle) = connect(&f).await;
+    let tab = session(&handle).await;
+    let docs = json!([
+        { "_id": 1, "address": { "city": "Oslo", "zip": "0150" }, "price": 10.5, "n": { "$numberLong": "5" }, "tags": ["a", "b"], "status": "new" },
+        { "_id": 2, "address": { "city": "Rome", "zip": "00100" }, "price": 20.0, "n": { "$numberLong": "6" }, "tags": [], "status": "new" },
+        { "_id": 3, "address": { "city": "Kyiv" }, "price": 30.0, "status": "paid", "qty": 2 },
+    ]);
+    run(&handle, &tab, r#"{ "drop": "contract_m5" }"#, "fosta_contract").await.ok();
+    run(
+        &handle,
+        &tab,
+        &json!({ "insert": "contract_m5", "documents": docs }).to_string(),
+        "fosta_contract",
+    )
+    .await
+    .unwrap();
+    let context = |preset: Preset| Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: CONNECTION.into(),
+        connection_name: CONNECTION.into(),
+        safety: SafetySettings::preset(preset),
+    };
+    let object = collection("fosta_contract", "contract_m5");
+    let read = |id: i64| {
+        let (manager, context) = (&manager, context(Preset::Open));
+        async move {
+            let args = json!({ "database": "fosta_contract", "collection": "contract_m5", "id": id });
+            gateway::invoke(manager, &context, gateway::Caller::EngineView, "mongo.resolveRef", args, None)
+                .await
+                .unwrap()["document"]
+                .clone()
+        }
+    };
+    let edit = |values: Vec<Field>, original: Vec<Field>| RowChangeSet {
+        object: object.clone(),
+        changes: vec![RowChange::Update {
+            key: vec![Field::new("_id", exact(r#"{"$numberInt":"1"}"#))],
+            values,
+            original,
+            version: None,
+            force: false,
+        }],
+    };
+    let save = |set: RowChangeSet, preset: Preset| {
+        let (manager, context) = (&manager, context(preset));
+        async move { gateway::apply_edits(manager, &context, gateway::Caller::GridSave, &set, None, None).await }
+    };
+
+    // A nested edit and a removed nested field; the rest of `address` and the stored types stay.
+    let first = edit(
+        vec![
+            Field::new("address.city", exact(r#""Bergen""#)),
+            Field::new("address.zip", unset()),
+            Field::new("added.at", exact(r#"{"$date":"2026-01-02T00:00:00Z"}"#)),
+            Field::new("n", exact("7")),
+        ],
+        vec![
+            Field::new("address.city", exact(r#""Oslo""#)),
+            Field::new("address.zip", exact(r#""0150""#)),
+            Field::new("added.at", exact("null")),
+            Field::new("n", exact("5")),
+        ],
+    );
+    assert_eq!(
+        save(first.clone(), Preset::ReadOnly).await.unwrap_err().code(),
+        Some(gateway::BLOCKED)
+    );
+    let result = save(first, Preset::Open).await.unwrap();
+    assert_eq!(result.updated, 1);
+    let now = read(1).await;
+    assert_eq!(now["address"], json!({ "city": "Bergen" }), "{now}");
+    assert_eq!(now["price"], json!(10.5));
+    assert_eq!(now["n"], json!(7), "an exact plain 7 is an int32 now: {now}");
+    assert_eq!(now["added"]["at"], json!({ "$date": "2026-01-02T00:00:00Z" }));
+
+    // A sub-document edited as a whole is written at its path.
+    let geo = edit(
+        vec![Field::new("address", exact(r#"{ "city": "Bergen", "zip": "5003" }"#))],
+        vec![Field::new("address", exact(r#"{ "city": "Bergen" }"#))],
+    );
+    save(geo, Preset::Open).await.unwrap();
+    assert_eq!(read(1).await["address"], json!({ "city": "Bergen", "zip": "5003" }));
+
+    // Someone else changes the edited path: a conflict with the path as it is now; nothing written.
+    run(
+        &handle,
+        &tab,
+        r#"{ "update": "contract_m5", "updates": [{ "q": { "_id": 1 }, "u": { "$set": { "address.city": "Tromso", "status": "elsewhere" } } }] }"#,
+        "fosta_contract",
+    )
+    .await
+    .unwrap();
+    let stale = edit(
+        vec![Field::new("address.city", exact(r#""Mine""#))],
+        vec![Field::new("address.city", exact(r#""Bergen""#))],
+    );
+    let error = save(stale, Preset::Open).await.unwrap_err();
+    assert_eq!(error.code(), Some(CONFLICT), "{error}");
+    let payload = error.payload().unwrap();
+    let current = payload["conflicts"][0]["current"].as_array().unwrap();
+    assert!(
+        current
+            .iter()
+            .any(|field| field["column"] == "address.city" && field["value"]["v"] == "\"Tromso\""),
+        "{payload}"
+    );
+    assert_eq!(read(1).await["address"]["city"], json!("Tromso"));
+    // Another field changed (status), the edited path did not: no conflict.
+    let fresh = edit(
+        vec![Field::new("address.zip", exact(r#""9000""#))],
+        vec![Field::new("address.zip", exact(r#""5003""#))],
+    );
+    save(fresh, Preset::Open).await.unwrap();
+    assert_eq!(read(1).await["address"], json!({ "city": "Tromso", "zip": "9000" }));
+
+    // Bulk: the preview reads (allowed in a Read-only workspace) and simulates the update.
+    let invoke = |name: &'static str, extra: serde_json::Value, preset: Preset, confirmation: Option<gateway::Confirmation>| {
+        let mut args = json!({ "database": "fosta_contract", "collection": "contract_m5" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let (manager, context) = (&manager, context(preset));
+        async move { gateway::invoke(manager, &context, gateway::Caller::EngineView, name, args, confirmation.as_ref()).await }
+    };
+    let preview = invoke(
+        "mongo.updatePreview",
+        json!({ "filter": { "status": "new" }, "update": { "$inc": { "qty": 1 }, "$set": { "status": "done" }, "$rename": { "tags": "labels" } } }),
+        Preset::ReadOnly,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(preview["matched"], json!(1), "{preview}");
+    let sample = &preview["sample"][0];
+    assert_eq!(sample["before"]["_id"], json!(2));
+    assert_eq!(sample["after"]["qty"], json!(1));
+    assert_eq!(sample["after"]["status"], json!("done"));
+    assert_eq!(sample["after"]["labels"], json!([]));
+    assert!(sample["after"].get("tags").is_none(), "{sample}");
+    assert_eq!(sample["changed"], json!(true));
+    assert!(preview["statement"].as_str().unwrap().contains(".updateMany("));
+    // The preview changed nothing.
+    assert_eq!(read(2).await["status"], json!("new"));
+    let refused = invoke(
+        "mongo.updatePreview",
+        json!({ "update": { "$addToSet": { "tags": "x" } } }),
+        Preset::Open,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(refused.to_string().contains("cannot be previewed"), "{refused}");
+
+    // updateMany: blocked in Read-only, confirmed in Guarded (typed with an empty filter).
+    let update = json!({ "filter": { "status": "new" }, "update": { "$set": { "status": "done" } } });
+    assert_eq!(
+        invoke("mongo.updateMany", update.clone(), Preset::ReadOnly, None)
+            .await
+            .unwrap_err()
+            .code(),
+        Some(gateway::BLOCKED)
+    );
+    let ask = invoke("mongo.updateMany", update.clone(), Preset::Guarded, None).await.unwrap_err();
+    assert_eq!(ask.code(), Some(gateway::CONFIRMATION_REQUIRED));
+    assert_eq!(ask.payload().unwrap()["level"], "confirm");
+    let token = ask.payload().unwrap()["token"].as_str().unwrap().to_owned();
+    let done = invoke(
+        "mongo.updateMany",
+        update,
+        Preset::Guarded,
+        Some(gateway::Confirmation { token, typed: None }),
+    )
+    .await
+    .unwrap();
+    assert_eq!((done["matched"].as_u64(), done["modified"].as_u64()), (Some(1), Some(1)));
+    assert_eq!(read(2).await["status"], json!("done"));
+    let everything = json!({ "filter": {}, "update": [{ "$set": { "seen": true } }] });
+    let ask = invoke("mongo.updateMany", everything.clone(), Preset::Guarded, None)
+        .await
+        .unwrap_err();
+    assert_eq!(ask.payload().unwrap()["level"], "typed");
+    assert_eq!(ask.payload().unwrap()["expected"], "contract_m5");
+    let token = ask.payload().unwrap()["token"].as_str().unwrap().to_owned();
+    let all = invoke(
+        "mongo.updateMany",
+        everything,
+        Preset::Guarded,
+        Some(gateway::Confirmation {
+            token,
+            typed: Some("contract_m5".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(all["modified"].as_u64(), Some(3));
+
+    // deleteMany is destructive: typed in Guarded even with a filter.
+    let delete = json!({ "filter": { "status": "paid" } });
+    let ask = invoke("mongo.deleteMany", delete.clone(), Preset::Guarded, None).await.unwrap_err();
+    assert_eq!(ask.payload().unwrap()["level"], "typed");
+    let token = ask.payload().unwrap()["token"].as_str().unwrap().to_owned();
+    let deleted = invoke(
+        "mongo.deleteMany",
+        delete,
+        Preset::Guarded,
+        Some(gateway::Confirmation {
+            token,
+            typed: Some("contract_m5".into()),
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(deleted["deleted"].as_u64(), Some(1));
+    assert!(read(3).await.is_null());
+    run(&handle, &tab, r#"{ "drop": "contract_m5" }"#, "fosta_contract").await.ok();
+    manager.disconnect(CONNECTION).await;
+}
+
 /// The canonical Extended JSON v2 wrappers the query bar's shell parser (`src/lang/mongo/shell.ts`) emits parse to
 /// the right BSON types, through the filter check, `values::parse_document` and the operations' own argument path.
 #[test]

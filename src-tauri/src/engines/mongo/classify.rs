@@ -1,9 +1,13 @@
 //! MongoDB database commands written as JSON (the query tab's input), classified by the command name: the first key
 //! of the object. Aggregations with `$out` / `$merge` write; deletes and multi-updates with an empty filter are
-//! destructive. The engine operations (`mongo.find` …) are classified by name: they read, refuse server-side JavaScript
+//! destructive. The engine operations (`mongo.find` …) are classified by name: reads, the bulk update (a write, destructive
+//! with an empty filter) and the bulk delete (destructive); they refuse server-side JavaScript
 //! and refuse names they do not know.
 
-use super::ops::{denied_operator, OPERATIONS};
+use super::{
+    bulk::filter_is_empty,
+    ops::{denied_operator, OPERATIONS},
+};
 use crate::{
     contract::classify::{Category, Classification, StatementInfo},
     engines::common::sqlclassify::excerpt,
@@ -90,9 +94,10 @@ pub fn classify_mongo(text: &str) -> Classification {
     })
 }
 
-/// Classifies an engine operation (`mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`): every one reads,
-/// unless it targets credentials (administration); server-side JavaScript in any query document and unknown names are
-/// refused.
+/// Classifies an engine operation by name: `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef` and
+/// `mongo.updatePreview` read; `mongo.updateMany` writes (destructive with an empty filter); `mongo.deleteMany` is always
+/// destructive. Any of them is administration when it targets credentials; server-side JavaScript in any query
+/// document or update and unknown names are refused.
 pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo {
     if !OPERATIONS.contains(&name) {
         return StatementInfo::refused(name, name, "unknown operation");
@@ -109,7 +114,16 @@ pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo
     let info = if touches_secrets(args) {
         StatementInfo::new(Category::Admin, name, &excerpt).with_reason(SENSITIVE_READ_REASON)
     } else {
-        StatementInfo::new(Category::Read, name, &excerpt)
+        match name {
+            "mongo.updateMany" if filter_is_empty(args) => StatementInfo::new(Category::Destructive, name, &excerpt)
+                .with_reason("An empty filter updates every document in the collection"),
+            "mongo.updateMany" => StatementInfo::new(Category::Write, name, &excerpt),
+            "mongo.deleteMany" if filter_is_empty(args) => StatementInfo::new(Category::Destructive, name, &excerpt)
+                .with_reason("An empty filter deletes every document in the collection"),
+            "mongo.deleteMany" => StatementInfo::new(Category::Destructive, name, &excerpt).with_reason("Deletes every matching document"),
+            // `mongo.updatePreview` simulates the update in an aggregation: it reads.
+            _ => StatementInfo::new(Category::Read, name, &excerpt),
+        }
     };
     info.with_tables(tables)
 }
@@ -357,5 +371,65 @@ mod tests {
         let secret = classify_operation("mongo.find", &json!({ "database": "admin", "collection": "system.users" }));
         assert_eq!(secret.category, Category::Admin);
         assert_eq!(secret.refused, None);
+    }
+
+    #[test]
+    fn bulk_operations_are_classified_per_operation_and_filter() {
+        use serde_json::json;
+        let args = |filter: serde_json::Value| json!({ "database": "shop", "collection": "orders", "filter": filter, "update": { "$set": { "status": "archived" } } });
+        let category = |name: &str, args: serde_json::Value| {
+            let info = classify_operation(name, &args);
+            assert_eq!(info.refused, None, "{name} {args}");
+            assert_eq!(info.tables, ["orders"], "{name}");
+            info.category
+        };
+        let some = json!({ "status": "paid" });
+        assert_eq!(category("mongo.updatePreview", args(some.clone())), Category::Read);
+        assert_eq!(category("mongo.updatePreview", args(json!({}))), Category::Read);
+        assert_eq!(category("mongo.updateMany", args(some.clone())), Category::Write);
+        assert_eq!(
+            category("mongo.updateMany", args(json!("{ \"status\": \"paid\" }"))),
+            Category::Write
+        );
+        for empty in [json!({}), json!(""), json!("{}"), json!(null), json!("{ broken")] {
+            assert_eq!(category("mongo.updateMany", args(empty.clone())), Category::Destructive, "{empty}");
+            assert_eq!(category("mongo.deleteMany", args(empty.clone())), Category::Destructive, "{empty}");
+        }
+        assert_eq!(category("mongo.deleteMany", args(some)), Category::Destructive);
+        let no_filter = json!({ "database": "shop", "collection": "orders", "update": { "$inc": { "n": 1 } } });
+        assert_eq!(category("mongo.updateMany", no_filter), Category::Destructive);
+        // Server-side JavaScript anywhere, including the update (a pipeline with $function), is refused.
+        for (name, args) in [
+            (
+                "mongo.updateMany",
+                json!({ "database": "s", "collection": "c", "filter": { "$where": "true" }, "update": { "$set": { "a": 1 } } }),
+            ),
+            (
+                "mongo.updateMany",
+                json!({ "database": "s", "collection": "c", "filter": { "a": 1 }, "update": [{ "$set": { "a": { "$function": { "body": "f", "args": [], "lang": "js" } } } }] }),
+            ),
+            (
+                "mongo.updatePreview",
+                json!({ "database": "s", "collection": "c", "update": "[{ \"$set\": { \"a\": { \"$accumulator\": {} } } }]" }),
+            ),
+            (
+                "mongo.deleteMany",
+                json!({ "database": "s", "collection": "c", "filter": "{ \"$where\": \"true\" }" }),
+            ),
+        ] {
+            let info = classify_operation(name, &args);
+            assert!(
+                info.refused.as_deref().is_some_and(|why| why.contains("JavaScript")),
+                "{name}: {args}"
+            );
+        }
+        // Every operation the module runs is classified (none falls through as unknown).
+        for name in OPERATIONS {
+            assert_eq!(classify_operation(name, &args(json!({ "a": 1 }))).refused, None, "{name}");
+        }
+        assert_eq!(
+            classify_operation("mongo.deleteMany", &json!({ "database": "admin", "collection": "system.users" })).category,
+            Category::Admin
+        );
     }
 }

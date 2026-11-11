@@ -372,6 +372,10 @@ pub fn matches_original(stored: Option<&Bson>, original: &Value) -> bool {
     if let Some(loaded) = exact_json(original) {
         // A value the document views loaded as relaxed Extended JSON: compared in that form, so what the view showed is
         // what is checked (a missing field reads as null).
+        // Canonical wrappers (`{"$numberInt": "1"}`) are read back to their relaxed form first.
+        let loaded = loaded
+            .and_then(|loaded| Bson::try_from(loaded).ok())
+            .map(Bson::into_relaxed_extjson);
         return loaded.is_some_and(|loaded| json_equal(&relaxed_or_null(stored), &loaded));
     }
     let current = stored.map(to_value).unwrap_or(Value::Null);

@@ -10,6 +10,11 @@
 //! the error is `CONFLICT` with those documents. Then the changes are written in order, each guarded by the key and the
 //! values just read, so a write that races the check matches nothing and is a conflict too.
 //!
+//! Columns of an update are dotted paths (`address.city`, `tags.1`): the update is `$set` / `$unset` by path, so a nested
+//! edit leaves the rest of its top-level field alone, and only the edited paths are compared. The document views send
+//! exact values ([`values::exact`]: Extended JSON written as given, originals compared as they were loaded) and removed
+//! fields ([`values::unset`]); the grid sends typed values coerced to the stored type.
+//!
 //! - On a replica set or a sharded cluster the whole apply runs in one transaction: any conflict or error aborts it.
 //! - On a standalone server (no transactions) the writes already made are compensated when a later one conflicts or
 //!   fails: updated documents are replaced by the copies read before, deleted ones are inserted again, inserted ones
@@ -467,7 +472,7 @@ fn set_document(values: &[Field], original: &[Field], current: &Document) -> App
 }
 
 /// Whether one dotted path is the other or lies inside it (`a` and `a.b`): one update cannot touch both.
-fn overlaps(left: &str, right: &str) -> bool {
+pub(super) fn overlaps(left: &str, right: &str) -> bool {
     let inside = |outer: &str, inner: &str| inner.len() > outer.len() && inner.starts_with(outer) && inner.as_bytes()[outer.len()] == b'.';
     left == right || inside(left, right) || inside(right, left)
 }

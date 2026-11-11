@@ -1,9 +1,10 @@
 //! The engine operations the MongoDB views call through `invoke`: `mongo.find`, `mongo.count`, `mongo.distinct` and
-//! `mongo.resolveRef`. All of them only read.
+//! `mongo.resolveRef` read; `mongo.updatePreview` reads too, and `mongo.updateMany` / `mongo.deleteMany` write (all three
+//! in `bulk.rs`).
 //!
 //! Filters, projections, sorts, collations, hints and `_id` values are relaxed or canonical Extended JSON, given as JSON
 //! values or as JSON text (an empty text is no filter). Operators that run JavaScript on the server (`$where`,
-//! `$function`, `$accumulator`) are refused here as well as by the classifier. Every operation runs with a time bound:
+//! `$function`, `$accumulator`) are refused here as well as by the classifier. Every read runs with a time bound:
 //! `maxTimeMS` when given, else the workspace's statement timeout, else [`DEFAULT_MAX_TIME_MS`]; never more than the
 //! workspace's timeout or [`MAX_TIME_MS`]. Documents come back as relaxed Extended JSON.
 //!
@@ -19,6 +20,7 @@
 //!   sorted, for value completion.
 //! - `mongo.resolveRef { database, collection, id, projection?, maxTimeMS? }` → `{ document }`, the document with that
 //!   `_id` or `null`.
+//! - `mongo.updatePreview`, `mongo.updateMany`, `mongo.deleteMany`: see `bulk.rs`.
 
 use std::time::{Duration, Instant};
 
@@ -30,7 +32,10 @@ use mongodb::{
 };
 use serde_json::{json, Value as Json};
 
-use super::values::{self, ID_FIELD};
+use super::{
+    bulk,
+    values::{self, ID_FIELD},
+};
 use crate::{
     contract::CallContext,
     engines::common::serverjs::find_denied_operator,
@@ -38,9 +43,17 @@ use crate::{
 };
 
 /// The `invoke` names of this module.
-pub const OPERATIONS: [&str; 4] = ["mongo.find", "mongo.count", "mongo.distinct", "mongo.resolveRef"];
+pub const OPERATIONS: [&str; 7] = [
+    "mongo.find",
+    "mongo.count",
+    "mongo.distinct",
+    "mongo.resolveRef",
+    "mongo.updatePreview",
+    "mongo.updateMany",
+    "mongo.deleteMany",
+];
 /// The arguments that hold query documents (checked for server-side JavaScript).
-pub const DOCUMENT_ARGS: [&str; 5] = ["filter", "projection", "sort", "collation", "hint"];
+pub const DOCUMENT_ARGS: [&str; 6] = ["filter", "projection", "sort", "collation", "hint", "update"];
 
 /// Documents per `mongo.find` page when no limit is given, and the most a page returns.
 const DEFAULT_FIND_LIMIT: u64 = 50;
@@ -68,7 +81,10 @@ pub async fn invoke(client: &Client, name: &str, args: &Json, ctx: &CallContext)
         "mongo.find" => find(&coll, args, max_time).await,
         "mongo.count" => count(&coll, args, max_time).await,
         "mongo.distinct" => distinct(&coll, args, max_time).await,
-        _ => resolve_ref(&coll, args, max_time).await,
+        "mongo.resolveRef" => resolve_ref(&coll, args, max_time).await,
+        "mongo.updatePreview" => bulk::update_preview(&coll, args, max_time).await,
+        "mongo.updateMany" => bulk::update_many(&coll, args).await,
+        _ => bulk::delete_many(&coll, args).await,
     }
 }
 
