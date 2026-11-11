@@ -17,14 +17,14 @@ const highlightStyle = HighlightStyle.define([
   { tag: [tags.number, tags.bool, tags.null], color: "var(--syn-number)" },
   { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "var(--syn-comment)", fontStyle: "italic" },
   { tag: [tags.typeName, tags.standard(tags.name), tags.propertyName], color: "var(--syn-type)" },
-  { tag: [tags.operator, tags.punctuation], color: "var(--fg-muted)" },
+  { tag: [tags.operator, tags.punctuation], color: "var(--fg-2)" },
 ]);
 
 const editorTheme = EditorView.theme({
   "&": { height: "100%", backgroundColor: "var(--editor-bg)", color: "var(--fg)", fontSize: "13px" },
   ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.55" },
   ".cm-content": { caretColor: "var(--fg)" },
-  ".cm-gutters": { backgroundColor: "var(--bg-sidebar)", color: "var(--fg-muted)", borderRight: "1px solid var(--border)" },
+  ".cm-gutters": { backgroundColor: "var(--surface-2)", color: "var(--fg-3)", borderRight: "1px solid var(--border)" },
   ".cm-activeLineGutter": { backgroundColor: "var(--active-line)" },
   // Translucent, because the line layer is painted above the selection layer: an opaque colour would hide the selection.
   ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--accent) 7%, transparent)" },
@@ -35,7 +35,7 @@ const editorTheme = EditorView.theme({
     backgroundColor: "color-mix(in srgb, var(--accent) 38%, transparent) !important",
   },
   // Below modal overlays (z-index 40), so a completion list never stays drawn above a dialog.
-  ".cm-tooltip": { zIndex: "35", backgroundColor: "var(--bg-panel)", color: "var(--fg)", border: "1px solid var(--border)" },
+  ".cm-tooltip": { zIndex: "35", backgroundColor: "var(--surface)", color: "var(--fg)", border: "1px solid var(--border)" },
   ".cm-tooltip-autocomplete ul li[aria-selected]": { backgroundColor: "var(--accent)", color: "var(--accent-fg)" },
 });
 
