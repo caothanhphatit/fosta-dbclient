@@ -22,6 +22,7 @@
 //!   `_id` or `null`.
 //! - `mongo.updatePreview`, `mongo.updateMany`, `mongo.deleteMany`: see `bulk.rs`.
 //! - `mongo.aggregatePreview`, `mongo.aggregate`: see `aggregate.rs`.
+//! - `mongo.schema`: see `schema.rs`.
 
 use std::time::{Duration, Instant};
 
@@ -34,7 +35,7 @@ use mongodb::{
 use serde_json::{json, Value as Json};
 
 use super::{
-    aggregate, bulk,
+    aggregate, bulk, schema,
     values::{self, ID_FIELD},
 };
 use crate::{
@@ -44,7 +45,7 @@ use crate::{
 };
 
 /// The `invoke` names of this module.
-pub const OPERATIONS: [&str; 9] = [
+pub const OPERATIONS: [&str; 10] = [
     "mongo.find",
     "mongo.count",
     "mongo.distinct",
@@ -54,6 +55,7 @@ pub const OPERATIONS: [&str; 9] = [
     "mongo.deleteMany",
     "mongo.aggregatePreview",
     "mongo.aggregate",
+    "mongo.schema",
 ];
 /// The arguments that hold query documents (checked for server-side JavaScript).
 pub const DOCUMENT_ARGS: [&str; 6] = ["filter", "projection", "sort", "collation", "hint", "update"];
@@ -89,6 +91,7 @@ pub async fn invoke(client: &Client, name: &str, args: &Json, ctx: &CallContext)
         "mongo.updateMany" => bulk::update_many(&coll, args).await,
         "mongo.aggregatePreview" => aggregate::aggregate_preview(&coll, args, max_time).await,
         "mongo.aggregate" => aggregate::aggregate(&coll, args, max_time).await,
+        "mongo.schema" => schema::schema(&coll, args, max_time).await,
         _ => bulk::delete_many(&coll, args).await,
     }
 }

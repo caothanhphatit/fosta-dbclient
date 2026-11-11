@@ -96,7 +96,7 @@ pub fn classify_mongo(text: &str) -> Classification {
     })
 }
 
-/// Classifies an engine operation by name: `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef` and
+/// Classifies an engine operation by name: `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`, `mongo.schema` and
 /// `mongo.updatePreview` read; `mongo.updateMany` writes (destructive with an empty filter); `mongo.deleteMany` is always
 /// destructive. Any of them is administration when it targets credentials; server-side JavaScript in any query
 /// document or update and unknown names are refused.
@@ -377,6 +377,10 @@ mod tests {
             ),
             ("mongo.distinct", with(json!({ "field": "status" }))),
             ("mongo.resolveRef", with(json!({ "id": { "$oid": "65f1a2b3c4d5e6f708192a3b" } }))),
+            (
+                "mongo.schema",
+                with(json!({ "sampleMode": "filtered", "filter": "{ \"status\": \"paid\" }", "sampleSize": 500 })),
+            ),
         ] {
             let info = classify_operation(name, &args);
             assert_eq!(info.category, Category::Read, "{name}");
@@ -397,6 +401,10 @@ mod tests {
                 with(json!({ "filter": { "$expr": { "$function": { "body": "f", "args": [], "lang": "js" } } } })),
             ),
             ("mongo.distinct", with(json!({ "field": "a", "filter": { "$where": "true" } }))),
+            (
+                "mongo.schema",
+                with(json!({ "sampleMode": "filtered", "filter": "{ \"$where\": \"true\" }" })),
+            ),
         ] {
             let info = classify_operation(name, &args);
             assert!(
@@ -404,6 +412,8 @@ mod tests {
                 "{name}: {args}"
             );
         }
+        let schema_of_users = classify_operation("mongo.schema", &json!({ "database": "admin", "collection": "system.users" }));
+        assert_eq!(schema_of_users.category, Category::Admin);
         let secret = classify_operation("mongo.find", &json!({ "database": "admin", "collection": "system.users" }));
         assert_eq!(secret.category, Category::Admin);
         assert_eq!(secret.refused, None);

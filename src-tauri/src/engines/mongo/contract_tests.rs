@@ -1295,3 +1295,119 @@ fn shell_parser_wrappers_parse_to_their_bson_types() {
     assert!(gateway::filter::validate_mongo_filter(r#"{ "_id": { "$gt": { "$oid": "65f1a2b3c4d5e6f708192a3b" } } }"#).is_ok());
     assert!(gateway::filter::validate_mongo_filter(r#"{ "d": { "$date": { "$numberLong": "0" } }, "$where": "true" }"#).is_err());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mongo.yml"]
+async fn contract_mongo_schema() {
+    let f = fixture();
+    let (manager, handle) = connect(&f).await;
+    let tab = session(&handle).await;
+    // Orders referencing customers by ObjectId, for the inferred references.
+    let customers: Vec<serde_json::Value> = (0..5)
+        .map(|i| json!({ "_id": { "$oid": format!("65f1a2b3c4d5e6f70819{i:04}") }, "name": format!("c{i}") }))
+        .collect();
+    let orders: Vec<serde_json::Value> = (0..20)
+        .map(|i| json!({ "_id": i, "customerId": { "$oid": format!("65f1a2b3c4d5e6f70819{:04}", i % 5) }, "total": i }))
+        .collect();
+    for command in [
+        json!({ "drop": "contract_schema_customers" }),
+        json!({ "drop": "contract_schema_orders" }),
+    ] {
+        run(&handle, &tab, &command.to_string(), "fosta_contract").await.ok();
+    }
+    for (collection, documents) in [("contract_schema_customers", customers), ("contract_schema_orders", orders)] {
+        let insert = json!({ "insert": collection, "documents": documents }).to_string();
+        run(&handle, &tab, &insert, "fosta_contract").await.unwrap();
+    }
+    let context = Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: CONNECTION.into(),
+        connection_name: CONNECTION.into(),
+        safety: SafetySettings::preset(Preset::ReadOnly),
+    };
+    let invoke = |collection: &'static str, extra: serde_json::Value| {
+        let mut args = json!({ "database": "fosta_contract", "collection": collection });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let (manager, context) = (&manager, &context);
+        async move { gateway::invoke(manager, context, gateway::Caller::EngineView, "mongo.schema", args, None).await }
+    };
+    let path = |schema: &serde_json::Value, name: &str| -> serde_json::Value {
+        schema["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["path"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("{name}: {schema}"))
+    };
+
+    // The first 300 items: presence, types, arrays, nested paths, min / max and top values.
+    let schema = invoke("contract_items", json!({ "sampleSize": 300, "references": false }))
+        .await
+        .unwrap();
+    assert_eq!(schema["sample"], json!({ "mode": "first", "size": 300, "count": 300 }), "{schema}");
+    assert_eq!(schema["truncated"], false);
+    assert_eq!(path(&schema, "_id")["min"], 1);
+    assert_eq!(path(&schema, "_id")["max"], 300);
+    assert_eq!(path(&schema, "price")["types"], json!([{ "type": "decimal", "count": 300 }]));
+    assert_eq!(path(&schema, "born")["types"][0]["type"], "date");
+    assert_eq!(path(&schema, "blob_data")["types"][0]["type"], "binData");
+    let note = path(&schema, "note");
+    assert_eq!(note["count"], 300);
+    assert_eq!(
+        note["types"],
+        json!([{ "type": "string", "count": 200 }, { "type": "null", "count": 100 }])
+    );
+    assert_eq!(note["mixed"], false);
+    let active = path(&schema, "active");
+    assert_eq!(active["distinct"], 2);
+    assert_eq!(active["topValues"].as_array().unwrap().len(), 2);
+    let tags = path(&schema, "meta.tags");
+    assert_eq!(tags["depth"], 1);
+    assert_eq!(tags["array"]["minLength"], 2);
+    assert_eq!(tags["array"]["maxLength"], 2);
+    assert_eq!(
+        tags["topValues"],
+        json!([{ "value": "a", "count": 300 }, { "value": "b", "count": 300 }])
+    );
+    assert_eq!(path(&schema, "name")["distinct"], serde_json::Value::Null);
+
+    // A filtered sample, and a random one.
+    let filtered = invoke(
+        "contract_items",
+        json!({ "sampleMode": "filtered", "filter": "{ \"active\": true }", "sampleSize": 50, "references": false }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(filtered["sample"]["count"], 50);
+    assert_eq!(path(&filtered, "active")["topValues"], json!([{ "value": true, "count": 50 }]));
+    let random = invoke("contract_items", json!({ "sampleMode": "random", "sampleSize": 40 }))
+        .await
+        .unwrap();
+    assert_eq!(random["sample"]["count"], 40);
+
+    // Inferred references: customerId holds _ids of contract_schema_customers.
+    let orders = invoke("contract_schema_orders", json!({})).await.unwrap();
+    let reference = &path(&orders, "customerId")["reference"];
+    assert_eq!(reference["collection"], "contract_schema_customers", "{orders}");
+    assert_eq!((reference["matched"].as_u64(), reference["probed"].as_u64()), (Some(5), Some(5)));
+    assert_eq!(path(&orders, "total")["reference"], serde_json::Value::Null);
+
+    // Server-side JavaScript in the filter is refused; a bad mode fails.
+    let refused = invoke(
+        "contract_items",
+        json!({ "sampleMode": "filtered", "filter": { "$where": "true" } }),
+    )
+    .await;
+    assert!(refused.is_err());
+    assert!(invoke("contract_items", json!({ "sampleMode": "all" })).await.is_err());
+
+    for command in [
+        json!({ "drop": "contract_schema_customers" }),
+        json!({ "drop": "contract_schema_orders" }),
+    ] {
+        run(&handle, &tab, &command.to_string(), "fosta_contract").await.ok();
+    }
+    manager.disconnect(CONNECTION).await;
+}
