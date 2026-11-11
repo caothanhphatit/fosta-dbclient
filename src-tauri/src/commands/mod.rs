@@ -17,6 +17,7 @@ pub mod lang;
 pub mod mcp;
 pub mod objects;
 pub mod open_tabs;
+pub mod profile;
 pub mod query;
 pub mod saved_queries;
 pub mod tasks;
@@ -171,6 +172,19 @@ macro_rules! for_each_command {
             [sync] ai_cancel(id: String) -> () = $crate::commands::ai::ai_cancel;
             [sync] set_assistant_read_queries(enabled: bool)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::ai::set_assistant_read_queries;
+
+            [async] profile_learn(connection_id: String, database: String, run_id: String)
+                -> $crate::error::AppResult<$crate::ai::profile::LearnOutcome> = $crate::commands::profile::profile_learn;
+            [async] profile_get(connection_id: String, database: String)
+                -> $crate::error::AppResult<Option<$crate::ai::profile::DatabaseProfile>> = $crate::commands::profile::profile_get;
+            [async] profile_status(connection_id: String, database: String, force: Option<bool>)
+                -> $crate::error::AppResult<$crate::ai::profile::ProfileStatus> = $crate::commands::profile::profile_status;
+            [async] profile_update_notes(connection_id: String, database: String, notes: Vec<$crate::ai::profile::ProfileNote>)
+                -> $crate::error::AppResult<$crate::ai::profile::DatabaseProfile> = $crate::commands::profile::profile_update_notes;
+            [async] profile_update_description(connection_id: String, database: String, object: String, description: Option<String>)
+                -> $crate::error::AppResult<$crate::ai::profile::DatabaseProfile> = $crate::commands::profile::profile_update_description;
+            [async] profile_delete(connection_id: String, database: String)
+                -> $crate::error::AppResult<bool> = $crate::commands::profile::profile_delete;
 
             [async] history_append(entry: $crate::history::HistoryEntry)
                 -> $crate::error::AppResult<Option<$crate::history::HistoryEntry>> = $crate::commands::history::history_append;

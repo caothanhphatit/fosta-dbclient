@@ -54,6 +54,10 @@ pub struct AppState {
     pub history: Arc<history::HistoryStore>,
     /// The open tabs of each workspace, restored on the next start.
     pub open_tabs: Arc<open_tabs::OpenTabsStore>,
+    /// What the assistant learned about each database ("Learn this database").
+    pub profiles: Arc<ai::profile::ProfileStore>,
+    /// Pushes events to the UI (`profile-progress`).
+    pub events: Arc<dyn EventEmitter>,
     pub capabilities: Capabilities,
     /// The MCP server (`mcp`); `attach` it once the state is in an `Arc`.
     pub mcp: mcp::McpState,
@@ -65,6 +69,7 @@ impl AppState {
     pub fn new(capabilities: Capabilities, executor: tokio::runtime::Handle, events: Arc<dyn EventEmitter>) -> AppResult<Self> {
         let config = config::ConfigStore::load()?;
         let mcp = mcp::McpState::new(Arc::clone(&events), executor.clone());
+        let emitter = Arc::clone(&events);
         let tasks = Arc::new(tasks::TaskManager::new(executor, events, capabilities.tasks));
         tasks.start_auto(&config.snapshot().active().tasks);
         if config.snapshot().debug_logging {
@@ -77,6 +82,8 @@ impl AppState {
             ai: ai::AiRuns::default(),
             history: Arc::new(history::HistoryStore::open_default()?),
             open_tabs: Arc::new(open_tabs::OpenTabsStore::new(config::data_path(open_tabs::OPEN_TABS_FILE)?)),
+            profiles: Arc::new(ai::profile::ProfileStore::open_default()?),
+            events: emitter,
             capabilities,
             mcp,
         })
@@ -96,6 +103,8 @@ impl AppState {
             ai: ai::AiRuns::default(),
             history: Arc::new(history::HistoryStore::new(directory.join("history.jsonl"), 100)),
             open_tabs: Arc::new(open_tabs::OpenTabsStore::new(directory.join(open_tabs::OPEN_TABS_FILE))),
+            profiles: Arc::new(ai::profile::ProfileStore::new(directory.join(ai::profile::store::PROFILES_DIR))),
+            events: Arc::new(events::NoEvents),
             capabilities,
             mcp: mcp::McpState::new(Arc::new(events::NoEvents), tokio::runtime::Handle::current()),
         }

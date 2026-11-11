@@ -156,6 +156,7 @@ pub async fn delete_connection(state: &AppState, id: String) -> AppResult<AppCon
     state.engines.disconnect(&id).await;
     connection_command::release(&state.tasks, &id).await;
     secrets::delete_connection(&id)?;
+    super::profile::forget_connection(state, &id);
     state.config.update(|config| {
         config.remove_connection(&id);
         Ok(())

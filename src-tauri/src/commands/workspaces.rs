@@ -177,6 +177,7 @@ pub async fn delete_workspace(state: &AppState, id: String) -> AppResult<AppConf
         state.engines.disconnect(&profile.id).await;
         connection_command::release(&state.tasks, &profile.id).await;
         secrets::delete_connection(&profile.id)?;
+        super::profile::forget_connection(state, &profile.id);
     }
     state.config.update(|config| config.remove_workspace(&id).map(|_| ()))
 }
