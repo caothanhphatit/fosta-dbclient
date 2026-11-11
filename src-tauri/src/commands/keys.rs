@@ -179,30 +179,31 @@ pub(crate) mod tests {
     use crate::{ai::AiConnection, embedding::EmbeddingSettings};
 
     pub(crate) fn config() -> AppConfig {
-        let mut config = AppConfig::default();
-        config.embedding = Some(EmbeddingSettings {
-            url: "https://api.openai.com/v1/embeddings".into(),
-            model: "text-embedding-3-large".into(),
-            auth: EmbeddingAuth::Bearer,
-            dimensions: None,
-        });
-        config.ai_connections = vec![
-            AiConnection {
-                id: "work".into(),
-                name: "Work OpenAI".into(),
-                provider: AiProvider::Openai,
-                base_url: String::new(),
-                default_model: "gpt-5".into(),
-            },
-            AiConnection {
-                id: "local".into(),
-                name: "Ollama".into(),
-                provider: AiProvider::Custom,
-                base_url: "http://localhost:11434/v1".into(),
-                default_model: "llama".into(),
-            },
-        ];
-        config
+        AppConfig {
+            embedding: Some(EmbeddingSettings {
+                url: "https://api.openai.com/v1/embeddings".into(),
+                model: "text-embedding-3-large".into(),
+                auth: EmbeddingAuth::Bearer,
+                dimensions: None,
+            }),
+            ai_connections: vec![
+                AiConnection {
+                    id: "work".into(),
+                    name: "Work OpenAI".into(),
+                    provider: AiProvider::Openai,
+                    base_url: String::new(),
+                    default_model: "gpt-5".into(),
+                },
+                AiConnection {
+                    id: "local".into(),
+                    name: "Ollama".into(),
+                    provider: AiProvider::Custom,
+                    base_url: "http://localhost:11434/v1".into(),
+                    default_model: "llama".into(),
+                },
+            ],
+            ..AppConfig::default()
+        }
     }
 
     #[test]
