@@ -81,6 +81,25 @@ impl Engine for MySqlAdapter {
         Some(url::format(self.flavor, spec))
     }
 
+    fn distinct_values_statement(
+        &self,
+        object: &crate::contract::ObjectRef,
+        column: &crate::contract::ColumnInfo,
+        sample: u64,
+        limit: u64,
+    ) -> Option<String> {
+        let object = crate::engines::common::adapt::object_to_common(object).ok()?;
+        Some(crate::engines::common::sqlbuild::build_distinct_sample(
+            &super::tabular::MySqlDialect {
+                mariadb: matches!(self.flavor, Flavor::MariaDb),
+            },
+            &object,
+            column,
+            sample,
+            limit,
+        ))
+    }
+
     async fn connect(&self, request: ConnectRequest) -> AppResult<Arc<dyn Connection>> {
         let (options, pool, edit_pool, version) = connect::open(self.flavor, &request).await?;
         let server = Server::from_version(&version);

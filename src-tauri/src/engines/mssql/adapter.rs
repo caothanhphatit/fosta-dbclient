@@ -57,6 +57,23 @@ impl Engine for MssqlAdapter {
         Some(url::format(spec))
     }
 
+    fn distinct_values_statement(
+        &self,
+        object: &crate::contract::ObjectRef,
+        column: &crate::contract::ColumnInfo,
+        sample: u64,
+        limit: u64,
+    ) -> Option<String> {
+        let object = crate::engines::common::adapt::object_to_common(object).ok()?;
+        Some(crate::engines::common::sqlbuild::build_distinct_sample(
+            &super::tabular::TsqlDialect,
+            &object,
+            column,
+            sample,
+            limit,
+        ))
+    }
+
     async fn connect(&self, request: ConnectRequest) -> AppResult<Arc<dyn Connection>> {
         connect::check_tls(&request)?;
         let config = connect::build_config(&request);

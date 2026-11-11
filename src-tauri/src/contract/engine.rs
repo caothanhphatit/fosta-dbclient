@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     capability::{Capability, CapabilitySet},
     classify::{classify_changes, classify_create_database, classify_transaction, Classification, ClassifyInput},
-    describe::ObjectDescription,
+    describe::{ColumnInfo, ObjectDescription},
     descriptor::{EngineDescriptor, LanguageSpec},
     errors::unsupported_capability,
     limits::CallContext,
@@ -61,6 +61,14 @@ pub trait Engine: Send + Sync + 'static {
     }
 
     async fn connect(&self, request: ConnectRequest) -> AppResult<Arc<dyn Connection>>;
+
+    /// A read in the engine's default language of at most `limit` distinct values of `column` among the first `sample`
+    /// rows of `object`, identifiers quoted by the engine's dialect (`SELECT DISTINCT c FROM (SELECT c FROM t LIMIT
+    /// sample) s LIMIT limit`): the assistant's value hints, run through the gateway like any assistant read. `None` when
+    /// the engine has no such statement (document, key-value and search engines).
+    fn distinct_values_statement(&self, _object: &ObjectRef, _column: &ColumnInfo, _sample: u64, _limit: u64) -> Option<String> {
+        None
+    }
 }
 
 #[async_trait]

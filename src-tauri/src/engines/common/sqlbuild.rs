@@ -610,6 +610,20 @@ pub fn build_reread<D: SqlDialect + ?Sized>(d: &D, obj: &ObjectRef, key: &[Field
     })
 }
 
+/// `SELECT DISTINCT c FROM (SELECT c FROM t LIMIT sample) s LIMIT limit` in `d`'s dialect (`TOP (n)` where it limits
+/// that way): at most `limit` distinct values of one column among the first `sample` rows, for the assistant's value
+/// hints. Identifiers are quoted by the dialect; the column is selected the way browsing selects it.
+pub fn build_distinct_sample<D: SqlDialect + ?Sized>(d: &D, obj: &ObjectRef, col: &ColumnInfo, sample: u64, limit: u64) -> String {
+    let (inner_top, inner_tail) = limit_parts(d, sample, 0);
+    let (top, tail) = limit_parts(d, limit, 0);
+    format!(
+        "SELECT DISTINCT {top}{} FROM (SELECT {inner_top}{} FROM {}{inner_tail}) s{tail}",
+        d.quote_ident(&col.name),
+        d.select_expr(col),
+        d.table_sql(obj)
+    )
+}
+
 /// Doubles `quote` inside `name` and wraps it: the standard identifier quoting.
 pub fn quote_with(name: &str, quote: char) -> String {
     let mut s = String::with_capacity(name.len() + 2);
@@ -850,5 +864,37 @@ mod tests {
         let b = build_browse_with_raw(&NullSafe, &req, &cols(), &["id".to_owned()], Some(" name = 'a' OR id = 2 ")).unwrap();
         assert!(b.sql.contains("WHERE (`id` > ?) AND (name = 'a' OR id = 2) ORDER BY"), "{}", b.sql);
         assert_eq!(b.where_sql, "(`id` > ?) AND (name = 'a' OR id = 2)");
+    }
+
+    #[test]
+    fn distinct_samples_quote_names_and_limit_both_levels() {
+        let obj = ObjectRef::new(None, Some("s"), "t\"x", NodeKind::Table);
+        let col = ColumnInfo::result("st\"atus", "text", ValueKind::Text);
+        assert_eq!(
+            build_distinct_sample(&Ansi, &obj, &col, 1000, 21),
+            "SELECT DISTINCT \"st\"\"atus\" FROM (SELECT \"st\"\"atus\" FROM \"s\".\"t\"\"x\" LIMIT 1000) s LIMIT 21"
+        );
+        struct Top;
+        impl SqlDialect for Top {
+            fn quote_ident(&self, name: &str) -> String {
+                quote_with(name, '"')
+            }
+            fn placeholder(&self, n: usize, _t: &ParamTarget) -> String {
+                format!("@P{n}")
+            }
+            fn text_expr(&self, col_sql: &str, _c: &ColumnInfo) -> String {
+                col_sql.to_owned()
+            }
+            fn like(&self, lhs: &str, rhs: &str, _ci: bool, _negate: bool) -> String {
+                format!("{lhs} LIKE {rhs}")
+            }
+            fn top(&self, limit: u64, _offset: u64) -> Option<String> {
+                Some(format!("TOP ({limit})"))
+            }
+        }
+        assert_eq!(
+            build_distinct_sample(&Top, &ObjectRef::table(None, "t"), &col, 1000, 21),
+            "SELECT DISTINCT TOP (21) \"st\"\"atus\" FROM (SELECT TOP (1000) \"st\"\"atus\" FROM \"t\") s"
+        );
     }
 }
