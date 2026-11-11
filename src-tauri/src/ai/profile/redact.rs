@@ -392,17 +392,25 @@ fn is_date_like(text: &str) -> bool {
         })
 }
 
-/// Text that reads as a token rather than a name: base64 (`+`, `/` or `=` among token characters), longer than 32
-/// characters, 16 or more characters mixing letters and digits, or a secret by [`scrub`]'s rules.
+/// Text that reads as a token rather than a name: base64 (`+` or `=` among token characters, or `/` among upper case,
+/// lower case and digits; `user/alice` is a path), longer than 32 characters, 16 or more characters mixing letters and
+/// digits, or a secret by [`scrub`]'s rules.
 pub fn is_token_like(text: &str) -> bool {
     let letters = text.chars().any(|c| c.is_ascii_alphabetic());
     let digits = text.chars().any(|c| c.is_ascii_digit());
-    let base64 = text.len() >= 8
-        && text.chars().any(|c| matches!(c, '+' | '/' | '='))
+    is_base64_like(text) || text.chars().count() > 32 || (text.len() >= 16 && letters && digits) || looks_like_secret(text)
+}
+
+/// Base64 text: token characters with `+` or `=`, or with `/` among upper case, lower case and digits (`user/alice` is
+/// a path).
+pub fn is_base64_like(text: &str) -> bool {
+    let digits = text.chars().any(|c| c.is_ascii_digit());
+    let mixed = text.chars().any(|c| c.is_ascii_uppercase()) && text.chars().any(|c| c.is_ascii_lowercase()) && digits;
+    text.len() >= 8
+        && (text.chars().any(|c| matches!(c, '+' | '=')) || (text.contains('/') && mixed))
         && text
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_'));
-    base64 || text.chars().count() > 32 || (text.len() >= 16 && letters && digits) || looks_like_secret(text)
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_'))
 }
 
 /// An identifier: a UUID, a number, a hex string of 12 or more characters with a digit (an ObjectId), or 8 or more

@@ -246,13 +246,18 @@ fn undetailed(node: &ObjectNode) -> ObjectProfile {
 /// The profile of a described object: columns with sensitive ones redacted, keys and indexes; no DDL.
 fn described(node: &ObjectNode, description: &ObjectDescription) -> ObjectProfile {
     let primary_key: Vec<String> = description.primary_key.as_ref().map(|key| key.columns.clone()).unwrap_or_default();
+    // A document's field names may be values used as keys (`ann@example.com`): they become `{key}`.
+    let documents = node.kind == NodeKind::COLLECTION;
+    let named = |name: &str| if documents { redact::field_path(name) } else { name.to_owned() };
+    let mut seen = HashSet::new();
     let columns: Vec<ColumnProfile> = description
         .columns
         .iter()
+        .filter(|column| seen.insert(named(&column.name)))
         .map(|column| {
             let sensitive = redact::is_sensitive_name(&column.name);
             ColumnProfile {
-                name: column.name.clone(),
+                name: named(&column.name),
                 type_name: column.type_name.clone(),
                 kind: column.kind.clone(),
                 nullable: column.nullable,
@@ -293,7 +298,7 @@ fn described(node: &ObjectNode, description: &ObjectDescription) -> ObjectProfil
         .iter()
         .map(|index| IndexProfile {
             name: index.name.clone(),
-            columns: index.columns.iter().map(|column| redact::scrub(column)).collect(),
+            columns: index.columns.iter().map(|column| redact::scrub(&named(column))).collect(),
             unique: index.unique,
             primary: index.primary,
             method: index.method.clone(),

@@ -130,10 +130,12 @@ Data is read only when the assistant may read data on that connection (the setti
 for Read-only and Production workspaces). Then, as the assistant and through the same read-only gateway check:
 
 - MongoDB samples up to 500 random documents per collection (`mongo.schema`, at most 200 collections) to learn nested
-  field paths, their types, how often they occur and references between collections;
+  field paths, their types, how often they occur and references between collections (path segments that are values
+  used as keys, such as emails, ids, UUIDs, phone numbers or tokens, become `{key}`);
 - Redis scans up to 5,000 key names with their types and TTLs (never values) and keeps them as key patterns such as
   `user:{id}:profile`: numbers, UUIDs, hashes, emails, IP addresses, phone numbers and token-like segments become
-  placeholders, and secret-looking text is redacted;
+  placeholders, a segment that differs between many otherwise equal keys becomes `{name}`, and secret-looking text is
+  redacted (a plain word seen in only one or two keys, such as `cart:alice`, is kept as it is);
 - with "Sample column values" ticked in the dialog, a few distinct values per short column are read.
 
 Without reads, learning is metadata only: the structure above, MongoDB collection options and index specs, and

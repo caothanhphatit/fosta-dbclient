@@ -123,7 +123,8 @@ const SKIPPED_TYPES: [&str; 16] = [
 
 /// Whether a column is worth reading: not sensitive, not a key, and of a type that can hold a short list of values.
 pub(super) fn sampled(column: &ColumnProfile) -> bool {
-    if column.sensitive || column.primary || redact::is_sensitive_name(&column.name) {
+    // `prefs.{key}` stands for many fields whose names were values.
+    if column.sensitive || column.primary || redact::is_sensitive_name(&column.name) || column.name.contains(redact::KEY_PLACEHOLDER) {
         return false;
     }
     let lower = column.type_name.to_ascii_lowercase();

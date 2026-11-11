@@ -217,10 +217,12 @@ async fn run_reads(
     Ok(answered)
 }
 
+/// A field as a column: its path with value-like segments as `{key}` and the others scrubbed (`redact::field_path`).
 fn column_of(field: &FieldShape) -> ColumnProfile {
-    let sensitive = redact::is_sensitive_name(&field.path);
+    let name = redact::field_path(&field.path);
+    let sensitive = redact::is_sensitive_name(&field.path) || redact::is_sensitive_name(&name);
     ColumnProfile {
-        name: redact::cut(&field.path, 256),
+        name: redact::cut(&name, 256),
         type_name: redact::cut(&field.type_name, 64),
         kind: field.kind.clone(),
         nullable: field.nullable,
@@ -230,6 +232,29 @@ fn column_of(field: &FieldShape) -> ColumnProfile {
         sensitive,
         presence: field.presence.map(|percent| percent.clamp(0.0, 100.0)),
     }
+}
+
+/// The fields as columns, at most [`MAX_FIELDS`]; paths that collapse into one (`prefs.{key}`) are one column, nullable,
+/// with the highest presence.
+fn columns_of(fields: &[FieldShape]) -> Vec<ColumnProfile> {
+    let mut columns: Vec<ColumnProfile> = Vec::new();
+    for field in fields {
+        let column = column_of(field);
+        match columns.iter().position(|known| known.name == column.name) {
+            Some(index) => {
+                let known = &mut columns[index];
+                known.nullable = true;
+                known.sensitive |= column.sensitive;
+                known.presence = match (known.presence, column.presence) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
+                };
+            }
+            None if columns.len() < MAX_FIELDS => columns.push(column),
+            None => {}
+        }
+    }
+    columns
 }
 
 /// A new object the walk did not list (a Redis key pattern).
@@ -271,7 +296,7 @@ fn position(profile: &DatabaseProfile, reference: &ObjectRef) -> Option<usize> {
 fn apply_object(object: &mut ObjectProfile, extras: ObjectExtras, keep_values: bool, based: &mut bool) -> usize {
     let replaced = extras.fields.is_some();
     if let Some(fields) = extras.fields {
-        object.columns = fields.iter().take(MAX_FIELDS).map(column_of).collect();
+        object.columns = columns_of(&fields);
         let primary: Vec<String> = object
             .columns
             .iter()
@@ -300,6 +325,10 @@ fn apply_object(object: &mut ObjectProfile, extras: ObjectExtras, keep_values: b
     let mut hinted = 0;
     if keep_values {
         for sample in extras.samples {
+            // A path whose segments were values (`prefs.{key}`) is never sampled.
+            if redact::field_path(&sample.path) != sample.path {
+                continue;
+            }
             let Some(column) = object.column(&sample.path).filter(|column| sampled(column)) else {
                 continue;
             };
@@ -374,7 +403,7 @@ fn apply(profile: &mut DatabaseProfile, enrichment: ProfileEnrichment, keep_valu
             .unwrap_or_else(|| reference.from.clone());
         let relation = RelationProfile {
             name: None,
-            columns: vec![reference.path.clone()],
+            columns: vec![redact::field_path(&reference.path)],
             to: reference.to.clone(),
             to_columns: vec![reference.to_field.clone()],
             to_database: None,
@@ -420,5 +449,57 @@ fn scrubbed(value: Json) -> Json {
                 .collect(),
         ),
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::{FieldSamples, NodeKind, ValueKind};
+
+    fn field(path: &str, presence: f32) -> FieldShape {
+        FieldShape {
+            path: path.into(),
+            type_name: "string".into(),
+            kind: ValueKind::Text,
+            nullable: false,
+            primary: false,
+            presence: Some(presence),
+        }
+    }
+
+    #[test]
+    fn value_like_field_paths_collapse_and_are_never_sampled() {
+        let fields = [
+            field("status", 100.0),
+            field("prefs.ann@example.com.theme", 10.0),
+            field("prefs.bob@example.org.theme", 30.0),
+            field("balances.5f2b9c0e1d2a3b4c5d6e7f80", 5.0),
+            field("apiKeys.Zm9vYmFyYmF6cXV4", 1.0),
+        ];
+        let columns = columns_of(&fields);
+        let names: Vec<&str> = columns.iter().map(|column| column.name.as_str()).collect();
+        assert_eq!(names, ["status", "prefs.{key}.theme", "balances.{key}", "apiKeys.{key}"]);
+        let prefs = &columns[1];
+        assert_eq!((prefs.presence, prefs.nullable), (Some(30.0), true));
+        assert!(columns[3].sensitive, "api keys stay sensitive");
+        let mut object = new_object(&ObjectRef::new(Some("shop"), None, "users", NodeKind::COLLECTION));
+        let mut extras = ObjectExtras::new(ObjectRef::new(Some("shop"), None, "users", NodeKind::COLLECTION));
+        extras.fields = Some(fields.to_vec());
+        extras.samples = vec![
+            FieldSamples {
+                path: "status".into(),
+                values: vec!["new".into()],
+                more: false,
+            },
+            FieldSamples {
+                path: "prefs.ann@example.com.theme".into(),
+                values: vec!["dark".into()],
+                more: false,
+            },
+        ];
+        let hinted = apply_object(&mut object, extras, true, &mut false);
+        assert_eq!(hinted, 1);
+        assert_eq!(object.value_hints[0].column, "status");
     }
 }

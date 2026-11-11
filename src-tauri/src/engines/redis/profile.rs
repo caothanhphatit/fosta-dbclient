@@ -1,19 +1,27 @@
 //! What Redis adds to the assistant's learned profile (`ProfileExtras`): key patterns and types, never values. One
 //! bounded `redis.scan` of key names (with their types and TTLs, no value read) is grouped into patterns such as
-//! `user:{id}:profile`: segments that look like numbers, UUIDs, hashes, emails, dates or mixed identifiers become
-//! placeholders, and a segment whose spellings are mostly seen once (`user:alice:profile`, `user:bob:profile`…)
-//! becomes `{name}`. Each pattern is a profile object of kind `keyPattern` with its key count and types in the sample.
+//! `user:{id}:profile` (segments split at `:`, and at `/` or `|` inside them; an IPv6 address stays one segment): segments
+//! that look like numbers, UUIDs, hashes, emails, dates, IP addresses, phone numbers, mixed identifiers, base64 or other
+//! token-like text become placeholders, the others are scrubbed of secret-looking text, and a segment whose spellings
+//! are mostly seen once (`user:alice:profile`, `user:bob:profile`…) becomes `{name}`. Each pattern is a profile object
+//! of kind `keyPattern` with its key count and types in the sample.
 
 use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{json, Value as Json};
 
-use crate::contract::{ExtrasRead, ObjectExtras, ObjectRef, ProfileEnrichment, KEY_PATTERN};
+use crate::{
+    ai::profile::redact,
+    contract::{ExtrasRead, ObjectExtras, ObjectRef, ProfileEnrichment, KEY_PATTERN},
+};
 
 /// Keys read in the sample (one SCAN page, bounded in time by the scan itself), and the patterns kept.
 pub const SAMPLE_KEYS: u64 = 5_000;
 pub const MAX_PATTERNS: usize = 200;
 const DELIMITER: char = ':';
+/// Separators that also split a segment (`user/alice/profile`), and the most segments a key is read in.
+const INNER: [char; 2] = ['/', '|'];
+const MAX_SEGMENTS: usize = 64;
 /// Spellings of one segment, in one group of otherwise equal keys, before it becomes `{name}`.
 const MIN_VARIANTS: usize = 3;
 
@@ -53,6 +61,15 @@ pub fn placeholder(segment: &str) -> Option<&'static str> {
     if segment.contains('@') {
         return Some("{email}");
     }
+    if redact::is_ip(segment) {
+        return Some("{ip}");
+    }
+    if redact::is_phone_like(segment) {
+        return Some("{phone}");
+    }
+    if segment.contains(['+', '=']) {
+        return Some("{token}");
+    }
     let digits = segment.chars().filter(char::is_ascii_digit).count();
     if segment.len() >= 12 && digits > 0 && segment.chars().all(|c| c.is_ascii_hexdigit()) {
         return Some("{hash}");
@@ -65,7 +82,73 @@ pub fn placeholder(segment: &str) -> Option<&'static str> {
     {
         return Some("{id}");
     }
+    if redact::is_token_like(segment) {
+        return Some("{token}");
+    }
     None
+}
+
+/// A segment as it shows in a pattern: its placeholder, else the segment with secret-looking text redacted.
+fn shown_segment(segment: &str) -> String {
+    placeholder(segment).map_or_else(|| redact::scrub(segment), str::to_owned)
+}
+
+/// The `:`-separated segments of a key, an IPv6 address (`ratelimit:2001:db8::1`) kept as one segment.
+fn segments_of(name: &str) -> Vec<String> {
+    let raw: Vec<&str> = name.split(DELIMITER).collect();
+    if raw.len() < 3 || raw.len() > MAX_SEGMENTS {
+        return raw.into_iter().map(str::to_owned).collect();
+    }
+    let mut segments = Vec::with_capacity(raw.len());
+    let mut start = 0;
+    while start < raw.len() {
+        let address = (start + 3..=raw.len().min(start + 9)).rev().find(|&end| {
+            let joined = raw[start..end].join(":");
+            // Eight decimal groups (`1:2:3:4:5:6:7:8`) are more likely numbers than an address.
+            (joined.contains("::") || joined.chars().any(|c| c.is_ascii_alphabetic())) && joined.parse::<std::net::Ipv6Addr>().is_ok()
+        });
+        match address {
+            Some(end) => {
+                segments.push(raw[start..end].join(":"));
+                start = end;
+            }
+            None => {
+                segments.push(raw[start].to_owned());
+                start += 1;
+            }
+        }
+    }
+    segments
+}
+
+/// The tokens of a key: shown segments at even positions and their delimiters at odd ones. A segment holding `/` or
+/// `|` (`user/alice/profile`) is split there too, unless it reads as base64.
+fn tokens_of(name: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for (index, segment) in segments_of(name).iter().enumerate() {
+        if index > 0 {
+            tokens.push(DELIMITER.to_string());
+        }
+        if !segment.contains(INNER) || redact::is_base64_like(segment) || placeholder(segment) == Some("{ip}") {
+            tokens.push(shown_segment(segment));
+            continue;
+        }
+        for piece in segment.split_inclusive(INNER) {
+            let (body, delimiter) = match piece.char_indices().last() {
+                Some((at, c)) if INNER.contains(&c) => (&piece[..at], &piece[at..]),
+                _ => (piece, ""),
+            };
+            tokens.push(shown_segment(body));
+            if !delimiter.is_empty() {
+                tokens.push(delimiter.to_owned());
+            }
+        }
+        // A trailing separator (`a/`) leaves an empty last part.
+        if segment.ends_with(INNER) {
+            tokens.push(String::new());
+        }
+    }
+    tokens
 }
 
 /// One pattern: how many sampled keys follow it, by type.
@@ -90,19 +173,17 @@ pub fn key_patterns(keys: &[SampledKey]) -> Vec<KeyPattern> {
     let mut tokens: Vec<Vec<String>> = keys
         .iter()
         .map(|key| match &key.name {
-            Some(name) => name
-                .split(DELIMITER)
-                .map(|segment| placeholder(segment).map_or_else(|| segment.to_owned(), str::to_owned))
-                .collect(),
+            Some(name) => tokens_of(name),
             None => vec!["{binary}".to_owned()],
         })
         .collect();
     let longest = tokens.iter().map(Vec::len).max().unwrap_or(0);
-    for position in 0..longest {
+    // Segments sit at even positions, delimiters between them.
+    for position in (0..longest).step_by(2) {
         // Keys equal but for this segment; a segment whose spellings are mostly seen once is a name.
         let mut groups: HashMap<(usize, Vec<&str>), HashMap<&str, usize>> = HashMap::new();
         for key in &tokens {
-            if key.len() < 2 || position >= key.len() || key[position].starts_with('{') {
+            if key.len() < 3 || position >= key.len() || key[position].starts_with('{') {
                 continue;
             }
             let rest: Vec<&str> = key
@@ -128,7 +209,7 @@ pub fn key_patterns(keys: &[SampledKey]) -> Vec<KeyPattern> {
             continue;
         }
         for key in &mut tokens {
-            if key.len() < 2 || position >= key.len() || key[position].starts_with('{') {
+            if key.len() < 3 || position >= key.len() || key[position].starts_with('{') {
                 continue;
             }
             let matches = collapsed.iter().any(|(length, rest)| {
@@ -146,7 +227,7 @@ pub fn key_patterns(keys: &[SampledKey]) -> Vec<KeyPattern> {
     }
     let mut patterns: HashMap<String, KeyPattern> = HashMap::new();
     for (key, token) in keys.iter().zip(tokens) {
-        let pattern = token.join(&DELIMITER.to_string());
+        let pattern = token.concat();
         let entry = patterns.entry(pattern.clone()).or_insert_with(|| KeyPattern {
             pattern,
             count: 0,
@@ -284,6 +365,51 @@ mod tests {
         assert_eq!(placeholder("profile"), None);
         assert_eq!(placeholder("v2"), None);
         assert_eq!(placeholder(""), None);
+        assert_eq!(placeholder("+15551234567"), Some("{phone}"));
+        assert_eq!(placeholder("203.0.113.5"), Some("{ip}"));
+        assert_eq!(placeholder("Zm9vYmFyYmF6cXV4=="), Some("{token}"));
+        assert_eq!(placeholder("a+b+c+d+e"), Some("{token}"));
+        assert_eq!(placeholder(&"q".repeat(40)), Some("{token}"));
+        assert_eq!(placeholder("notifications_queue"), None);
+    }
+
+    #[test]
+    fn identifiers_in_keys_never_survive() {
+        let names = [
+            "otp:+15551234567",
+            "ratelimit:203.0.113.5",
+            "ratelimit:2001:db8::1",
+            "session:Zm9vYmFy/cXV4Ab1==",
+            "token:sk-abcdefghijklmnopqrstuvwx1234",
+            "mail:ann@example.com:inbox",
+            "user/alice/profile",
+            "user/bob/profile",
+            "user/carol/profile",
+            "user/42/profile",
+        ];
+        let keys: Vec<SampledKey> = names.iter().map(|name| key(name, "string")).collect();
+        let mut shown: Vec<String> = key_patterns(&keys).into_iter().map(|pattern| pattern.pattern).collect();
+        shown.sort();
+        assert_eq!(
+            shown,
+            [
+                "mail:{email}:inbox",
+                "otp:{phone}",
+                "ratelimit:{ip}",
+                "session:{token}",
+                "token:{id}",
+                "user/{id}/profile",
+                "user/{name}/profile",
+            ]
+        );
+        for pattern in &shown {
+            for secret in ["5551234567", "203.0", "db8", "Zm9v", "abcdefghij", "ann", "alice", "bob"] {
+                assert!(!pattern.contains(secret), "{pattern} holds {secret}");
+            }
+        }
+        // A literal segment that looks like a secret is redacted.
+        assert_eq!(shown_segment("AKIAIOSFODNN7EXAMPLE"), "{token}");
+        assert_eq!(tokens_of("a/b"), ["a", "/", "b"]);
     }
 
     #[test]
