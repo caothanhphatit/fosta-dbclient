@@ -59,6 +59,7 @@ import type {
   HistoryQuery,
   InstallKind,
   KeyTarget,
+  SavedQuery,
   StatementCategory,
   TaskDef,
   Workspace,
@@ -81,6 +82,7 @@ import { mockError, NOT_CONNECTED, SESSION_LOST } from "./errors";
 import { gate, refuseOperation, statementInfo } from "./gateway";
 import { mockCheckUpdate, mockInstallKind, mockRestart, mockUpdaterCheck, mockUpdaterDownload, mockWhatsNew, setInstallKind } from "./update";
 import { mockMcpAnswer, mockMcpStatus, mockMcpToken, mockRotateMcpToken, mockSetMcpSettings, simulateMcpApproval } from "./mcp";
+import { deleteSavedQuery, listSavedQueries, renameSavedQuery, saveSavedQuery } from "./savedQueries";
 import { VECTOR_DIMS } from "./shop";
 import { state } from "./state";
 import {
@@ -99,7 +101,7 @@ import {
 } from "./commands";
 import type { EngineMock, MockSession } from "./types";
 
-const modules = import.meta.glob<EngineMock>("./engines/*.ts", { eager: true });
+const modules = import.meta.glob<EngineMock>(["./engines/*.ts", "!./engines/*.test.ts"], { eager: true });
 const engines = Object.values(modules).sort((a, b) => a.order - b.order);
 const engineById = new Map(engines.map((engine) => [engine.descriptor.id, engine]));
 
@@ -497,6 +499,14 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       return saveTask(payload.task as TaskDef, (payload.workspaceId as string | null) ?? null);
     case "delete_task":
       return deleteTask(str("id"));
+    case "list_saved_queries":
+      return listSavedQueries((payload.connectionId as string | null) ?? null, (payload.workspaceId as string | null) ?? null);
+    case "save_saved_query":
+      return saveSavedQuery(payload.query as SavedQuery, (payload.workspaceId as string | null) ?? null);
+    case "rename_saved_query":
+      return renameSavedQuery(str("id"), str("name"));
+    case "delete_saved_query":
+      return deleteSavedQuery(str("id"));
     case "save_embedding_settings":
       return saveEmbeddingSettings(
         (payload.settings as EmbeddingSettings | null) ?? null,

@@ -214,10 +214,39 @@ export interface McpActivity {
 /** A workspace's choice for the assistant's read-only queries: follow the setting, or always / never allow them. */
 export type AssistantQueries = "default" | "allow" | "deny";
 
+/** The query bar's fields of a saved query, as typed (mongosh shell text). */
+export interface SavedQueryState {
+  filter: string;
+  project: string;
+  sort: string;
+  collation: string;
+  skip: number;
+  limit: number;
+}
+
+/** A named query of an engine workspace, kept with the workspace of its connection (`saved_queries.rs`). */
+export interface SavedQuery {
+  id: string;
+  name: string;
+  /** The engine id (`mongodb`). */
+  engine: string;
+  /** The connection it was saved from (informational: offered on every connection of the workspace). */
+  connectionId?: string | null;
+  database: string;
+  collection: string;
+  query: SavedQueryState;
+  /** Aggregation stages as typed, one text per stage. */
+  pipeline?: string[] | null;
+  /** Milliseconds since the epoch of the last save or rename (set by the backend). */
+  updatedAt: number;
+}
+
 /** A workspace groups the connections and commands of one environment. */
 export interface Workspace extends WorkspaceMeta {
   connections: ConnectionProfile[];
   tasks: TaskDef[];
+  /** Absent while the workspace has none. */
+  savedQueries?: SavedQuery[];
 }
 
 export type AiProvider = "fosta" | "openai" | "gemini" | "anthropic" | "custom";
