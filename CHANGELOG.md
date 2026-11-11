@@ -24,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   to its collection filtered by `_id`. Views open in the workspace too. When a field does not parse, the documents shown
   are dimmed and marked as the previous query's. Every read goes through the safety gateway, and the filter, sort and
   view are kept with the open tabs.
+  Documents of a collection can be edited in the List and Table modes: edit a value with its type (String, Number
+  keeping the stored type, Double, Int32, Int64, Decimal128, Boolean, Date, ObjectId, Null, or an object / array in
+  mongosh syntax), add, rename and remove fields and array items, insert, duplicate and delete documents. Edits stay
+  pending (marked in the views, counted in the pending bar) until Save; Review shows each changed document as a diff.
+  A save writes nested edits by dotted path (`$set` / `$unset` of `address.city`, not the whole `address`), checks only
+  the edited paths against what was loaded, opens the conflict dialog when someone changed one of them, and goes
+  through the workspace's rules like a grid save. The query bar's More menu has "Update matching documents…" (a
+  before/after preview of the first documents and the match count, simulated without writing; operators it cannot
+  simulate exactly are refused) and "Delete matching documents…" (count and the first documents), each for the bar's
+  current filter.
 
 ### Changed
 

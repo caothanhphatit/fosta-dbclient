@@ -69,6 +69,13 @@ rated by what they run, and functions with side effects (`pg_terminate_backend`,
 count as administrative.
 
 Grid saves check that the row has not changed since you loaded it; a conflict shows both versions instead of overwriting.
+MongoDB document edits are saved the same way (one save, the same rules) and compare only the paths you edited.
+
+MongoDB bulk changes from the collection workspace are rated by what they do: an update preview reads (it simulates the
+update on a few documents and refuses operators it cannot simulate exactly), "Update matching documents" is a write, or
+destructive when the filter is empty, and "Delete matching documents" is always destructive, so a Guarded workspace asks for
+the collection's name and a Read-only one blocks it. Server-side JavaScript (`$where`, `$function`, `$accumulator`) is refused in
+filters and updates whatever the rules.
 
 **For production databases, also connect with a database user that can only read.** The app's rules are a safety net, not a
 replacement for database permissions.
