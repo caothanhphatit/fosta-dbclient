@@ -433,6 +433,7 @@ mod tests {
             icon: icon.into(),
             safety: Some(SafetySettings::preset(preset)),
             assistant_queries: None,
+            assistant_learn: None,
             mcp: None,
         });
         config.workspace(id).unwrap().clone()
@@ -693,6 +694,7 @@ mod tests {
                     icon: "box".into(),
                     safety: None,
                     assistant_queries: None,
+                    assistant_learn: None,
                     mcp: None,
                 });
                 Ok(())
@@ -751,6 +753,7 @@ mod tests {
             icon: "box".into(),
             safety: None,
             assistant_queries: None,
+            assistant_learn: None,
             mcp: None,
         };
         let other = TaskDef {

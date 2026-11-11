@@ -116,6 +116,15 @@ pub fn set_assistant_read_queries(state: &AppState, enabled: bool) -> AppResult<
     })
 }
 
+/// Settings → "Assistant may learn databases"; each workspace can override it. Off: "Learn this database" and the
+/// model's summary of a learned database are refused (what was learned before stays usable and can be deleted).
+pub fn set_assistant_learn(state: &AppState, enabled: bool) -> AppResult<AppConfig> {
+    state.config.update(|config| {
+        config.assistant_learn = enabled;
+        Ok(())
+    })
+}
+
 /// The gateway context for the assistant's read-only queries on `connection_id`, when the user allows them there.
 fn read_query_context(config: &AppConfig, connection_id: &str) -> Option<Context> {
     let (workspace, _) = config.connection_scope(connection_id)?;

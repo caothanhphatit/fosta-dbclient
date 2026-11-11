@@ -172,6 +172,8 @@ macro_rules! for_each_command {
             [sync] ai_cancel(id: String) -> () = $crate::commands::ai::ai_cancel;
             [sync] set_assistant_read_queries(enabled: bool)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::ai::set_assistant_read_queries;
+            [sync] set_assistant_learn(enabled: bool)
+                -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::ai::set_assistant_learn;
 
             [async] profile_learn(connection_id: String, database: String, run_id: String, sample_values: Option<bool>)
                 -> $crate::error::AppResult<$crate::ai::profile::LearnOutcome> = $crate::commands::profile::profile_learn;

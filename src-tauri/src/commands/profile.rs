@@ -19,7 +19,10 @@ use crate::{
     },
     audit::{AuditEntry, Outcome},
     error::{AppError, AppResult},
-    gateway::{assistant::reads_allowed, Context},
+    gateway::{
+        assistant::{reads_allowed, AssistantQueries},
+        Context,
+    },
     secrets, AppState,
 };
 
@@ -39,6 +42,7 @@ pub async fn profile_learn(
     run_id: String,
     sample_values: Option<bool>,
 ) -> AppResult<LearnOutcome> {
+    ensure_learning_allowed(state, &connection_id)?;
     let handle = state.engines.handle(&connection_id)?;
     // The engine's extras (sampled documents, key names) read through the gateway as the assistant on any saved
     // connection; their values become hints only where value sampling is allowed and asked for.
@@ -185,6 +189,7 @@ pub async fn profile_summarize(
     model: Option<String>,
     only_changed: bool,
 ) -> AppResult<SummaryOutcome> {
+    ensure_learning_allowed(state, &connection_id)?;
     let (connection, model) = summary_settings(state, model)?;
     let completer = ModelCompleter::new(connection.settings(&model), secrets::load_ai_key(&connection.id)?)?;
     summarize_with(state, &connection, &completer, connection_id, database, run_id, model, only_changed).await
@@ -248,6 +253,37 @@ async fn summarize_with(
         ),
     );
     result.map(|()| outcome)
+}
+
+/// Whether the assistant may learn databases: the workspace's override wins, else the global setting.
+pub fn learning_allowed(global: bool, workspace: AssistantQueries) -> bool {
+    match workspace {
+        AssistantQueries::Allow => true,
+        AssistantQueries::Deny => false,
+        AssistantQueries::Default => global,
+    }
+}
+
+/// Refuses learning (a build or a summary) on `connection_id` where the user turned it off: Settings → "Assistant may
+/// learn databases", or the workspace's override. A connection outside every workspace follows the global setting.
+fn ensure_learning_allowed(state: &AppState, connection_id: &str) -> AppResult<()> {
+    let (global, workspace) = state.config.read(|config| {
+        let workspace = config.connection_scope(connection_id).map(|(workspace, _)| workspace);
+        (
+            config.assistant_learn,
+            workspace.map(|workspace| (workspace.name.clone(), workspace.assistant_learn)),
+        )
+    });
+    let choice = workspace.as_ref().map(|(_, choice)| *choice).unwrap_or_default();
+    if learning_allowed(global, choice) {
+        return Ok(());
+    }
+    Err(AppError::new(match (choice, workspace) {
+        (AssistantQueries::Deny, Some((name, _))) => {
+            format!("The assistant may not learn databases in the {name} workspace (Edit workspace → Assistant may learn databases)")
+        }
+        _ => "The assistant may not learn databases: turn on Settings → Assistant may learn databases".to_owned(),
+    }))
 }
 
 /// The assistant's gateway context on `connection_id` when the user lets it read data there.
@@ -522,5 +558,48 @@ mod tests {
         );
         assert!(entry.detail.contains("data read: no"));
         let _ = std::fs::remove_file(audit_path);
+    }
+
+    #[tokio::test]
+    async fn learning_follows_the_setting_and_the_workspace_override() {
+        assert!(learning_allowed(true, AssistantQueries::Default));
+        assert!(!learning_allowed(false, AssistantQueries::Default));
+        assert!(learning_allowed(false, AssistantQueries::Allow));
+        assert!(!learning_allowed(true, AssistantQueries::Deny));
+        let state = AppState::for_test("profile-learn-setting", crate::Capabilities::desktop(), AppConfig::default());
+        let engine = FakeEngine::leak();
+        state.engines.insert("c", engine, engine.connection());
+        assert!(state.config.read(|config| config.assistant_learn), "on unless turned off");
+        crate::commands::ai::set_assistant_learn(&state, false).unwrap();
+        let refused = profile_learn(&state, "c".into(), "shop".into(), "run".into(), None).await;
+        assert!(refused.unwrap_err().to_string().contains("Assistant may learn databases"));
+        let summary = profile_summarize(&state, "c".into(), "shop".into(), "s".into(), None, false).await;
+        assert!(summary.unwrap_err().to_string().contains("Assistant may learn databases"));
+        assert!(
+            profile_get(&state, "c".into(), "shop".into()).await.unwrap().is_none(),
+            "nothing was built"
+        );
+        crate::commands::ai::set_assistant_learn(&state, true).unwrap();
+        profile_learn(&state, "c".into(), "shop".into(), "run".into(), None).await.unwrap();
+        // A workspace that denies it wins over the global setting.
+        state
+            .config
+            .update(|config| {
+                config.workspaces[0].connections.push(crate::config::ConnectionProfile {
+                    id: "saved".into(),
+                    name: "Saved".into(),
+                    engine: "fake".into(),
+                    ..Default::default()
+                });
+                config.workspaces[0].assistant_learn = AssistantQueries::Deny;
+                Ok(())
+            })
+            .unwrap();
+        let denied = ensure_learning_allowed(&state, "saved").unwrap_err().to_string();
+        assert!(denied.contains("workspace"), "{denied}");
+        assert!(
+            ensure_learning_allowed(&state, "c").is_ok(),
+            "outside every workspace: the global setting"
+        );
     }
 }

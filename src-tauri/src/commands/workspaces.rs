@@ -194,6 +194,7 @@ mod tests {
             icon: icon.into(),
             safety: Some(SafetySettings::preset(preset)),
             assistant_queries: Default::default(),
+            assistant_learn: Default::default(),
             mcp: Default::default(),
             connections: Vec::new(),
             tasks: Vec::new(),
@@ -209,6 +210,7 @@ mod tests {
             icon: icon.into(),
             safety: preset.map(SafetySettings::preset),
             assistant_queries: None,
+            assistant_learn: None,
             mcp: None,
         }
     }

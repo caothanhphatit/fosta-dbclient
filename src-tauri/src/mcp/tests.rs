@@ -45,6 +45,7 @@ fn workspace(id: &str, icon: &str, safety: SafetySettings, mcp: McpAccess, conne
         icon: icon.into(),
         safety: Some(safety),
         assistant_queries: Default::default(),
+        assistant_learn: Default::default(),
         mcp,
         connections: connections.iter().map(|id| profile(id)).collect(),
         tasks: Vec::new(),
@@ -180,6 +181,7 @@ async fn saving_a_production_workspace_caps_its_mcp_access() {
         icon: PRODUCTION_ICON.into(),
         safety: None,
         assistant_queries: None,
+        assistant_learn: None,
         mcp: Some(McpAccess::AskBeforeWrites),
     };
     let saved = crate::commands::workspaces::save_workspace(&harness.app, meta, None).unwrap();

@@ -223,6 +223,9 @@ pub struct WorkspaceMeta {
     /// Whether the assistant may run read-only queries here; `None` keeps the current choice.
     #[serde(default)]
     pub assistant_queries: Option<AssistantQueries>,
+    /// Whether the assistant may learn this workspace's databases; `None` keeps the current choice.
+    #[serde(default)]
+    pub assistant_learn: Option<AssistantQueries>,
     /// What MCP clients may do here; `None` keeps the current choice (Off for a new workspace).
     #[serde(default)]
     pub mcp: Option<McpAccess>,
@@ -244,6 +247,9 @@ pub struct Workspace {
     /// Overrides the global "Allow the assistant to run read-only queries" setting for this workspace.
     #[serde(default)]
     pub assistant_queries: AssistantQueries,
+    /// Overrides the global "Assistant may learn databases" setting for this workspace (Allow, Deny, or follow it).
+    #[serde(default)]
+    pub assistant_learn: AssistantQueries,
     /// What MCP clients may do with this workspace's connections (off unless chosen; see `crate::mcp`).
     #[serde(default)]
     pub mcp: McpAccess,
@@ -266,6 +272,7 @@ impl Workspace {
             icon: meta.icon,
             safety: Some(safety),
             assistant_queries: meta.assistant_queries.unwrap_or_default(),
+            assistant_learn: meta.assistant_learn.unwrap_or_default(),
             mcp: meta.mcp.unwrap_or_default(),
             connections: Vec::new(),
             tasks: Vec::new(),
@@ -282,6 +289,9 @@ impl Workspace {
         }
         if let Some(choice) = meta.assistant_queries {
             self.assistant_queries = choice;
+        }
+        if let Some(choice) = meta.assistant_learn {
+            self.assistant_learn = choice;
         }
         if let Some(choice) = meta.mcp {
             self.mcp = choice;
@@ -311,6 +321,8 @@ pub struct AppConfig {
     pub debug_logging: bool,
     /// Settings → "Allow the assistant to run read-only queries" (on unless turned off; each workspace can override it).
     pub assistant_read_queries: bool,
+    /// Settings → "Assistant may learn databases" (on unless turned off; each workspace can override it).
+    pub assistant_learn: bool,
     /// Settings → "Check for updates", plus what the last check found (`update.rs`).
     pub update_check: crate::update::UpdateCheckSettings,
     /// Settings → MCP server (off unless turned on).
@@ -346,6 +358,8 @@ struct StoredConfig {
     #[serde(default)]
     assistant_read_queries: Option<bool>,
     #[serde(default)]
+    assistant_learn: Option<bool>,
+    #[serde(default)]
     update_check: crate::update::UpdateCheckSettings,
     #[serde(default)]
     mcp: McpSettings,
@@ -375,6 +389,7 @@ impl From<StoredConfig> for AppConfig {
                 icon: DEFAULT_WORKSPACE_ICON.into(),
                 safety: None,
                 assistant_queries: AssistantQueries::Default,
+                assistant_learn: AssistantQueries::Default,
                 mcp: McpAccess::Off,
                 connections: stored.connections,
                 tasks: stored.tasks,
@@ -414,6 +429,7 @@ impl From<StoredConfig> for AppConfig {
             query_history: stored.query_history.unwrap_or(true),
             debug_logging: stored.debug_logging,
             assistant_read_queries: stored.assistant_read_queries.unwrap_or(true),
+            assistant_learn: stored.assistant_learn.unwrap_or(true),
             update_check: stored.update_check,
             mcp: stored.mcp,
             startup_notice: None,
@@ -1037,6 +1053,7 @@ mod tests {
             icon: String::new(),
             safety: None,
             assistant_queries: None,
+            assistant_learn: None,
             mcp: None,
         });
         assert_eq!(
@@ -1350,6 +1367,7 @@ mod tests {
             icon: icon.into(),
             safety: None,
             assistant_queries: None,
+            assistant_learn: None,
             mcp: None,
         };
         config.put_workspace(meta("n", "cloud"));
@@ -1452,6 +1470,7 @@ mod tests {
                 icon: "box".into(),
                 safety: None,
                 assistant_queries: None,
+                assistant_learn: None,
                 mcp: None,
             });
             config.put_task(id, port_forward(&format!("pf-{id}"))).unwrap();

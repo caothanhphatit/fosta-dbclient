@@ -95,6 +95,7 @@ mod tests {
                     icon: String::new(),
                     safety: None,
                     assistant_queries: None,
+                    assistant_learn: None,
                     mcp: None,
                 });
                 config.put_connection(
