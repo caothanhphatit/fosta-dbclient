@@ -3,9 +3,11 @@
 //! checked against what the user read (in one transaction on replica sets, compensated on standalone servers), and
 //! query tabs that run database commands written as Extended JSON, reading cursors with `getMore`, and the engine
 //! operations the MongoDB views invoke (`mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`, and the bulk
-//! `mongo.updatePreview`, `mongo.updateMany`, `mongo.deleteMany`).
+//! `mongo.updatePreview`, `mongo.updateMany`, `mongo.deleteMany`, and the aggregations `mongo.aggregatePreview`,
+//! `mongo.aggregate`).
 
 pub mod adapter;
+mod aggregate;
 pub(crate) mod bulk;
 mod catalog;
 pub mod classify;

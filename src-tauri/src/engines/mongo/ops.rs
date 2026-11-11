@@ -21,6 +21,7 @@
 //! - `mongo.resolveRef { database, collection, id, projection?, maxTimeMS? }` → `{ document }`, the document with that
 //!   `_id` or `null`.
 //! - `mongo.updatePreview`, `mongo.updateMany`, `mongo.deleteMany`: see `bulk.rs`.
+//! - `mongo.aggregatePreview`, `mongo.aggregate`: see `aggregate.rs`.
 
 use std::time::{Duration, Instant};
 
@@ -33,7 +34,7 @@ use mongodb::{
 use serde_json::{json, Value as Json};
 
 use super::{
-    bulk,
+    aggregate, bulk,
     values::{self, ID_FIELD},
 };
 use crate::{
@@ -43,7 +44,7 @@ use crate::{
 };
 
 /// The `invoke` names of this module.
-pub const OPERATIONS: [&str; 7] = [
+pub const OPERATIONS: [&str; 9] = [
     "mongo.find",
     "mongo.count",
     "mongo.distinct",
@@ -51,6 +52,8 @@ pub const OPERATIONS: [&str; 7] = [
     "mongo.updatePreview",
     "mongo.updateMany",
     "mongo.deleteMany",
+    "mongo.aggregatePreview",
+    "mongo.aggregate",
 ];
 /// The arguments that hold query documents (checked for server-side JavaScript).
 pub const DOCUMENT_ARGS: [&str; 6] = ["filter", "projection", "sort", "collation", "hint", "update"];
@@ -84,6 +87,8 @@ pub async fn invoke(client: &Client, name: &str, args: &Json, ctx: &CallContext)
         "mongo.resolveRef" => resolve_ref(&coll, args, max_time).await,
         "mongo.updatePreview" => bulk::update_preview(&coll, args, max_time).await,
         "mongo.updateMany" => bulk::update_many(&coll, args).await,
+        "mongo.aggregatePreview" => aggregate::aggregate_preview(&coll, args, max_time).await,
+        "mongo.aggregate" => aggregate::aggregate(&coll, args, max_time).await,
         _ => bulk::delete_many(&coll, args).await,
     }
 }
@@ -100,14 +105,21 @@ pub fn json_arg(args: &Json, key: &str) -> AppResult<Option<Json>> {
     }
 }
 
-/// The first server-side JavaScript operator in any query-document argument (text or JSON).
+/// The first server-side JavaScript operator in any query-document argument or pipeline stage (text or JSON).
 pub fn denied_operator(args: &Json) -> Option<&'static str> {
-    find_denied_operator(args).or_else(|| {
-        DOCUMENT_ARGS
-            .iter()
-            .filter_map(|key| json_arg(args, key).ok().flatten())
-            .find_map(|value| find_denied_operator(&value))
-    })
+    find_denied_operator(args)
+        .or_else(|| {
+            DOCUMENT_ARGS
+                .iter()
+                .filter_map(|key| json_arg(args, key).ok().flatten())
+                .find_map(|value| find_denied_operator(&value))
+        })
+        .or_else(|| {
+            aggregate::pipeline_arg(args)
+                .ok()
+                .flatten()
+                .and_then(|stages| stages.iter().find_map(find_denied_operator))
+        })
 }
 
 fn text_arg<'a>(args: &'a Json, key: &str) -> AppResult<&'a str> {
@@ -118,7 +130,7 @@ fn text_arg<'a>(args: &'a Json, key: &str) -> AppResult<&'a str> {
         .ok_or_else(|| AppError::new(format!("{key} is required")))
 }
 
-fn u64_arg(args: &Json, key: &str) -> AppResult<Option<u64>> {
+pub(super) fn u64_arg(args: &Json, key: &str) -> AppResult<Option<u64>> {
     match args.get(key) {
         None | Some(Json::Null) => Ok(None),
         Some(value) => value
@@ -128,7 +140,7 @@ fn u64_arg(args: &Json, key: &str) -> AppResult<Option<u64>> {
     }
 }
 
-fn bool_arg(args: &Json, key: &str) -> bool {
+pub(super) fn bool_arg(args: &Json, key: &str) -> bool {
     args.get(key).and_then(Json::as_bool).unwrap_or(false)
 }
 
@@ -148,7 +160,7 @@ pub(super) fn document_arg(args: &Json, key: &str) -> AppResult<Option<Document>
     }
 }
 
-fn hint_arg(args: &Json) -> AppResult<Option<Hint>> {
+pub(super) fn hint_arg(args: &Json) -> AppResult<Option<Hint>> {
     match args.get("hint") {
         None | Some(Json::Null) => Ok(None),
         Some(Json::String(name)) if !name.trim_start().starts_with('{') => {
@@ -158,7 +170,7 @@ fn hint_arg(args: &Json) -> AppResult<Option<Hint>> {
     }
 }
 
-fn collation_arg(args: &Json) -> AppResult<Option<Collation>> {
+pub(super) fn collation_arg(args: &Json) -> AppResult<Option<Collation>> {
     document_arg(args, "collation")?
         .map(|document| {
             mongodb::bson::from_document::<Collation>(document).map_err(|error| AppError::new(format!("collation is not valid ({error})")))
@@ -192,11 +204,11 @@ fn and(left: Document, right: Document) -> Document {
     }
 }
 
-fn relaxed(document: Document) -> Json {
+pub(super) fn relaxed(document: Document) -> Json {
     Bson::Document(document).into_relaxed_extjson()
 }
 
-fn elapsed_ms(started: Instant) -> u64 {
+pub(super) fn elapsed_ms(started: Instant) -> u64 {
     started.elapsed().as_millis() as u64
 }
 
@@ -222,7 +234,7 @@ fn id_sort(sort: &Document) -> Option<bool> {
     }
 }
 
-fn name_json(name: &str) -> String {
+pub(super) fn name_json(name: &str) -> String {
     serde_json::to_string(name).unwrap_or_default()
 }
 

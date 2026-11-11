@@ -767,6 +767,230 @@ async fn contract_mongo_engine_operations() {
     manager.disconnect(CONNECTION).await;
 }
 
+/// Aggregations: the per-stage preview on a bounded sample (counts, documents, the failing stage, `$lookup`, random
+/// samples seen alike by every stage), refusals, and the full run reading or writing with `$merge` / `$out`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mongo.yml"]
+async fn contract_mongo_aggregations() {
+    let f = fixture();
+    let (manager, handle) = connect(&f).await;
+    let tab = session(&handle).await;
+    run(&handle, &tab, r#"{ "drop": "contract_agg_out" }"#, "fosta_contract").await.ok();
+    let context = |preset: Preset| Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: CONNECTION.into(),
+        connection_name: CONNECTION.into(),
+        safety: SafetySettings::preset(preset),
+    };
+    let invoke = |name: &'static str, extra: serde_json::Value, preset: Preset, confirmation: Option<gateway::Confirmation>| {
+        let mut args = json!({ "database": "fosta_contract", "collection": "contract_items" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let (manager, context) = (&manager, context(preset));
+        async move { gateway::invoke(manager, &context, gateway::Caller::EngineView, name, args, confirmation.as_ref()).await }
+    };
+    let counts = |preview: &serde_json::Value| -> Vec<serde_json::Value> {
+        preview["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|stage| stage["count"].clone())
+            .collect()
+    };
+
+    // Per-stage counts and documents on the first 100 documents; stages given as values or text; `$lookup` joins.
+    let pipeline = json!([
+        { "$match": { "active": true } },
+        { "$lookup": { "from": "contract_children", "localField": "_id", "foreignField": "item_id", "as": "kids" } },
+        "{ \"$unwind\": \"$kids\" }",
+        { "$sort": { "_id": -1 } },
+        { "$project": { "label": "$kids.label" } },
+        { "$group": { "_id": null, "n": { "$sum": 1 } } },
+    ]);
+    let preview = invoke(
+        "mongo.aggregatePreview",
+        json!({ "pipeline": pipeline, "sampleSize": 100, "limit": 3 }),
+        Preset::ReadOnly,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        preview["sample"],
+        json!({ "mode": "first", "size": 100, "count": 100 }),
+        "{preview}"
+    );
+    assert_eq!(counts(&preview), [json!(50), json!(50), json!(50), json!(50), json!(50), json!(1)]);
+    let stages = preview["stages"].as_array().unwrap();
+    assert_eq!(stages[0]["operator"], "$match");
+    assert_eq!(stages[0]["documents"].as_array().unwrap().len(), 3);
+    assert_eq!(stages[1]["documents"][0]["kids"][0]["label"], "child 2", "{preview}");
+    assert_eq!(stages[3]["documents"][0]["_id"], json!(100));
+    assert_eq!(stages[4]["documents"][0], json!({ "_id": 100, "label": "child 100" }));
+    assert_eq!(stages[5]["documents"][0]["n"], json!(50));
+    assert!(stages.iter().all(|stage| stage["error"].is_null() && stage["elapsedMs"].is_u64()));
+    // Up to a stage only.
+    let partial = invoke(
+        "mongo.aggregatePreview",
+        json!({ "pipeline": pipeline, "sampleSize": 100, "upTo": 1 }),
+        Preset::ReadOnly,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(counts(&partial), [json!(50), json!(50)]);
+
+    // The sample is bounded: never more than the hard maximum, here the whole collection (1000) at most.
+    let bounded = invoke(
+        "mongo.aggregatePreview",
+        json!({ "pipeline": [{ "$match": {} }], "sampleSize": 1_000_000 }),
+        Preset::ReadOnly,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(bounded["sample"]["size"], json!(10_000));
+    assert_eq!(counts(&bounded), [json!(1000)]);
+    assert_eq!(bounded["stages"][0]["documents"].as_array().unwrap().len(), 20);
+    let small = invoke(
+        "mongo.aggregatePreview",
+        json!({ "pipeline": [{ "$match": {} }, { "$count": "c" }], "sampleSize": 10 }),
+        Preset::ReadOnly,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(counts(&small), [json!(10), json!(1)]);
+    assert_eq!(small["stages"][1]["documents"][0]["c"], json!(10));
+    // A random sample: every stage sees the same documents.
+    let random = invoke(
+        "mongo.aggregatePreview",
+        json!({
+            "pipeline": [{ "$match": {} }, { "$group": { "_id": null, "ids": { "$sum": "$_id" } } }],
+            "sampleSize": 20,
+            "sampleMode": "random",
+            "limit": 100,
+        }),
+        Preset::ReadOnly,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(random["sample"]["mode"], "random");
+    assert_eq!(counts(&random)[0], json!(20), "{random}");
+    let sum: i64 = random["stages"][0]["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|doc| doc["_id"].as_i64().unwrap())
+        .sum();
+    assert_eq!(random["stages"][1]["documents"][0]["ids"].as_i64(), Some(sum), "{random}");
+
+    // The first failing stage carries the error and stops the preview.
+    let failing = invoke(
+        "mongo.aggregatePreview",
+        json!({ "pipeline": [{ "$match": {} }, { "$project": { "x": { "$divide": [1, 0] } } }, { "$limit": 1 }], "sampleSize": 5 }),
+        Preset::ReadOnly,
+        None,
+    )
+    .await
+    .unwrap();
+    let stages = failing["stages"].as_array().unwrap();
+    assert_eq!(stages.len(), 2, "{failing}");
+    assert_eq!(stages[0]["count"], json!(5));
+    assert!(stages[0]["error"].is_null());
+    assert!(stages[1]["count"].is_null());
+    assert!(stages[1]["error"].as_str().unwrap().contains("divide"), "{failing}");
+
+    // Refused whatever the rules: writes in a preview, server-side JavaScript.
+    for (name, pipeline) in [
+        ("mongo.aggregatePreview", json!([{ "$out": "contract_agg_out" }])),
+        ("mongo.aggregatePreview", json!([{ "$merge": { "into": "contract_agg_out" } }])),
+        ("mongo.aggregate", json!([{ "$match": { "$where": "true" } }])),
+        (
+            "mongo.aggregatePreview",
+            json!(["{ \"$group\": { \"_id\": null, \"x\": { \"$accumulator\": {} } } }"]),
+        ),
+    ] {
+        let error = invoke(name, json!({ "pipeline": pipeline }), Preset::Open, None)
+            .await
+            .expect_err(name);
+        assert_eq!(error.code(), Some(gateway::BLOCKED), "{name} {pipeline}: {error}");
+    }
+    // Credentials read through `$lookup` / `$unionWith` are administration: blocked in a Read-only workspace.
+    for pipeline in [
+        json!([{ "$lookup": { "from": "system.users", "localField": "a", "foreignField": "user", "as": "u" } }]),
+        json!([{ "$unionWith": "system.users" }]),
+    ] {
+        let error = invoke("mongo.aggregatePreview", json!({ "pipeline": pipeline }), Preset::ReadOnly, None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Some(gateway::BLOCKED), "{pipeline}: {error}");
+    }
+
+    // The full run reads, capped, in a Read-only workspace.
+    let read = invoke(
+        "mongo.aggregate",
+        json!({ "pipeline": [{ "$match": { "active": true } }, { "$sort": { "_id": 1 } }], "limit": 5, "allowDiskUse": true }),
+        Preset::ReadOnly,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(read["documents"].as_array().unwrap().len(), 5);
+    assert_eq!(read["documents"][0]["_id"], json!(2));
+    assert_eq!((read["hasMore"].as_bool(), read["wrote"].is_null()), (Some(true), true));
+    assert!(read["statement"]
+        .as_str()
+        .unwrap()
+        .starts_with("db.getCollection(\"contract_items\").aggregate(["));
+
+    // $merge writes: blocked in Read-only, confirmed in Guarded; $out (DDL) replaces the collection.
+    let merge = json!({ "pipeline": [{ "$match": { "_id": { "$lte": 10 } } }, { "$merge": { "into": "contract_agg_out" } }] });
+    assert_eq!(
+        invoke("mongo.aggregate", merge.clone(), Preset::ReadOnly, None)
+            .await
+            .unwrap_err()
+            .code(),
+        Some(gateway::BLOCKED)
+    );
+    let confirmed = |extra: serde_json::Value| {
+        let invoke = &invoke;
+        async move {
+            let ask = invoke("mongo.aggregate", extra.clone(), Preset::Guarded, None).await.unwrap_err();
+            assert_eq!(ask.code(), Some(gateway::CONFIRMATION_REQUIRED), "{ask}");
+            let payload = ask.payload().unwrap();
+            let token = payload["token"].as_str().unwrap().to_owned();
+            let typed = payload["expected"].as_str().map(str::to_owned);
+            invoke(
+                "mongo.aggregate",
+                extra,
+                Preset::Guarded,
+                Some(gateway::Confirmation { token, typed }),
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let merged = confirmed(merge).await;
+    assert_eq!(merged["wrote"], json!({ "stage": "$merge", "target": "contract_agg_out" }));
+    assert_eq!(merged["documents"], json!([]));
+    let total = || {
+        let invoke = &invoke;
+        async move {
+            invoke("mongo.count", json!({ "collection": "contract_agg_out" }), Preset::ReadOnly, None)
+                .await
+                .unwrap()["count"]
+                .as_u64()
+        }
+    };
+    assert_eq!(total().await, Some(10));
+    let out = confirmed(json!({ "pipeline": [{ "$match": { "_id": { "$lte": 3 } } }, { "$out": "contract_agg_out" }] })).await;
+    assert_eq!(out["wrote"]["stage"], "$out");
+    assert_eq!(total().await, Some(3));
+    run(&handle, &tab, r#"{ "drop": "contract_agg_out" }"#, "fosta_contract").await.ok();
+    manager.disconnect(CONNECTION).await;
+}
 /// The collection workspace's edits: nested edits by dotted path (the rest of the top-level field untouched, stored
 /// number types kept), conflicts on a changed path only, Read-only blocking, and the bulk operations with their
 /// confirmations.

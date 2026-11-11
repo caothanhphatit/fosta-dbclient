@@ -1,10 +1,12 @@
 //! MongoDB database commands written as JSON (the query tab's input), classified by the command name: the first key
 //! of the object. Aggregations with `$out` / `$merge` write; deletes and multi-updates with an empty filter are
 //! destructive. The engine operations (`mongo.find` …) are classified by name: reads, the bulk update (a write, destructive
-//! with an empty filter) and the bulk delete (destructive); they refuse server-side JavaScript
-//! and refuse names they do not know.
+//! with an empty filter), the bulk delete (destructive) and the aggregations (a read; with `$merge` a
+//! write, with `$out` DDL; the preview refuses both); they refuse server-side JavaScript and refuse names they do not
+//! know.
 
 use super::{
+    aggregate::{pipeline_arg, read_targets, write_stage, write_target},
     bulk::filter_is_empty,
     ops::{denied_operator, OPERATIONS},
 };
@@ -111,6 +113,9 @@ pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo
         .and_then(|collection| collection.as_str())
         .map(|collection| vec![collection.to_owned()])
         .unwrap_or_default();
+    if matches!(name, "mongo.aggregatePreview" | "mongo.aggregate") {
+        return classify_aggregation(name, args, &excerpt, tables);
+    }
     let info = if touches_secrets(args) {
         StatementInfo::new(Category::Admin, name, &excerpt).with_reason(SENSITIVE_READ_REASON)
     } else {
@@ -123,6 +128,37 @@ pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo
             "mongo.deleteMany" => StatementInfo::new(Category::Destructive, name, &excerpt).with_reason("Deletes every matching document"),
             // `mongo.updatePreview` simulates the update in an aggregation: it reads.
             _ => StatementInfo::new(Category::Read, name, &excerpt),
+        }
+    };
+    info.with_tables(tables)
+}
+
+/// An aggregation: the collections it reads (`$lookup`, `$graphLookup`, `$unionWith`) and writes are its tables, and
+/// reading credentials through any of them is administration. `mongo.aggregatePreview` only reads, so `$out` / `$merge`
+/// are refused there; `mongo.aggregate` with `$merge` writes and with `$out` (which creates or replaces the target
+/// collection) is DDL. A pipeline that does not parse is refused (it could not run either).
+fn classify_aggregation(name: &str, args: &serde_json::Value, excerpt: &str, mut tables: Vec<String>) -> StatementInfo {
+    let stages = match pipeline_arg(args) {
+        Ok(stages) => stages.unwrap_or_default(),
+        Err(error) => return StatementInfo::refused(name, excerpt, error.message()),
+    };
+    let writes = write_stage(&stages);
+    if let (Some(stage), "mongo.aggregatePreview") = (writes, name) {
+        return StatementInfo::refused(name, excerpt, &format!("{stage} writes into a collection; a preview only reads"));
+    }
+    for table in read_targets(&stages).into_iter().chain(write_target(&stages)) {
+        if !tables.contains(&table) {
+            tables.push(table);
+        }
+    }
+    let info = if touches_secrets(args) || touches_secrets(&serde_json::Value::Array(stages)) {
+        StatementInfo::new(Category::Admin, name, excerpt).with_reason(SENSITIVE_READ_REASON)
+    } else {
+        match writes {
+            Some("$out") => StatementInfo::new(Category::Ddl, name, excerpt)
+                .with_reason("$out creates or replaces the target collection with the result"),
+            Some(_) => StatementInfo::new(Category::Write, name, excerpt).with_reason("$merge writes the result into a collection"),
+            None => StatementInfo::new(Category::Read, name, excerpt),
         }
     };
     info.with_tables(tables)
@@ -371,6 +407,72 @@ mod tests {
         let secret = classify_operation("mongo.find", &json!({ "database": "admin", "collection": "system.users" }));
         assert_eq!(secret.category, Category::Admin);
         assert_eq!(secret.refused, None);
+    }
+
+    #[test]
+    fn aggregations_read_write_or_are_refused() {
+        use serde_json::json;
+        let args = |pipeline: serde_json::Value| json!({ "database": "shop", "collection": "orders", "pipeline": pipeline });
+        let preview = classify_operation(
+            "mongo.aggregatePreview",
+            &args(json!([{ "$match": { "status": "paid" } }, "{ \"$group\": { \"_id\": \"$customer\", \"n\": { \"$sum\": 1 } } }"])),
+        );
+        assert_eq!((preview.category, preview.refused.as_deref()), (Category::Read, None));
+        assert_eq!(preview.tables, ["orders"]);
+        let read = classify_operation("mongo.aggregate", &args(json!([{ "$sort": { "total": -1 } }])));
+        assert_eq!(read.category, Category::Read);
+        // A preview never writes.
+        for pipeline in [json!([{ "$out": "copy" }]), json!("[{ \"$merge\": { \"into\": \"t\" } }]")] {
+            let info = classify_operation("mongo.aggregatePreview", &args(pipeline.clone()));
+            assert!(info.refused.as_deref().is_some_and(|why| why.contains("only reads")), "{pipeline}");
+        }
+        let merge = classify_operation(
+            "mongo.aggregate",
+            &args(json!([{ "$match": {} }, { "$merge": { "into": "totals" } }])),
+        );
+        assert_eq!((merge.category, merge.refused.as_deref()), (Category::Write, None));
+        assert_eq!(merge.tables, ["orders", "totals"]);
+        let out = classify_operation("mongo.aggregate", &args(json!(["{ \"$out\": \"copy\" }"])));
+        assert_eq!(out.category, Category::Ddl);
+        assert_eq!(out.tables, ["orders", "copy"]);
+        // Other collections read are tables; credentials read through them are administration.
+        let lookup = classify_operation(
+            "mongo.aggregatePreview",
+            &args(
+                json!([{ "$lookup": { "from": "customers", "localField": "c", "foreignField": "_id", "as": "c" } }, { "$unionWith": "archive" }]),
+            ),
+        );
+        assert_eq!(lookup.category, Category::Read);
+        assert_eq!(lookup.tables, ["orders", "customers", "archive"]);
+        for pipeline in [
+            json!([{ "$lookup": { "from": "system.users", "localField": "u", "foreignField": "user", "as": "u" } }]),
+            json!(["{ \"$unionWith\": { \"coll\": \"system.users\" } }"]),
+            json!([{ "$currentOp": {} }]),
+        ] {
+            let info = classify_operation(
+                "mongo.aggregatePreview",
+                &json!({ "database": "admin", "collection": "x", "pipeline": pipeline }),
+            );
+            assert_eq!((info.category, info.refused.as_deref()), (Category::Admin, None), "{pipeline}");
+        }
+        // Server-side JavaScript anywhere in the pipeline, as values or text, is refused.
+        for pipeline in [
+            json!([{ "$match": { "$where": "true" } }]),
+            json!([{ "$project": { "x": { "$function": { "body": "f", "args": [], "lang": "js" } } } }]),
+            json!(["{ \"$group\": { \"_id\": null, \"x\": { \"$accumulator\": {} } } }"]),
+            json!("[{ \"$match\": { \"$where\": \"true\" } }]"),
+        ] {
+            for name in ["mongo.aggregatePreview", "mongo.aggregate"] {
+                let info = classify_operation(name, &args(pipeline.clone()));
+                assert!(
+                    info.refused.as_deref().is_some_and(|why| why.contains("JavaScript")),
+                    "{name}: {pipeline}"
+                );
+            }
+        }
+        // A pipeline that does not parse is refused.
+        let broken = classify_operation("mongo.aggregate", &args(json!(["{ nope"])));
+        assert!(broken.refused.is_some());
     }
 
     #[test]
