@@ -424,24 +424,6 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// The config of a first start: one workspace, plus a local MariaDB connection when `local_connection`.
-    fn starter(local_connection: bool) -> Self {
-        let mut config = Self::default();
-        if !local_connection {
-            return config;
-        }
-        config.workspaces[0].connections.push(ConnectionProfile {
-            id: "local-mariadb".into(),
-            name: "Local MariaDB".into(),
-            engine: DEFAULT_ENGINE.into(),
-            host: "127.0.0.1".into(),
-            port: 3306,
-            user: "root".into(),
-            ..Default::default()
-        });
-        config
-    }
-
     /// The workspace that holds a saved connection, with the connection.
     pub fn connection_scope(&self, connection_id: &str) -> Option<(&Workspace, &ConnectionProfile)> {
         self.workspaces.iter().find_map(|workspace| {
@@ -647,9 +629,9 @@ pub struct ConfigStore {
 }
 
 impl ConfigStore {
-    pub fn load(local_connection: bool) -> AppResult<Self> {
+    pub fn load() -> AppResult<Self> {
         let path = config_path()?;
-        let current = load_file(&path, local_connection)?;
+        let current = load_file(&path)?;
         Ok(Self {
             path,
             current: Mutex::new(current),
@@ -769,14 +751,14 @@ fn move_legacy_file(path: &Path, legacy: &Path) -> AppResult<()> {
     Ok(())
 }
 
-/// Reads the config at `path`: a missing file becomes the starter config (written), a version-1 file is migrated
+/// Reads the config at `path`: a missing file becomes the default config (written), a version-1 file is migrated
 /// (after a one-time `.v1.bak` copy), and an unreadable one is moved aside to `.corrupt-<unix ts>` and replaced by
-/// the starter config, with a `startup_notice` for the UI.
-fn load_file(path: &Path, local_connection: bool) -> AppResult<AppConfig> {
+/// the default config, with a `startup_notice` for the UI.
+fn load_file(path: &Path) -> AppResult<AppConfig> {
     if !path.exists() {
-        let starter = AppConfig::starter(local_connection);
-        write_config(path, &starter)?;
-        return Ok(starter);
+        let config = AppConfig::default();
+        write_config(path, &config)?;
+        return Ok(config);
     }
     let bytes = fs::read(path)?;
     match serde_json::from_slice::<StoredConfig>(&bytes) {
@@ -789,13 +771,13 @@ fn load_file(path: &Path, local_connection: bool) -> AppResult<AppConfig> {
         Err(error) => {
             let aside = sibling(path, &format!(".corrupt-{}", unix_seconds()));
             fs::rename(path, &aside)?;
-            let mut starter = AppConfig::starter(local_connection);
-            write_config(path, &starter)?;
-            starter.startup_notice = Some(format!(
+            let mut config = AppConfig::default();
+            write_config(path, &config)?;
+            config.startup_notice = Some(format!(
                 "The settings file could not be read ({error}). It was moved to {} and Fosta Studio started with new settings.",
                 aside.display()
             ));
-            Ok(starter)
+            Ok(config)
         }
     }
 }
@@ -1094,18 +1076,18 @@ mod tests {
         let directory = scratch("v1bak");
         let path = directory.join(CONFIG_FILE);
         fs::write(&path, V1_FIXTURE).unwrap();
-        let config = load_file(&path, true).unwrap();
+        let config = load_file(&path).unwrap();
         assert!(config.startup_notice.is_none());
         let backup = directory.join("fosta-studio.json.v1.bak");
         assert_eq!(fs::read_to_string(&backup).unwrap(), V1_FIXTURE);
         write_config(&path, &config).unwrap();
         fs::write(&backup, "older backup").unwrap();
         fs::write(&path, V1_FIXTURE).unwrap();
-        load_file(&path, true).unwrap();
+        load_file(&path).unwrap();
         assert_eq!(fs::read_to_string(&backup).unwrap(), "older backup", "an existing backup is kept");
         fs::write(&path, serde_json::to_string(&config).unwrap()).unwrap();
         fs::remove_file(&backup).unwrap();
-        load_file(&path, true).unwrap();
+        load_file(&path).unwrap();
         assert!(!backup.exists(), "version-2 files are not backed up");
         fs::remove_dir_all(directory).unwrap();
     }
@@ -1115,8 +1097,10 @@ mod tests {
         let directory = scratch("atomic");
         let path = directory.join(CONFIG_FILE);
         fs::write(&path, "old").unwrap();
-        let mut config = AppConfig::starter(false);
-        config.startup_notice = Some("hello".into());
+        let config = AppConfig {
+            startup_notice: Some("hello".into()),
+            ..Default::default()
+        };
         write_config(&path, &config).unwrap();
         assert!(!directory.join("fosta-studio.json.tmp").exists());
         let written: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -1126,14 +1110,14 @@ mod tests {
     }
 
     #[test]
-    fn a_corrupt_file_is_set_aside_and_replaced_by_the_starter() {
+    fn a_corrupt_file_is_set_aside_and_replaced_by_the_default() {
         let directory = scratch("corrupt");
         let path = directory.join(CONFIG_FILE);
         fs::write(&path, "{ not json").unwrap();
-        let config = load_file(&path, true).unwrap();
+        let config = load_file(&path).unwrap();
         let notice = config.startup_notice.as_deref().unwrap();
         assert!(notice.contains("fosta-studio.json.corrupt-"), "{notice}");
-        assert_eq!(config.workspaces[0].connections[0].id, "local-mariadb");
+        assert!(config.workspaces[0].connections.is_empty());
         let aside: Vec<_> = fs::read_dir(&directory)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -1141,17 +1125,20 @@ mod tests {
             .collect();
         assert_eq!(aside.len(), 1);
         assert_eq!(fs::read_to_string(directory.join(&aside[0])).unwrap(), "{ not json");
-        let reloaded = load_file(&path, true).unwrap();
+        let reloaded = load_file(&path).unwrap();
         assert!(reloaded.startup_notice.is_none(), "the notice is not persisted");
         fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
-    fn containers_start_without_a_localhost_connection() {
-        let desktop = AppConfig::starter(true);
-        assert_eq!(desktop.workspaces[0].connections[0].host, "127.0.0.1");
-        let container = AppConfig::starter(false);
-        assert!(container.workspaces.iter().all(|workspace| workspace.connections.is_empty()));
+    fn a_first_start_seeds_no_connection() {
+        let directory = scratch("first-start");
+        let path = directory.join(CONFIG_FILE);
+        let config = load_file(&path).unwrap();
+        assert_eq!(config.workspaces.len(), 1);
+        assert!(config.workspaces[0].connections.is_empty());
+        assert!(path.exists(), "the default config is written");
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -8,7 +8,7 @@ import { showError } from "./core/errorPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { assistantContext as buildAssistantContext, isQueryView, taskLogContext } from "./app/assistantContext";
 import { AppNavigation, preloadQueryView } from "./app/navigation";
-import { welcomeScreen } from "./app/welcome";
+import { showWelcomeStart, welcomeScreen } from "./app/welcome";
 import { renderStatusContext } from "./app/statusBar";
 import { buildLayout, ASSISTANT_STORAGE_KEY, toggleSidebar } from "./app/layout";
 import { shellMenus } from "./app/menus";
@@ -126,6 +126,7 @@ const tree = new ConnectionTree({
   openDiagram: (profile, database) => navigation.openDiagram(profile, database),
   editConnection: (profile) => void editConnection(profile),
   deleteConnection: (profile) => void deleteConnection(profile),
+  newConnection: () => void editConnection(null),
   openCommandLog: (commandId) => {
     const task = workspace?.tasks.find((item) => item.id === commandId);
     if (task) navigation.openLogs(task);
@@ -268,6 +269,7 @@ function applyConfig(config: AppConfig): void {
   assistant.setConfigured(config.aiConnections, config.aiActive);
   assistant.setScope(workspace.id);
   welcomeName.textContent = workspace.name;
+  showWelcomeStart(welcome, workspace.connections.length === 0);
   renderSafetyStatus(workspace);
   refreshActivity();
   const title = `${workspace.name} — Fosta Studio`;

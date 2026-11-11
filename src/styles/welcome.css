@@ -84,6 +84,72 @@
   font-weight: 600;
 }
 
+/* First connection: shown instead of the action cards while the workspace has none. */
+.welcome-start {
+  display: none;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  align-items: start;
+  padding: 18px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+
+.welcome.no-connections .welcome-start {
+  display: grid;
+}
+
+.welcome.no-connections .welcome-actions {
+  display: none;
+}
+
+.welcome-start-icon .icon {
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+}
+
+.welcome-start-text h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.welcome-start-text p {
+  margin: 4px 0 0;
+  color: var(--fg-2);
+}
+
+.welcome-start-actions {
+  display: flex;
+  grid-column: 2;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.welcome-start-button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  height: 32px;
+  font-weight: 600;
+}
+
+.welcome-start-hint {
+  color: var(--fg-3);
+}
+
+/* Reserved for a dismissible announcement; nothing is shown while it is empty. */
+.welcome-promo-slot {
+  margin-bottom: 16px;
+}
+
+.welcome-promo-slot:empty {
+  display: none;
+}
+
 .shortcuts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

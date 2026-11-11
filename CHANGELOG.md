@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- A first start no longer adds a "Local MariaDB" connection that may not exist. A workspace without connections shows a
+  "Connect your first database" card on the welcome screen and a New connection button in the sidebar. Existing settings
+  are not changed.
+
 ## [0.2.1] - 2026-11-11
 
 ### Added

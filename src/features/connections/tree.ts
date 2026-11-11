@@ -87,6 +87,8 @@ export interface TreeHost {
   openDiagram(profile: ConnectionProfile, database: string): void;
   editConnection(profile: ConnectionProfile): void;
   deleteConnection(profile: ConnectionProfile): void;
+  /** Opens the new-connection dialog (the empty tree's button). */
+  newConnection?(): void;
   /** Opens the log of the workspace command `commandId` (the one a connection uses). */
   openCommandLog?(commandId: string): void;
   /** The last known state of the workspace command `commandId`. */
@@ -560,8 +562,22 @@ export class ConnectionTree {
     this.rows = new Map();
     const query = this.search.value.trim();
     const elements = this.nodes.flatMap((conn) => this.connectionRows(conn, query));
-    this.body.replaceChildren(...(elements.length ? elements : [h("div", { class: "empty-hint" }, "No connections yet")]));
+    this.body.replaceChildren(...(elements.length ? elements : [this.emptyState()]));
     this.host.stateChanged?.();
+  }
+
+  /** The tree of a workspace without connections. */
+  private emptyState(): HTMLElement {
+    const newConnection = this.host.newConnection;
+    return h(
+      "div",
+      { class: "tree-empty" },
+      h("p", { class: "tree-empty-title" }, "No connections yet"),
+      h("p", { class: "tree-empty-text" }, "Add a database to this workspace to get started."),
+      newConnection
+        ? h("button", { class: "btn primary tree-empty-button", type: "button", onclick: () => newConnection() }, icon("plug"), h("span", {}, "New connection"))
+        : null,
+    );
   }
 
   private connectionRows(conn: ConnectionNode, query: string): HTMLElement[] {

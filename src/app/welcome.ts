@@ -21,7 +21,11 @@ export interface WelcomeActions {
   openCommunity(): void;
 }
 
-/** The screen shown when no tab is open. `workspaceName` is updated by the caller. */
+/**
+ * The screen shown when no tab is open. `workspaceName` is updated by the caller, and so is the empty-workspace state
+ * (`showWelcomeStart`): a workspace without connections gets a "Connect your first database" card instead of the
+ * action cards.
+ */
 export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeActions): HTMLElement {
   const card = (iconName: IconName, title: string, run: () => void) => {
     const button = h("button", { class: "welcome-action", type: "button" }, icon(iconName), h("span", { class: "welcome-action-title" }, title));
@@ -36,6 +40,9 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
       { class: "welcome-inner" },
       h("div", { class: "welcome-brand" }, h("img", { class: "welcome-icon", src: logoUrl, alt: "" }), h("h1", {}, "Fosta Studio")),
       h("p", { class: "welcome-sub" }, "Workspace ", workspaceName),
+      // Reserved for a dismissible announcement; stays hidden while empty.
+      h("div", { class: "welcome-promo-slot", "data-slot": "promo" }),
+      startCard(actions),
       h(
         "div",
         { class: "welcome-actions" },
@@ -49,6 +56,28 @@ export function welcomeScreen(workspaceName: HTMLElement, actions: WelcomeAction
       h("p", { class: "welcome-sub" }, h("button", { class: "link-button", type: "button", onclick: () => actions.openCommunity() }, "Community (Discord)")),
       h("ul", { class: "shortcuts" }, ...SHORTCUTS.map(([keys, action]) => h("li", {}, h("kbd", {}, keys), h("span", {}, action)))),
     ),
+  );
+}
+
+/** Shows the first-connection card (and hides the action cards) while the workspace has no connections. */
+export function showWelcomeStart(welcome: HTMLElement, noConnections: boolean): void {
+  welcome.classList.toggle("no-connections", noConnections);
+}
+
+function startCard(actions: WelcomeActions): HTMLElement {
+  const button = h("button", { class: "btn primary welcome-start-button", type: "button" }, icon("plug"), h("span", {}, "New connection"));
+  button.addEventListener("click", () => actions.newConnection());
+  return h(
+    "section",
+    { class: "welcome-start", "aria-label": "Get started" },
+    h("div", { class: "welcome-start-icon" }, icon("database")),
+    h(
+      "div",
+      { class: "welcome-start-text" },
+      h("h2", {}, "Connect your first database"),
+      h("p", {}, "This workspace has no connections yet. Add one to browse its objects, run queries and edit data."),
+    ),
+    h("div", { class: "welcome-start-actions" }, button, h("span", { class: "welcome-start-hint" }, h("kbd", {}, "Ctrl+N"))),
   );
 }
 

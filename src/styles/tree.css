@@ -173,6 +173,29 @@
   font-variant-numeric: tabular-nums;
 }
 
+.tree-empty {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  padding: 14px;
+}
+
+.tree-empty-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.tree-empty-text {
+  margin: 0 0 8px;
+  color: var(--fg-2);
+}
+
+.tree-empty-button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
 .empty-hint {
   padding: 10px 14px;
   color: var(--fg-3);

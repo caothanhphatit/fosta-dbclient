@@ -1,7 +1,8 @@
 /**
  * Config, workspaces and query history of the mock backend (this page load only). "Client A staging" is guarded (run an
  * UPDATE or DELETE to see the confirmation dialog) and has an unreachable server to see a failing connect; "Production"
- * is read-only. "Local" has PostgreSQL and SQLite profiles on the mock engines.
+ * is read-only. "Local" has PostgreSQL and SQLite profiles on the mock engines. "Empty" has no connections, to see the
+ * first-run state.
  */
 import { presetSettings } from "../../features/safety/safety";
 import type { AppConfig, HistoryEntry, Workspace } from "../../core/types";
@@ -197,6 +198,15 @@ const workspaces: Workspace[] = [
         options: {},
       },
     ],
+    tasks: [],
+  },
+  {
+    id: "empty",
+    name: "Empty",
+    color: "slate",
+    icon: "flask",
+    safety: presetSettings("open"),
+    connections: [],
     tasks: [],
   },
 ];
