@@ -4,7 +4,8 @@
 //! query tabs that run database commands written as Extended JSON, reading cursors with `getMore`, and the engine
 //! operations the MongoDB views invoke (`mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`, and the bulk
 //! `mongo.updatePreview`, `mongo.updateMany`, `mongo.deleteMany`, and the aggregations `mongo.aggregatePreview`,
-//! `mongo.aggregate`, and `mongo.schema`, the shape of a sample).
+//! `mongo.aggregate`, `mongo.schema`, the shape of a sample, and the index operations `mongo.indexes`, `mongo.createIndex`,
+//! `mongo.hideIndex` / `mongo.unhideIndex` and `mongo.dropIndex`).
 
 pub mod adapter;
 mod aggregate;
@@ -15,6 +16,7 @@ mod connect;
 #[cfg(test)]
 mod contract_tests;
 pub mod descriptor;
+mod indexes;
 mod ops;
 mod schema;
 mod session;

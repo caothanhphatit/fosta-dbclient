@@ -2,12 +2,14 @@
 //! of the object. Aggregations with `$out` / `$merge` write; deletes and multi-updates with an empty filter are
 //! destructive. The engine operations (`mongo.find` …) are classified by name: reads, the bulk update (a write, destructive
 //! with an empty filter), the bulk delete (destructive) and the aggregations (a read; with `$merge` a
-//! write, with `$out` DDL; the preview refuses both); they refuse server-side JavaScript and refuse names they do not
+//! write, with `$out` DDL; the preview refuses both), the index listing (a read), creating, hiding and unhiding an index
+//! (DDL) and dropping one (destructive; never `_id_`); they refuse server-side JavaScript and refuse names they do not
 //! know.
 
 use super::{
     aggregate::{pipeline_arg, read_targets, write_stage, write_target},
     bulk::filter_is_empty,
+    indexes::protected_index,
     ops::{denied_operator, OPERATIONS},
 };
 use crate::{
@@ -98,8 +100,9 @@ pub fn classify_mongo(text: &str) -> Classification {
 
 /// Classifies an engine operation by name: `mongo.find`, `mongo.count`, `mongo.distinct`, `mongo.resolveRef`, `mongo.schema` and
 /// `mongo.updatePreview` read; `mongo.updateMany` writes (destructive with an empty filter); `mongo.deleteMany` is always
-/// destructive. Any of them is administration when it targets credentials; server-side JavaScript in any query
-/// document or update and unknown names are refused.
+/// destructive; `mongo.indexes` reads, `mongo.createIndex` / `mongo.hideIndex` / `mongo.unhideIndex` are DDL and
+/// `mongo.dropIndex` is destructive (the `_id_` index, or `*`, is refused). Any of them is administration when it targets
+/// credentials; server-side JavaScript in any query document, update or partial filter and unknown names are refused.
 pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo {
     if !OPERATIONS.contains(&name) {
         return StatementInfo::refused(name, name, "unknown operation");
@@ -116,6 +119,9 @@ pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo
     if matches!(name, "mongo.aggregatePreview" | "mongo.aggregate") {
         return classify_aggregation(name, args, &excerpt, tables);
     }
+    if matches!(name, "mongo.dropIndex" | "mongo.hideIndex" | "mongo.unhideIndex") && protected_index(args) {
+        return StatementInfo::refused(name, &excerpt, "the _id index (or every index at once) cannot be dropped or hidden");
+    }
     let info = if touches_secrets(args) {
         StatementInfo::new(Category::Admin, name, &excerpt).with_reason(SENSITIVE_READ_REASON)
     } else {
@@ -126,6 +132,15 @@ pub fn classify_operation(name: &str, args: &serde_json::Value) -> StatementInfo
             "mongo.deleteMany" if filter_is_empty(args) => StatementInfo::new(Category::Destructive, name, &excerpt)
                 .with_reason("An empty filter deletes every document in the collection"),
             "mongo.deleteMany" => StatementInfo::new(Category::Destructive, name, &excerpt).with_reason("Deletes every matching document"),
+            "mongo.createIndex" => StatementInfo::new(Category::Ddl, name, &excerpt).with_reason("Builds a new index on the collection"),
+            "mongo.hideIndex" => {
+                StatementInfo::new(Category::Ddl, name, &excerpt).with_reason("Hides the index from the query planner (collMod)")
+            }
+            "mongo.unhideIndex" => {
+                StatementInfo::new(Category::Ddl, name, &excerpt).with_reason("Lets the query planner use the index again (collMod)")
+            }
+            "mongo.dropIndex" => StatementInfo::new(Category::Destructive, name, &excerpt)
+                .with_reason("Drops the index; queries that used it scan instead until it is built again"),
             // `mongo.updatePreview` simulates the update in an aggregation: it reads.
             _ => StatementInfo::new(Category::Read, name, &excerpt),
         }
@@ -483,6 +498,56 @@ mod tests {
         // A pipeline that does not parse is refused.
         let broken = classify_operation("mongo.aggregate", &args(json!(["{ nope"])));
         assert!(broken.refused.is_some());
+    }
+
+    #[test]
+    fn index_operations_are_read_ddl_or_destructive() {
+        use serde_json::json;
+        let args = |extra: serde_json::Value| {
+            let mut args = json!({ "database": "shop", "collection": "orders" });
+            args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            args
+        };
+        let info = |name: &str, extra: serde_json::Value| classify_operation(name, &args(extra));
+        let listed = info("mongo.indexes", json!({}));
+        assert_eq!((listed.category, listed.refused.as_deref()), (Category::Read, None));
+        assert_eq!(listed.tables, ["orders"]);
+        let create = info(
+            "mongo.createIndex",
+            json!({ "keys": { "status": 1, "createdAt": -1 }, "unique": true, "partialFilterExpression": { "status": "paid" } }),
+        );
+        assert_eq!((create.category, create.refused.as_deref()), (Category::Ddl, None));
+        assert_eq!(create.tables, ["orders"]);
+        for name in ["mongo.hideIndex", "mongo.unhideIndex"] {
+            assert_eq!(info(name, json!({ "name": "status_1" })).category, Category::Ddl, "{name}");
+        }
+        let drop = info("mongo.dropIndex", json!({ "name": "status_1" }));
+        assert_eq!((drop.category, drop.refused.as_deref()), (Category::Destructive, None));
+        assert_eq!(drop.tables, ["orders"]);
+        // The _id index (and every index at once) stays.
+        for name in ["mongo.dropIndex", "mongo.hideIndex", "mongo.unhideIndex"] {
+            for index in ["_id_", " _id_ ", "*"] {
+                assert!(info(name, json!({ "name": index })).refused.is_some(), "{name} {index}");
+            }
+        }
+        // Server-side JavaScript in a partial filter, as JSON or text, is refused.
+        for partial in [json!({ "$where": "true" }), json!("{ \"$expr\": { \"$function\": {} } }")] {
+            let refused = info(
+                "mongo.createIndex",
+                json!({ "keys": { "a": 1 }, "partialFilterExpression": partial }),
+            );
+            assert!(
+                refused.refused.as_deref().is_some_and(|why| why.contains("JavaScript")),
+                "{refused:?}"
+            );
+        }
+        let secret = classify_operation("mongo.indexes", &json!({ "database": "admin", "collection": "system.users" }));
+        assert_eq!(secret.category, Category::Admin);
+        let secret = classify_operation(
+            "mongo.createIndex",
+            &json!({ "database": "admin", "collection": "system.users", "keys": { "user": 1 } }),
+        );
+        assert_eq!(secret.category, Category::Admin);
     }
 
     #[test]

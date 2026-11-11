@@ -23,6 +23,7 @@
 //! - `mongo.updatePreview`, `mongo.updateMany`, `mongo.deleteMany`: see `bulk.rs`.
 //! - `mongo.aggregatePreview`, `mongo.aggregate`: see `aggregate.rs`.
 //! - `mongo.schema`: see `schema.rs`.
+//! - `mongo.indexes`, `mongo.createIndex`, `mongo.hideIndex`, `mongo.unhideIndex`, `mongo.dropIndex`: see `indexes.rs`.
 
 use std::time::{Duration, Instant};
 
@@ -35,7 +36,7 @@ use mongodb::{
 use serde_json::{json, Value as Json};
 
 use super::{
-    aggregate, bulk, schema,
+    aggregate, bulk, indexes, schema,
     values::{self, ID_FIELD},
 };
 use crate::{
@@ -45,7 +46,7 @@ use crate::{
 };
 
 /// The `invoke` names of this module.
-pub const OPERATIONS: [&str; 10] = [
+pub const OPERATIONS: [&str; 15] = [
     "mongo.find",
     "mongo.count",
     "mongo.distinct",
@@ -56,9 +57,25 @@ pub const OPERATIONS: [&str; 10] = [
     "mongo.aggregatePreview",
     "mongo.aggregate",
     "mongo.schema",
+    "mongo.indexes",
+    "mongo.createIndex",
+    "mongo.hideIndex",
+    "mongo.unhideIndex",
+    "mongo.dropIndex",
 ];
 /// The arguments that hold query documents (checked for server-side JavaScript).
-pub const DOCUMENT_ARGS: [&str; 6] = ["filter", "projection", "sort", "collation", "hint", "update"];
+pub const DOCUMENT_ARGS: [&str; 10] = [
+    "filter",
+    "projection",
+    "sort",
+    "collation",
+    "hint",
+    "update",
+    "keys",
+    "partialFilterExpression",
+    "wildcardProjection",
+    "weights",
+];
 
 /// Documents per `mongo.find` page when no limit is given, and the most a page returns.
 const DEFAULT_FIND_LIMIT: u64 = 50;
@@ -92,6 +109,11 @@ pub async fn invoke(client: &Client, name: &str, args: &Json, ctx: &CallContext)
         "mongo.aggregatePreview" => aggregate::aggregate_preview(&coll, args, max_time).await,
         "mongo.aggregate" => aggregate::aggregate(&coll, args, max_time).await,
         "mongo.schema" => schema::schema(&coll, args, max_time).await,
+        "mongo.indexes" => indexes::indexes(client, &coll, max_time).await,
+        "mongo.createIndex" => indexes::create_index(client, &coll, args).await,
+        "mongo.hideIndex" => indexes::set_hidden(client, &coll, args, true).await,
+        "mongo.unhideIndex" => indexes::set_hidden(client, &coll, args, false).await,
+        "mongo.dropIndex" => indexes::drop_index(client, &coll, args).await,
         _ => bulk::delete_many(&coll, args).await,
     }
 }

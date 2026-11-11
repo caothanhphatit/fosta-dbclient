@@ -1411,3 +1411,178 @@ async fn contract_mongo_schema() {
     }
     manager.disconnect(CONNECTION).await;
 }
+
+/// The Indexes section's operations: the listing with options, sizes and usage; creating (compound with a partial filter
+/// and a collation, TTL, text, wildcard, hidden), hiding and unhiding, dropping with a confirmation; `_id_` and
+/// server-side JavaScript refused, Read-only blocking DDL.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/mongo.yml"]
+async fn contract_mongo_indexes() {
+    let f = fixture();
+    let (manager, handle) = connect(&f).await;
+    let tab = session(&handle).await;
+    run(&handle, &tab, r#"{ "drop": "contract_indexes" }"#, "fosta_contract").await.ok();
+    let documents: Vec<serde_json::Value> = (0..30)
+        .map(|i| {
+            json!({
+                "_id": i,
+                "status": if i % 3 == 0 { "paid" } else { "open" },
+                "createdAt": { "$date": format!("2026-01-{:02}T00:00:00Z", i % 28 + 1) },
+                "title": format!("order number {i}"),
+                "meta": { "k": i },
+            })
+        })
+        .collect();
+    let insert = json!({ "insert": "contract_indexes", "documents": documents }).to_string();
+    run(&handle, &tab, &insert, "fosta_contract").await.unwrap();
+    let context = |preset: Preset| Context {
+        workspace_id: "contract".into(),
+        workspace_name: "Contract".into(),
+        connection_id: CONNECTION.into(),
+        connection_name: CONNECTION.into(),
+        safety: SafetySettings::preset(preset),
+    };
+    let invoke = |name: &'static str, extra: serde_json::Value, preset: Preset, confirmation: Option<gateway::Confirmation>| {
+        let mut args = json!({ "database": "fosta_contract", "collection": "contract_indexes" });
+        args.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        let (manager, context) = (&manager, context(preset));
+        async move { gateway::invoke(manager, &context, gateway::Caller::EngineView, name, args, confirmation.as_ref()).await }
+    };
+    let list = || {
+        let invoke = &invoke;
+        async move { invoke("mongo.indexes", json!({}), Preset::ReadOnly, None).await.unwrap() }
+    };
+    let index = |listed: &serde_json::Value, name: &str| -> serde_json::Value {
+        listed["indexes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|index| index["name"] == name)
+            .cloned()
+            .unwrap_or_else(|| panic!("{name}: {listed}"))
+    };
+
+    // Only _id_ at first, with a size and usage.
+    let listed = list().await;
+    assert_eq!(listed["indexes"].as_array().unwrap().len(), 1, "{listed}");
+    let id = index(&listed, "_id_");
+    assert_eq!(id["keys"], json!([{ "field": "_id", "kind": 1 }]));
+    assert!(id["size"].as_i64().is_some_and(|size| size > 0), "{listed}");
+    assert!(id["usage"]["ops"].as_i64().is_some(), "{listed}");
+    assert_eq!(listed["stats"]["sizes"], true);
+    assert_eq!(listed["stats"]["usage"], true);
+
+    // Read-only blocks DDL; Open builds without asking.
+    let compound = json!({
+        "keys": { "status": 1, "createdAt": -1 },
+        "unique": false,
+        "partialFilterExpression": "{ \"status\": { \"$eq\": \"paid\" } }",
+        "collation": { "locale": "en", "strength": 2 },
+    });
+    assert_eq!(
+        invoke("mongo.createIndex", compound.clone(), Preset::ReadOnly, None)
+            .await
+            .unwrap_err()
+            .code(),
+        Some(gateway::BLOCKED)
+    );
+    let created = invoke("mongo.createIndex", compound.clone(), Preset::Open, None).await.unwrap();
+    assert_eq!(created["name"], "status_1_createdAt_-1");
+    assert_eq!(created["created"], true);
+    assert!(created["statement"]
+        .as_str()
+        .unwrap()
+        .starts_with(r#"db.getCollection("contract_indexes").createIndex({"status":1,"createdAt":-1}, {"name":"status_1_createdAt_-1""#));
+    let again = invoke("mongo.createIndex", compound, Preset::Open, None).await.unwrap();
+    assert_eq!(again["created"], false);
+    for extra in [
+        json!({ "keys": { "createdAt": 1 }, "name": "ttl_created", "expireAfterSeconds": 86_400 }),
+        json!({ "keys": { "title": "text" }, "weights": { "title": 5 }, "defaultLanguage": "english" }),
+        json!({ "keys": { "meta.$**": 1 } }),
+        json!({ "keys": { "title": 1 }, "name": "title_hidden", "hidden": true, "sparse": true }),
+    ] {
+        invoke("mongo.createIndex", extra.clone(), Preset::Open, None)
+            .await
+            .unwrap_or_else(|error| panic!("{extra}: {error}"));
+    }
+    let listed = list().await;
+    assert_eq!(listed["indexes"].as_array().unwrap().len(), 6, "{listed}");
+    let compound = index(&listed, "status_1_createdAt_-1");
+    assert_eq!(
+        compound["keys"],
+        json!([{ "field": "status", "kind": 1 }, { "field": "createdAt", "kind": -1 }])
+    );
+    assert_eq!(
+        compound["options"]["partialFilterExpression"],
+        json!({ "status": { "$eq": "paid" } })
+    );
+    assert_eq!(compound["options"]["collation"]["locale"], "en");
+    assert_eq!(index(&listed, "ttl_created")["options"]["expireAfterSeconds"], 86_400);
+    let text = index(&listed, "title_text");
+    assert!(text["keys"].as_array().unwrap().iter().any(|key| key["kind"] == "text"), "{text}");
+    assert_eq!(text["options"]["weights"], json!({ "title": 5 }));
+    assert_eq!(text["options"]["default_language"], "english");
+    assert_eq!(index(&listed, "meta.$**_1")["keys"], json!([{ "field": "meta.$**", "kind": 1 }]));
+    let hidden = index(&listed, "title_hidden");
+    assert_eq!(hidden["options"]["hidden"], true);
+    assert_eq!(hidden["options"]["sparse"], true);
+    assert!(listed["totalSize"].as_i64().is_some_and(|total| total > 0));
+
+    // Unhide, hide; the _id index stays.
+    let shown = invoke("mongo.unhideIndex", json!({ "name": "title_hidden" }), Preset::Open, None)
+        .await
+        .unwrap();
+    assert_eq!(shown["hidden"], false);
+    assert_eq!(shown["changed"], true);
+    assert_eq!(index(&list().await, "title_hidden")["options"]["hidden"], serde_json::Value::Null);
+    let hid = invoke("mongo.hideIndex", json!({ "name": "title_hidden" }), Preset::Open, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        hid["statement"],
+        r#"db.getCollection("contract_indexes").hideIndex("title_hidden")"#
+    );
+    assert_eq!(index(&list().await, "title_hidden")["options"]["hidden"], true);
+    for name in ["mongo.dropIndex", "mongo.hideIndex"] {
+        assert!(invoke(name, json!({ "name": "_id_" }), Preset::Open, None).await.is_err(), "{name}");
+    }
+
+    // Server-side JavaScript in a partial filter and bad keys are refused.
+    let refused = invoke(
+        "mongo.createIndex",
+        json!({ "keys": { "a": 1 }, "partialFilterExpression": { "$where": "true" } }),
+        Preset::Open,
+        None,
+    )
+    .await;
+    assert!(refused.is_err());
+    assert!(invoke("mongo.createIndex", json!({ "keys": { "a": 5 } }), Preset::Open, None)
+        .await
+        .is_err());
+
+    // Dropping asks (typed in Guarded: the collection name).
+    let ask = invoke("mongo.dropIndex", json!({ "name": "ttl_created" }), Preset::Guarded, None)
+        .await
+        .unwrap_err();
+    assert_eq!(ask.code(), Some(gateway::CONFIRMATION_REQUIRED), "{ask}");
+    let payload = ask.payload().unwrap();
+    assert_eq!(payload["level"], "typed");
+    let token = payload["token"].as_str().unwrap().to_owned();
+    let typed = payload["expected"].as_str().map(str::to_owned);
+    let dropped = invoke(
+        "mongo.dropIndex",
+        json!({ "name": "ttl_created" }),
+        Preset::Guarded,
+        Some(gateway::Confirmation { token, typed }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        dropped["statement"],
+        r#"db.getCollection("contract_indexes").dropIndex("ttl_created")"#
+    );
+    assert_eq!(list().await["indexes"].as_array().unwrap().len(), 5);
+
+    run(&handle, &tab, r#"{ "drop": "contract_indexes" }"#, "fosta_contract").await.ok();
+    manager.disconnect(CONNECTION).await;
+}
