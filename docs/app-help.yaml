@@ -312,6 +312,14 @@
     Settings → "Allow the assistant to run read-only queries (rows go to your AI provider)" (on by default) lets the assistant run one read-only statement at a time: at most 50 rows, 10 seconds, cancelled by Stop, shown in the chat and audited. Writes, DDL and admin statements are refused and handed back as code blocks.
     Per workspace: "Edit workspace…" → "Assistant queries". Read-only and Production workspaces stay off unless you choose "Allow read-only queries". On MongoDB the same setting covers sample_documents (up to 20 documents). Without it the model sees names and types only.
 
+- id: learn-database
+  group: Assistant and MCP
+  title: Learn this database (what the assistant knows)
+  keywords: [learn, learn this database, profile, schema knowledge, what the assistant knows, summary, notes, glossary, stale, schema changed, refresh]
+  body: |
+    The book button in the assistant panel ("Learn this database"), the "Learn this database" chip of a new chat, or right-click a database or connection in the tree → "Learn this database…". The dialog reads the structure (tables, columns, keys, indexes, relations) and, when the assistant may read data and "Sample column values (enum lists and formats)" is ticked, a few values per column. Nothing is sent to the model while learning; then "Summarise" (after the estimated tokens, with a model picker) or "Skip (structure only)".
+    "What the assistant knows" (the "Knows N objects" chip under the panel header, or the tree menu) shows the summary, your notes ("Add note", for the whole database or one object), and each object with its description ("Edit"; yours are marked "edited by you"). "Refresh", "Refresh changed only" and "Delete" are in its toolbar; "Schema changed — refresh" appears when tables or columns changed. Turn it off under Settings → "Assistant may learn databases" or Edit workspace → "Assistant may learn databases".
+
 - id: mcp-server
   group: Assistant and MCP
   title: MCP server for Claude Code, Cursor, VS Code, Zed

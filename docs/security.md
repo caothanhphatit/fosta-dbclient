@@ -118,6 +118,32 @@ _Find_). Both collection tools are pinned to the chat's connection and database,
 (`{ db, coll }` in `$lookup`, `$unionWith` or `$merge`). A `mongo-pipeline` block in the chat that writes or names another
 database is flagged under the block, and its buttons ask before applying it.
 
+### Learn this database
+
+"Learn this database" reads the structure of one database through the open connection: object names and kinds, columns
+and types, keys, indexes, foreign keys, comments and the engine's row estimates (never a count of rows). System and
+credential objects (`mysql.user`, `pg_authid`, `sys.*`, Elasticsearch `.security*` and the like) are left out. Row or
+document values are read only when the assistant may read data on that connection (the setting above, per workspace) and
+"Sample column values" is ticked in the dialog: then a few distinct values per short column are read as the assistant,
+through the same read-only gateway check, and audited. Columns whose names look like credentials or personal data
+(`password`, `secret`, `token`, `api_key`, `salt`, `hash`, `ssn`, `card`, `cvv`, `iban`…) are never sampled and lose
+their comments and defaults, and secret-looking text (API keys, tokens, PEM blocks) is replaced by `[redacted]` throughout
+the profile.
+
+Learning sends nothing to a model. The summary step does, and only when you choose "Summarise" after seeing the estimate:
+it sends the structure and your notes to the active LLM provider (with the model you pick), plus the value hints only when
+the profile has them and reads are still allowed. What comes back is treated as untrusted text: fences and tags are
+stripped, descriptions are cut to 200 characters, and your own descriptions are never replaced. In chats the profile is
+passed to the model as untrusted data like the rest of the database context, without value hints where reads are off.
+Builds, refreshes, summaries (provider, model, objects, tokens, whether data was sent) and deletions are written to the
+audit log. Settings → "Assistant may learn databases" and Edit workspace → "Assistant may learn databases" turn learning and
+summaries off; what was learned before stays until you delete it.
+
+Profiles are stored in `fosta-studio-profiles/` next to the other files, one `<sha256 of connection and database>.json` per
+database (at most 4 MB), with the same permissions as the files above (owner-only, mode `0600`, on Linux). A file that does
+not parse is moved aside as `.json.corrupt`. They hold structure, your notes and descriptions and, if sampled, short value
+lists; they are not encrypted. Deleting a connection deletes its profiles; "What the assistant knows" → Delete removes one.
+
 ## MCP clients
 
 The MCP server ([mcp.md](mcp.md)) lets AI clients such as Claude Code, Claude Desktop or Cursor use saved connections. It is off

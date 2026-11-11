@@ -95,6 +95,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   fail strict rules (with a one-click switch to moderate), and goes through the safety gateway as DDL (`collMod`);
   Discard goes back to the applied rules and Remove rules empties the validator. Server-side JavaScript is refused in
   validators. An unapplied draft is kept with the open tabs, and the assistant sees the rules.
+- "Learn this database": the assistant studies a database once and keeps what it learned, so every chat knows it
+  without looking it up again. Start it from the book button in the assistant panel, the "Learn this database" chip of
+  a new chat, or a database or connection in the tree. Learning reads the structure (tables, views, collections,
+  columns, keys, indexes, foreign keys and relations inferred from column names; MongoDB field paths and references)
+  and, where the assistant may read data and the "Sample column values" box is ticked, a few distinct values per column
+  (enum lists and formats); the dialog lists the steps with counts and can be cancelled. Nothing goes to the model while
+  learning; afterwards the dialog shows what a summary would send (objects, requests, estimated tokens, model and
+  provider, with a model picker) and lets you "Summarise" or "Skip (structure only)". The "What the assistant knows" tab
+  shows the summary, your notes (for the database or one object), and every object with its signature, a description
+  you can edit (marked "edited by you", never replaced by the model), columns with value hints and relations; Refresh,
+  "Refresh changed only" and Delete. When tables or columns change the panel says "Schema changed — refresh". Settings →
+  "Assistant may learn databases" (on by default) and Edit workspace → "Assistant may learn databases" turn it off.
+- The assistant knows Fosta Studio itself: for questions about the app it searches the app's own help (how-to entries
+  and the user docs, built into the app, no network) and quotes the UI labels in English, and it can offer a button for
+  one of the app's actions (the MCP server settings, the LLM providers, a new connection, copy diagnostics…). The button
+  shows the help entry's title, is marked as a Fosta Studio action, and runs only when you click it.
 
 ### Changed
 
