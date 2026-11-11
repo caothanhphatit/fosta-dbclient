@@ -9,7 +9,7 @@
 use serde_json::{json, Value};
 
 use super::{
-    catalog,
+    catalog, collections,
     prompt::{truncate, untrusted_block},
     ChatContext, ChatEvent, ChatSink, ToolCall, UiAction, Wire,
 };
@@ -22,9 +22,9 @@ use crate::{
 const MAX_DDL_CHARS: usize = 8000;
 const MAX_OVERVIEW_CHARS: usize = 24_000;
 /// A cell of a query result is cut here before the model (and the chat) sees it.
-const MAX_CELL_CHARS: usize = 200;
+pub(super) const MAX_CELL_CHARS: usize = 200;
 /// The whole query result sent to the model.
-const MAX_RESULT_CHARS: usize = 16_000;
+pub(super) const MAX_RESULT_CHARS: usize = 16_000;
 pub(super) const READ_QUERY: &str = "run_read_query";
 
 pub(super) struct ToolSpec {
@@ -33,8 +33,9 @@ pub(super) struct ToolSpec {
     pub(super) schema: Value,
 }
 
-/// The tools offered to the model; `read_queries` adds `run_read_query` (the user allows it for the workspace).
-pub(super) fn tool_definitions(read_queries: bool) -> Vec<ToolSpec> {
+/// The tools offered to the model; `read_queries` adds `run_read_query` (the user allows it for the workspace), and
+/// `collections` (a document engine) the collection tools (`super::collections`; `sample_documents` only with reads).
+pub(super) fn tool_definitions(read_queries: bool, collections: bool) -> Vec<ToolSpec> {
     let database = json!({ "type": "string", "description": "Database name; defaults to the current one." });
     let mut tools = vec![
         ToolSpec {
@@ -118,6 +119,9 @@ pub(super) fn tool_definitions(read_queries: bool) -> Vec<ToolSpec> {
             }),
         });
     }
+    if collections {
+        tools.extend(super::collections::definitions(read_queries));
+    }
     tools
 }
 
@@ -133,6 +137,7 @@ pub(super) fn describe_call(call: &ToolCall, context: &ChatContext) -> String {
         "open_table" => format!("Opened {}", argument("table").unwrap_or_default()),
         "open_query" => String::from("Opened a query tab"),
         READ_QUERY => String::from("Running a read-only query"),
+        name @ (collections::OPEN_WORKSPACE | collections::SAMPLE_DOCUMENTS) => collections::describe(name, &call.input),
         other => format!("Called {other}"),
     }
 }
@@ -167,6 +172,16 @@ pub(super) async fn run_tool(
     // The catalog tools: an engine without databases (Elasticsearch) needs none.
     let catalog_database = || argument("database").or_else(|| context.database.clone()).unwrap_or_default();
     let outcome = match call.name.as_str() {
+        name @ (collections::OPEN_WORKSPACE | collections::SAMPLE_DOCUMENTS) => {
+            if !collections::has_collections(db, context) {
+                return Err(format!("{name} works on connections with collections (MongoDB) only."));
+            }
+            return if name == collections::OPEN_WORKSPACE {
+                collections::open_workspace(context, &call.input, events)
+            } else {
+                collections::sample(db, context, reads, &call.input, events).await
+            };
+        }
         READ_QUERY => {
             let reads = reads
                 .ok_or("Running queries is turned off for this workspace. Put the query in a fenced code block so the user can run it.")?;
@@ -575,7 +590,7 @@ mod tests {
             ("open_table", json!({ "table": "items", "filter": "name = 'x'" })),
             ("open_query", json!({ "sql": "DELETE FROM items" })),
         ];
-        let defined: Vec<&str> = tool_definitions(false).iter().map(|tool| tool.name).collect();
+        let defined: Vec<&str> = tool_definitions(false, false).iter().map(|tool| tool.name).collect();
         assert_eq!(defined.len(), inputs.len(), "every tool is exercised here");
         let mut outputs = Vec::new();
         for (name, input) in inputs {
@@ -648,10 +663,51 @@ mod tests {
 
     #[test]
     fn the_query_tool_is_only_offered_when_allowed() {
-        let names = |allowed: bool| -> Vec<&'static str> { tool_definitions(allowed).iter().map(|tool| tool.name).collect() };
+        let names = |allowed: bool| -> Vec<&'static str> { tool_definitions(allowed, false).iter().map(|tool| tool.name).collect() };
         assert!(!names(false).contains(&READ_QUERY));
         assert!(names(true).contains(&READ_QUERY));
         assert_eq!(names(true).len(), names(false).len() + 1);
+    }
+
+    #[test]
+    fn every_offered_tool_is_registered_with_the_gateway() {
+        use gateway::AssistantToolEffect::{OpenView, ReadMetadata, ReadRows};
+        for (reads, collections) in [(false, false), (true, false), (false, true), (true, true)] {
+            for tool in tool_definitions(reads, collections) {
+                let effect = gateway::assistant_tool_effect(tool.name).unwrap_or_else(|error| panic!("{}: {error}", tool.name));
+                // Row data only where the user allows reads.
+                assert!(reads || effect != ReadRows, "{}", tool.name);
+                assert!(matches!(effect, ReadMetadata | ReadRows | OpenView));
+            }
+        }
+        let names = |reads: bool, collections: bool| -> Vec<&'static str> {
+            tool_definitions(reads, collections).iter().map(|tool| tool.name).collect()
+        };
+        assert!(!names(true, false).contains(&collections::OPEN_WORKSPACE));
+        assert!(names(false, true).contains(&collections::OPEN_WORKSPACE));
+        assert!(!names(false, true).contains(&collections::SAMPLE_DOCUMENTS));
+        assert!(names(true, true).contains(&collections::SAMPLE_DOCUMENTS));
+        assert_eq!(
+            gateway::assistant_tool_effect(collections::OPEN_WORKSPACE).unwrap(),
+            OpenView,
+            "it cannot write"
+        );
+        assert_eq!(gateway::assistant_tool_effect(collections::SAMPLE_DOCUMENTS).unwrap(), ReadRows);
+    }
+
+    #[tokio::test]
+    async fn the_collection_tools_need_a_document_engine() {
+        let db = ConnectionManager::default();
+        let engine = FakeEngine::leak();
+        db.insert("c", engine, engine.connection());
+        let context: ChatContext = serde_json::from_value(json!({ "connectionId": "c", "database": "shop" })).unwrap();
+        let events = |_: ChatEvent| {};
+        let open = call(
+            collections::OPEN_WORKSPACE,
+            json!({ "collection": "items", "section": "documents" }),
+        );
+        let error = run_tool(&db, &context, None, &open, &events).await.unwrap_err();
+        assert!(error.contains("MongoDB"), "{error}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

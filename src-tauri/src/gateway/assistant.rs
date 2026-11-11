@@ -326,6 +326,51 @@ pub async fn read(mgr: &ConnectionManager, context: &Context, text: &str, databa
     outcome
 }
 
+/// Runs one engine operation for the assistant (`sample_documents`: `mongo.find`, `mongo.aggregatePreview`): the engine
+/// classifies it by name and arguments, and it is authorized as [`Caller::Assistant`] like [`read`] (Read only, never a
+/// confirmation; unknown operations are refused whatever the rules). It runs read-only within [`TIMEOUT`], and the run is
+/// audited; refusals are audited by the check.
+pub async fn invoke_read(mgr: &ConnectionManager, context: &Context, name: &str, args: serde_json::Value) -> AppResult<serde_json::Value> {
+    let handle = mgr.handle(&context.connection_id)?;
+    let classification = handle.engine.classify(&ClassifyInput::Capability { name, args: &args });
+    let binding = format!("{name}\u{0}{}", serde_json::to_string(&args)?);
+    let request = Request {
+        caller: Caller::Assistant,
+        context,
+        engine: handle.engine.id(),
+        scope: &context.connection_id,
+        text: &binding,
+        classification: &classification,
+        confirmation: None,
+        reusable: false,
+        client: None,
+    };
+    mgr.gateway.authorize(&request)?;
+    let mut limits = context.limits();
+    limits.read_only = true;
+    let (operation, ctx) = (name.to_owned(), CallContext::new(limits));
+    let started = Instant::now();
+    let outcome = tokio::time::timeout(
+        TIMEOUT,
+        handle.call("ran an operation for the assistant", |conn| async move {
+            conn.invoke(&operation, args, &ctx).await
+        }),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        Err(AppError::new(format!(
+            "The read did not finish within {} seconds. Narrow it down (a filter, fewer stages).",
+            TIMEOUT.as_secs()
+        )))
+    });
+    let detail = match &outcome {
+        Ok(_) => format!("ran in {} ms", started.elapsed().as_millis()),
+        Err(error) => format!("failed: {error}"),
+    };
+    mgr.gateway.audit(audit_entry(&request, Outcome::Ran, &detail));
+    outcome
+}
+
 /// Whether `error` is the gateway refusing the statement (the model should hand it to the user).
 pub fn is_refusal(error: &AppError) -> bool {
     error.code() == Some(BLOCKED)

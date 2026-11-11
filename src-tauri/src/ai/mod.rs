@@ -13,6 +13,7 @@
 
 mod anthropic;
 pub(crate) mod catalog;
+mod collections;
 mod http;
 mod openai;
 mod prompt;
@@ -297,6 +298,18 @@ pub enum UiAction {
     },
     #[serde(rename_all = "camelCase")]
     OpenQuery { database: Option<String>, sql: String },
+    /// A collection's workspace on `section` ("documents" or "aggregations"). The filter, sort and projection (or the
+    /// pipeline stages) are only pre-filled, marked as suggested by the assistant: nothing runs until the user does.
+    #[serde(rename_all = "camelCase")]
+    OpenCollectionWorkspace {
+        database: String,
+        collection: String,
+        section: String,
+        suggested_filter: Option<String>,
+        suggested_sort: Option<String>,
+        suggested_project: Option<String>,
+        suggested_pipeline: Option<Vec<String>>,
+    },
 }
 
 /// In-flight requests, so the UI can stop one.
@@ -432,7 +445,7 @@ async fn run(
     let reads = reads.filter(|reads| context.connection_id.as_deref() == Some(reads.connection_id.as_str()));
     let system = system_prompt(db, &context, reads.is_some()).await;
     let tools = if context.connection_id.is_some() {
-        tool_definitions(reads.is_some())
+        tool_definitions(reads.is_some(), collections::has_collections(db, &context))
     } else {
         Vec::new()
     };

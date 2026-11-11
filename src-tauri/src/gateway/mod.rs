@@ -821,8 +821,8 @@ pub enum AssistantToolEffect {
 pub fn assistant_tool_effect(name: &str) -> AppResult<AssistantToolEffect> {
     match name {
         "list_databases" | "list_tables" | "describe_table" | "schema_overview" => Ok(AssistantToolEffect::ReadMetadata),
-        "run_read_query" => Ok(AssistantToolEffect::ReadRows),
-        "open_diagram" | "open_table" | "open_query" => Ok(AssistantToolEffect::OpenView),
+        "run_read_query" | "sample_documents" => Ok(AssistantToolEffect::ReadRows),
+        "open_diagram" | "open_table" | "open_query" | "open_collection_workspace" => Ok(AssistantToolEffect::OpenView),
         other => Err(AppError::new(format!("The assistant has no tool called {other}"))),
     }
 }
@@ -1061,8 +1061,17 @@ mod tests {
             "open_diagram",
             "open_table",
             "open_query",
+            "open_collection_workspace",
         ] {
             assert!(assistant_tool_effect(name).is_ok(), "{name}");
+        }
+        assert_eq!(
+            assistant_tool_effect("open_collection_workspace").unwrap(),
+            AssistantToolEffect::OpenView
+        );
+        // Sampled documents are row data: only where the user lets the assistant read it.
+        for name in ["run_read_query", "sample_documents"] {
+            assert_eq!(assistant_tool_effect(name).unwrap(), AssistantToolEffect::ReadRows, "{name}");
         }
         assert!(assistant_tool_effect("run_sql").is_err());
         assert!(assistant_tool_effect("apply_changes").is_err());
