@@ -1,0 +1,343 @@
+/* MongoDB collection workspace: query bar and documents. Colours and spacing come from the shared tokens. */
+
+.mq-documents {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+/* --- Query bar ---------------------------------------------------------------------------------------------------- */
+
+.mq-bar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.mq-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.mq-row[hidden] {
+  display: none;
+}
+
+.mq-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mq-grow {
+  flex: 1 1 260px;
+}
+
+.mq-label {
+  flex: none;
+  min-width: 52px;
+  padding-top: 6px;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mq-editor {
+  flex: 1;
+  min-width: 0;
+}
+
+.mq-row > .tool-button,
+.mq-row > .btn {
+  flex: none;
+  height: 30px;
+}
+
+.mq-history {
+  padding: 0 7px;
+}
+
+.mq-number {
+  width: 84px;
+  height: 30px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mq-collation-toggle {
+  align-self: center;
+}
+
+.mq-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.mq-error[hidden] {
+  display: none;
+}
+
+.mq-error-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--danger);
+}
+
+.mq-error-where {
+  flex: none;
+  font-weight: 600;
+}
+
+/* --- Results ------------------------------------------------------------------------------------------------------ */
+
+.mq-results-bar {
+  min-height: 36px;
+}
+
+.mq-modes {
+  flex: none;
+}
+
+.mq-modes .segment {
+  min-width: 56px;
+  height: 24px;
+  padding: 0 10px;
+}
+
+.mq-timing {
+  padding: 0 6px;
+  color: var(--fg-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.mq-body {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mq-results {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mq-documents.busy .mq-results {
+  opacity: 0.6;
+}
+
+.mq-message {
+  padding: 16px;
+}
+
+.mq-message[hidden] {
+  display: none;
+}
+
+.mq-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 32px auto;
+  color: var(--fg-3);
+  text-align: center;
+}
+
+.mq-empty-icon {
+  width: 22px;
+  height: 22px;
+}
+
+/* --- List mode: one card per document ---------------------------------------------------------------------------- */
+
+.md-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px 24px;
+}
+
+.md-card {
+  position: relative;
+  margin-bottom: 8px;
+  padding: 8px 12px 8px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.md-card:hover {
+  border-color: var(--border-strong);
+}
+
+.md-card-tools {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-ui);
+}
+
+.md-index {
+  color: var(--fg-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.md-card-tools .icon-button {
+  opacity: 0;
+}
+
+.md-card:hover .md-card-tools .icon-button,
+.md-card-tools .icon-button:focus-visible {
+  opacity: 1;
+}
+
+.md-field {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 48px;
+}
+
+.md-toggle,
+.md-toggle-space {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.md-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+
+.md-toggle:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.md-toggle .icon {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.12s ease;
+}
+
+.md-toggle[aria-expanded="true"] .icon {
+  transform: rotate(90deg);
+}
+
+.md-key {
+  flex: none;
+  color: var(--syn-type);
+  font-weight: 600;
+}
+
+.md-index-key {
+  color: var(--fg-3);
+  font-weight: 400;
+}
+
+.md-clickable {
+  cursor: pointer;
+}
+
+.md-colon {
+  margin-left: -3px;
+  flex: none;
+  color: var(--fg-3);
+}
+
+.md-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.md-string {
+  color: var(--syn-string);
+}
+
+.md-number,
+.md-boolean {
+  color: var(--syn-number);
+}
+
+.md-null {
+  color: var(--null);
+  font-style: italic;
+}
+
+.md-objectId,
+.md-date,
+.md-binary,
+.md-regex,
+.md-special {
+  color: var(--syn-keyword);
+}
+
+.md-folded {
+  color: var(--fg-3);
+}
+
+.md-children {
+  margin-left: 7px;
+  padding-left: 12px;
+  border-left: 1px solid var(--grid-line);
+}
+
+.md-children[hidden] {
+  display: none;
+}
+
+.md-more {
+  margin: 2px 0 0 20px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+/* --- JSON mode ---------------------------------------------------------------------------------------------------- */
+
+.md-json {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.md-json .cm-editor {
+  height: 100%;
+}

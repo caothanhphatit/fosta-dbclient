@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- A MongoDB collection workspace: double-clicking a collection opens it (the grid stays in the menu as "Open as grid").
+  Its Documents section has a query bar with Filter, Project, Sort, Collation, Skip and Limit in mongosh syntax
+  (`ObjectId("…")`, `ISODate("…")`, unquoted keys, braces optional), errors underlined where they are, and completion
+  of field paths, query operators, BSON constructors and the field's own values. Ctrl+Enter runs; ArrowUp / ArrowDown
+  and the history button recall recent filters of the collection. Documents show as expandable cards or as JSON, paged
+  by `_id` where the sort allows it, with the matching count (estimated without a filter) and the server time. Every
+  read goes through the safety gateway, and the filter, sort and view are kept with the open tabs.
+
 ### Changed
 
 - A first start no longer adds a "Local MariaDB" connection that may not exist. A workspace without connections shows a
