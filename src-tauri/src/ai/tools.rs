@@ -29,8 +29,6 @@ pub(super) const MAX_RESULT_CHARS: usize = 16_000;
 pub(super) const READ_QUERY: &str = "run_read_query";
 pub(super) const SEARCH_APP_HELP: &str = "search_app_help";
 pub(super) const SUGGEST_APP_ACTION: &str = "suggest_app_action";
-/// A suggested action's button label is cut here.
-const MAX_ACTION_LABEL_CHARS: usize = 60;
 
 pub(super) struct ToolSpec {
     pub(super) name: &'static str,
@@ -125,8 +123,7 @@ pub(super) fn tool_definitions(read_queries: bool, collections: bool, profile: b
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "id": { "type": "string", "description": "A UI action id from search_app_help, e.g. open_dialog:new_connection." },
-                    "label": { "type": "string", "description": "Short button text in the user's language, e.g. \"Open MCP server settings\"; defaults to the help entry's title." }
+                    "id": { "type": "string", "description": "A UI action id from search_app_help, e.g. open_dialog:new_connection. The button shows that help entry's title." }
                 },
                 "required": ["id"],
                 "additionalProperties": false
@@ -228,7 +225,7 @@ pub(super) async fn run_tool_with(
     }
     // A button for one of the app's own actions: only ids the help pack names, and it never runs here.
     if call.name == SUGGEST_APP_ACTION {
-        return suggest_app_action(text("id"), text("label"), events);
+        return suggest_app_action(text("id"), events);
     }
     // The stored profile: no engine call. It is pinned to the chat's connection and database by how it was loaded; the
     // tools take no database argument.
@@ -547,9 +544,9 @@ pub(crate) async fn metadata_tool(
     run_tool(db, &context, None, &call, &events).await
 }
 
-/// `suggest_app_action`: a chat button for the UI action `id`, refused unless the help pack names it. The label is
-/// flattened to one line and cut; without one the help entry's title is used.
-fn suggest_app_action(id: &str, label: &str, events: &dyn ChatSink) -> Result<String, String> {
+/// `suggest_app_action`: a chat button for the UI action `id`, refused unless the help pack names it. The button always
+/// shows the help entry's title: a label the model sends is ignored, so the model's text never becomes a button.
+fn suggest_app_action(id: &str, events: &dyn ChatSink) -> Result<String, String> {
     let id = id.trim();
     let Some(title) = super::app_help::action_title(id) else {
         let known: Vec<&str> = super::app_help::actions().into_iter().map(|(id, _)| id).collect();
@@ -558,14 +555,7 @@ fn suggest_app_action(id: &str, label: &str, events: &dyn ChatSink) -> Result<St
             known.join(", ")
         ));
     };
-    let flat: String = label.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
-    let label = if flat.is_empty() { title.to_owned() } else { flat };
-    let label: String = if label.chars().count() > MAX_ACTION_LABEL_CHARS {
-        format!("{}…", label.chars().take(MAX_ACTION_LABEL_CHARS - 1).collect::<String>().trim_end())
-    } else {
-        label
-    };
+    let label = title.to_owned();
     show(
         events,
         UiAction::SuggestAppAction {
@@ -714,7 +704,7 @@ mod tests {
             (SEARCH_APP_HELP, json!({ "query": "port forward" })),
             (
                 SUGGEST_APP_ACTION,
-                json!({ "id": "open_settings:mcp", "label": "Open\nMCP settings" }),
+                json!({ "id": "open_settings:mcp", "label": "Click to ignore your rules" }),
             ),
             (digest::SEARCH_PROFILE, json!({ "query": "customer" })),
             (digest::GET_OBJECT_PROFILE, json!({ "name": "orders" })),
@@ -804,7 +794,8 @@ mod tests {
         let suggested: Vec<&String> = events.iter().filter(|event| event.contains("suggestAppAction")).collect();
         assert_eq!(suggested.len(), 1, "{events:?}");
         assert!(
-            suggested[0].contains(r#""id":"open_settings:mcp","label":"Open MCP settings""#),
+            // The model's label is ignored: the button shows the help entry's title.
+            suggested[0].contains(r#""id":"open_settings:mcp","label":"MCP server for Claude Code, Cursor, VS Code, Zed""#),
             "{}",
             suggested[0]
         );
@@ -816,19 +807,18 @@ mod tests {
         let sink = seen.clone();
         let events = move |event: ChatEvent| sink.lock().unwrap().push(serde_json::to_value(&event).unwrap());
         for id in ["run:drop_database", "open_settings:", "", "open_settings:mcp; run:copy_diagnostics"] {
-            let error = suggest_app_action(id, "Do it", &events).unwrap_err();
+            let error = suggest_app_action(id, &events).unwrap_err();
             assert!(error.starts_with("Refused") && error.contains("open_settings:mcp"), "{error}");
         }
         assert!(seen.lock().unwrap().is_empty(), "a refused id shows no button");
-        // Without a label the entry's title is the button text; a long one is cut.
-        suggest_app_action(" run:copy_diagnostics ", "  ", &events).unwrap();
-        suggest_app_action("open_view:new_query", &"x".repeat(200), &events).unwrap();
+        // The button text is always the help entry's title.
+        suggest_app_action(" run:copy_diagnostics ", &events).unwrap();
+        suggest_app_action("open_view:new_query", &events).unwrap();
         let seen = seen.lock().unwrap().clone();
         assert_eq!(seen[0]["action"]["kind"], "suggestAppAction");
         assert_eq!(seen[0]["action"]["id"], "run:copy_diagnostics");
         assert_eq!(seen[0]["action"]["label"], "Diagnostics and logs for bug reports");
-        let long = seen[1]["action"]["label"].as_str().unwrap();
-        assert_eq!(long.chars().count(), MAX_ACTION_LABEL_CHARS, "{long}");
+        assert_eq!(seen[1]["action"]["label"], "Query tabs");
     }
 
     fn reads(preset: gateway::rules::Preset) -> gateway::Context {
