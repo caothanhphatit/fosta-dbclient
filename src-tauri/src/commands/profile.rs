@@ -10,16 +10,31 @@ use crate::{
     ai::profile::{self, DatabaseProfile, LearnOutcome, ProfileNote, ProfileStatus, ProfileStore, Progress},
     audit::{AuditEntry, Outcome},
     error::{AppError, AppResult},
+    gateway::{assistant::reads_allowed, Context},
     AppState,
 };
 
 /// The event a build reports its steps with.
 pub const PROGRESS_EVENT: &str = "profile-progress";
 
-/// Builds (or refreshes) the profile of `database` on the open connection `connection_id`. Structure only: no rows are
-/// read and nothing is sent to a model.
-pub async fn profile_learn(state: &AppState, connection_id: String, database: String, run_id: String) -> AppResult<LearnOutcome> {
+/// Builds (or refreshes) the profile of `database` on the open connection `connection_id`. Nothing is sent to a model.
+/// Rows are read only for value hints: when the user lets the assistant read data on this connection
+/// (`gateway::assistant::reads_allowed`) and `sample_values` is not false (it defaults to that setting); those reads go
+/// through the gateway as the assistant and are audited one by one.
+pub async fn profile_learn(
+    state: &AppState,
+    connection_id: String,
+    database: String,
+    run_id: String,
+    sample_values: Option<bool>,
+) -> AppResult<LearnOutcome> {
     let handle = state.engines.handle(&connection_id)?;
+    let sampler = read_context(state, &connection_id)
+        .filter(|_| sample_values.unwrap_or(true))
+        .map(|context| profile::Sampler {
+            manager: &state.engines,
+            context,
+        });
     let events = Arc::clone(&state.events);
     let (run, connection, name) = (run_id.clone(), connection_id.clone(), database.clone());
     let progress = move |progress: Progress| {
@@ -36,7 +51,7 @@ pub async fn profile_learn(state: &AppState, connection_id: String, database: St
             }),
         );
     };
-    let outcome = profile::learn(&state.ai, &state.profiles, &handle, &database, &run_id, &progress).await?;
+    let outcome = profile::learn(&state.ai, &state.profiles, &handle, &database, &run_id, sampler, &progress).await?;
     let diff = &outcome.diff;
     let statement = if outcome.refreshed {
         format!(
@@ -54,9 +69,30 @@ pub async fn profile_learn(state: &AppState, connection_id: String, database: St
         &connection_id,
         handle.engine.id(),
         statement,
-        format!("{} objects", outcome.status.objects),
+        match &outcome.values {
+            Some(values) => format!(
+                "{} objects, {} columns sampled, {} value hints",
+                outcome.status.objects, values.columns, values.hinted
+            ),
+            None => format!("{} objects", outcome.status.objects),
+        },
     );
     Ok(outcome)
+}
+
+/// The assistant's gateway context on `connection_id` when the user lets it read data there.
+fn read_context(state: &AppState, connection_id: &str) -> Option<Context> {
+    state.config.read(|config| {
+        let (workspace, _) = config.connection_scope(connection_id)?;
+        let context = Context::for_connection(config, connection_id).ok()?;
+        reads_allowed(
+            config.assistant_read_queries,
+            workspace.assistant_queries,
+            &context.safety,
+            &workspace.icon,
+        )
+        .then_some(context)
+    })
 }
 
 /// The stored profile, if any.
@@ -181,7 +217,9 @@ mod tests {
         state.engines.insert("c", engine, engine.connection());
         assert!(!profile_status(&state, "c".into(), "shop".into(), None).await.unwrap().exists);
         assert!(profile_get(&state, "c".into(), "shop".into()).await.unwrap().is_none());
-        let learned = profile_learn(&state, "c".into(), "shop".into(), "run".into()).await.unwrap();
+        let learned = profile_learn(&state, "c".into(), "shop".into(), "run".into(), None).await.unwrap();
+        // The connection is not saved in a workspace that lets the assistant read data: no values are sampled.
+        assert!(learned.values.is_none());
         assert!(!learned.refreshed);
         assert_eq!((learned.status.objects, learned.status.stale), (1, Some(false)));
         let events = recorder.0.lock().unwrap().clone();
@@ -205,7 +243,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(described.object("items").unwrap().description.as_ref().unwrap().text, "Things");
-        let again = profile_learn(&state, "c".into(), "shop".into(), "run".into()).await.unwrap();
+        let again = profile_learn(&state, "c".into(), "shop".into(), "run".into(), None).await.unwrap();
         assert!(again.refreshed && again.diff.is_empty());
         let stored = profile_get(&state, "c".into(), "shop".into()).await.unwrap().unwrap();
         assert_eq!(stored.notes.len(), 1);
@@ -213,8 +251,8 @@ mod tests {
         assert!(profile_delete(&state, "c".into(), "shop".into()).await.unwrap());
         assert!(!profile_delete(&state, "c".into(), "shop".into()).await.unwrap());
         // A connection that is not open cannot be learned, and its staleness is unknown.
-        assert!(profile_learn(&state, "gone".into(), "shop".into(), "r".into()).await.is_err());
-        profile_learn(&state, "c".into(), "shop".into(), "run".into()).await.unwrap();
+        assert!(profile_learn(&state, "gone".into(), "shop".into(), "r".into(), None).await.is_err());
+        profile_learn(&state, "c".into(), "shop".into(), "run".into(), None).await.unwrap();
         forget_connection(&state, "c");
         assert!(profile_get(&state, "c".into(), "shop".into()).await.unwrap().is_none());
     }

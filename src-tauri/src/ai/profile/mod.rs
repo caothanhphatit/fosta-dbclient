@@ -9,8 +9,9 @@
 //! - [`redact`]: system and credential objects left out, sensitive columns and secret-looking text redacted
 //! - [`store`]: the files, caps, refresh merge and cleanup
 //!
-//! Later phases fill fields that are already in the model: value hints (P4, under the read gate), the model's summary
-//! and descriptions (P5), engine extras (P6). The structural build reads no rows and sends nothing anywhere.
+//! [`values`] reads value hints, only under the read gate; later phases fill the other fields that are already in the
+//! model: the model's summary and descriptions (P5), engine extras (P6). The structural build reads no rows and sends
+//! nothing anywhere.
 
 pub mod build;
 pub mod fingerprint;
@@ -18,6 +19,7 @@ pub mod infer;
 pub mod model;
 pub mod redact;
 pub mod store;
+pub mod values;
 
 use std::sync::Arc;
 
@@ -28,6 +30,7 @@ pub use self::{
     fingerprint::ObjectDiff,
     model::{DatabaseProfile, ProfileNote},
     store::{ProfileStatus, ProfileStore},
+    values::{strip_value_hints, Sampler, ValuesOutcome},
 };
 use super::AiRuns;
 use crate::{
@@ -47,16 +50,21 @@ pub struct LearnOutcome {
     /// Whether a stored profile was refreshed (false: the first build).
     pub refreshed: bool,
     pub diff: ObjectDiff,
+    /// What value sampling did; none when it was not asked for or not allowed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<ValuesOutcome>,
 }
 
 /// Builds (or refreshes) the profile of `database` on `handle`'s connection and stores it. `run_id` registers the
-/// build with [`AiRuns`], so `ai_cancel(run_id)` stops it; `progress` hears each step.
+/// build with [`AiRuns`], so `ai_cancel(run_id)` stops it; `progress` hears each step. With a `sampler` (the user lets the
+/// assistant read data on this connection and the caller asked for it) the build also reads value hints ([`values`]).
 pub async fn learn(
     runs: &AiRuns,
     store: &Arc<ProfileStore>,
     handle: &Handle,
     database: &str,
     run_id: &str,
+    sampler: Option<Sampler<'_>>,
     progress: build::ProgressFn<'_>,
 ) -> AppResult<LearnOutcome> {
     let connection_id = handle.connection_id.clone();
@@ -65,7 +73,14 @@ pub async fn learn(
     // `ai_cancel` fires the run's token; the build watches the contract's token, and stops its engine call within the
     // call's grace period.
     let token = CancellationToken::new();
-    let building = build::build(handle, &connection_id, database, &token, progress);
+    let building = async {
+        let mut profile = build::build(handle, &connection_id, database, &token, progress).await?;
+        let values = match &sampler {
+            Some(sampler) => Some(values::sample(sampler, handle, &mut profile, &token, progress).await?),
+            None => None,
+        };
+        Ok::<_, AppError>((profile, values))
+    };
     tokio::pin!(building);
     let built = tokio::select! {
         outcome = &mut building => outcome,
@@ -75,7 +90,7 @@ pub async fn learn(
         }
     };
     runs.finish(run_id);
-    let fresh = built.map_err(|error| if token.is_cancelled() { cancelled() } else { error })?;
+    let (fresh, values) = built.map_err(|error| if token.is_cancelled() { cancelled() } else { error })?;
     progress(Progress::new(Step::Saving, 0, 1));
     let writer = Arc::clone(store);
     let (profile, diff, refreshed) = tokio::task::spawn_blocking(move || {
@@ -88,7 +103,12 @@ pub async fn learn(
     let mut status = status_of(&profile);
     status.stale = Some(false);
     status.checked_at = Some(store.remember_stale(&profile.connection_id, &profile.database, false));
-    Ok(LearnOutcome { status, refreshed, diff })
+    Ok(LearnOutcome {
+        status,
+        refreshed,
+        diff,
+        values,
+    })
 }
 
 fn status_of(profile: &DatabaseProfile) -> ProfileStatus {

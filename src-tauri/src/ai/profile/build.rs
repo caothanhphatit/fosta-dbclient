@@ -48,6 +48,8 @@ pub enum Step {
     Listing,
     Describing,
     Relations,
+    /// Reading value hints (only where the assistant may read data and the caller asked for them).
+    Values,
     Saving,
 }
 

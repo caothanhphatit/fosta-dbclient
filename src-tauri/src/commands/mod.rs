@@ -173,7 +173,7 @@ macro_rules! for_each_command {
             [sync] set_assistant_read_queries(enabled: bool)
                 -> $crate::error::AppResult<$crate::config::AppConfig> = $crate::commands::ai::set_assistant_read_queries;
 
-            [async] profile_learn(connection_id: String, database: String, run_id: String)
+            [async] profile_learn(connection_id: String, database: String, run_id: String, sample_values: Option<bool>)
                 -> $crate::error::AppResult<$crate::ai::profile::LearnOutcome> = $crate::commands::profile::profile_learn;
             [async] profile_get(connection_id: String, database: String)
                 -> $crate::error::AppResult<Option<$crate::ai::profile::DatabaseProfile>> = $crate::commands::profile::profile_get;

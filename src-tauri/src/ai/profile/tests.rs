@@ -414,12 +414,12 @@ async fn a_cancelled_build_stops_and_stores_nothing() {
             runs.cancel("run-1");
         }
     };
-    let error = learn(&runs, &store, &handle, "shop", "run-1", &stop).await.unwrap_err();
+    let error = learn(&runs, &store, &handle, "shop", "run-1", None, &stop).await.unwrap_err();
     assert_eq!(error.code(), Some(CANCELLED), "{error}");
     assert!(catalog.described.lock().unwrap().len() <= 2);
     assert!(store.load("c", "shop").unwrap().is_none());
     // The slot is free again and a later build succeeds.
-    let outcome = learn(&runs, &store, &handle, "shop", "run-2", &quiet).await.unwrap();
+    let outcome = learn(&runs, &store, &handle, "shop", "run-2", None, &quiet).await.unwrap();
     assert!(!outcome.refreshed && outcome.status.exists);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -430,7 +430,7 @@ async fn refreshing_keeps_notes_and_descriptions_and_reports_staleness() {
     let (_manager, handle) = catalog_handle(&catalog);
     let (store, dir) = temporary_store("refresh");
     let runs = AiRuns::default();
-    let first = learn(&runs, &store, &handle, "shop", "r", &quiet).await.unwrap();
+    let first = learn(&runs, &store, &handle, "shop", "r", None, &quiet).await.unwrap();
     assert_eq!(first.diff.added.len(), 4);
     let note = ProfileNote {
         id: "n1".into(),
@@ -465,7 +465,7 @@ async fn refreshing_keeps_notes_and_descriptions_and_reports_staleness() {
         super::status(&store, None, "c", "other", false).await.unwrap(),
         ProfileStatus::default()
     );
-    let refreshed = learn(&runs, &store, &handle, "shop", "r", &quiet).await.unwrap();
+    let refreshed = learn(&runs, &store, &handle, "shop", "r", None, &quiet).await.unwrap();
     assert!(refreshed.refreshed);
     assert_eq!(
         (refreshed.diff.added.clone(), refreshed.diff.changed.clone()),
