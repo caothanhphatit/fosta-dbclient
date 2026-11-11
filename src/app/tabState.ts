@@ -4,7 +4,7 @@
  * unit-tested.
  */
 import type { ObjectRef } from "../core/contract";
-import { boundViewState, parseViewState, type WorkspaceViewState } from "../features/workspace/workspaceState";
+import { boundViewState, parseViewState, type WorkspaceViewState } from "../features/objectWorkspace/workspaceState";
 
 /** One open tab, enough to open it again (without its id). */
 export type SavedTabBody =
@@ -30,7 +30,7 @@ export type SavedTabBody =
       filter?: string;
       columnFilters?: Record<string, string>;
       database?: string | null;
-      /** An engine workspace tab's section and section states (`features/workspace`), at most `MAX_VIEW_BYTES`. */
+      /** An engine workspace tab's section and section states (`features/objectWorkspace`), at most `MAX_VIEW_BYTES`. */
       view?: WorkspaceViewState;
     }
   | { kind: "logs"; taskId: string; title: string };

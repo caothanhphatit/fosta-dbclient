@@ -5,7 +5,7 @@ import type { ConnectionTree } from "../features/connections/tree";
 import type { QueryView } from "../features/query/queryView";
 import { TableView } from "../features/table/tableView";
 import type { LogTabContent } from "../features/tasks/tasksPanel";
-import { isWorkspaceTab } from "../features/workspace/sectionWorkspace";
+import { isWorkspaceTab } from "../features/objectWorkspace/sectionWorkspace";
 
 const LOG_TAIL_LINES = 80;
 

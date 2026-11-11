@@ -11,7 +11,7 @@ import type { TabContent } from "./tabs";
 import type { ConnectionProfile } from "./types";
 
 /**
- * `workspace`: an engine's dedicated tab for an object, with a strip of sections (`features/workspace`). Where one is
+ * `workspace`: an engine's dedicated tab for an object, with a strip of sections (`features/objectWorkspace`). Where one is
  * registered for a kind, a default open uses it instead of `data` (`defaultRole`); the grid stays one menu entry away.
  */
 export type ViewRole = "data" | "design" | "overview" | "value" | "console" | "server" | "diagram" | "workspace" | (string & {});

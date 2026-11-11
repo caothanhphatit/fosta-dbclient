@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../core/types";
 import type { ConnectionTree } from "../features/connections/tree";
-import type { WorkspaceTab } from "../features/workspace/sectionWorkspace";
-import { MAX_WORKSPACE_CONTEXT, workspaceContextText } from "../features/workspace/workspaceState";
+import type { WorkspaceTab } from "../features/objectWorkspace/sectionWorkspace";
+import { MAX_WORKSPACE_CONTEXT, workspaceContextText } from "../features/objectWorkspace/workspaceState";
 import { assistantContext } from "./assistantContext";
 
 // The grid pulls in DOM modules at load time; this test only needs `instanceof` to fail.
