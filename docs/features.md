@@ -9,8 +9,12 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     vector tools on MariaDB 11.7+.
   - **SQL Server** (`tiberius`, TLS on by default): `schema.table` names (`dbo` is hidden), `OFFSET/FETCH` paging, batches that
     return every result set.
-  - **MongoDB** (`mongodb`): collections as tables with BSON-typed columns and edits, JSON filters, Atlas URIs, query tabs that run
-    database commands as JSON (`{ "find": "products", "filter": {...} }`).
+  - **MongoDB** (`mongodb`): double-click a collection to open its workspace (Documents, Aggregations, Schema, Indexes, Explain,
+    Validation; views too), with a query bar in mongosh syntax and List, JSON and read-only Table views of BSON-typed documents.
+    Edits stay pending until Save (nested edits by dotted path, with a conflict check), plus bulk update and delete previews, saved
+    queries, an aggregation builder with a preview per stage, schema analysis of a sample, index management, visual explain plans
+    and validation rules. "Open as grid" keeps the collection-as-table grid. Atlas URIs; query tabs run database commands as JSON
+    (`{ "find": "products", "filter": {...} }`). Every read and write goes through the safety gateway.
   - **PostgreSQL**: schemas, materialized views, functions, sequences, types and extensions; arrays, `jsonb` and `uuid` values; Stop
     cancels on the server; `postgres.explain`; vector tools with pgvector.
   - **SQLite**: a database file (read-only, create, `:memory:`) with attached databases; edits by primary key or `rowid`.
@@ -84,6 +88,15 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     most 50 rows, 10 seconds, cancelled by Stop). Anything that writes, changes the schema or administers the server is refused and
     handed back as a code block. Each run is shown in the chat and written to the audit log. Turn it off in Settings or per workspace;
     the rows it reads are sent to your AI provider, and Production and Read-only workspaces stay off unless you allow them.
+  - **Learn this database**: the assistant studies a database once and keeps what it learned (structure, relations, descriptions you
+    can edit, notes), so every chat knows it without looking it up again. Start it from the book button in the assistant panel, a new
+    chat's chip, or the tree. Learning reads structure only, plus sampled MongoDB documents and Redis key patterns, and column values
+    if you tick "Sample column values", and only where the assistant may read data on the connection. Nothing goes to the model while
+    learning; you see what a summary would send and can "Summarise" or "Skip (structure only)". Secrets and personal data are left
+    out or replaced by placeholders, and the reads are audited as one summary entry per phase. Turn it off in Settings or per
+    workspace ("Assistant may learn databases").
+  - **App help**: for questions about Fosta Studio itself the assistant searches the app's built-in help (no network) and can offer a
+    button for an app action, which runs only when you click it.
 - **MCP server** (Settings → MCP server, off by default): AI clients such as Claude Code, Claude Desktop, Cursor, VS Code and Zed
   use your saved connections without seeing passwords. Streamable HTTP on `127.0.0.1:3910` with a bearer token (copy and rotate it
   in Settings, with ready-made setup for each client), or `fosta-studio mcp` for stdio clients; `/mcp` on the web edition. Each

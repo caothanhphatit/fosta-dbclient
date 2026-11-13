@@ -136,16 +136,18 @@ Vietnamese, Chinese (Simplified) or Japanese over English. Nothing ever redirect
 
 ## Hero carousel
 
-The hero shows three app views (SQL grid, MongoDB documents, ER diagram) in one window frame. Without JavaScript it is a
+The hero shows four app views in one window frame: the SQL grid with the assistant, the ER diagram, the workspace commands and
+the command editor (the last two are screenshot slots, `commands.png` and `commands-dialog.png`). Without JavaScript it is a
 horizontally scrollable, snapping strip that starts on the first view. `main.js` adds arrows, dots, a pause button and
 auto-advance every 6 s; it pauses on hover, on keyboard focus inside the carousel and in background tabs, and with
-`prefers-reduced-motion` it neither auto-advances nor animates. The MongoDB view previews the document view and query bar
-from the roadmap, and its caption says so. `#slide=2` (or 3) in the URL opens that view with auto-advance paused, which is
-handy for links and screenshots.
+`prefers-reduced-motion` it neither auto-advances nor animates. `#slide=2` (or 3, 4) in the URL opens that view with
+auto-advance paused, which is handy for links and screenshots.
+
+MongoDB is not in the carousel: it has its own feature block further down the page (`mongo.*` keys), a collection workspace
+mock (`mock-mongo`) with an optional screenshot slot, `assets/screenshots/mongo.png`.
 
 On phones (600 px and below) each slide shows only the main area of the window: the workspace rail, the tree and the
-assistant panel are hidden, the MongoDB view drops its secondary buttons, and the ER diagram switches to a two-column
-version of the schema so its text stays readable.
+assistant panel are hidden, and the ER diagram switches to a two-column version of the schema so its text stays readable.
 
 ## Effects
 

@@ -1,6 +1,6 @@
 # Screenshots for the website
 
-The landing page has four screenshot slots. Until a screenshot is added, the page shows an HTML/CSS mock of the same view, so
+The landing page has screenshot slots (the table lists the main ones). Until a screenshot is added, the page shows an HTML/CSS mock of the same view, so
 nothing looks broken. To use a real screenshot:
 
 1. Save the PNG with the exact name below in this folder.
@@ -15,6 +15,7 @@ that are not listed are never requested, so missing screenshots cause no 404s.
 | `grid.png`       | A data grid made for editing        | A table with type badges, a column filter in use, one edited cell, one new row, and the pending-changes bar with Discard / Apply.     |
 | `diagram.png`    | Interactive ER diagrams             | The ER diagram of a small sample database (e.g. the Docker sample data) with foreign-key links, auto-laid-out.                        |
 | `assistant.png`  | An AI assistant that never executes | The assistant panel with a question, a reply containing a SQL code block, and the Insert / New tab buttons visible.                   |
+| `mongo.png`      | MongoDB collection workspace       | A collection open in the workspace: section tabs, the query bar with a filter, and documents in the Table view.                     |
 
 Guidelines:
 
