@@ -6,13 +6,13 @@
 import "./styles.css";
 import { showError } from "./core/errorPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { assistantContext as buildAssistantContext, isQueryView, taskLogContext } from "./app/assistantContext";
+import { assistantContext as buildAssistantContext, composerTakesFocus, isQueryView, taskLogContext, typingElsewhere } from "./app/assistantContext";
 import { AppNavigation, preloadQueryView } from "./app/navigation";
 import { showWelcomeStart, welcomeScreen } from "./app/welcome";
 import { renderStatusContext } from "./app/statusBar";
 import { buildLayout, ASSISTANT_STORAGE_KEY, toggleSidebar } from "./app/layout";
 import { shellMenus } from "./app/menus";
-import { appActionRegistry, isAppActionId } from "./app/appActions";
+import { appActionEntry, appActionRegistry } from "./app/appActions";
 import { installOnExit, openRelease, startUpdates } from "./app/update";
 import { COMMUNITY_URL } from "./app/updateLogic";
 import { initMcpApprovals } from "./features/mcp/mcpApproval";
@@ -38,7 +38,7 @@ import { aiDialog } from "./features/assistant/aiDialog";
 import { AssistantPanel, type AssistantContext } from "./features/assistant/assistantPanel";
 import { learnDialog, type LearnTarget } from "./features/assistant/learnDialog";
 import { learningAllowed } from "./features/assistant/profileLogic";
-import { ProfileView } from "./features/assistant/profileView";
+import { knowledgeTabKey, ProfileView } from "./features/assistant/profileView";
 import { connectionDialog } from "./features/connections/connectionDialog";
 import { ConnectionTree } from "./features/connections/tree";
 import { TasksPanel } from "./features/tasks/tasksPanel";
@@ -106,6 +106,7 @@ const navigation = new AppNavigation(tabs, {
     currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name ?? connectionId,
   historyEnabled: () => currentConfig?.queryHistory !== false,
   ensureConnected: (connectionId): Promise<boolean> => tree.ensureConnected(connectionId),
+  schemaMayHaveChanged: (connectionId) => assistant.schemaMayHaveChanged(connectionId),
   askAssistant: (prompt, extra, samples, shown) => {
     showAssistant(true);
     assistant.ask(prompt, extra, samples, shown);
@@ -124,7 +125,7 @@ const assistant = new AssistantPanel({
   openQuery: openQueryWithText,
   openWorkspace: (connectionId, object, section, request) => navigation.openWorkspace(connectionId, object, section, request),
   perform: performAssistantAction,
-  appAction: (id) => (isAppActionId(id) ? appActions[id] : null),
+  appAction: (id) => appActionEntry(appActions, id),
   configure: () => void configureAssistant(),
   editProvider: (connection) => void editAiProvider(connection),
   configChanged: applyConfig,
@@ -271,6 +272,9 @@ async function learnDatabase(connectionId: string, database: string, onlyChanged
     openKnowledge: () => openKnowledge(connectionId, database),
   });
   if (result.learned) assistant.knowledgeChanged(connectionId, database);
+  // An open "What the assistant knows" tab shows the new run (a cancel can still have saved the structure).
+  const open = tabs.contentOf(knowledgeTabKey(workspaceId(), connectionId, database));
+  if (open instanceof ProfileView) open.reload();
   return result;
 }
 
@@ -278,7 +282,7 @@ async function learnDatabase(connectionId: string, database: string, onlyChanged
 function openKnowledge(connectionId: string, database: string): void {
   const target = learnTarget(connectionId, database);
   tabs.open({
-    key: `${workspaceId()}|${connectionId}|knows|${database}`,
+    key: knowledgeTabKey(workspaceId(), connectionId, database),
     title: `${database || target.connectionName} · assistant knows`,
     icon: "book",
     connection: target.connectionName,
@@ -302,7 +306,11 @@ function openQueryWithText(text: string): void {
   navigation.openQuery(connectionId, context.database ?? null, text);
 }
 
-function showAssistant(visible: boolean): void {
+/**
+ * Shows or hides the assistant panel. Opening it never moves the focus, except from the keyboard shortcut (`byKeyboard`,
+ * the user wants to type a question) and then not away from an editor or a field that has it.
+ */
+function showAssistant(visible: boolean, byKeyboard = false): void {
   workspaceArea?.classList.toggle("with-assistant", visible);
   try {
     localStorage.setItem(ASSISTANT_STORAGE_KEY, visible ? "open" : "closed");
@@ -312,7 +320,7 @@ function showAssistant(visible: boolean): void {
   if (visible) {
     assistant.refreshContext();
     assistant.recheckKnowledge();
-    assistant.focus();
+    if (composerTakesFocus(byKeyboard, typingElsewhere(document.activeElement, assistant.element))) assistant.focus();
   }
 }
 
@@ -320,8 +328,8 @@ function hideOrShowSidebar(): void {
   if (workspaceArea) toggleSidebar(workspaceArea);
 }
 
-function toggleAssistant(): void {
-  showAssistant(!workspaceArea?.classList.contains("with-assistant"));
+function toggleAssistant(byKeyboard = false): void {
+  showAssistant(!workspaceArea?.classList.contains("with-assistant"), byKeyboard);
 }
 
 /** "LLM providers…": the active connection, or a new one when there is none. */
@@ -552,7 +560,7 @@ async function bootstrap(): Promise<void> {
     newQuery: newQueryFromSelection,
     newDiagram: diagramFromSelection,
     configureEmbedding: () => void configureEmbedding(),
-    toggleAssistant,
+    toggleAssistant: () => toggleAssistant(),
     toggleSidebar: hideOrShowSidebar,
   });
   hideUnsupported(document);
@@ -562,7 +570,8 @@ async function bootstrap(): Promise<void> {
     switchWorkspace: (id) => void switchWorkspace(id),
     newConnection: () => void editConnection(null),
     newQuery: newQueryFromSelection,
-    toggleAssistant,
+    // From the keyboard: the user wants to type a question.
+    toggleAssistant: () => toggleAssistant(true),
     toggleSidebar: hideOrShowSidebar,
     toggleRail: () => rail.toggleHidden(),
   });

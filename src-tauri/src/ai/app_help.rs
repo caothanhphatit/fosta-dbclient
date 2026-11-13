@@ -161,6 +161,28 @@ pub(crate) fn action_title(id: &str) -> Option<&'static str> {
     actions().into_iter().find(|(action, _)| *action == id).map(|(_, title)| title)
 }
 
+/// The short button label of each UI action (what the click does, not the help entry's title). The frontend registry
+/// (`APP_ACTION_LABELS` in `src/app/appActions.ts`) holds the same labels; a test keeps both equal.
+const ACTION_LABELS: [(&str, &str); 11] = [
+    ("open_dialog:edit_workspace", "Edit workspace"),
+    ("open_dialog:new_command", "New command"),
+    ("open_dialog:new_connection", "New connection"),
+    ("open_dialog:new_workspace", "New workspace"),
+    ("open_settings:embedding", "Embedding settings"),
+    ("open_settings:llm_providers", "LLM providers"),
+    ("open_settings:mcp", "MCP settings"),
+    ("open_view:new_query", "New query"),
+    ("run:check_for_updates", "Check for updates now"),
+    ("run:copy_diagnostics", "Copy diagnostics"),
+    ("run:open_log_folder", "Open log folder"),
+];
+
+/// The button label of the UI action `id`, only for an action the pack names (the allowlist).
+pub(crate) fn action_label(id: &str) -> Option<&'static str> {
+    action_title(id)?;
+    ACTION_LABELS.iter().find(|(action, _)| *action == id).map(|(_, label)| *label)
+}
+
 /// The `search_app_help` tool: the top three sections for `query`, at most [`MAX_RESULT_CHARS`] characters.
 pub(crate) fn search_app_help(query: &str) -> String {
     let query = query.trim();
@@ -846,6 +868,34 @@ mod tests {
         registry.sort_unstable();
         let pack: Vec<String> = actions.iter().map(|(id, _)| (*id).to_owned()).collect();
         assert_eq!(registry, pack, "src/app/appActions.ts and docs/app-help.yaml name the same actions");
+    }
+
+    #[test]
+    fn every_action_has_a_short_label_shared_with_the_frontend() {
+        for (id, title) in actions() {
+            let label = action_label(id).unwrap_or_else(|| panic!("{id} has no label"));
+            assert!(label.len() <= 24 && label != title, "{id}: {label}");
+        }
+        assert_eq!(action_label("run:check_for_updates"), Some("Check for updates now"));
+        assert_eq!(action_label("run:drop_database"), None);
+        // The frontend's labels (`APP_ACTION_LABELS`) are the same.
+        let source = include_str!("../../../src/app/appActions.ts");
+        let start = source.find("APP_ACTION_LABELS").expect("appActions.ts declares APP_ACTION_LABELS");
+        let block = &source[start..];
+        let block = &block[..block.find("};").expect("APP_ACTION_LABELS is closed")];
+        let mut frontend: Vec<(String, String)> = block
+            .lines()
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split('"').collect();
+                (parts.len() >= 5).then(|| (parts[1].to_owned(), parts[3].to_owned()))
+            })
+            .collect();
+        frontend.sort_unstable();
+        let backend: Vec<(String, String)> = ACTION_LABELS
+            .iter()
+            .map(|(id, label)| ((*id).to_owned(), (*label).to_owned()))
+            .collect();
+        assert_eq!(frontend, backend);
     }
 
     #[test]

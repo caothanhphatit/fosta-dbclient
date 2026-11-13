@@ -10,6 +10,7 @@ import type { DatabaseProfile, ProfileProgress, ProfileStep, SummaryCost, Summar
 import type { AppConfig } from "../../core/types";
 import { connectionSettings, providerPreset } from "./aiProviders";
 import {
+  describedText,
   formatTokens,
   isStopped,
   LEARN_STEPS,
@@ -301,12 +302,12 @@ class LearnFlow {
     }
     if (this.closed) return;
     const hints = profile?.objects.reduce((sum, object) => sum + (object.valueHints?.length ?? 0), 0) ?? 0;
-    const described = profile?.objects.filter((object) => object.description).length ?? summary?.described ?? 0;
+    const inProfile = profile ? profile.objects.filter((object) => object.description).length : null;
     const facts: [string, string][] = [
       ["Objects", String(profile?.totalObjects ?? 0)],
       ["Relations", String(profile?.relations.length ?? 0)],
       ["Value hints", profile?.dataRead ? String(hints) : "not sampled"],
-      ["Described", String(described)],
+      ["Described", describedText(summary?.described ?? null, inProfile)],
     ];
     if (summary) facts.push(["Tokens", `~${formatTokens(summary.inputTokens)} in, ~${formatTokens(summary.outputTokens)} out (${summary.model})`]);
     this.body.replaceChildren(

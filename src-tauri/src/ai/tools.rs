@@ -131,7 +131,7 @@ pub(super) fn tool_definitions(read_queries: bool, collections: bool, profile: b
             schema: json!({
                 "type": "object",
                 "properties": {
-                    "id": { "type": "string", "description": "A UI action id from search_app_help, e.g. open_dialog:new_connection. The button shows that help entry's title." }
+                    "id": { "type": "string", "description": "A UI action id from search_app_help, e.g. open_dialog:new_connection. The button shows the action's short label, e.g. \"New connection\"." }
                 },
                 "required": ["id"],
                 "additionalProperties": false
@@ -556,10 +556,11 @@ pub(crate) async fn metadata_tool(
 }
 
 /// `suggest_app_action`: a chat button for the UI action `id`, refused unless the help pack names it. The button always
-/// shows the help entry's title: a label the model sends is ignored, so the model's text never becomes a button.
+/// shows the action's own short label (`app_help::action_label`): a label the model sends is ignored, so the model's
+/// text never becomes a button.
 fn suggest_app_action(id: &str, events: &dyn ChatSink) -> Result<String, String> {
     let id = id.trim();
-    let Some(title) = super::app_help::action_title(id) else {
+    let Some(title) = super::app_help::action_label(id) else {
         let known: Vec<&str> = super::app_help::actions().into_iter().map(|(id, _)| id).collect();
         return Err(format!(
             "Refused: {id:?} is not an app action. Use a \"UI action:\" id from search_app_help: {}.",
@@ -822,8 +823,8 @@ mod tests {
         let suggested: Vec<&String> = events.iter().filter(|event| event.contains("suggestAppAction")).collect();
         assert_eq!(suggested.len(), 1, "{events:?}");
         assert!(
-            // The model's label is ignored: the button shows the help entry's title.
-            suggested[0].contains(r#""id":"open_settings:mcp","label":"MCP server for Claude Code, Cursor, VS Code, Zed""#),
+            // The model's label is ignored: the button shows the action's own short label.
+            suggested[0].contains(r#""id":"open_settings:mcp","label":"MCP settings""#),
             "{}",
             suggested[0]
         );
@@ -839,14 +840,16 @@ mod tests {
             assert!(error.starts_with("Refused") && error.contains("open_settings:mcp"), "{error}");
         }
         assert!(seen.lock().unwrap().is_empty(), "a refused id shows no button");
-        // The button text is always the help entry's title.
+        // The button text is always the action's short label, never the help entry's title.
         suggest_app_action(" run:copy_diagnostics ", &events).unwrap();
         suggest_app_action("open_view:new_query", &events).unwrap();
+        suggest_app_action("run:check_for_updates", &events).unwrap();
         let seen = seen.lock().unwrap().clone();
         assert_eq!(seen[0]["action"]["kind"], "suggestAppAction");
         assert_eq!(seen[0]["action"]["id"], "run:copy_diagnostics");
-        assert_eq!(seen[0]["action"]["label"], "Diagnostics and logs for bug reports");
-        assert_eq!(seen[1]["action"]["label"], "Query tabs");
+        assert_eq!(seen[0]["action"]["label"], "Copy diagnostics");
+        assert_eq!(seen[1]["action"]["label"], "New query");
+        assert_eq!(seen[2]["action"]["label"], "Check for updates now");
     }
 
     fn reads(preset: gateway::rules::Preset) -> gateway::Context {
@@ -1255,6 +1258,26 @@ mod tests {
         assert!(described.contains("- _id "), "{described}");
         let overview = tool("schema_overview", json!({})).await.unwrap();
         assert!(overview.contains("No foreign keys are declared."), "{overview}");
+        // A pipeline preview with stages as JSON text (the tool schema) keeps its operators on the real server.
+        let allowed = gateway::Context {
+            connection_id: "events".into(),
+            ..reads(gateway::rules::Preset::Guarded)
+        };
+        let preview = call(
+            super::collections::SAMPLE_DOCUMENTS,
+            json!({
+                "collection": first,
+                "pipeline": ["{\"$match\": {}}", "{\"$group\": {\"_id\": null, \"n\": {\"$sum\": 1}}}"]
+            }),
+        );
+        let grouped = run_tool(&db, &context, Some(&allowed), &preview, &events).await.unwrap();
+        assert!(grouped.contains("\"n\":") && grouped.contains("\"_id\":null"), "{grouped}");
+        let emptied = call(
+            super::collections::SAMPLE_DOCUMENTS,
+            json!({ "collection": first, "pipeline": [{}] }),
+        );
+        let refused = run_tool(&db, &context, Some(&allowed), &emptied, &events).await.unwrap_err();
+        assert!(refused.contains("arrived empty"), "{refused}");
         db.disconnect("events").await;
     }
 }

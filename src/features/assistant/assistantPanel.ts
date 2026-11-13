@@ -13,7 +13,18 @@ import { toast } from "../../core/dialogs";
 import { copyText, h, icon, iconButton, iconOrDefault, spacer, type IconName } from "../../core/dom";
 import { capabilityOf, defaultLanguage, engineInfo, isKnownFence, languageForFence, visibleEngines, type EngineInfo } from "../../core/engines";
 import { ChatRun, queryToolCall } from "./chatRun";
-import { conversationMove, objectWords, parseMarkdown, thinkingAfter, topicKey, type Align, type ChatTopic } from "./chatText";
+import {
+  contextParts,
+  conversationMove,
+  hideAnswerWhileThinking,
+  objectWords,
+  parseMarkdown,
+  recheckAfterSchemaChange,
+  thinkingAfter,
+  topicKey,
+  type Align,
+  type ChatTopic,
+} from "./chatText";
 import { ModelSwitcher } from "./modelSwitcher";
 import type { ObjectRef } from "../../core/contract";
 import type { ProfileStatus } from "../../core/profileTypes";
@@ -49,8 +60,11 @@ export interface AssistantHost {
   openWorkspace(connectionId: string, object: ObjectRef, section: string, request: unknown): void;
   /** Opens what the model asked for (diagram, table, query tab) on the current connection. */
   perform(action: UiAction): void;
-  /** What clicking a suggested app action (`suggestAppAction`) runs; null for an id this version does not know. */
-  appAction(id: string): (() => void) | null;
+  /**
+   * A suggested app action (`suggestAppAction`) from the app's own registry: its short button label and what clicking
+   * runs; null for an id this version does not know.
+   */
+  appAction(id: string): AppActionEntry | null;
   /** Opens the LLM provider dialog for the active connection (or a new one). */
   configure(): void;
   /** Opens the LLM provider dialog for `connection`, or an empty one to add a provider. */
@@ -63,6 +77,12 @@ export interface AssistantHost {
   openKnowledge(connectionId: string, database: string): void;
   /** Whether the settings let the assistant learn databases on `connectionId`. */
   canLearn(connectionId: string): boolean;
+}
+
+/** An app action the chat may show as a button: the registry's label (never the model's text) and its function. */
+export interface AppActionEntry {
+  label: string;
+  run(): void;
 }
 
 interface QuickAction {
@@ -268,6 +288,15 @@ export class AssistantPanel {
     if (context.connectionId) void this.loadKnowledge(context.connectionId, context.database ?? "", false);
   }
 
+  /**
+   * A statement that may change the schema finished on `connectionId` (DDL in a query tab): when it is the chat's
+   * connection, check again so "Schema changed" shows without reopening the panel. Cheap: the backend answers from its
+   * cache unless the statement moved the connection's schema epoch.
+   */
+  schemaMayHaveChanged(connectionId: string): void {
+    if (recheckAfterSchemaChange(this.knowledge.key, connectionId)) this.recheckKnowledge();
+  }
+
   private async loadKnowledge(connectionId: string, database: string, force: boolean): Promise<void> {
     const key = `${connectionId}|${database}`;
     let status: ProfileStatus | null = null;
@@ -375,10 +404,13 @@ export class AssistantPanel {
     // Between tool rounds the model is working again: a "Thinking…" row under the tool calls until it writes.
     const thinking = h("div", { class: "chat-thinking", role: "status" }, h("span", { class: "chat-run-spinner" }), "Thinking…");
     const think = (on: boolean | null) => {
+      if (on === null) return;
       if (on) {
         bubble.before(thinking);
         this.scrollToEnd();
-      } else if (on === false) thinking.remove();
+      } else thinking.remove();
+      // The "Thinking…" row is the only progress shown: no empty answer bubble with a lone cursor under it.
+      bubble.hidden = hideAnswerWhileThinking(on, reply);
     };
     // Code blocks run against the connection the question was about, even if the user moves on.
     const render = () => body.replaceChildren(...this.renderMarkdown(reply, context));
@@ -403,7 +435,7 @@ export class AssistantPanel {
           // Only a button: nothing runs until the user clicks it.
           suggestions ??= h("div", { class: "chat-app-actions" });
           if (!suggestions.isConnected) bubble.after(suggestions);
-          suggestions.append(appActionButton(event.action, this.host.appAction(event.action.id)));
+          suggestions.append(appActionButton(event.action.id, this.host.appAction(event.action.id)));
           this.scrollToEnd();
         } else if (event.type === "action") {
           this.host.perform(event.action);
@@ -658,19 +690,19 @@ function codeButton(iconName: IconName, label: string, title: string, run: () =>
 }
 
 /**
- * A suggested app action: a button that runs `run` on click (never before), with a hint that it is the app's own action.
- * An id this version does not know shows a note instead.
+ * A suggested app action: a button labelled by the app's registry (`entry`, never the model's text) that runs it on
+ * click (never before), with a hint that it is the app's own action. An id this version does not know shows a note.
  */
-export function appActionButton(action: { id: string; label: string }, run: (() => void) | null): HTMLElement {
-  if (!run) return h("div", { class: "chat-app-action-unknown" }, `The assistant suggested an app action this version does not have (${action.id}).`);
+export function appActionButton(id: string, entry: AppActionEntry | null): HTMLElement {
+  if (!entry) return h("div", { class: "chat-app-action-unknown" }, `The assistant suggested an app action this version does not have (${id}).`);
   const button = h(
     "button",
-    { class: "chat-app-action", type: "button", title: `Runs only when you click (${action.id})` },
+    { class: "chat-app-action", type: "button", title: `Runs only when you click (${id})` },
     icon("sparkle"),
-    h("span", { class: "chat-app-action-label" }, action.label),
+    h("span", { class: "chat-app-action-label" }, entry.label),
     h("span", { class: "chat-app-action-hint" }, "Fosta Studio action"),
   );
-  button.addEventListener("click", () => run());
+  button.addEventListener("click", () => entry.run());
   return button;
 }
 
@@ -728,13 +760,16 @@ function contextChip(context: AssistantContext): HTMLElement[] {
     return [h("span", { class: "assistant-context-text muted" }, icon("plug"), "Not connected. Connect to get answers based on your schema.")];
   }
   const info = engineInfo(context.driver);
-  const parts = [context.connectionName ?? "connection", context.database, context.table].filter(Boolean).join(" · ");
+  const { connection, place } = contextParts(context.connectionName, context.database, context.table);
+  const full = place ? `${connection} · ${place}` : connection;
   return [
     h(
       "span",
-      { class: "assistant-context-text", title: context.serverVersion ?? "" },
+      { class: "assistant-context-text", title: [full, context.serverVersion].filter(Boolean).join("\n") },
       icon(iconOrDefault(info.icon, "database"), `driver-icon ${info.id}`),
-      parts,
+      // The connection gives way first; the database and table stay readable next to the chips.
+      h("span", { class: "assistant-context-connection" }, connection),
+      ...(place ? [h("span", { class: "assistant-context-place" }, `· ${place}`)] : []),
     ),
   ];
 }

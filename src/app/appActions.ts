@@ -23,6 +23,24 @@ export const APP_ACTION_IDS = [
 
 export type AppActionId = (typeof APP_ACTION_IDS)[number];
 
+/**
+ * The button label of each action: what the click does, never the help entry's title or the model's text. The backend
+ * (`ACTION_LABELS` in `src-tauri/src/ai/app_help.rs`) holds the same labels; a test there keeps both equal.
+ */
+export const APP_ACTION_LABELS: Record<AppActionId, string> = {
+  "open_dialog:edit_workspace": "Edit workspace",
+  "open_dialog:new_command": "New command",
+  "open_dialog:new_connection": "New connection",
+  "open_dialog:new_workspace": "New workspace",
+  "open_settings:embedding": "Embedding settings",
+  "open_settings:llm_providers": "LLM providers",
+  "open_settings:mcp": "MCP settings",
+  "open_view:new_query": "New query",
+  "run:check_for_updates": "Check for updates now",
+  "run:copy_diagnostics": "Copy diagnostics",
+  "run:open_log_folder": "Open log folder",
+};
+
 /** The shell's own dialogs and views the actions open. */
 export interface AppActionHost {
   newConnection(): void;
@@ -56,4 +74,9 @@ export function appActionRegistry(host: AppActionHost): AppActionRegistry {
 
 export function isAppActionId(id: string): id is AppActionId {
   return (APP_ACTION_IDS as readonly string[]).includes(id);
+}
+
+/** The chat button of a suggested action: the registry's label and function; null for an id this version lacks. */
+export function appActionEntry(registry: AppActionRegistry, id: string): { label: string; run: () => void } | null {
+  return isAppActionId(id) ? { label: APP_ACTION_LABELS[id], run: registry[id] } : null;
 }

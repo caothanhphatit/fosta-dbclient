@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { conversationMove, isDocumentCall, objectWords, parseMarkdown, shellCell, tableAlignments, tableCells, thinkingAfter, toolCallTitle } from "./chatText";
+import {
+  contextParts,
+  conversationMove,
+  hideAnswerWhileThinking,
+  isDocumentCall,
+  objectWords,
+  parseMarkdown,
+  recheckAfterSchemaChange,
+  shellCell,
+  tableAlignments,
+  tableCells,
+  thinkingAfter,
+  toolCallTitle,
+} from "./chatText";
 
 describe("markdown tables", () => {
   it("render a GFM table as a table block, not one line of pipes", () => {
@@ -117,6 +130,29 @@ describe("tool calls", () => {
     expect(thinkingAfter({ type: "text" })).toBe(false);
     expect(thinkingAfter({ type: "done" })).toBe(false);
     expect(thinkingAfter({ type: "action" })).toBeNull();
+  });
+
+  it("hide the empty answer (and its cursor) while the Thinking row shows", () => {
+    expect(hideAnswerWhileThinking(true, "")).toBe(true);
+    expect(hideAnswerWhileThinking(true, " \t ")).toBe(true);
+    expect(hideAnswerWhileThinking(true, "Let me check")).toBe(false);
+    expect(hideAnswerWhileThinking(false, "")).toBe(false);
+  });
+});
+
+describe("the context row", () => {
+  it("keeps the database apart from the connection, which gives way first", () => {
+    expect(contextParts("PG shop", "shop", undefined)).toEqual({ connection: "PG shop", place: "shop" });
+    expect(contextParts("Mongo events", "fosta_extras", "orders")).toEqual({ connection: "Mongo events", place: "fosta_extras · orders" });
+    expect(contextParts(undefined, undefined, undefined)).toEqual({ connection: "connection", place: "" });
+  });
+
+  it("rechecks what the assistant knows after DDL on the chat's connection only", () => {
+    expect(recheckAfterSchemaChange("pg1|shop", "pg1")).toBe(true);
+    expect(recheckAfterSchemaChange("pg1|", "pg1")).toBe(true);
+    expect(recheckAfterSchemaChange("pg10|shop", "pg1")).toBe(false);
+    expect(recheckAfterSchemaChange("mongo|events", "pg1")).toBe(false);
+    expect(recheckAfterSchemaChange("", "")).toBe(false);
   });
 });
 

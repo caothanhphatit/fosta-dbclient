@@ -36,6 +36,11 @@ export interface ProfileViewHost {
 /** Objects drawn before "Show more". */
 const PAGE = 100;
 
+/** The tab key of a database's "What the assistant knows" tab in a workspace. */
+export function knowledgeTabKey(workspaceId: string, connectionId: string, database: string): string {
+  return `${workspaceId}|${connectionId}|knows|${database}`;
+}
+
 export class ProfileView implements TabContent {
   readonly element: HTMLElement;
   private readonly header = h("div", { class: "knows-header" });
@@ -98,12 +103,15 @@ export class ProfileView implements TabContent {
     }
   }
 
+  /** Reads the profile and its status again (a learn run finished, from this tab or from the assistant panel). */
+  reload(): void {
+    void this.load(true);
+  }
+
+  /** Learns again; the host reloads this tab when the run is over (`reload`), as for a run started elsewhere. */
   private async relearn(onlyChanged: boolean): Promise<void> {
     const result = await this.host.learn(this.target, onlyChanged && this.profile !== null);
-    if (result.learned) {
-      this.host.changed(this.target);
-      await this.load(true);
-    }
+    if (result.learned) this.host.changed(this.target);
   }
 
   private async remove(): Promise<void> {

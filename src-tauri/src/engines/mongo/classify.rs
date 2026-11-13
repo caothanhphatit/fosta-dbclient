@@ -573,6 +573,23 @@ mod tests {
         );
         assert_eq!((preview.category, preview.refused.as_deref()), (Category::Read, None));
         assert_eq!(preview.tables, ["orders"]);
+        // The assistant's sample_documents preview (its full argument set) is a read, like its find; only a pipeline
+        // that cannot run (stages that arrived empty) is refused, and a refusal is audited as administration.
+        let assistant = json!({
+            "database": "shop", "collection": "orders",
+            "pipeline": [{ "$match": { "total": { "$gt": 5 } } }, { "$group": { "_id": "$status", "n": { "$sum": 1 } } }],
+            "upTo": 1, "sampleSize": 1000, "limit": 5, "maxTimeMS": 10000,
+        });
+        let info = classify_operation("mongo.aggregatePreview", &assistant);
+        assert_eq!((info.category, info.refused.as_deref()), (Category::Read, None));
+        let find = classify_operation(
+            "mongo.find",
+            &json!({ "database": "shop", "collection": "orders", "limit": 5, "maxTimeMS": 10000 }),
+        );
+        assert_eq!(find.category, info.category);
+        let emptied = classify_operation("mongo.aggregatePreview", &args(json!([{}])));
+        assert!(emptied.refused.is_some());
+        assert_eq!(emptied.category, Category::Admin);
         let read = classify_operation("mongo.aggregate", &args(json!([{ "$sort": { "total": -1 } }])));
         assert_eq!(read.category, Category::Read);
         // A preview never writes.

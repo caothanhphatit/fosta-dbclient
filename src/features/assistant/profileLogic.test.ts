@@ -3,6 +3,7 @@ import type { DatabaseProfile, ObjectProfile, RelationProfile } from "../../core
 import type { AppConfig, Workspace } from "../../core/types";
 import { presetSettings } from "../safety/safety";
 import {
+  describedText,
   columnSignature,
   editedNote,
   formatTokens,
@@ -124,6 +125,16 @@ describe("the learn dialog", () => {
     expect(summaryCount(12, 13)).toBe("writing the database summary");
     expect(summaryCount(13, 13)).toBe("");
     expect(summaryCount(0, 1)).toBe("writing the database summary");
+  });
+
+  it("reports Described like the cost after a run, with the total when earlier descriptions add to it", () => {
+    // The cost said 11 objects to describe; one object was described by an earlier run.
+    expect(describedText(11, 12)).toBe("11 (12 in all)");
+    expect(describedText(11, 11)).toBe("11");
+    expect(describedText(11, null)).toBe("11");
+    // Stopped or failed before any summary: what the profile holds.
+    expect(describedText(null, 12)).toBe("12");
+    expect(describedText(null, null)).toBe("0");
   });
 });
 

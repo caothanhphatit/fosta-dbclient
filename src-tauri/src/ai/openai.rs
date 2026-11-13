@@ -22,6 +22,14 @@ struct PendingCall {
     arguments: String,
 }
 
+/// The `tools` of a request: each tool's schema is sent as declared (no strict mode, nothing rewritten).
+pub(super) fn tools_body(tools: &[ToolSpec]) -> Value {
+    tools
+        .iter()
+        .map(|tool| json!({ "type": "function", "function": { "name": tool.name, "description": tool.description, "parameters": tool.schema } }))
+        .collect()
+}
+
 pub(super) async fn turn(
     client: &reqwest::Client,
     settings: &AiSettings,
@@ -35,10 +43,7 @@ pub(super) async fn turn(
     messages.extend(history.iter().cloned());
     let mut body = json!({ "model": settings.model, "stream": true, "messages": messages });
     if !tools.is_empty() {
-        body["tools"] = tools
-            .iter()
-            .map(|tool| json!({ "type": "function", "function": { "name": tool.name, "description": tool.description, "parameters": tool.schema } }))
-            .collect();
+        body["tools"] = tools_body(tools);
     }
     let mut request = client.post(format!("{}/chat/completions", settings.base_url()?)).json(&body);
     if let Some(key) = api_key.filter(|key| !key.is_empty()) {

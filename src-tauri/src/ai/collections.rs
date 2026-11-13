@@ -93,16 +93,18 @@ pub(super) fn definitions(read_rows: bool) -> Vec<ToolSpec> {
     if read_rows {
         let mut sample = names;
         let properties = sample.as_object_mut().expect("an object");
+        // Documents travel as JSON text: an `object` schema without properties reaches strict-schema providers as `{}`,
+        // which drops every operator key ($group, $match) the model wrote.
         properties.insert(
             "filter".into(),
-            json!({ "type": "object", "description": "Filter as Extended JSON, e.g. { \"status\": \"paid\" } or { \"_id\": { \"$oid\": \"…\" } }." }),
+            json!({ "type": "string", "description": "Filter as Extended JSON text (keys in double quotes), e.g. {\"status\": \"paid\"} or {\"_id\": {\"$oid\": \"…\"}}." }),
         );
         properties.insert(
             "pipeline".into(),
             json!({
                 "type": "array",
-                "items": { "type": "object" },
-                "description": "Aggregation stages as Extended JSON: the documents returned are those leaving stage upTo, on a sample of the collection (the first 1000 documents)."
+                "items": { "type": "string" },
+                "description": "Aggregation stages, one stage per item as Extended JSON text (keys in double quotes), e.g. [\"{\\\"$match\\\": {\\\"status\\\": \\\"paid\\\"}}\", \"{\\\"$group\\\": {\\\"_id\\\": \\\"$status\\\", \\\"n\\\": {\\\"$sum\\\": 1}}}\"]. The documents returned are those leaving stage upTo, on a sample of the collection (the first 1000 documents)."
             }),
         );
         properties.insert(
@@ -371,6 +373,44 @@ fn json_value(input: &Value, key: &str) -> Result<Option<Value>, String> {
     }
 }
 
+/// What the model is told when a stage cannot be used, so it does not retry the same call.
+const STAGE_HINT: &str = "Pass each stage as one Extended JSON string with double-quoted keys, e.g. \
+     \"{\\\"$group\\\": {\\\"_id\\\": \\\"$status\\\", \\\"n\\\": {\\\"$sum\\\": 1}}}\". If it still fails, write the \
+     pipeline in a ```mongo-pipeline block for the user instead of calling the tool again.";
+
+/// The `pipeline` argument of `sample_documents` as stage documents; `None` when absent or empty. Stages arrive as JSON
+/// text (the schema), as documents (providers that keep them), or the whole pipeline as one JSON text. Each must be a
+/// document with exactly one stage operator: an empty `{}` is what a provider sends after dropping the operator keys.
+fn pipeline_stages(input: &Value) -> Result<Option<Vec<Value>>, String> {
+    let items = match json_value(input, "pipeline")? {
+        None => return Ok(None),
+        Some(Value::Array(items)) => items,
+        Some(_) => return Err(format!("`pipeline` is an array of stages. {STAGE_HINT}")),
+    };
+    let mut stages = Vec::with_capacity(items.len());
+    for (index, item) in items.into_iter().enumerate() {
+        let number = index + 1;
+        let stage = match item {
+            Value::String(text) if text.trim().is_empty() => continue,
+            Value::String(text) => serde_json::from_str::<Value>(text.trim())
+                .map_err(|error| format!("Stage {number} is not Extended JSON ({error}). {STAGE_HINT}"))?,
+            other => other,
+        };
+        match &stage {
+            Value::Object(map) if map.is_empty() => {
+                return Err(format!("Stage {number} arrived empty ({{}}): its operator was lost. {STAGE_HINT}"));
+            }
+            Value::Object(map) if map.len() == 1 && map.keys().all(|key| key.starts_with('$')) => stages.push(stage),
+            _ => {
+                return Err(format!(
+                    "Stage {number} must be a document with one stage operator, such as {{\"$match\": {{…}}}}. {STAGE_HINT}"
+                ))
+            }
+        }
+    }
+    Ok((!stages.is_empty()).then_some(stages))
+}
+
 /// `sample_documents`: through the gateway as the assistant, in the chat's database only.
 pub(super) async fn sample(
     db: &ConnectionManager,
@@ -399,12 +439,7 @@ pub(super) async fn sample(
     if filter.as_ref().is_some_and(|filter| !filter.is_object()) {
         return Err(String::from("`filter` is a document"));
     }
-    let stages = match json_value(input, "pipeline")? {
-        None => None,
-        Some(Value::Array(stages)) if stages.is_empty() => None,
-        Some(Value::Array(stages)) => Some(stages),
-        Some(_) => return Err(String::from("`pipeline` is an array of stage documents")),
-    };
+    let stages = pipeline_stages(input)?;
     if let Some(stages) = &stages {
         stages.iter().try_for_each(|stage| refuse_json(stage, &database))?;
     }
@@ -904,6 +939,126 @@ mod tests {
         assert_eq!(args["pipeline"].as_array().unwrap().len(), 3);
         assert_eq!(args["pipeline"][0], json!({ "$match": { "a": 1 } }));
         assert_eq!(args["upTo"], 2);
+    }
+
+    /// Every `object` node of a schema declares its properties: a property-less object reaches strict-schema providers
+    /// (OpenAI-compatible gateways) as `{}`, which is how pipeline stages lost their operators.
+    fn assert_no_open_objects(schema: &Value, path: &str) {
+        match schema {
+            Value::Object(map) => {
+                if map.get("type") == Some(&json!("object")) {
+                    assert!(
+                        map.get("properties").is_some_and(Value::is_object),
+                        "{path}: object without properties"
+                    );
+                    assert_eq!(map.get("additionalProperties"), Some(&json!(false)), "{path}");
+                }
+                for (key, inner) in map {
+                    assert_no_open_objects(inner, &format!("{path}.{key}"));
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|inner| assert_no_open_objects(inner, path)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn tool_schemas_keep_documents_as_text_for_every_provider() {
+        let tools = super::super::tools::tool_definitions(true, true, true);
+        for tool in &tools {
+            assert_no_open_objects(&tool.schema, tool.name);
+        }
+        let sample = tools.iter().find(|tool| tool.name == SAMPLE_DOCUMENTS).expect("offered with reads");
+        assert_eq!(sample.schema["properties"]["pipeline"]["items"], json!({ "type": "string" }));
+        assert_eq!(sample.schema["properties"]["filter"]["type"], "string");
+        let open = tools.iter().find(|tool| tool.name == OPEN_WORKSPACE).unwrap();
+        assert_eq!(open.schema["properties"]["pipeline"]["items"], json!({ "type": "string" }));
+        // What the adapters send is the schema as declared (the Fosta and OpenAI-compatible providers use the OpenAI one).
+        let openai = super::super::openai::tools_body(&tools);
+        let sent = openai
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["function"]["name"] == SAMPLE_DOCUMENTS)
+            .unwrap();
+        assert_eq!(sent["function"]["parameters"], sample.schema);
+        assert!(sent["function"].get("strict").is_none());
+        let anthropic = super::super::anthropic::tools_body(&tools);
+        let sent = anthropic
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == SAMPLE_DOCUMENTS)
+            .unwrap();
+        assert_eq!(sent["input_schema"], sample.schema);
+    }
+
+    #[test]
+    fn pipeline_stages_parse_from_text_and_refuse_lost_operators() {
+        let stages = |pipeline: Value| pipeline_stages(&json!({ "pipeline": pipeline }));
+        // As the schema asks: one Extended JSON string per stage.
+        let parsed = stages(json!([
+            "{\"$match\": {\"status\": \"paid\"}}",
+            " {\"$group\": {\"_id\": \"$status\", \"n\": {\"$sum\": 1}}} ",
+            ""
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed[1], json!({ "$group": { "_id": "$status", "n": { "$sum": 1 } } }));
+        assert_eq!(parsed.len(), 2);
+        // Documents (providers that keep them) and the whole pipeline as one text still work.
+        assert_eq!(stages(json!([{ "$limit": 5 }])).unwrap().unwrap(), vec![json!({ "$limit": 5 })]);
+        assert_eq!(
+            stages(json!("[{\"$count\": \"n\"}]")).unwrap().unwrap(),
+            vec![json!({ "$count": "n" })]
+        );
+        assert_eq!(stages(json!([])).unwrap(), None);
+        assert_eq!(pipeline_stages(&json!({})).unwrap(), None);
+        // What a strict-schema provider made of object stages: refused with a hint, before the gateway.
+        let empty = stages(json!([{}, {}])).unwrap_err();
+        assert!(
+            empty.contains("Stage 1 arrived empty") && empty.contains("mongo-pipeline"),
+            "{empty}"
+        );
+        let shell = stages(json!(["{ $group: { _id: '$status' } }"])).unwrap_err();
+        assert!(
+            shell.contains("Stage 1 is not Extended JSON") && shell.contains("double-quoted"),
+            "{shell}"
+        );
+        for bad in [
+            json!(["{\"$match\": {}, \"$limit\": 1}"]),
+            json!(["{\"status\": 1}"]),
+            json!(["[1]"]),
+            json!(7),
+        ] {
+            assert!(stages(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_pipeline_given_as_text_reaches_the_engine_with_its_operators() {
+        let (db, engine, context) = setup();
+        let quiet = |_: ChatEvent| {};
+        let input = json!({
+            "pipeline": ["{\"$match\": {\"status\": \"paid\"}}", "{\"$group\": {\"_id\": \"$status\", \"n\": {\"$sum\": 1}}}"],
+            "filter": "{\"total\": {\"$gt\": 5}}"
+        });
+        sample(&db, &context, Some(&reads()), &input, &quiet).await.unwrap();
+        let (name, args) = engine.calls.lock().unwrap()[0].clone();
+        assert_eq!(name, "mongo.aggregatePreview");
+        assert_eq!(
+            args["pipeline"],
+            json!([
+                { "$match": { "total": { "$gt": 5 } } },
+                { "$match": { "status": "paid" } },
+                { "$group": { "_id": "$status", "n": { "$sum": 1 } } }
+            ])
+        );
+        // Stage text that writes is refused like a document.
+        let writes = json!({ "pipeline": ["{\"$out\": \"orders\"}"] });
+        let refused = sample(&db, &context, Some(&reads()), &writes, &quiet).await.unwrap_err();
+        assert!(refused.starts_with("Refused:"), "{refused}");
+        assert_eq!(engine.calls.lock().unwrap().len(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread")]

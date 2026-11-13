@@ -50,6 +50,8 @@ export interface NavigationHost {
   taskOf(taskId: string): TaskDef | undefined;
   /** Connects the connection unless it is connected (through the tree, which shows it); true once it is. */
   ensureConnected(connectionId: string): Promise<boolean>;
+  /** A query tab ran a statement that may change the schema on `connectionId`. */
+  schemaMayHaveChanged(connectionId: string): void;
   /** Opens the assistant panel and sends a prepared question (see `Navigator.askAssistant`). */
   askAssistant(prompt: string, extra?: string, samples?: string, shown?: string): void;
 }
@@ -572,6 +574,7 @@ export class AppNavigation implements Navigator {
       openQuery: (id, db, sql) => this.openQuery(id, db, sql),
       openWorkspace: (id, object, section, request) => this.openWorkspace(id, object, section, request),
       reconnect: (id) => this.host.ensureConnected(id),
+      schemaMayHaveChanged: (id) => this.host.schemaMayHaveChanged(id),
     };
     const title = restore?.title ?? `Query ${this.queryCounter}`;
     const params: OpenParams = { database, text: initialSql, host, title };

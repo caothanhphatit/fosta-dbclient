@@ -245,3 +245,34 @@ export function thinkingAfter(event: { type: string }): boolean | null {
       return null;
   }
 }
+
+/**
+ * Whether the answer bubble hides while the "Thinking…" row shows: only while nothing is written yet, so an empty bubble
+ * with a lone cursor never sits under the row.
+ */
+export function hideAnswerWhileThinking(thinking: boolean, reply: string): boolean {
+  return thinking && reply.trim() === "";
+}
+
+/**
+ * The context row's text in two parts: the connection, which gives way first (ellipsis) when the row is narrow, and
+ * the place in it (database · table), which stays readable.
+ */
+export function contextParts(
+  connectionName: string | undefined,
+  database: string | undefined,
+  table: string | undefined,
+): { connection: string; place: string } {
+  return {
+    connection: connectionName || "connection",
+    place: [database, table].filter(Boolean).join(" · "),
+  };
+}
+
+/**
+ * Whether a statement that may have changed the schema on `connectionId` makes the panel check what the assistant knows
+ * again: only for the chat's own connection (`knowledgeKey` is "connection|database").
+ */
+export function recheckAfterSchemaChange(knowledgeKey: string, connectionId: string): boolean {
+  return connectionId !== "" && knowledgeKey.startsWith(`${connectionId}|`);
+}

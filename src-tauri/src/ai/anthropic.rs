@@ -16,6 +16,14 @@ enum Block {
     ToolUse { id: String, name: String, json: String },
 }
 
+/// The `tools` of a request: each tool's schema is sent as declared.
+pub(super) fn tools_body(tools: &[ToolSpec]) -> Value {
+    tools
+        .iter()
+        .map(|tool| json!({ "name": tool.name, "description": tool.description, "input_schema": tool.schema }))
+        .collect()
+}
+
 pub(super) async fn turn(
     client: &reqwest::Client,
     settings: &AiSettings,
@@ -33,10 +41,7 @@ pub(super) async fn turn(
         "messages": history,
     });
     if !tools.is_empty() {
-        body["tools"] = tools
-            .iter()
-            .map(|tool| json!({ "name": tool.name, "description": tool.description, "input_schema": tool.schema }))
-            .collect();
+        body["tools"] = tools_body(tools);
     }
     let request = client
         .post(format!("{}/v1/messages", settings.base_url()?))

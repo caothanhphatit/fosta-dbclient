@@ -65,7 +65,9 @@
 
 .assistant-context {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  row-gap: 4px;
   min-height: 30px;
   padding: 4px 12px;
   border-bottom: 1px solid var(--border);
@@ -81,6 +83,21 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The connection name gives way first (ellipsis); the database and table stay readable beside the chips. */
+.assistant-context-connection {
+  flex: 0 1000 auto;
+  min-width: 2em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assistant-context-place {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .assistant-context-text.muted {

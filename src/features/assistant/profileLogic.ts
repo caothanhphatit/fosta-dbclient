@@ -76,6 +76,16 @@ export function summaryCount(done: number, total: number): string {
 }
 
 /**
+ * The result page's "Described" count. After a summary run it counts what this run described, like the cost shown
+ * before ("Objects to describe"), and adds the profile's total when objects described earlier make it larger; without a
+ * run, the objects of the profile that have a description.
+ */
+export function describedText(described: number | null, inProfile: number | null): string {
+  if (described === null) return String(inProfile ?? 0);
+  return inProfile !== null && inProfile > described ? `${described} (${inProfile} in all)` : String(described);
+}
+
+/**
  * Where the progress list goes on a build's progress event: the index of `step` in `order` when it is the current step
  * or a later one, null when the event is about an earlier step (the list never moves backwards) or a step not listed.
  */

@@ -38,6 +38,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - App help: the update entry offers the "Check for updates now" action for more phrasings, explains that "Check for
   updates" is an on/off setting and marks desktop-only and web-only steps; the Settings button is described as the
   sliders icon, not a gear.
+- Assistant: previewing an aggregation pipeline works with real providers. Stages and filters now travel as Extended
+  JSON text, so the operators ($group, $match…) no longer arrive as empty `{}` stages that the app refused; a stage that
+  still arrives empty or as shell syntax gets a clear message telling the model how to fix it or to hand the pipeline
+  to the user instead of retrying.
+- Assistant panel: an open panel shows "Schema changed — refresh" right after DDL runs from a query tab on its
+  connection, without closing and reopening it.
+- Assistant panel: an open "What the assistant knows" tab refreshes when a Learn run started from the panel finishes.
+- Assistant panel: with the "Schema changed" chip shown the database name stays visible; the connection name gives way
+  first and the chips move to a second line when the row is narrow.
+- Assistant panel: opening the panel no longer moves the focus into the chat box, except from Ctrl+Shift+A when no
+  editor or field has the focus, so keystrokes meant for the editor stay there.
+- Assistant panel: no empty answer box with a lone cursor under "Thinking…".
+- Assistant: a suggested app action's button shows a short action label ("Check for updates now", "MCP settings")
+  instead of the help entry's title.
+- Learn this database: the result's "Described" counts what the run described, like the cost shown before ("11"),
+  with the total when earlier descriptions add to it ("11 (12 in all)").
 
 ### Security
 

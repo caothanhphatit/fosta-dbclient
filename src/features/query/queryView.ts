@@ -59,6 +59,8 @@ export interface QueryHost {
   openWorkspace?(connectionId: string, object: ObjectRef, section: string, request: unknown): void;
   /** Connects again a connection the backend lost; true once it is connected. */
   reconnect?(connectionId: string): Promise<boolean>;
+  /** A statement that may change the schema (DDL) finished on `connectionId` (the assistant rechecks what it knows). */
+  schemaMayHaveChanged?(connectionId: string): void;
 }
 
 /** Everything a query tab is built from (the view registry fills it from the `ViewContext`). */
@@ -770,7 +772,10 @@ export class QueryView implements TabContent {
       this.setRunning(false);
       this.onChanged?.();
       // New or changed tables and columns complete right away.
-      if (changesSchema(text) && results.entries.length > 0) this.refreshNames();
+      if (changesSchema(text) && results.entries.length > 0) {
+        this.refreshNames();
+        this.host.schemaMayHaveChanged?.(this.connectionId);
+      }
     }
   }
 
