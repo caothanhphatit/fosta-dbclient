@@ -32,12 +32,14 @@ pub struct FieldShape {
 }
 
 /// Values seen in one field of a sample: the most frequent ones (or a few samples), `more` when the field had more
-/// distinct values than listed.
+/// distinct values than listed. `counts` says how many sampled documents held each value (same order), empty when the
+/// engine does not know.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FieldSamples {
     pub path: String,
     pub values: Vec<String>,
     pub more: bool,
+    pub counts: Vec<u64>,
 }
 
 /// A field of one object holding another object's key (a MongoDB ObjectId field matched against `_id`s).

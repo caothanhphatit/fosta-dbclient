@@ -51,6 +51,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   hints, as 0.3.0 promised. IP and MAC address values are kept only as a format, a value list that mixes emails, phone
   numbers or addresses with other values is dropped, and password hashes (`$2b$…`, `$argon2…`) count as secrets.
 - Assistant: documents sampled in a collection workspace and sent with the chat context are redacted the same way.
+- Assistant and learning: more credential names and hashes are caught. `pass`, `pw` and `user_pass` (WordPress),
+  activation, reset, invite and confirmation keys, and the usual words for "password" in German, Spanish, French,
+  Portuguese, Italian, Dutch, Vietnamese and Russian (`passwort`, `contraseña`, `mot_de_passe`, `senha`, `mat_khau`,
+  `пароль`…) count as credentials; WordPress `$P$…` / `$wp$…`, Drupal `$S$…`, phpBB `$H$…`, Apache `$apr1$…`, `$md5$`,
+  `$sha1$`, Spring `{bcrypt}…` / `{noop}…` and other `$id$…` hashes count as secrets, also after a joiner
+  (`1700000000:$P$…`) and when a `$` sits next to a token.
+- Assistant: JSON kept as a string inside a document or JSON column (a logged request body) is parsed and redacted
+  inside, and the value after a credential key in text is redacted (`Password=…;`, `?password=…&`, `DB_PASSWORD: …`,
+  `--password=…`). A long secret the collection workspace cut short (ending in `…`) is still recognised.
+- Assistant: errors from `run_read_query` and `sample_documents`, the last error and workspace context sent with the
+  chat, and task logs and command lines sent with "Ask assistant" are scrubbed of secrets and credential values, also
+  when the assistant may read data.
+- MCP: rows and errors returned by `run_read_query` are redacted like the in-app assistant's; `run_query` results, which
+  you approve one by one, are unchanged.
+- Learn this database: columns named `login`, `user`, `author`, `owner`, `contact`, `mobile`, `tel`, `mail`,
+  `created_by`, `tax_id`, `national_id`, `account_number` and the like get no value hints, a MongoDB field that is
+  mostly a boolean but sometimes holds other values gets the personal-data and format checks, and values are listed
+  only when each stands for at least 3 rows (SQL value reads now count rows per value), so a small table never lists
+  the values that tell its rows apart.
+- Docs: the security page states the limits of name-based redaction more fully (aliases, expressions, casts, `$project`
+  renames, filters on redacted columns, errors that quote plain values) and that MCP `run_read_query` rows are redacted.
 
 ### Changed
 

@@ -28,7 +28,7 @@ use super::{
     fingerprint,
     model::{ColumnProfile, DatabaseProfile, ObjectProfile, RelationProfile, RelationSource},
     redact,
-    values::{hint_of, sampled, Sampler},
+    values::{hint_of, least_rows, sampled, Sampler},
     MAX_DETAILED_OBJECTS,
 };
 use crate::{
@@ -392,7 +392,8 @@ fn apply_object(object: &mut ObjectProfile, extras: ObjectExtras, keep_values: b
             let Some(column) = object.column(&sample.path).filter(|column| sampled(column)) else {
                 continue;
             };
-            let Some(hint) = hint_of(column, &sample.values, sample.more) else {
+            let least = least_rows(&sample.counts, object.row_estimate, sample.values.len());
+            let Some(hint) = hint_of(column, &sample.values, sample.more, least) else {
                 continue;
             };
             object.value_hints.retain(|known| known.column != hint.column);
@@ -557,11 +558,13 @@ mod tests {
                 path: "status".into(),
                 values: vec!["new".into()],
                 more: false,
+                counts: vec![5],
             },
             FieldSamples {
                 path: "prefs.ann@example.com.theme".into(),
                 values: vec!["dark".into()],
                 more: false,
+                counts: vec![5],
             },
         ];
         let hinted = apply_object(&mut object, extras, true, &mut false);

@@ -988,3 +988,28 @@ async fn the_bridge_initializes_again_after_a_404() {
     let answer: Value = serde_json::from_str(&lines.recv().await.unwrap()).unwrap();
     assert_eq!(answer["error"]["code"], -32000, "{answer}");
 }
+
+#[test]
+fn run_read_query_rows_are_redacted_like_the_assistants() {
+    use crate::contract::{ColumnInfo, Value as Cell, ValueKind};
+    let column = |name: &str| ColumnInfo::result(name, "text", ValueKind::Text);
+    let result = crate::gateway::assistant::ReadResult {
+        columns: vec![column("email"), column("user_pass"), column("note")],
+        rows: vec![vec![
+            Cell::Text("ann@example.com".into()),
+            Cell::Text("$P$BxvVKjpM3qHo1rBv4bAEHdN8E1GCNb.".into()),
+            Cell::Text("key sk-abcdefghijklmnopqrstuvwx1234".into()),
+        ]],
+        truncated: false,
+        affected: None,
+        elapsed_ms: 1,
+    };
+    let redacted = tools::format_result(&result, 100, true);
+    assert!(
+        !redacted.contains("$P$Bxv") && !redacted.contains("sk-abc") && redacted.contains("ann@example.com"),
+        "{redacted}"
+    );
+    // What the user approved with run_query is returned as it is.
+    let approved = tools::format_result(&result, 100, false);
+    assert!(approved.contains("$P$Bxv"), "{approved}");
+}

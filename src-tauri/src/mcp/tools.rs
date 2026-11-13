@@ -298,8 +298,14 @@ pub async fn call(app: &AppState, client: &ClientInfo, name: &str, arguments: &V
                 run_query(app, client, &target, &query, database.as_deref(), limits).await
             };
             match outcome {
-                Ok(result) => Ok(ai::framed(name, &format_result(&result, limits.max_rows))),
+                // run_read_query rows are redacted like the in-app assistant's (credential columns and fields, secret-looking
+                // text); run_query results are what the user approved.
+                Ok(result) => Ok(ai::framed(name, &format_result(&result, limits.max_rows, name == "run_read_query"))),
                 Err(error) if gateway::assistant::is_refusal(&error) => Err(error.to_string()),
+                Err(error) if name == "run_read_query" => Err(ai::framed(
+                    name,
+                    &format!("Error: {}", ai::profile::redact::scrub_value(&error.to_string())),
+                )),
                 Err(error) => Err(ai::framed(name, &format!("Error: {error}"))),
             }
         }
@@ -495,7 +501,14 @@ fn list_connections(app: &AppState) -> String {
     serde_json::to_string(&json!({ "connections": connections })).unwrap_or_default()
 }
 
-fn cell(value: &Cell) -> Value {
+fn cell(column: &str, value: &Cell, redact: bool) -> Value {
+    let redacted;
+    let value = if redact {
+        redacted = ai::profile::redact::redact_cell(column, value);
+        &redacted
+    } else {
+        value
+    };
     let json = match value {
         Cell::Bytes(bytes) => Value::String(format!("<binary {} bytes>", bytes.len())),
         other => other.to_json(),
@@ -516,8 +529,9 @@ fn cell(value: &Cell) -> Value {
     }
 }
 
-/// Compact JSON: columns, rows (arrays of cells), and a note when rows were cut.
-fn format_result(result: &ReadResult, max_rows: usize) -> String {
+/// Compact JSON: columns, rows (arrays of cells), and a note when rows were cut. With `redact`, each cell goes through
+/// [`ai::profile::redact::redact_cell`] first.
+pub(super) fn format_result(result: &ReadResult, max_rows: usize, redact: bool) -> String {
     if result.columns.is_empty() {
         return match result.affected {
             Some(affected) => format!("The statement ran: {affected} row(s) affected."),
@@ -529,7 +543,12 @@ fn format_result(result: &ReadResult, max_rows: usize) -> String {
     let mut size = 0;
     let mut cut = false;
     for row in &result.rows {
-        let row = Value::Array(row.iter().map(cell).collect());
+        let row = Value::Array(
+            row.iter()
+                .enumerate()
+                .map(|(index, value)| cell(columns.get(index).copied().unwrap_or_default(), value, redact))
+                .collect(),
+        );
         size += row.to_string().len() + 1;
         if size > MAX_RESULT_CHARS {
             cut = true;

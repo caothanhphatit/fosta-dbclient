@@ -105,13 +105,25 @@ shown in the chat and written to the audit log. Database content is passed to th
 
 Rows and documents the read tools return (`run_read_query`, `sample_documents`) are redacted before they reach the
 model, and the chat shows the same redacted values: a column or field named like a credential or sensitive identifier
-(`password`, `secret`, `token`, `api_key`, `hash`, `pin`, `ssn`, `card`, `iban`, date of birth…, see the list under
-[Learn this database](#learn-this-database)) keeps its name and shows `[redacted]` instead of its value (a null stays
-null), at any depth: nested documents, dotted keys, arrays and JSON columns. Secret-looking text in any value (API keys,
-tokens, password hashes such as `$2b$…`, PEM blocks, passwords in URLs) is replaced by `[redacted]` too. Contact data
-(emails, names, phone numbers, addresses) is not redacted there: when you allow reads, answering questions about your data
-needs it. A column renamed in the query (`SELECT password AS p`) is caught only by the value checks. It is never kept in
-a learned profile either (below).
+(`password`, `pass`, `pw`, `user_pass`, `secret`, `token`, `api_key`, `hash`, `pin`, `ssn`, `card`, `iban`, date of
+birth, activation and reset keys, and the usual words for "password" in German, Spanish, French, Portuguese, Italian,
+Dutch, Vietnamese and Russian…, see the list under [Learn this database](#learn-this-database)) keeps its name and shows
+`[redacted]` instead of its value (a null stays null), at any depth: nested documents, dotted keys, arrays, JSON columns
+and JSON kept as a string inside a value (a logged request body). Secret-looking text in any value is replaced by
+`[redacted]` too: API keys, tokens, password hashes (`$2b$…`, `$argon2…`, WordPress `$P$…` and `$wp$…`, Drupal `$S$…`,
+phpBB `$H$…`, Apache `$apr1$…`, Spring `{bcrypt}…` and `{noop}…`, LDAP `{SSHA}…`), PEM blocks, the user information of
+URLs (`user:password@host`), and the value after a credential key in text (`Password=…;` in a connection string,
+`?password=…&` in a URL, `DB_PASSWORD: …`, `--password=…`). Error messages from `run_read_query` and `sample_documents`
+get the same text checks. Contact data (emails, names, phone numbers, addresses) is not redacted there: when you allow
+reads, answering questions about your data needs it.
+
+Redaction goes by column and field names. A value the query renames or computes from such a column (an alias such as
+`SELECT password AS p`, an expression such as `concat(password)` or `left(password, 3)`, a cast, a whole-row value, a
+MongoDB `$project` that renames the field) is caught only by the value checks, which miss plain-text passwords, and a
+filter on a redacted column (`WHERE password LIKE 'a%'`) still tells the model about its values. Error messages are
+checked for secret-looking text only, so an error that quotes a plain value (`invalid input syntax for type integer:
+"hunter2"`) passes. Allow reads only where the assistant may see the data. None of this is ever kept in a learned profile
+(below).
 
 On MongoDB the same setting covers sampled documents: `sample_documents` reads at most 20 documents of a collection in the
 chat's database (or what leaves a pipeline stage, on a bounded sample), redacted as above and with long values cut,
@@ -119,7 +131,9 @@ through the same read-only gateway check, shown in the chat and audited; and the
 only when reading that collection is a plain read for the rules (not a system collection, not `admin`, `local` or `config`, not
 administration). Where the setting is off, neither reaches the model: it sees field names, types, the filter you typed and the
 errors, with the values cut out of the errors (the key of a duplicate-key error, every quoted literal). An error message spread
-over several lines may keep values on its later lines.
+over several lines may keep values on its later lines. Whatever the setting, the last error, the workspace context and a
+task log sent with "Ask assistant" (its command line and last lines) get the text checks above, so `-e
+POSTGRES_PASSWORD=…`, `--password=…`, connection strings and tokens in them are redacted.
 
 Filters and pipelines it suggests, in the chat or through `open_collection_workspace`, are only pre-filled for you to review;
 they never run on their own, and a workspace the assistant opens does not run its first page either (Documents waits for
@@ -152,16 +166,21 @@ Without reads, learning is metadata only: the structure above, MongoDB collectio
 Elasticsearch mappings, aliases and data streams (which are metadata, so they are always read). MongoDB then has no
 nested paths and Redis no key patterns, and the build says so. Value hints learned earlier are dropped by a refresh that
 may not sample them (reads off now, or "Sample column values" unticked). Columns whose names look like credentials or
-sensitive identifiers (`password`, `secret`, `token`, `api_key`, `salt`, `hash`, `pin`, `otp`, `session`, `ssn`, `card`,
-`cvv`, `iban`, `dob`…) are never sampled and lose their comments and defaults. Columns and fields named like personal
+sensitive identifiers (`password`, `pass`, `pw`, `secret`, `token`, `api_key`, `salt`, `hash`, `pin`, `otp`, `session`,
+`ssn`, `card`, `cvv`, `iban`, `dob`, `activation_key`, `reset_key`, `passwort`, `contraseña`, `mot_de_passe`, `senha`,
+`mat_khau`, `пароль`…) are never sampled and lose their comments and defaults. Columns and fields named like personal
 data (`email`, `phone`, `address`, person names such as `full_name`, `first_name` or `customerName`, `ip_address`,
-`mac_address`, `passport`), and network address types (`inet`, `cidr`, `macaddr`, `IPv4`), get no value read and no
-hint either (a yes/no flag such as `email_verified` does; MongoDB reads whole sample documents to learn field paths, but
-keeps no value of these fields). A plain `name` column is sampled, since it often names things rather than
-people; its values are kept only when there are few of them. Values that are emails, phone numbers, IP or MAC addresses,
-URLs, UUIDs or JSON are never kept as hints: a column where all of them share such a format keeps only the format, and one
-where they are mixed with other values keeps nothing. Secret-looking text (API keys, tokens, password hashes, PEM blocks)
-is replaced by `[redacted]` throughout the profile.
+`mac_address`, `passport`; names ending in `login`, `user`, `author`, `owner`, `contact`, `mobile`, `tel` or `mail`;
+`created_by` and the like; `tax_id`, `national_id`, `account_number`), and network address types (`inet`, `cidr`,
+`macaddr`, `IPv4`), get no value read and no hint either (a yes/no flag such as `email_verified` does, but not a MongoDB
+field that is only mostly a boolean; MongoDB reads whole sample documents to learn field paths, but keeps no value of
+these fields). A plain `name` column is sampled, since it often names things rather than people. Values are kept as a
+list only when there are at most 20 and each stands for at least 3 rows: counted in the sample on SQL engines and from
+MongoDB's field statistics, and estimated from the row count for MongoDB's distinct reads; yes/no values are always
+listed. So a small table never lists the values of a column that tells its rows apart, whatever its name. Values that are
+emails, phone numbers, IP or MAC addresses, URLs, UUIDs or JSON are never kept as hints: a column where all of them share
+such a format keeps only the format, and one where they are mixed with other values keeps nothing. Secret-looking text
+(API keys, tokens, password hashes, PEM blocks) is replaced by `[redacted]` throughout the profile.
 
 Learning sends nothing to a model. The summary step does, and only when you choose "Summarise" after seeing the estimate:
 it sends the structure and your notes to the active LLM provider (with the model you pick), plus the value hints only when
@@ -190,6 +209,11 @@ allows it.
 What a client **can see**: the connections of those workspaces (id, name, engine, workspace), their databases, tables, columns and
 relations, and the rows its read-only queries return (100 by default, 500 at most). It never sees passwords, SSH or TLS secrets,
 hosts, users, or the confirmation token.
+
+Rows from `run_read_query` are redacted the way the in-app assistant's are ([The assistant](#the-assistant)): columns and
+fields named like credentials show `[redacted]`, secret-looking text and password hashes are replaced, and its error
+messages get the same text checks, with the same limits (a renamed or computed column is caught only by the value checks).
+Results of `run_query`, the statements you approve one by one, are returned as they are.
 
 What a client **can do**:
 

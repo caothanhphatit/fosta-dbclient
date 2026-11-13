@@ -450,7 +450,8 @@ pub(super) async fn sample(
     };
     let outcome = gateway::assistant::invoke_read(db, reads, operation, args)
         .await
-        .map_err(|error| error.to_string())
+        // Server errors can quote values (a duplicate key, a failed conversion): scrubbed like row text.
+        .map_err(|error| redact::scrub_value(&error.to_string()))
         .and_then(|result| documents_of(operation, &result).map(|(documents, more)| (documents, more, result)));
     let elapsed_ms = outcome
         .as_ref()

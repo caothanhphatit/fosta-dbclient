@@ -2,18 +2,21 @@
 //! learning. Only where the user lets the assistant read data (`gateway::assistant::reads_allowed`) and the caller asked
 //! for it; every read goes through the gateway as the assistant (Read only, audited, time-bounded):
 //!
-//! - SQL engines: [`Engine::distinct_values_statement`] (`SELECT DISTINCT c FROM (SELECT c FROM t LIMIT 1000) s LIMIT
-//!   21`, identifiers quoted by the engine's dialect) through `gateway::assistant::read`;
+//! - SQL engines: [`Engine::distinct_values_statement`] (`SELECT c, COUNT(*) FROM (SELECT c FROM t LIMIT 1000) s GROUP BY c
+//!   LIMIT 21`, identifiers quoted by the engine's dialect) through `gateway::assistant::read`;
 //! - MongoDB: `mongo.distinct` (at most 20 values, a short `maxTimeMS`) through `gateway::assistant::invoke_read`;
 //! - other engines (Elasticsearch, Redis): no bounded distinct read, so no hints, and the outcome says so.
 //!
 //! Sensitive columns ([`redact::is_sensitive_name`]), columns named like personal data ([`redact::is_personal_name`]:
-//! emails, phones, addresses, person names, IP and MAC addresses; flags excepted), primary keys and types unlikely to
-//! hold few values (network addresses among them) are never read; excluded objects are not in the profile to begin with.
-//! Values that look like secrets are dropped, and values of formats that carry personal data or identifiers (emails,
-//! phone numbers, IP and MAC addresses, URLs, UUIDs, JSON) are never kept: only the format when all values share it,
-//! nothing when they are mixed with other values. The work is bounded per object, per build and in time, and stops with
-//! the build's cancellation.
+//! emails, phones, addresses, person names, logins, authors and owners, identity and account numbers, IP and MAC
+//! addresses; single-type boolean flags excepted), primary keys and types unlikely to hold few values (network addresses
+//! among them) are never read; excluded objects are not in the profile to begin with. Values that look like secrets are
+//! dropped, and values of formats that carry personal data or identifiers (emails, phone numbers, IP and MAC addresses,
+//! URLs, UUIDs, JSON) are never kept: only the format when all values share it, nothing when they are mixed with other
+//! values. Values are listed only when each stands for at least [`MIN_ROWS_PER_VALUE`] rows (counted in the sample, or
+//! estimated from the object's row count where the engine gives no counts), so a small table never lists the values of
+//! a column that identifies its rows. The work is bounded per object, per build and in time, and stops with the build's
+//! cancellation.
 //!
 //! [`Engine::distinct_values_statement`]: crate::contract::Engine::distinct_values_statement
 
@@ -45,6 +48,10 @@ pub const SAMPLE_ROWS: u64 = 1_000;
 /// A column with at most this many distinct values (of at most [`MAX_VALUE_CHARS`] characters) gets them listed.
 pub const MAX_ENUM_VALUES: usize = 20;
 pub const MAX_VALUE_CHARS: usize = 64;
+/// Rows each listed value must stand for: a value held by one or two rows says more about those rows than about the
+/// column (a 6-row `employees` table's `login`), so such a column gets a format or nothing. `true` / `false` are always
+/// listed.
+pub const MIN_ROWS_PER_VALUE: u64 = 3;
 /// How long all the reads of one build may take together.
 pub const BUDGET: Duration = Duration::from_secs(60);
 /// The server-side time bound of one MongoDB read.
@@ -131,13 +138,21 @@ const SKIPPED_TYPES: [&str; 21] = [
 ];
 
 /// Whether a column is worth reading: not sensitive or personal data, not a key, and of a type that can hold a short
-/// list of values. A flag named like personal data (`email_verified`, a boolean) is still read.
+/// list of values. A flag named like personal data (`email_verified`, a boolean) is still read, but not a document
+/// field that is mostly a boolean and sometimes something else (`email`: `false` or an address; type `bool | string`).
 pub(super) fn sampled(column: &ColumnProfile) -> bool {
     // `prefs.{key}` stands for many fields whose names were values.
     if column.sensitive || column.primary || redact::is_sensitive_name(&column.name) || column.name.contains(redact::KEY_PLACEHOLDER) {
         return false;
     }
-    if column.kind != ValueKind::Bool && redact::is_personal_name(&column.name) {
+    let types = column
+        .type_name
+        .split('|')
+        .map(str::trim)
+        .filter(|type_name| *type_name != "null")
+        .count();
+    let flag = column.kind == ValueKind::Bool && types <= 1;
+    if !flag && redact::is_personal_name(&column.name) {
         return false;
     }
     let lower = column.type_name.to_ascii_lowercase();
@@ -266,9 +281,20 @@ fn is_mac(text: &str) -> bool {
     groups(':', 6, 2) || groups('-', 6, 2) || groups('.', 3, 4)
 }
 
-/// The hint a sample gives: a private format, an ISO date, the values (when few and short), or a numeric format.
-/// `more` says the sample had more distinct values than it returned.
-pub fn hint_of(column: &ColumnProfile, sample: &[String], more: bool) -> Option<ValueHint> {
+/// The fewest rows any value of a sample stands for: the smallest count where the read counted them, else the object's
+/// row estimate shared out among the distinct values; `None` when neither is known.
+pub fn least_rows(counts: &[u64], row_estimate: Option<i64>, distinct: usize) -> Option<u64> {
+    if !counts.is_empty() {
+        return counts.iter().copied().min();
+    }
+    let rows = u64::try_from(row_estimate?).ok()?;
+    Some(rows / distinct.max(1) as u64)
+}
+
+/// The hint a sample gives: a private format, an ISO date, the values (when few, short, and each standing for at least
+/// [`MIN_ROWS_PER_VALUE`] rows by `least`, see [`least_rows`]), or a numeric format. `more` says the sample had more
+/// distinct values than it returned.
+pub fn hint_of(column: &ColumnProfile, sample: &[String], more: bool, least: Option<u64>) -> Option<ValueHint> {
     let values: Vec<&str> = sample.iter().map(String::as_str).filter(|value| !value.is_empty()).collect();
     if values.is_empty() {
         return None;
@@ -281,22 +307,23 @@ pub fn hint_of(column: &ColumnProfile, sample: &[String], more: bool) -> Option<
             format: Some(name.to_owned()),
         })
     };
+    // Every kind: a field inferred as a boolean or a number can still hold emails among its values.
+    if let Some((name, _)) = PRIVATE_FORMATS.iter().find(|(_, test)| all(*test)) {
+        return format(name);
+    }
     let textual = matches!(column.kind, ValueKind::Text | ValueKind::Other);
-    if textual {
-        if let Some((name, _)) = PRIVATE_FORMATS.iter().find(|(_, test)| all(*test)) {
-            return format(name);
-        }
-        if all(is_iso_date) {
-            return format("iso-date");
-        }
+    if textual && all(is_iso_date) {
+        return format("iso-date");
     }
     // A value that looks like a secret, or of a private format (an email, an IP address among other values), anywhere
     // means the column is not listed at all.
     let private = |value: &&str| PRIVATE_FORMATS.iter().any(|(_, test)| test(value));
-    if values.iter().any(|value| redact::scrub(value) != *value) || (textual && values.iter().any(private)) {
+    if values.iter().any(|value| redact::scrub(value) != *value) || values.iter().any(private) {
         return None;
     }
-    let few = !more && values.len() <= MAX_ENUM_VALUES && values.iter().all(|value| value.chars().count() <= MAX_VALUE_CHARS);
+    let flags = values.iter().all(|value| matches!(*value, "true" | "false"));
+    let common = flags || least.is_some_and(|least| least >= MIN_ROWS_PER_VALUE);
+    let few = common && !more && values.len() <= MAX_ENUM_VALUES && values.iter().all(|value| value.chars().count() <= MAX_VALUE_CHARS);
     if few {
         let mut listed: Vec<String> = values.iter().map(|value| (*value).to_owned()).collect();
         listed.sort();
@@ -348,8 +375,9 @@ fn plan(profile: &DatabaseProfile, done: &HashSet<usize>) -> Vec<(usize, Vec<usi
     planned
 }
 
-/// What one read gave: the values as text, and whether there were more distinct values than returned.
-type Sample = (Vec<String>, bool);
+/// What one read gave: the values as text, whether there were more distinct values than returned, and how many sampled
+/// rows held each value (empty when the read does not count).
+type Sample = (Vec<String>, bool, Vec<u64>);
 
 async fn read_sql(
     sampler: &Sampler<'_>,
@@ -368,8 +396,21 @@ async fn read_sql(
         .ok_or_else(|| crate::contract::unsupported_capability("value sampling"))?;
     let result = gateway::assistant::read_audited(sampler.manager, &sampler.context, &statement, database, ReadAudit::Failures).await?;
     let more = result.rows.len() > MAX_ENUM_VALUES || result.truncated;
-    let values = result.rows.iter().filter_map(|row| row.first().and_then(text_of)).collect();
-    Ok((values, more))
+    let counted: Vec<(String, Option<u64>)> = result
+        .rows
+        .iter()
+        .filter_map(|row| {
+            let value = row.first().and_then(text_of)?;
+            Some((
+                value,
+                row.get(1).and_then(text_of).and_then(|count| count.trim().parse::<u64>().ok()),
+            ))
+        })
+        .collect();
+    let counts: Vec<u64> = counted.iter().map_while(|(_, count)| *count).collect();
+    let counts = if counts.len() == counted.len() { counts } else { Vec::new() };
+    let values = counted.into_iter().map(|(value, _)| value).collect();
+    Ok((values, more, counts))
 }
 
 async fn read_mongo(sampler: &Sampler<'_>, database: &str, object: &ObjectProfile, column: &ColumnProfile) -> AppResult<Sample> {
@@ -388,7 +429,7 @@ async fn read_mongo(sampler: &Sampler<'_>, database: &str, object: &ObjectProfil
         .and_then(Json::as_array)
         .map(|values| values.iter().filter_map(json_text_of).collect())
         .unwrap_or_default();
-    Ok((values, more))
+    Ok((values, more, Vec::new()))
 }
 
 /// The one audit entry of a build's value reads (each failed read has its own, each refusal too).
@@ -397,7 +438,7 @@ fn audit_values(sampler: &Sampler<'_>, handle: &Handle, database: &str, path: Pa
         return;
     }
     let read = match path {
-        Path::Sql => "SELECT DISTINCT",
+        Path::Sql => "SELECT … GROUP BY",
         Path::Mongo => "mongo.distinct",
     };
     let stopped = outcome.skipped.as_deref().map(|why| format!("; {why}")).unwrap_or_default();
@@ -497,8 +538,8 @@ pub async fn sample_except(
                 }
             };
             match outcome_of_read {
-                Ok(Ok((values, more))) => {
-                    if let Some(hint) = hint_of(column, &values, more) {
+                Ok(Ok((values, more, counts))) => {
+                    if let Some(hint) = hint_of(column, &values, more, least_rows(&counts, object.row_estimate, values.len())) {
                         hints.push(hint);
                     }
                 }
@@ -556,12 +597,12 @@ mod tests {
     #[test]
     fn samples_become_values_or_formats() {
         let status = column("status", "text", ValueKind::Text);
-        let hint = hint_of(&status, &strings(&["paid", "new", "shipped", "new"]), false).unwrap();
+        let hint = hint_of(&status, &strings(&["paid", "new", "shipped", "new"]), false, Some(10)).unwrap();
         assert_eq!((hint.values, hint.format), (strings(&["new", "paid", "shipped"]), None));
         // Too many, or too long, values give no list.
-        assert!(hint_of(&status, &strings(&["a"; 3]), true).is_none());
-        assert!(hint_of(&status, &[("x".repeat(65))], false).is_none());
-        let format = |values: &[&str], more: bool| hint_of(&status, &strings(values), more).and_then(|hint| hint.format);
+        assert!(hint_of(&status, &strings(&["a"; 3]), true, Some(10)).is_none());
+        assert!(hint_of(&status, &[("x".repeat(65))], false, Some(10)).is_none());
+        let format = |values: &[&str], more: bool| hint_of(&status, &strings(values), more, Some(10)).and_then(|hint| hint.format);
         assert_eq!(format(&["a@example.com", "b@example.org"], false).as_deref(), Some("email"));
         assert_eq!(format(&["a2b3c4d5-e6f7-4890-abcd-ef0123456789"], false).as_deref(), Some("uuid"));
         assert_eq!(format(&["https://example.com/a"], true).as_deref(), Some("url"));
@@ -570,12 +611,18 @@ mod tests {
         assert_eq!(format(&["+1 555 123 4567", "(555) 123-4567"], false).as_deref(), Some("phone-ish"));
         assert_eq!(format(&["12", "13.5", "-4"], true).as_deref(), Some("numeric-string"));
         // Few numeric strings are listed: codes are more useful than a format.
-        assert_eq!(hint_of(&status, &strings(&["1", "2"]), false).unwrap().values, strings(&["1", "2"]));
+        assert_eq!(
+            hint_of(&status, &strings(&["1", "2"]), false, Some(10)).unwrap().values,
+            strings(&["1", "2"])
+        );
         // Emails are never listed, however few.
-        assert!(hint_of(&status, &strings(&["a@example.com"]), false).unwrap().values.is_empty());
+        assert!(hint_of(&status, &strings(&["a@example.com"]), false, Some(10))
+            .unwrap()
+            .values
+            .is_empty());
         // A secret-looking value drops the column.
-        assert!(hint_of(&status, &strings(&["new", "sk-abcdefghijklmnopqrstuvwx1234"]), false).is_none());
-        assert!(hint_of(&status, &[], false).is_none());
+        assert!(hint_of(&status, &strings(&["new", "sk-abcdefghijklmnopqrstuvwx1234"]), false, Some(10)).is_none());
+        assert!(hint_of(&status, &[], false, Some(10)).is_none());
         // IP and MAC addresses give their format only; mixed with other values, nothing.
         assert_eq!(format(&["192.168.1.10", "10.0.0.1"], false).as_deref(), Some("ip"));
         assert_eq!(format(&["::1"], false).as_deref(), Some("ip"));
@@ -587,9 +634,66 @@ mod tests {
             &["new", "+1 555 123 4567"],
             &["new", "08:00:2b:01:02:03"],
         ] {
-            assert!(hint_of(&status, &strings(mixed), false).is_none(), "{mixed:?}");
+            assert!(hint_of(&status, &strings(mixed), false, Some(10)).is_none(), "{mixed:?}");
         }
         assert!(!is_mac("12:34") && !is_mac("gg:00:2b:01:02:03") && !is_mac("2026-11-13"));
+    }
+
+    #[test]
+    fn values_held_by_few_rows_are_never_listed() {
+        let status = column("status", "text", ValueKind::Text);
+        let listed =
+            |least: Option<u64>| hint_of(&status, &strings(&["new", "paid"]), false, least).is_some_and(|hint| !hint.values.is_empty());
+        assert!(listed(Some(MIN_ROWS_PER_VALUE)) && listed(Some(50)));
+        assert!(!listed(Some(MIN_ROWS_PER_VALUE - 1)) && !listed(Some(1)) && !listed(None));
+        // Flags are listed whatever the counts; numbers still get their format.
+        let active = column("active", "boolean", ValueKind::Bool);
+        assert_eq!(
+            hint_of(&active, &strings(&["false", "true"]), false, Some(1)).unwrap().values,
+            strings(&["false", "true"])
+        );
+        let code = hint_of(&status, &strings(&["12", "13"]), false, Some(1)).unwrap();
+        assert_eq!((code.values.len(), code.format.as_deref()), (0, Some("numeric-string")));
+        // The fewest rows: counted when the read counts, else the row estimate shared out.
+        assert_eq!(least_rows(&[9, 2, 30], Some(1_000), 3), Some(2));
+        assert_eq!(least_rows(&[], Some(6), 6), Some(1));
+        assert_eq!(least_rows(&[], Some(600), 6), Some(100));
+        assert_eq!(least_rows(&[], None, 6), None);
+        assert_eq!(least_rows(&[], Some(-1), 6), None);
+    }
+
+    #[test]
+    fn mixed_boolean_fields_get_the_personal_and_format_checks() {
+        // `email` is mostly `false` and sometimes an address: inferred `Bool`, but not a flag.
+        assert!(!sampled(&column("email", "bool | string", ValueKind::Bool)));
+        assert!(sampled(&column("email_verified", "bool | null", ValueKind::Bool)));
+        let mixed = column("contact", "bool | string", ValueKind::Bool);
+        assert!(hint_of(&mixed, &strings(&["false", "ann@example.com"]), false, Some(10)).is_none());
+        assert_eq!(
+            hint_of(&mixed, &strings(&["ann@example.com"]), false, Some(10))
+                .and_then(|hint| hint.format)
+                .as_deref(),
+            Some("email")
+        );
+    }
+
+    #[test]
+    fn people_and_identity_columns_are_never_read() {
+        for name in [
+            "login",
+            "user",
+            "author",
+            "created_by",
+            "owner",
+            "mobile",
+            "tel",
+            "tax_id",
+            "national_id",
+            "account_number",
+        ] {
+            assert!(!sampled(&column(name, "varchar(50)", ValueKind::Text)), "{name}");
+        }
+        assert!(sampled(&column("user_type", "varchar(20)", ValueKind::Text)));
     }
 
     #[test]

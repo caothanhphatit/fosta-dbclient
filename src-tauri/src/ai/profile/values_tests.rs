@@ -183,6 +183,7 @@ impl Connection for Conn {
             .iter()
             .map(|(name, type_name, kind)| ColumnInfo::result(name, type_name, kind.clone()))
             .collect();
+        description.row_estimate = Some(1_000);
         if object.name == "orders" {
             description.primary_key = Some(KeyInfo {
                 name: None,
@@ -228,12 +229,15 @@ impl Session for Sess {
         }
         sink.event(StreamEvent::Columns {
             index: 0,
-            columns: vec![ColumnInfo::result(column, "text", ValueKind::Text)],
+            columns: vec![
+                ColumnInfo::result(column, "text", ValueKind::Text),
+                ColumnInfo::result("count", "bigint", ValueKind::Int),
+            ],
         });
         let rows: Vec<Vec<Value>> = values_of(column)
             .into_iter()
             .take(limit)
-            .map(|value| vec![Value::Text(value)])
+            .map(|value| vec![Value::Text(value), Value::Int(10)])
             .collect();
         let count = rows.len();
         sink.event(StreamEvent::Rows { index: 0, rows });

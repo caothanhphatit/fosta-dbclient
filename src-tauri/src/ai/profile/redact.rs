@@ -29,8 +29,10 @@ pub const MAX_TEXT_CHARS: usize = 500;
 /// What replaces a redacted value or piece of text.
 pub const REDACTED: &str = "[redacted]";
 
-/// Words a column name contains to count as sensitive.
-const SENSITIVE_PARTS: [&str; 10] = [
+/// Words a column name contains to count as sensitive, compared lower-cased (Unicode): English, and the usual words for
+/// "password" in other languages (German `passwort` / `kennwort`, Spanish `contraseña`, Dutch `wachtwoord`, Russian
+/// `пароль`).
+const SENSITIVE_PARTS: [&str; 16] = [
     "password",
     "passwd",
     "passphrase",
@@ -41,9 +43,21 @@ const SENSITIVE_PARTS: [&str; 10] = [
     "api_key",
     "private",
     "credential",
+    "passwort",
+    "kennwort",
+    "contrasena",
+    "contraseña",
+    "wachtwoord",
+    "пароль",
 ];
 /// Words a column name has as a whole word (`card_number`, `pin_hash`, `totpSeed`, `session-id`) to count as sensitive.
-const SENSITIVE_WORDS: [&str; 25] = [
+const SENSITIVE_WORDS: [&str; 31] = [
+    "pass",
+    "pw",
+    "pword",
+    "senha",
+    "parola",
+    "matkhau",
     "salt",
     "hash",
     "ssn",
@@ -70,9 +84,12 @@ const SENSITIVE_WORDS: [&str; 25] = [
     "dateofbirth",
     "jwt",
 ];
+/// Word sequences that name a password in other languages (French `mot_de_passe`, Vietnamese `mat_khau`), also
+/// written as one word (`motdepasse`, `matkhau`).
+const SENSITIVE_PHRASES: [&[&str]; 3] = [&["mot", "de", "passe"], &["mat", "khau"], &["mật", "khẩu"]];
 /// Words that make the next word, `key` or `code`, sensitive (`encryption_key`, `aws_access_key_id`, `licenseKey`,
 /// `auth-code`), also written as one word (`signingkey`).
-const KEY_QUALIFIERS: [&str; 17] = [
+const KEY_QUALIFIERS: [&str; 21] = [
     "encryption",
     "decryption",
     "signing",
@@ -90,9 +107,23 @@ const KEY_QUALIFIERS: [&str; 17] = [
     "gpg",
     "pgp",
     "session",
+    "activation",
+    "reset",
+    "invite",
+    "confirmation",
 ];
 const KEY_WORDS: [&str; 2] = ["key", "keys"];
-const CODE_QUALIFIERS: [&str; 6] = ["auth", "recovery", "backup", "verification", "reset", "mfa"];
+const CODE_QUALIFIERS: [&str; 9] = [
+    "auth",
+    "recovery",
+    "backup",
+    "verification",
+    "reset",
+    "mfa",
+    "activation",
+    "invite",
+    "confirmation",
+];
 
 /// A database node the assistant does not learn (a system database).
 pub fn is_system_database(node: &ObjectNode) -> bool {
@@ -151,13 +182,22 @@ fn words(name: &str) -> Vec<String> {
 
 /// Whether a column called `name` may hold credentials or personal data.
 pub fn is_sensitive_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
+    let lower = name.to_lowercase();
     if SENSITIVE_PARTS.iter().any(|part| lower.contains(part)) {
         return true;
     }
     let words = words(name);
     let joined = words.concat();
-    if joined.contains("apikey") || words.iter().any(|word| SENSITIVE_WORDS.contains(&word.as_str())) {
+    let phrase = |phrase: &&[&str]| {
+        joined == phrase.concat()
+            || words
+                .windows(phrase.len())
+                .any(|window| window.iter().zip(phrase.iter()).all(|(a, b)| a == b))
+    };
+    if joined.contains("apikey")
+        || words.iter().any(|word| SENSITIVE_WORDS.contains(&word.as_str()))
+        || SENSITIVE_PHRASES.iter().any(phrase)
+    {
         return true;
     }
     let compound = |qualifiers: &[&str], nouns: &[&str], word: &str| {
@@ -208,6 +248,60 @@ const PERSONAL_WORDS: [&str; 30] = [
     "nickname",
     "passport",
 ];
+/// Words that make a column personal data when they end its name (`login`, `user`, `created_by_user`, `owner`,
+/// `contact`, `mobile`): such columns hold who someone is or how to reach them. `user_type` or `owner_kind` still say
+/// what kind of thing a row is, so they stay.
+const PERSON_NOUNS: [&str; 22] = [
+    "login",
+    "logins",
+    "user",
+    "users",
+    "userid",
+    "author",
+    "authors",
+    "owner",
+    "owners",
+    "creator",
+    "assignee",
+    "reporter",
+    "reviewer",
+    "approver",
+    "contact",
+    "mobile",
+    "tel",
+    "cellphone",
+    "mail",
+    "vat",
+    "nin",
+    "postcode",
+];
+/// Words that make the next word, `id`, `no`, `number` or `code`, an identity or account identifier (`tax_id`,
+/// `national_id`, `account_number`, `social_security_no`).
+const ID_QUALIFIERS: [&str; 10] = [
+    "tax",
+    "national",
+    "account",
+    "acct",
+    "vat",
+    "security",
+    "insurance",
+    "driver",
+    "licence",
+    "license",
+];
+/// Words that make the next word, `by`, name a person (`created_by`, `updatedBy`, `assigned_by`).
+const ACTOR_VERBS: [&str; 10] = [
+    "created",
+    "updated",
+    "modified",
+    "deleted",
+    "changed",
+    "edited",
+    "assigned",
+    "approved",
+    "reviewed",
+    "submitted",
+];
 /// Words that make the next word, `name`, a person's name (`first_name`, `customerName`, `contact.name`).
 const NAME_QUALIFIERS: [&str; 22] = [
     "full",
@@ -240,12 +334,15 @@ const NAME_QUALIFIERS: [&str; 22] = [
 pub fn is_personal_name(name: &str) -> bool {
     let words = words(name);
     words.iter().any(|word| PERSONAL_WORDS.contains(&word.as_str()))
+        || words.last().is_some_and(|last| PERSON_NOUNS.contains(&last.as_str()))
         || words.windows(2).any(|pair| {
             let (first, second) = (pair[0].as_str(), pair[1].as_str());
             (first == "e" && second == "mail")
                 || (first == "mac" && matches!(second, "address" | "addr"))
                 || (first == "mobile" && matches!(second, "number" | "phone" | "no"))
                 || (NAME_QUALIFIERS.contains(&first) && matches!(second, "name" | "names"))
+                || (ID_QUALIFIERS.contains(&first) && matches!(second, "id" | "no" | "number" | "num" | "code"))
+                || (ACTOR_VERBS.contains(&first) && second == "by")
         })
 }
 
@@ -293,6 +390,16 @@ fn trim_quotes(word: &str) -> &str {
     word.trim_matches(|c: char| quote_like(c) || matches!(c, ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}'))
 }
 
+/// [`trim_quotes`], and the `…` a cut value ends with (the collection workspace cuts long values before they reach
+/// the backend), so a cut secret is still recognised.
+fn trim_for_check(word: &str) -> &str {
+    let mut word = trim_quotes(word);
+    while let Some(rest) = word.strip_suffix('…') {
+        word = trim_quotes(rest);
+    }
+    word
+}
+
 fn token_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '_' | '-' | '.')
 }
@@ -300,7 +407,7 @@ fn token_char(c: char) -> bool {
 /// Whether one piece of a word looks like a credential: a known key prefix, a long hex string, or a long mix of upper
 /// case, lower case and digits (base64 or base62 tokens).
 fn looks_like_secret(word: &str) -> bool {
-    let word = trim_quotes(word);
+    let word = trim_for_check(word);
     if word.len() < MIN_SECRET_CHARS || !word.chars().all(token_char) {
         return false;
     }
@@ -319,37 +426,98 @@ fn looks_like_secret(word: &str) -> bool {
     upper && lower && digit
 }
 
-/// Modular-crypt and LDAP password hashes (`$2b$12$…`, `$argon2id$v=19$…`, `pbkdf2_sha256$…`, `{SSHA}…`), which
-/// [`looks_like_secret`] misses for their `$` and braces.
-const HASH_PREFIXES: [&str; 13] = [
+/// Modular-crypt, framework and LDAP password hashes (`$2b$12$…`, `$argon2id$v=19$…`, `pbkdf2_sha256$…`, WordPress
+/// `$P$…` / `$wp$2y$…`, Drupal `$S$…`, phpBB `$H$…`, Apache `$apr1$…`, Spring `{bcrypt}$2a$…`, LDAP `{SSHA}…`), which
+/// [`looks_like_secret`] misses for their `$` and braces. Compared case-insensitively.
+const HASH_PREFIXES: [&str; 35] = [
     "$2a$",
     "$2b$",
     "$2x$",
     "$2y$",
     "$1$",
+    "$3$",
     "$5$",
     "$6$",
+    "$7$",
     "$y$",
+    "$gy$",
+    "$p$",
+    "$h$",
+    "$s$",
+    "$wp$",
+    "$apr1$",
+    "$md5",
+    "$sha1$",
+    "$sha256$",
+    "$sha512$",
     "$argon2",
     "$scrypt$",
     "$pbkdf2",
     "pbkdf2_sha",
+    "bcrypt$",
+    "bcrypt_sha256$",
+    "argon2$",
     "{ssha",
+    "{sha",
+    "{smd5}",
+    "{md5}",
+    "{crypt}",
+    "{bcrypt}",
+    "{pbkdf2",
+    "{argon2",
 ];
+/// Spring Security prefixes whose password follows in plain text or in any length.
+const PLAIN_PREFIXES: [&str; 3] = ["{noop}", "{plain}", "{cleartext}"];
 const MIN_HASH_CHARS: usize = 20;
 
 fn looks_like_password_hash(word: &str) -> bool {
-    let word = word.trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | ';' | '(' | ')'));
-    word.len() >= MIN_HASH_CHARS
-        && HASH_PREFIXES
-            .iter()
-            .any(|prefix| word.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix)))
+    // Braces start LDAP and Spring prefixes, so only quotes and punctuation are trimmed.
+    let word = word
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | ';' | '(' | ')'))
+        .trim_end_matches('…');
+    let starts = |prefix: &&str| word.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix));
+    if PLAIN_PREFIXES.iter().any(|prefix| starts(prefix) && word.len() > prefix.len()) {
+        return true;
+    }
+    if word.len() < MIN_HASH_CHARS {
+        return false;
+    }
+    if HASH_PREFIXES.iter().any(starts) || looks_like_modular_crypt(word) {
+        return true;
+    }
+    // A Spring `{id}` prefix of any name (`{scrypt}`, `{pbkdf2@SpringSecurity_v5_8}`) before a hash.
+    word.strip_prefix('{')
+        .and_then(|rest| rest.split_once('}'))
+        .is_some_and(|(id, hash)| {
+            (2..=40).contains(&id.len())
+                && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '@' | '.'))
+                && hash.len() >= 16
+                && (looks_like_secret(hash)
+                    || looks_like_modular_crypt(hash)
+                    || HASH_PREFIXES.iter().any(|prefix| hash.starts_with(prefix)))
+        })
+}
+
+/// The generic modular-crypt shape `$id$…$…` (`$6$rounds=5000$salt$hash`): a short scheme id between the first two
+/// `$`, then at least 16 characters of salt and hash with another `$` among them. A price (`$25`) has no second `$`.
+fn looks_like_modular_crypt(word: &str) -> bool {
+    let Some(rest) = word.strip_prefix('$') else {
+        return false;
+    };
+    let Some((id, tail)) = rest.split_once('$') else {
+        return false;
+    };
+    (1..=12).contains(&id.len())
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && tail.len() >= 16
+        && tail.contains('$')
+        && tail.chars().all(|c| token_char(c) || matches!(c, '$' | ','))
 }
 
 /// The credential after an authorization scheme (`Bearer eyJ…`, `Basic dXNlcjpw…`): token characters only, at least 8 of
 /// them, and not a plain lower-case word (`basic plan` stays).
 fn looks_like_credential(word: &str) -> bool {
-    let word = trim_quotes(word);
+    let word = trim_for_check(word);
     word.len() >= 8 && word.chars().all(token_char) && !word.chars().all(|c| c.is_ascii_lowercase() || c == '-' || c == '.')
 }
 
@@ -398,31 +566,105 @@ fn redact_webhooks(text: &str) -> String {
     text
 }
 
-/// One whitespace-free word with every secret-looking piece (split at [`JOINERS`]) replaced; also says whether the word
-/// ends with an authorization scheme, so that the next word is the credential.
-fn scrub_word(word: &str) -> (String, bool) {
-    if looks_like_secret(word) || looks_like_password_hash(word) {
-        return (REDACTED.to_owned(), false);
+/// What the word after a scrubbed word is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Next {
+    Plain,
+    /// The word ended with an authorization scheme (`Bearer`): the next word is a credential when it looks like one.
+    Credential,
+    /// The word was a sensitive key with its joiner (`password:`, `DB_PASSWORD=`): the next word is its value.
+    Value,
+}
+
+/// Joiners after which a sensitive key's value starts (`password=…`, `"token":"…"`).
+const VALUE_JOINERS: [char; 2] = ['=', ':'];
+/// Joiners that end a sensitive key's value (`Password=x;User=y`, `?password=x&user=y`, `"password":"x","a":1`).
+const VALUE_ENDS: [char; 3] = [';', '&', ','];
+
+/// `body` with its text replaced and its surrounding quotes and brackets kept (`"hunter2"}` → `"[redacted]"}`).
+fn redact_core(body: &str) -> String {
+    let core = trim_quotes(body);
+    if core.is_empty() {
+        return body.to_owned();
+    }
+    let start = body.find(core).unwrap_or(0);
+    format!("{}{REDACTED}{}", &body[..start], &body[start + core.len()..])
+}
+
+/// A pattern placeholder: `{id}`, `{key}`, `{token}`.
+fn is_placeholder(body: &str) -> bool {
+    body.strip_prefix('{')
+        .and_then(|rest| rest.strip_suffix('}'))
+        .is_some_and(|inner| !inner.is_empty() && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+}
+
+/// Whether `body` (`password`, `"DB_PASSWORD"`, `--password`, `?api_key`) names a credential.
+fn is_sensitive_key(body: &str) -> bool {
+    let key = trim_quotes(body).trim_start_matches(['-', '?', '&', '$']);
+    !key.is_empty() && key.chars().any(char::is_alphabetic) && is_sensitive_name(key)
+}
+
+/// One whitespace-free word with every secret-looking piece (split at [`JOINERS`]) replaced, the value after a
+/// sensitive key (`password=…`, `"token":"…"`, `?password=…&`) replaced up to the next `;`, `&` or `,`, and a password
+/// hash after a joiner (`1700000000:$P$B…`) replaced with the rest of the word; also says what the next word is.
+fn scrub_word(word: &str) -> (String, Next) {
+    if looks_like_secret(word) || looks_like_password_hash(word) || dollar_secret(word) {
+        return (REDACTED.to_owned(), Next::Plain);
     }
     let mut out = String::with_capacity(word.len());
     let mut last = "";
+    let mut in_value = false;
+    let mut offset = 0;
+    let mut next = Next::Plain;
     for piece in word.split_inclusive(JOINERS) {
+        let rest = &word[offset..];
+        offset += piece.len();
         let (body, joiner) = match piece.char_indices().last() {
             Some((index, c)) if JOINERS.contains(&c) => (&piece[..index], &piece[index..]),
             _ => (piece, ""),
         };
+        if !in_value && offset > piece.len() && (looks_like_password_hash(rest) || dollar_secret(rest)) {
+            out.push_str(REDACTED);
+            return (out, Next::Plain);
+        }
+        let ends_value = joiner.chars().next().is_some_and(|c| VALUE_ENDS.contains(&c));
+        if in_value {
+            // A placeholder (`session:{id}`, a key pattern) holds no value.
+            let placeholder = is_placeholder(body);
+            if placeholder {
+                out.push_str(body);
+            } else {
+                out.push_str(&redact_core(body));
+            }
+            out.push_str(joiner);
+            in_value = !placeholder && !ends_value && !joiner.is_empty();
+            continue;
+        }
         if looks_like_secret(body) {
             out.push_str(REDACTED);
         } else {
             out.push_str(body);
         }
         out.push_str(joiner);
+        if joiner.chars().next().is_some_and(|c| VALUE_JOINERS.contains(&c)) && is_sensitive_key(body) {
+            in_value = true;
+            // The joiner ends the word (`password: hunter2`): the value is the next word.
+            next = if offset == word.len() { Next::Value } else { Next::Plain };
+        }
         if !body.is_empty() {
             last = body;
         }
     }
-    let scheme = AUTH_SCHEMES.iter().any(|scheme| trim_quotes(last).eq_ignore_ascii_case(scheme));
-    (out, scheme)
+    if next == Next::Plain && !in_value && AUTH_SCHEMES.iter().any(|scheme| trim_quotes(last).eq_ignore_ascii_case(scheme)) {
+        next = Next::Credential;
+    }
+    (out, next)
+}
+
+/// A word with `$` (which [`looks_like_secret`] does not allow) one of whose `$`-separated pieces is a secret, so a
+/// `$` inside or around a token does not hide it.
+fn dollar_secret(word: &str) -> bool {
+    word.contains('$') && word.split('$').any(looks_like_secret)
 }
 
 /// `text` with secret-looking words and pieces of words, the user information of URLs, webhook paths, the credential
@@ -443,7 +685,8 @@ fn scrub_uncut(text: &str) -> String {
     }
     let text = redact_webhooks(&redact_userinfo(&text));
     let mut scrubbed = String::with_capacity(text.len());
-    let mut after_scheme = false;
+    let mut next = Next::Plain;
+    let mut previous_key = false;
     for piece in text.split_inclusive(char::is_whitespace) {
         let word = piece.trim_end_matches(char::is_whitespace);
         let space = &piece[word.len()..];
@@ -451,18 +694,41 @@ fn scrub_uncut(text: &str) -> String {
             scrubbed.push_str(piece);
             continue;
         }
-        if after_scheme && looks_like_credential(word) {
-            scrubbed.push_str(REDACTED);
-            scrubbed.push_str(space);
-            after_scheme = false;
+        // `DB_PASSWORD = hunter2`: a lone `=` or `:` after a sensitive key.
+        if previous_key && (word == "=" || word == ":") {
+            scrubbed.push_str(piece);
+            next = Next::Value;
+            previous_key = false;
             continue;
         }
-        let (word, scheme) = scrub_word(word);
+        previous_key = is_sensitive_key(word) && !word.contains(JOINERS);
+        match next {
+            Next::Value => {
+                scrubbed.push_str(&redact_core(word));
+                scrubbed.push_str(space);
+                next = Next::Plain;
+                previous_key = false;
+                continue;
+            }
+            Next::Credential if looks_like_credential(word) => {
+                scrubbed.push_str(REDACTED);
+                scrubbed.push_str(space);
+                next = Next::Plain;
+                continue;
+            }
+            _ => {}
+        }
+        let (word, after) = scrub_word(word);
         scrubbed.push_str(&word);
         scrubbed.push_str(space);
-        after_scheme = scheme;
+        next = after;
     }
     scrubbed
+}
+
+/// [`scrub`] without the cut, for text the caller has already bounded (error messages, task logs).
+pub fn scrub_text(text: &str) -> String {
+    scrub_uncut(text)
 }
 
 /// Engine text worth keeping: trimmed, scrubbed and cut; empty text is none.
@@ -485,6 +751,8 @@ pub fn cut(text: &str, max: usize) -> String {
 const MAX_SCRUBBED_CHARS: usize = 4_096;
 /// Nesting redacted; anything deeper is replaced as a whole.
 const MAX_REDACT_DEPTH: usize = 100;
+/// JSON text longer than this inside a value is scrubbed as text rather than parsed.
+const MAX_NESTED_JSON_CHARS: usize = 256 * 1024;
 
 /// One value's text with secret-looking pieces replaced, at most [`MAX_SCRUBBED_CHARS`] of it.
 pub fn scrub_value(text: &str) -> String {
@@ -513,7 +781,8 @@ fn redact_json_at(value: &Json, depth: usize) -> Json {
         return Json::String(REDACTED.to_owned());
     }
     match value {
-        Json::String(text) => Json::String(scrub_value(text)),
+        // JSON kept as a string (a logged request body) is parsed and redacted like the rest.
+        Json::String(text) => Json::String(redact_text_at(text, depth + 1)),
         Json::Array(items) => Json::Array(items.iter().map(|item| redact_json_at(item, depth + 1)).collect()),
         Json::Object(map) => Json::Object(
             map.iter()
@@ -546,8 +815,8 @@ fn redact_value(value: &Value, depth: usize) -> Value {
         return Value::Text(REDACTED.to_owned());
     }
     match value {
-        Value::Text(text) => Value::Text(redact_text(text)),
-        Value::Json(text) => Value::Json(redact_text(text)),
+        Value::Text(text) => Value::Text(redact_text_at(text, depth)),
+        Value::Json(text) => Value::Json(redact_text_at(text, depth)),
         Value::Other { type_name, text } => Value::Other {
             type_name: type_name.clone(),
             text: scrub_value(text),
@@ -571,10 +840,17 @@ fn redact_value(value: &Value, depth: usize) -> Value {
 }
 
 /// Text that is a JSON document redacted as one (re-serialised only when something changed), other text scrubbed.
-fn redact_text(text: &str) -> String {
-    match json_in(text) {
+/// JSON inside JSON strings is parsed too, up to [`MAX_REDACT_DEPTH`] levels in all and [`MAX_NESTED_JSON_CHARS`] per
+/// string; longer text is only scrubbed.
+fn redact_text_at(text: &str, depth: usize) -> String {
+    let parsed = if depth == 0 || text.len() <= MAX_NESTED_JSON_CHARS {
+        json_in(text)
+    } else {
+        None
+    };
+    match parsed {
         Some(json) => {
-            let redacted = redact_json(&json);
+            let redacted = redact_json_at(&json, depth);
             if redacted == json {
                 text.to_owned()
             } else {
@@ -787,7 +1063,7 @@ mod tests {
     #[test]
     fn secret_looking_text_is_redacted() {
         assert_eq!(scrub("key sk-abcdefghijklmnopqrstuv1234"), "key [redacted]");
-        assert_eq!(scrub("token: 'AKIAIOSFODNN7EXAMPLE'"), "token: [redacted]");
+        assert_eq!(scrub("token: 'AKIAIOSFODNN7EXAMPLE'"), "token: '[redacted]'");
         assert_eq!(
             scrub("hash 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"),
             "hash [redacted]"
@@ -987,7 +1263,6 @@ mod tests {
             "country",
             "zip",
             "tip",
-            "mobile",
             "mailbox_size",
         ] {
             assert!(!is_personal_name(name), "{name}");
@@ -999,7 +1274,7 @@ mod tests {
         assert_eq!(scrub("$2b$12$KIXQJFakeHashValueForTests0123456789abcdefABCDEF"), REDACTED);
         assert_eq!(
             scrub("hash: '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA'"),
-            format!("hash: {REDACTED}")
+            format!("hash: '{REDACTED}'")
         );
         assert_eq!(scrub("{SSHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g="), REDACTED);
         assert_eq!(scrub("costs $25 today"), "costs $25 today");
@@ -1112,6 +1387,192 @@ mod tests {
             keys[0],
             Value::Document(vec![("secret".into(), text(REDACTED)), ("label".into(), text("ci"))])
         );
+    }
+
+    #[test]
+    fn framework_password_columns_and_hashes_are_redacted() {
+        for name in [
+            "user_pass",
+            "pass",
+            "pw",
+            "user_pw",
+            "pword",
+            "user_activation_key",
+            "activationKey",
+            "reset_key",
+            "invite_code",
+            "confirmation_code",
+            "passwort",
+            "Kennwort",
+            "contraseña",
+            "contrasena",
+            "mot_de_passe",
+            "motDePasse",
+            "senha",
+            "parola",
+            "wachtwoord",
+            "mat_khau",
+            "matkhau",
+            "MatKhau",
+            "пароль",
+            "Пароль",
+        ] {
+            assert!(is_sensitive_name(name), "{name}");
+        }
+        for name in [
+            "passed",
+            "bypass",
+            "compass",
+            "passenger",
+            "pwm_duty",
+            "reset_at",
+            "invite_count",
+            "parole_date",
+        ] {
+            assert!(!is_sensitive_name(name), "{name}");
+        }
+        for hash in [
+            // WordPress before and after 6.8, Drupal 7, phpBB, Apache, Sun MD5, NetBSD SHA-1, Spring, LDAP.
+            "$P$BxvVKjpM3qHo1rBv4bAEHdN8E1GCNb.",
+            "$wp$2y$10$DXbXQ3ZbXJhsW0MGsJ8u5.PVu5H3WkNnqvU/9.L.hJ1i8xGkN4vOe",
+            "$S$DTvYhlR0Abcm9uEX1Q2W3E4R5T6Y7U8I9O0P1A2S3D4F5G6H7J8K9L0",
+            "$H$9IQRaTwmfeRo7ud9Fh4E2PdI0S3r.L0",
+            "$apr1$r31.....$HqJZimcKQFAMYayBlzkrA/",
+            "$md5,rounds=5000$GUBv0xjJ$$mSwgIswdjlTY0YxV7HBVm0",
+            "$sha1$40000$jtNX3nZ2$hBNaIXkt4wBI2o5rsi8KejSjNqIq",
+            "{bcrypt}$2a$10$dXJ3SW6G7P50lGmMkkmwe.20cQQubK3.HZWzG3YB1tlRy.fqvM/BG",
+            "{noop}password",
+            "{pbkdf2@SpringSecurity_v5_8}5d923b44a6d129f3ddf3e3c8d29412723dcbde72445e8ef6bf3b508fbf17fa4ed4d6b99ca763d8dc",
+            "{scrypt}$e0801$8bWJaSu2IKSn9Z9kM+TPXfOc/9bdYSrN1oD9qfVThWEwdRTnO7re7Ei+fUZRJ68k9lTyuTeUp4of4g24hHnazw==$OAOec05+bXxvuu/1qZ6NUR+xQYvYv7BeL1QxwRpY5Pc=",
+            "{MD5}X03MO1qnZdYdgyfeuILPmQ==",
+            "$6$rounds=5000$saltsalt$hashhashhashhashhash",
+        ] {
+            assert_eq!(scrub(hash), REDACTED, "{hash}");
+        }
+        assert_eq!(
+            scrub("1700000000:$P$BxvVKjpM3qHo1rBv4bAEHdN8E1GCNb."),
+            format!("1700000000:{REDACTED}")
+        );
+        // A `$` around a token does not hide it.
+        assert_eq!(scrub("$sk-abcdefghijklmnopqrstuvwx1234$"), REDACTED);
+        for text in ["costs $25 today", "$1,000 or $2", "SELECT $1, $2"] {
+            assert_eq!(scrub(text), text);
+        }
+        // A WordPress row read by `SELECT * FROM wp_users`.
+        assert_eq!(
+            redact_cell("user_pass", &Value::Text("$P$Bxv".into())),
+            Value::Text(REDACTED.into())
+        );
+        assert_eq!(
+            redact_cell("user_activation_key", &Value::Text("1700000000:$P$B".into())),
+            Value::Text(REDACTED.into())
+        );
+    }
+
+    #[test]
+    fn json_kept_as_a_string_is_redacted_inside() {
+        let document = serde_json::json!({
+            "path": "/login",
+            "body": "{\"email\":\"a@b.c\",\"password\":\"hunter2\"}",
+            "deeper": "{\"inner\":\"{\\\"token\\\":\\\"abc\\\"}\"}",
+            "plain": "{not json}",
+        });
+        let redacted = redact_json(&document);
+        let text = redacted.to_string();
+        assert!(!text.contains("hunter2") && !text.contains("abc"), "{text}");
+        let body: Json = serde_json::from_str(redacted["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body, serde_json::json!({ "email": "a@b.c", "password": REDACTED }));
+        assert_eq!(redacted["plain"], "{not json}");
+        // A JSON column holding JSON text in a field, and a cut body that no longer parses.
+        let Value::Json(cell) = redact_cell("payload", &Value::Json(r#"{"raw": "{\"pw\": \"x1\"}"}"#.into())) else {
+            panic!("JSON stays JSON");
+        };
+        assert!(!cell.contains("x1"), "{cell}");
+        assert!(!redact_documents_text(r#"{"body": "{\"password\":\"hunter2\",\"a\":\"…"}"#).contains("hunter2"));
+    }
+
+    #[test]
+    fn values_of_sensitive_keys_in_text_are_redacted() {
+        assert_eq!(
+            scrub("Server=db;User Id=app;Password=Hunter2;"),
+            format!("Server=db;User Id=app;Password={REDACTED};")
+        );
+        assert_eq!(
+            scrub("https://api.example.com/hook?password=Hunter2&user=x"),
+            format!("https://api.example.com/hook?password={REDACTED}&user=x")
+        );
+        assert_eq!(scrub("DB_PASSWORD: Hunter2"), format!("DB_PASSWORD: {REDACTED}"));
+        assert_eq!(scrub("DB_PASSWORD = Hunter2 next"), format!("DB_PASSWORD = {REDACTED} next"));
+        assert_eq!(scrub("psql --password=Hunter2 -h db"), format!("psql --password={REDACTED} -h db"));
+        assert_eq!(
+            scrub("docker run -e POSTGRES_PASSWORD=Hunter2 postgres"),
+            format!("docker run -e POSTGRES_PASSWORD={REDACTED} postgres")
+        );
+        assert_eq!(
+            scrub(r#"{"password":"hunter2","a":1}"#),
+            format!(r#"{{"password":"{REDACTED}","a":1}}"#)
+        );
+        assert_eq!(
+            scrub("api_key=ab:cd@ef;x=1"),
+            format!("api_key={REDACTED}:{REDACTED}@{REDACTED};x=1")
+        );
+        for text in [
+            "status:paid,new",
+            "a=b&c=d",
+            "ratio 3:2",
+            "http://localhost:8080/path",
+            "sort=asc&page=2",
+            "session:{id}",
+            "token:{id}:meta",
+        ] {
+            assert_eq!(scrub(text), text);
+        }
+    }
+
+    #[test]
+    fn cut_secrets_are_still_recognised() {
+        let jwt = format!("eyJ{}…", "a1B2".repeat(50));
+        assert_eq!(scrub(&jwt), REDACTED);
+        assert_eq!(scrub(&format!("Bearer {}…", "a1B2".repeat(50))), format!("Bearer {REDACTED}"));
+        assert_eq!(scrub(&format!("{}…", "f0".repeat(30))), REDACTED);
+        let sample = format!(r#"{{"headers": {{"authorization": "Bearer {}…"}}}}"#, "a1B2".repeat(50));
+        assert!(!redact_documents_text(&sample).contains("a1B2"), "{sample}");
+    }
+
+    #[test]
+    fn people_and_identity_numbers_are_personal() {
+        for name in [
+            "login",
+            "user",
+            "author",
+            "created_by",
+            "updatedBy",
+            "owner",
+            "contact",
+            "emergency_contact",
+            "mobile",
+            "tel",
+            "mail",
+            "tax_id",
+            "national_id",
+            "account_number",
+            "acct_no",
+            "assignee",
+            "postcode",
+        ] {
+            assert!(is_personal_name(name), "{name}");
+        }
+        for name in [
+            "user_type",
+            "owner_kind",
+            "login_count",
+            "mobile_app_version",
+            "account_type",
+            "created_at",
+            "status",
+        ] {
+            assert!(!is_personal_name(name), "{name}");
+        }
     }
 
     #[test]

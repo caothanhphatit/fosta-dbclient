@@ -200,16 +200,31 @@ fn text_of(value: &Json) -> Option<String> {
 /// than listed), else a few samples (`more`: high cardinality).
 pub fn samples_of(path: &Json) -> Option<FieldSamples> {
     let name = path["path"].as_str()?.to_owned();
-    let (values, more) = match path["topValues"].as_array() {
+    let (values, more, counts) = match path["topValues"].as_array() {
         Some(top) => {
-            let values: Vec<String> = top.iter().filter_map(|entry| text_of(&entry["value"])).collect();
-            let distinct = path["distinct"].as_u64().unwrap_or(values.len() as u64);
-            let more = distinct > values.len() as u64 || values.len() < top.len();
-            (values, more)
+            let kept: Vec<(String, Option<u64>)> = top
+                .iter()
+                .filter_map(|entry| text_of(&entry["value"]).map(|value| (value, entry["count"].as_u64())))
+                .collect();
+            let distinct = path["distinct"].as_u64().unwrap_or(kept.len() as u64);
+            let more = distinct > kept.len() as u64 || kept.len() < top.len();
+            // Counts only when every value has one.
+            let counts: Vec<u64> = kept.iter().map_while(|(_, count)| *count).collect();
+            let counts = if counts.len() == kept.len() { counts } else { Vec::new() };
+            (kept.into_iter().map(|(value, _)| value).collect::<Vec<_>>(), more, counts)
         }
-        None => (path["samples"].as_array().into_iter().flatten().filter_map(text_of).collect(), true),
+        None => (
+            path["samples"].as_array().into_iter().flatten().filter_map(text_of).collect(),
+            true,
+            Vec::new(),
+        ),
     };
-    (!values.is_empty()).then_some(FieldSamples { path: name, values, more })
+    (!values.is_empty()).then_some(FieldSamples {
+        path: name,
+        values,
+        more,
+        counts,
+    })
 }
 
 /// What one collection's `mongo.schema` answer adds.

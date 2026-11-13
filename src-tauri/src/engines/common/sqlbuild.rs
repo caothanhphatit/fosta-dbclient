@@ -610,15 +610,16 @@ pub fn build_reread<D: SqlDialect + ?Sized>(d: &D, obj: &ObjectRef, key: &[Field
     })
 }
 
-/// `SELECT DISTINCT c FROM (SELECT c FROM t LIMIT sample) s LIMIT limit` in `d`'s dialect (`TOP (n)` where it limits
-/// that way): at most `limit` distinct values of one column among the first `sample` rows, for the assistant's value
-/// hints. Identifiers are quoted by the dialect; the column is selected the way browsing selects it.
+/// `SELECT c, COUNT(*) FROM (SELECT c FROM t LIMIT sample) s GROUP BY c LIMIT limit` in `d`'s dialect (`TOP (n)` where it
+/// limits that way): at most `limit` distinct values of one column among the first `sample` rows, with how many of those
+/// rows hold each, for the assistant's value hints. Identifiers are quoted by the dialect; the column is selected the way
+/// browsing selects it.
 pub fn build_distinct_sample<D: SqlDialect + ?Sized>(d: &D, obj: &ObjectRef, col: &ColumnInfo, sample: u64, limit: u64) -> String {
     let (inner_top, inner_tail) = limit_parts(d, sample, 0);
     let (top, tail) = limit_parts(d, limit, 0);
+    let column = d.quote_ident(&col.name);
     format!(
-        "SELECT DISTINCT {top}{} FROM (SELECT {inner_top}{} FROM {}{inner_tail}) s{tail}",
-        d.quote_ident(&col.name),
+        "SELECT {top}{column}, COUNT(*) FROM (SELECT {inner_top}{} FROM {}{inner_tail}) s GROUP BY {column}{tail}",
         d.select_expr(col),
         d.table_sql(obj)
     )
@@ -872,7 +873,7 @@ mod tests {
         let col = ColumnInfo::result("st\"atus", "text", ValueKind::Text);
         assert_eq!(
             build_distinct_sample(&Ansi, &obj, &col, 1000, 21),
-            "SELECT DISTINCT \"st\"\"atus\" FROM (SELECT \"st\"\"atus\" FROM \"s\".\"t\"\"x\" LIMIT 1000) s LIMIT 21"
+            "SELECT \"st\"\"atus\", COUNT(*) FROM (SELECT \"st\"\"atus\" FROM \"s\".\"t\"\"x\" LIMIT 1000) s GROUP BY \"st\"\"atus\" LIMIT 21"
         );
         struct Top;
         impl SqlDialect for Top {
@@ -894,7 +895,7 @@ mod tests {
         }
         assert_eq!(
             build_distinct_sample(&Top, &ObjectRef::table(None, "t"), &col, 1000, 21),
-            "SELECT DISTINCT TOP (21) \"st\"\"atus\" FROM (SELECT TOP (1000) \"st\"\"atus\" FROM \"t\") s"
+            "SELECT TOP (21) \"st\"\"atus\", COUNT(*) FROM (SELECT TOP (1000) \"st\"\"atus\" FROM \"t\") s GROUP BY \"st\"\"atus\""
         );
     }
 }

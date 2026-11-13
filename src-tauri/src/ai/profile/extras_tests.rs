@@ -190,6 +190,7 @@ fn samples(path: &str, values: &[&str], more: bool) -> FieldSamples {
         path: path.into(),
         values: values.iter().map(|value| (*value).to_owned()).collect(),
         more,
+        counts: vec![10; values.len()],
     }
 }
 

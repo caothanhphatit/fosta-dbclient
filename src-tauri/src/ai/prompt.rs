@@ -5,7 +5,10 @@
 
 use super::{
     app_help, catalog,
-    profile::digest::{self, ChatProfile, Focus},
+    profile::{
+        digest::{self, ChatProfile, Focus},
+        redact,
+    },
     ChatContext,
 };
 use crate::{
@@ -157,9 +160,12 @@ pub(super) async fn system_prompt_with(
     }
     // Server errors can quote document values (a duplicate key, a failed conversion): without the read setting the
     // values are cut out, so the model sees what failed but not the data.
+    // Either way, secret-looking text and the values of credential keys (`--password=…`, `POSTGRES_PASSWORD=…`, a
+    // connection string in a task log) are scrubbed.
     if let Some(error) = context.last_error.as_deref().filter(|value| !value.trim().is_empty()) {
         let error = if read_queries { error.to_owned() } else { redact_values(error) };
-        data.push_str(&format!("Last error from the server: {}\n", truncate(&error, 1000)));
+        let error = redact::scrub_text(&truncate(&error, 1000));
+        data.push_str(&format!("Last error from the server: {error}\n"));
     }
     if let Some(extra) = context.extra.as_deref().filter(|value| !value.trim().is_empty()) {
         let extra = if read_queries {
@@ -167,7 +173,7 @@ pub(super) async fn system_prompt_with(
         } else {
             redact_error_lines(extra)
         };
-        data.push_str(&format!("{}\n", truncate(&extra, MAX_EDITOR_CHARS)));
+        data.push_str(&format!("{}\n", redact::scrub_text(&truncate(&extra, MAX_EDITOR_CHARS))));
     }
     // Row data, so only where the user lets the assistant read data (the same gate as run_read_query), and only from
     // a collection the assistant could read itself.
@@ -611,6 +617,27 @@ mod tests {
         assert!(prompt.contains("Filter: { status: 'paid' }"), "{prompt}");
         let allowed = system_prompt(&db, &context, true).await;
         assert!(allowed.contains("ann@example.com"), "{allowed}");
+    }
+
+    #[tokio::test]
+    async fn errors_and_task_logs_are_scrubbed_even_with_reads_on() {
+        let db = ConnectionManager::default();
+        let context = ChatContext {
+            last_error: Some("E11000 duplicate key error dup key: { token: \"sk-abcdefghijklmnopqrstuvwx1234\" }".into()),
+            extra: Some(
+                "Command \"db\" runs: docker run -e POSTGRES_PASSWORD=Hunter2 postgres --password=Hunter3\nLast log lines:\n\
+                 connecting to postgres://app:Hunter4@db/prod\nDB_PASSWORD: Hunter5"
+                    .into(),
+            ),
+            ..ChatContext::default()
+        };
+        for reads in [true, false] {
+            let prompt = system_prompt(&db, &context, reads).await;
+            for secret in ["sk-abc", "Hunter2", "Hunter3", "Hunter4", "Hunter5"] {
+                assert!(!prompt.contains(secret), "{secret} (reads {reads}): {prompt}");
+            }
+            assert!(prompt.contains("docker run -e POSTGRES_PASSWORD=[redacted]"), "{prompt}");
+        }
     }
 
     #[test]

@@ -298,6 +298,9 @@ pub(super) async fn run_tool_with(
             }
             let outcome = gateway::assistant::read(db, reads, &query, database.as_deref()).await;
             let (columns, rows) = outcome.as_ref().map(result_cells).unwrap_or_default();
+            // Server errors can quote values (`invalid input syntax for type integer: "…"`, a duplicate key): scrubbed like
+            // row text, for the chat and the model alike.
+            let error = outcome.as_ref().err().map(error_text);
             show_event(
                 events,
                 ChatEvent::Query {
@@ -307,12 +310,12 @@ pub(super) async fn run_tool_with(
                     rows: rows.clone(),
                     truncated: outcome.as_ref().is_ok_and(|result| result.truncated),
                     elapsed_ms: outcome.as_ref().map(|result| result.elapsed_ms).unwrap_or_default(),
-                    error: outcome.as_ref().err().map(ToString::to_string),
+                    error: error.clone(),
                 },
             );
             return match outcome {
                 Ok(result) => Ok(format_rows(&columns, &rows, result.truncated)),
-                Err(error) => Err(error.to_string()),
+                Err(_) => Err(error.unwrap_or_default()),
             };
         }
         "list_databases" => catalog::databases(&handle, &ctx).await.map(|names| {
@@ -583,6 +586,12 @@ fn show(events: &dyn ChatSink, action: UiAction) {
 
 fn show_event(events: &dyn ChatSink, event: ChatEvent) {
     let _ = events.send(event);
+}
+
+/// A failed query's error as the chat and the model see it: scrubbed like row text ([`redact::scrub_value`]), since
+/// errors can quote values (a failed cast, a duplicate key). A value quoted under another name still gets through.
+fn error_text(error: &impl std::fmt::Display) -> String {
+    redact::scrub_value(&error.to_string())
 }
 
 /// Column names and cells as text: each cell redacted ([`redact::redact_cell`]: credential columns and fields lose their
@@ -986,6 +995,22 @@ mod tests {
         assert_eq!(long.chars().count(), MAX_CELL_CHARS + 1);
         assert_eq!(cell_text(&Cell::Text("a\nb".into())), "a b");
         assert_eq!(format_rows(&[], &[], false), "The statement ran and returned no result set.");
+    }
+
+    #[test]
+    fn query_errors_are_scrubbed() {
+        assert_eq!(
+            error_text(&"duplicate key value violates unique constraint: Key (token)=(sk-abcdefghijklmnopqrstuvwx1234)"),
+            "duplicate key value violates unique constraint: Key (token)=([redacted])"
+        );
+        assert_eq!(
+            error_text(&"bad hash $P$BxvVKjpM3qHo1rBv4bAEHdN8E1GCNb. in row"),
+            "bad hash [redacted] in row"
+        );
+        assert_eq!(
+            error_text(&"relation \"users\" does not exist"),
+            "relation \"users\" does not exist"
+        );
     }
 
     #[test]
