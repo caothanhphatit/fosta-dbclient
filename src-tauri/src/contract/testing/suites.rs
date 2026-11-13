@@ -848,6 +848,188 @@ pub async fn suite_profile(f: &Fixture) {
     manager.disconnect(CONNECTION).await;
 }
 
+/// The rows of the value-sampling table: `status` takes three values (6, 4 and 3 rows), `first_name` two (7 and 6 rows).
+const VALUE_ROWS: [(&str, &str); 13] = [
+    ("open", "Alice"),
+    ("open", "Alice"),
+    ("open", "Alice"),
+    ("open", "Alice"),
+    ("open", "Alice"),
+    ("open", "Alice"),
+    ("closed", "Alice"),
+    ("closed", "Bob"),
+    ("closed", "Bob"),
+    ("closed", "Bob"),
+    ("draft", "Bob"),
+    ("draft", "Bob"),
+    ("draft", "Bob"),
+];
+
+/// The statements (drop, create, insert) that (re)create the value-sampling table `contract_values` in an engine's
+/// dialect.
+fn values_table_sql(engine: &str, table: &ObjectRef) -> Vec<String> {
+    let database = table.database.clone().unwrap_or_default();
+    let (name, status, first_name, id) = match engine {
+        "oracle" => ("CONTRACT_VALUES".to_owned(), "\"status\"", "\"first_name\"", "\"id\""),
+        "mssql" => (format!("{database}.dbo.contract_values"), "status", "first_name", "id"),
+        "sqlite" => ("contract_values".to_owned(), "status", "first_name", "id"),
+        "postgres" => ("shop.contract_values".to_owned(), "status", "first_name", "id"),
+        _ => (format!("{database}.contract_values"), "status", "first_name", "id"),
+    };
+    let (drop, create) = match engine {
+        "mssql" => (
+            format!("IF OBJECT_ID('{name}') IS NOT NULL DROP TABLE {name}"),
+            format!("CREATE TABLE {name} ({id} INT NOT NULL PRIMARY KEY, {status} NVARCHAR(20) NOT NULL, {first_name} NVARCHAR(50) NOT NULL)"),
+        ),
+        "oracle" => (
+            format!("DROP TABLE IF EXISTS {name} PURGE"),
+            format!("CREATE TABLE {name} ({id} NUMBER(10) NOT NULL PRIMARY KEY, {status} VARCHAR2(20) NOT NULL, {first_name} VARCHAR2(50) NOT NULL)"),
+        ),
+        "clickhouse" => (
+            format!("DROP TABLE IF EXISTS {name} SYNC"),
+            format!("CREATE TABLE {name} ({id} Int32, {status} String, {first_name} String) ENGINE = MergeTree ORDER BY {id}"),
+        ),
+        _ => (
+            format!("DROP TABLE IF EXISTS {name}"),
+            format!("CREATE TABLE {name} ({id} INTEGER NOT NULL PRIMARY KEY, {status} VARCHAR(20) NOT NULL, {first_name} VARCHAR(50) NOT NULL)"),
+        ),
+    };
+    let oracle = engine == "oracle";
+    let rows: Vec<String> = VALUE_ROWS
+        .iter()
+        .enumerate()
+        .map(|(i, (s, n))| {
+            if oracle {
+                format!("SELECT {}, '{s}', '{n}' FROM dual", i + 1)
+            } else {
+                format!("({}, '{s}', '{n}')", i + 1)
+            }
+        })
+        .collect();
+    let insert = if oracle {
+        format!("INSERT INTO {name} ({id}, {status}, {first_name}) {}", rows.join(" UNION ALL "))
+    } else {
+        format!("INSERT INTO {name} ({id}, {status}, {first_name}) VALUES {}", rows.join(", "))
+    };
+    vec![drop, create, insert]
+}
+
+/// The profile builder's value sampling on SQL engines, on a table the suite creates and drops: the engine's
+/// `distinct_values_statement` returns value and count rows with the right counts, and a build that samples values keeps
+/// the low-cardinality text column's values but never reads the personal-name column.
+pub async fn suite_values(f: &Fixture) {
+    use crate::{
+        ai::profile::{
+            build::build,
+            values::{sample, Sampler, SAMPLE_ROWS},
+            Progress,
+        },
+        contract::{CancellationToken, ColumnInfo, ValueKind},
+        gateway::{rules::Preset, Context},
+    };
+    let (manager, handle) = connect(f).await;
+    let column = |column: &str| ColumnInfo::result(column, "text", ValueKind::Text);
+    if handle
+        .engine
+        .distinct_values_statement(&f.table, &column("status"), SAMPLE_ROWS, 21)
+        .is_none()
+    {
+        println!("{}: skipped (no value-sampling statement)", f.engine);
+        manager.disconnect(CONNECTION).await;
+        return;
+    }
+    let statements = values_table_sql(f.engine, &f.table);
+    let session = open_session(&handle).await;
+    for statement in &statements {
+        run_text(&handle, &session, statement, f.seed_database)
+            .await
+            .unwrap_or_else(|error| panic!("{}: creating contract_values: {error}\n{statement}", f.engine));
+    }
+    let name = if f.engine == "oracle" {
+        "CONTRACT_VALUES"
+    } else {
+        "contract_values"
+    };
+    let table = ObjectRef::new(f.table.database.as_deref(), f.table.schema.as_deref(), name, NodeKind::TABLE);
+    // The statement the builder runs, as the engine writes it: value and count rows.
+    let statement = handle
+        .engine
+        .distinct_values_statement(&table, &column("status"), SAMPLE_ROWS, 21)
+        .expect("value-sampling statement");
+    let sink = run_text(&handle, &session, &statement, f.seed_database)
+        .await
+        .unwrap_or_else(|error| panic!("{}: {statement}: {error}", f.engine));
+    let rows = &sink
+        .sets
+        .last()
+        .unwrap_or_else(|| panic!("{}: no result set for {statement}", f.engine))
+        .rows;
+    let mut counted: Vec<(String, u64)> = rows
+        .iter()
+        .map(|row| {
+            let count = text_of(&row[1])
+                .trim()
+                .parse::<u64>()
+                .unwrap_or_else(|_| panic!("{}: count {:?} in {statement}", f.engine, row[1]));
+            (text_of(&row[0]), count)
+        })
+        .collect();
+    counted.sort();
+    assert_eq!(
+        counted,
+        vec![("closed".to_owned(), 4), ("draft".to_owned(), 3), ("open".to_owned(), 6)],
+        "{}: {statement}",
+        f.engine
+    );
+    // A build that samples values reads `status` only: the key is excluded and `first_name` holds personal data.
+    let database = f
+        .table
+        .database
+        .clone()
+        .or_else(|| f.seed_database.map(str::to_owned))
+        .unwrap_or_default();
+    let quiet = |_: Progress| {};
+    let cancel = CancellationToken::new();
+    let mut profile = build(&handle, CONNECTION, &database, &cancel, &quiet)
+        .await
+        .unwrap_or_else(|error| panic!("{}: profile build: {error}", f.engine));
+    let sampler = Sampler {
+        manager: &manager,
+        context: Context {
+            workspace_id: "w".into(),
+            workspace_name: "Team".into(),
+            connection_id: CONNECTION.into(),
+            connection_name: "Contract".into(),
+            safety: crate::gateway::rules::SafetySettings::preset(Preset::Open),
+        },
+    };
+    let outcome = sample(&sampler, &handle, &mut profile, &cancel, &quiet)
+        .await
+        .unwrap_or_else(|error| panic!("{}: value sampling: {error}", f.engine));
+    assert_eq!(outcome.failed, 0, "{}: {outcome:?}", f.engine);
+    assert!(outcome.skipped.is_none(), "{}: {outcome:?}", f.engine);
+    let object = profile
+        .object(name)
+        .unwrap_or_else(|| panic!("{}: {name} not in the profile", f.engine));
+    assert!(object.column("first_name").is_some(), "{}: first_name not described", f.engine);
+    let status = object
+        .value_hints
+        .iter()
+        .find(|hint| hint.column == "status")
+        .unwrap_or_else(|| panic!("{}: no hint for status: {:?}", f.engine, object.value_hints));
+    assert_eq!(status.values, ["closed", "draft", "open"], "{}", f.engine);
+    assert_eq!(
+        object.value_hints.len(),
+        1,
+        "{}: a personal-name column was sampled: {:?}",
+        f.engine,
+        object.value_hints
+    );
+    run_text(&handle, &session, &statements[0], f.seed_database).await.ok();
+    session.close().await;
+    manager.disconnect(CONNECTION).await;
+}
+
 /// Generates the tests of one engine as a module named `contract_<engine>`, so `cargo test contract_<engine>` selects
 /// them. The classification test always runs; the live suites are ignored by default: start the engine's compose file,
 /// then `cargo test contract_<engine> -- --ignored --test-threads=1`.
@@ -871,7 +1053,7 @@ macro_rules! contract_tests {
 
             $crate::contract_tests!(@live $fixture;
                 suite_connect suite_tree suite_describe suite_browse suite_edit suite_query suite_cancel suite_transactions
-                suite_assistant suite_profile);
+                suite_assistant suite_profile suite_values);
         }
     };
     (@live $fixture:expr; $($suite:ident)*) => {
