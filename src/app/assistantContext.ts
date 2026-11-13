@@ -80,15 +80,11 @@ export function assistantContext(active: TabContent | null, config: AppConfig | 
   return selection ? withConnection(selection.connectionId, { database: selection.database ?? undefined }) : { kind: "none" };
 }
 
-/** Whether `active` is an editor or a field outside the assistant panel (`panel`), where the user may be typing. */
-export function typingElsewhere(active: Element | null, panel: Node): boolean {
-  return Boolean(active?.closest(".cm-editor, input, textarea, select, [contenteditable]")) && !panel.contains(active);
-}
-
 /**
- * Whether opening the assistant panel moves the focus into its composer: only when opened from the keyboard shortcut
- * (the user wants to type a question), and never away from an editor or field that has the focus.
+ * Whether opening the assistant panel moves the focus into its composer: only when opened from the keyboard shortcut,
+ * which the user pressed to type a question, even when an editor had the focus. The toggle button and an inline Ask
+ * leave the focus where it is.
  */
-export function composerTakesFocus(byKeyboard: boolean, typingElsewhereNow: boolean): boolean {
-  return byKeyboard && !typingElsewhereNow;
+export function composerTakesFocus(byKeyboard: boolean): boolean {
+  return byKeyboard;
 }

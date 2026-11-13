@@ -6,7 +6,7 @@
 import "./styles.css";
 import { showError } from "./core/errorPanel";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { assistantContext as buildAssistantContext, composerTakesFocus, isQueryView, taskLogContext, typingElsewhere } from "./app/assistantContext";
+import { assistantContext as buildAssistantContext, composerTakesFocus, isQueryView, taskLogContext } from "./app/assistantContext";
 import { AppNavigation, preloadQueryView } from "./app/navigation";
 import { showWelcomeStart, welcomeScreen } from "./app/welcome";
 import { renderStatusContext } from "./app/statusBar";
@@ -308,7 +308,7 @@ function openQueryWithText(text: string): void {
 
 /**
  * Shows or hides the assistant panel. Opening it never moves the focus, except from the keyboard shortcut (`byKeyboard`,
- * the user wants to type a question) and then not away from an editor or a field that has it.
+ * the user wants to type a question), which moves it into the composer even when an editor had it.
  */
 function showAssistant(visible: boolean, byKeyboard = false): void {
   workspaceArea?.classList.toggle("with-assistant", visible);
@@ -320,7 +320,7 @@ function showAssistant(visible: boolean, byKeyboard = false): void {
   if (visible) {
     assistant.refreshContext();
     assistant.recheckKnowledge();
-    if (composerTakesFocus(byKeyboard, typingElsewhere(document.activeElement, assistant.element))) assistant.focus();
+    if (composerTakesFocus(byKeyboard)) assistant.focus();
   }
 }
 

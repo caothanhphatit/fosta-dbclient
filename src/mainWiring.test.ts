@@ -37,7 +37,7 @@ describe("assistant panel wiring", () => {
   });
 
   it("moves the focus into the composer only from the keyboard shortcut", () => {
-    expect(main).toMatch(/if \(composerTakesFocus\(byKeyboard, typingElsewhere\(document\.activeElement, assistant\.element\)\)\) assistant\.focus\(\);/);
+    expect(main).toMatch(/if \(composerTakesFocus\(byKeyboard\)\) assistant\.focus\(\);/);
     expect(main).toMatch(/toggleAssistant: \(\) => toggleAssistant\(true\)/);
     expect(main).toMatch(/toggleAssistant: \(\) => toggleAssistant\(\),/);
     // Asking from elsewhere opens the panel without taking the focus.

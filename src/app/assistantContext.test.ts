@@ -3,7 +3,7 @@ import type { AppConfig } from "../core/types";
 import type { ConnectionTree } from "../features/connections/tree";
 import type { WorkspaceTab } from "../features/objectWorkspace/sectionWorkspace";
 import { MAX_WORKSPACE_CONTEXT, workspaceContextText } from "../features/objectWorkspace/workspaceState";
-import { assistantContext, composerTakesFocus, typingElsewhere } from "./assistantContext";
+import { assistantContext, composerTakesFocus } from "./assistantContext";
 
 // The grid pulls in DOM modules at load time; this test only needs `instanceof` to fail.
 vi.mock("../features/table/tableView", () => ({ TableView: class {} }));
@@ -62,21 +62,8 @@ describe("assistantContext of an engine workspace tab", () => {
 });
 
 describe("focus on opening the assistant", () => {
-  const panel = { contains: (node: unknown) => node === inPanel } as unknown as Node;
-  const element = (editable: boolean) => ({ closest: (selector: string) => (editable && selector.includes(".cm-editor") ? {} : null) }) as unknown as Element;
-  const inPanel = element(true);
-
-  it("knows when the user is typing in an editor or field outside the panel", () => {
-    expect(typingElsewhere(element(true), panel)).toBe(true);
-    expect(typingElsewhere(element(false), panel)).toBe(false);
-    expect(typingElsewhere(inPanel, panel)).toBe(false);
-    expect(typingElsewhere(null, panel)).toBe(false);
-  });
-
-  it("takes the focus only from the keyboard shortcut, never from an editor", () => {
-    expect(composerTakesFocus(true, false)).toBe(true);
-    expect(composerTakesFocus(true, true)).toBe(false);
-    expect(composerTakesFocus(false, false)).toBe(false);
-    expect(composerTakesFocus(false, true)).toBe(false);
+  it("takes the focus from the keyboard shortcut, even away from an editor, and never from a click", () => {
+    expect(composerTakesFocus(true)).toBe(true);
+    expect(composerTakesFocus(false)).toBe(false);
   });
 });
