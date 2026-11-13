@@ -103,9 +103,19 @@ under the workspace's rules. The optional read-only query tool lets the assistan
 statement); those rows go to your provider. It is off for Production and Read-only workspaces unless you allow it, and every run is
 shown in the chat and written to the audit log. Database content is passed to the model as untrusted data.
 
+Rows and documents the read tools return (`run_read_query`, `sample_documents`) are redacted before they reach the
+model, and the chat shows the same redacted values: a column or field named like a credential or sensitive identifier
+(`password`, `secret`, `token`, `api_key`, `hash`, `pin`, `ssn`, `card`, `iban`, date of birth…, see the list under
+[Learn this database](#learn-this-database)) keeps its name and shows `[redacted]` instead of its value (a null stays
+null), at any depth: nested documents, dotted keys, arrays and JSON columns. Secret-looking text in any value (API keys,
+tokens, password hashes such as `$2b$…`, PEM blocks, passwords in URLs) is replaced by `[redacted]` too. Contact data
+(emails, names, phone numbers, addresses) is not redacted there: when you allow reads, answering questions about your data
+needs it. A column renamed in the query (`SELECT password AS p`) is caught only by the value checks. It is never kept in
+a learned profile either (below).
+
 On MongoDB the same setting covers sampled documents: `sample_documents` reads at most 20 documents of a collection in the
-chat's database (or what leaves a pipeline stage, on a bounded sample), with long values cut, through the same read-only gateway
-check, shown in the chat and audited; and the collection workspace sends a few documents (cut the same way) with the context,
+chat's database (or what leaves a pipeline stage, on a bounded sample), redacted as above and with long values cut,
+through the same read-only gateway check, shown in the chat and audited; and the collection workspace sends a few documents (cut the same way) with the context,
 only when reading that collection is a plain read for the rules (not a system collection, not `admin`, `local` or `config`, not
 administration). Where the setting is off, neither reaches the model: it sees field names, types, the filter you typed and the
 errors, with the values cut out of the errors (the key of a duplicate-key error, every quoted literal). An error message spread
@@ -141,10 +151,17 @@ for Read-only and Production workspaces). Then, as the assistant and through the
 Without reads, learning is metadata only: the structure above, MongoDB collection options and index specs, and
 Elasticsearch mappings, aliases and data streams (which are metadata, so they are always read). MongoDB then has no
 nested paths and Redis no key patterns, and the build says so. Value hints learned earlier are dropped by a refresh that
-may not sample them (reads off now, or "Sample column values" unticked). Columns whose names look like credentials or personal data
-(`password`, `secret`, `token`, `api_key`, `salt`, `hash`, `ssn`, `card`, `cvv`, `iban`…) are never sampled and lose
-their comments and defaults, and secret-looking text (API keys, tokens, PEM blocks) is replaced by `[redacted]` throughout
-the profile.
+may not sample them (reads off now, or "Sample column values" unticked). Columns whose names look like credentials or
+sensitive identifiers (`password`, `secret`, `token`, `api_key`, `salt`, `hash`, `pin`, `otp`, `session`, `ssn`, `card`,
+`cvv`, `iban`, `dob`…) are never sampled and lose their comments and defaults. Columns and fields named like personal
+data (`email`, `phone`, `address`, person names such as `full_name`, `first_name` or `customerName`, `ip_address`,
+`mac_address`, `passport`), and network address types (`inet`, `cidr`, `macaddr`, `IPv4`), get no value read and no
+hint either (a yes/no flag such as `email_verified` does; MongoDB reads whole sample documents to learn field paths, but
+keeps no value of these fields). A plain `name` column is sampled, since it often names things rather than
+people; its values are kept only when there are few of them. Values that are emails, phone numbers, IP or MAC addresses,
+URLs, UUIDs or JSON are never kept as hints: a column where all of them share such a format keeps only the format, and one
+where they are mixed with other values keeps nothing. Secret-looking text (API keys, tokens, password hashes, PEM blocks)
+is replaced by `[redacted]` throughout the profile.
 
 Learning sends nothing to a model. The summary step does, and only when you choose "Summarise" after seeing the estimate:
 it sends the structure and your notes to the active LLM provider (with the model you pick), plus the value hints only when

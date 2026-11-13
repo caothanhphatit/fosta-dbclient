@@ -23,6 +23,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Assistant panel: a "Thinking…" row shows while the model works between tool calls.
 - Assistant panel: the quick prompts of a MongoDB collection say "Query this collection" and ask for documents, not rows.
 
+### Security
+
+- Assistant: rows and documents that `run_read_query` and `sample_documents` send to the AI provider, and show in the
+  chat, are redacted like learned profiles. Fields named like credentials (`password`, `token`, `api_key`, `pin`,
+  `card`…) keep their name and show `[redacted]` at any depth (nested documents, dotted keys, arrays, JSON columns), and
+  secret-looking values (API keys, tokens, password hashes, passwords in URLs) are replaced. Before, a sampled
+  `contact.password` reached the provider although the learned profile marked it sensitive.
+- Learn this database: columns and fields named like personal data (email, phone, address, person names such as
+  `full_name`, IP and MAC addresses) and network address types (`inet`, `cidr`, `macaddr`) are no longer read for value
+  hints, as 0.3.0 promised. IP and MAC address values are kept only as a format, a value list that mixes emails, phone
+  numbers or addresses with other values is dropped, and password hashes (`$2b$…`, `$argon2…`) count as secrets.
+
+### Changed
+
+- Assistant: with a learned profile, `schema_overview` is described as the fallback for objects the profile misses or
+  when it is stale, so the model looks in the profile (`search_profile`, `get_object_profile`) before reading the whole
+  schema live.
+
 ## [0.3.0] - 2026-11-12
 
 This release also includes the fixes and additions of

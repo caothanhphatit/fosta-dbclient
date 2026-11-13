@@ -3,8 +3,15 @@
 //! private keys). Engine-neutral: system containers are recognised by the `system` note engines put on their tree nodes
 //! (MySQL `mysql`, `sys`…; MongoDB `admin`, `config`, `local`; SQL Server `master`…; ClickHouse `system`), plus names
 //! every engine family shares.
+//!
+//! The same rules redact the rows and documents the assistant's read tools (`run_read_query`, `sample_documents`) hand
+//! to the model and show in the chat ([`redact_cell`], [`redact_json`]): fields named like credentials keep their key
+//! and lose their value, and secret-looking text is replaced, at any depth. Columns named like personal data
+//! ([`is_personal_name`]) are never sampled while learning.
 
-use crate::contract::{NodeKind, ObjectNode};
+use serde_json::Value as Json;
+
+use crate::contract::{NodeKind, ObjectNode, Value};
 
 /// The note engines put on system databases and schemas.
 const SYSTEM_DETAIL: &str = "system";
@@ -19,7 +26,8 @@ const HIDDEN_PREFIX: char = '.';
 
 /// Comments, defaults and other engine text are cut to this many characters.
 pub const MAX_TEXT_CHARS: usize = 500;
-const REDACTED: &str = "[redacted]";
+/// What replaces a redacted value or piece of text.
+pub const REDACTED: &str = "[redacted]";
 
 /// Words a column name contains to count as sensitive.
 const SENSITIVE_PARTS: [&str; 10] = [
@@ -166,6 +174,81 @@ pub fn is_sensitive_name(name: &str) -> bool {
         })
 }
 
+/// Whole words of a column name that make it personal data: contact details, addresses, network addresses, person
+/// names, identity documents.
+const PERSONAL_WORDS: [&str; 30] = [
+    "email",
+    "emails",
+    "emailaddress",
+    "phone",
+    "phones",
+    "phonenumber",
+    "telephone",
+    "msisdn",
+    "fax",
+    "address",
+    "addresses",
+    "street",
+    "ip",
+    "ipaddr",
+    "ipaddress",
+    "ipv4",
+    "ipv6",
+    "macaddr",
+    "macaddress",
+    "surname",
+    "fullname",
+    "firstname",
+    "lastname",
+    "middlename",
+    "givenname",
+    "familyname",
+    "displayname",
+    "username",
+    "nickname",
+    "passport",
+];
+/// Words that make the next word, `name`, a person's name (`first_name`, `customerName`, `contact.name`).
+const NAME_QUALIFIERS: [&str; 22] = [
+    "full",
+    "first",
+    "last",
+    "middle",
+    "given",
+    "family",
+    "display",
+    "user",
+    "nick",
+    "maiden",
+    "legal",
+    "contact",
+    "customer",
+    "person",
+    "owner",
+    "sender",
+    "recipient",
+    "employee",
+    "member",
+    "holder",
+    "patient",
+    "client",
+];
+
+/// Whether a column or field path called `name` holds personal data (`email`, `contact.phone`, `billing_address`,
+/// `first_name`, `customerName`, `ip_address`, `mac_addr`). Such columns are never sampled while learning; the read tools
+/// still return them where the user lets the assistant read data, since answering about the data needs them.
+pub fn is_personal_name(name: &str) -> bool {
+    let words = words(name);
+    words.iter().any(|word| PERSONAL_WORDS.contains(&word.as_str()))
+        || words.windows(2).any(|pair| {
+            let (first, second) = (pair[0].as_str(), pair[1].as_str());
+            (first == "e" && second == "mail")
+                || (first == "mac" && matches!(second, "address" | "addr"))
+                || (first == "mobile" && matches!(second, "number" | "phone" | "no"))
+                || (NAME_QUALIFIERS.contains(&first) && matches!(second, "name" | "names"))
+        })
+}
+
 /// Prefixes of well-known credentials (OpenAI and Anthropic, GitHub, GitLab, Slack, AWS, Google, JWT, Stripe).
 const SECRET_PREFIXES: [&str; 18] = [
     "sk-",
@@ -236,6 +319,33 @@ fn looks_like_secret(word: &str) -> bool {
     upper && lower && digit
 }
 
+/// Modular-crypt and LDAP password hashes (`$2b$12$…`, `$argon2id$v=19$…`, `pbkdf2_sha256$…`, `{SSHA}…`), which
+/// [`looks_like_secret`] misses for their `$` and braces.
+const HASH_PREFIXES: [&str; 13] = [
+    "$2a$",
+    "$2b$",
+    "$2x$",
+    "$2y$",
+    "$1$",
+    "$5$",
+    "$6$",
+    "$y$",
+    "$argon2",
+    "$scrypt$",
+    "$pbkdf2",
+    "pbkdf2_sha",
+    "{ssha",
+];
+const MIN_HASH_CHARS: usize = 20;
+
+fn looks_like_password_hash(word: &str) -> bool {
+    let word = word.trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | ';' | '(' | ')'));
+    word.len() >= MIN_HASH_CHARS
+        && HASH_PREFIXES
+            .iter()
+            .any(|prefix| word.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix)))
+}
+
 /// The credential after an authorization scheme (`Bearer eyJ…`, `Basic dXNlcjpw…`): token characters only, at least 8 of
 /// them, and not a plain lower-case word (`basic plan` stays).
 fn looks_like_credential(word: &str) -> bool {
@@ -291,7 +401,7 @@ fn redact_webhooks(text: &str) -> String {
 /// One whitespace-free word with every secret-looking piece (split at [`JOINERS`]) replaced; also says whether the word
 /// ends with an authorization scheme, so that the next word is the credential.
 fn scrub_word(word: &str) -> (String, bool) {
-    if looks_like_secret(word) {
+    if looks_like_secret(word) || looks_like_password_hash(word) {
         return (REDACTED.to_owned(), false);
     }
     let mut out = String::with_capacity(word.len());
@@ -318,6 +428,11 @@ fn scrub_word(word: &str) -> (String, bool) {
 /// `text` with secret-looking words and pieces of words, the user information of URLs, webhook paths, the credential
 /// after `Bearer` or `Basic`, and PEM blocks replaced by `[redacted]`, cut to [`MAX_TEXT_CHARS`].
 pub fn scrub(text: &str) -> String {
+    cut(&scrub_uncut(text), MAX_TEXT_CHARS)
+}
+
+/// [`scrub`] without the cut.
+fn scrub_uncut(text: &str) -> String {
     let mut text = text.to_owned();
     while let Some(start) = text.find("-----BEGIN") {
         let end = text[start..]
@@ -347,7 +462,7 @@ pub fn scrub(text: &str) -> String {
         scrubbed.push_str(space);
         after_scheme = scheme;
     }
-    cut(&scrubbed, MAX_TEXT_CHARS)
+    scrubbed
 }
 
 /// Engine text worth keeping: trimmed, scrubbed and cut; empty text is none.
@@ -362,6 +477,127 @@ pub fn cut(text: &str, max: usize) -> String {
     let mut cut: String = text.chars().take(max).collect();
     cut.push('…');
     cut
+}
+
+// --- Rows and documents the assistant reads -------------------------------------------------------
+
+/// Text longer than this is cut before it is scrubbed (the read tools show far less of it).
+const MAX_SCRUBBED_CHARS: usize = 4_096;
+/// Nesting redacted; anything deeper is replaced as a whole.
+const MAX_REDACT_DEPTH: usize = 100;
+
+/// One value's text with secret-looking pieces replaced, at most [`MAX_SCRUBBED_CHARS`] of it.
+pub fn scrub_value(text: &str) -> String {
+    if text.len() <= MAX_SCRUBBED_CHARS {
+        return scrub_uncut(text);
+    }
+    scrub_uncut(&cut(text, MAX_SCRUBBED_CHARS))
+}
+
+/// A JSON document (or array) inside text, when the text is one.
+fn json_in(text: &str) -> Option<Json> {
+    let trimmed = text.trim();
+    let bracketed = (trimmed.starts_with('{') && trimmed.ends_with('}')) || (trimmed.starts_with('[') && trimmed.ends_with(']'));
+    bracketed.then(|| serde_json::from_str::<Json>(trimmed).ok()).flatten()
+}
+
+/// A JSON value as the assistant may see it: the value of every field named like a credential
+/// ([`is_sensitive_name`]) is `[redacted]` (its key stays; a null stays null), and secret-looking text in strings and
+/// keys is replaced, at any depth and inside arrays.
+pub fn redact_json(value: &Json) -> Json {
+    redact_json_at(value, 0)
+}
+
+fn redact_json_at(value: &Json, depth: usize) -> Json {
+    if depth > MAX_REDACT_DEPTH {
+        return Json::String(REDACTED.to_owned());
+    }
+    match value {
+        Json::String(text) => Json::String(scrub_value(text)),
+        Json::Array(items) => Json::Array(items.iter().map(|item| redact_json_at(item, depth + 1)).collect()),
+        Json::Object(map) => Json::Object(
+            map.iter()
+                .map(|(key, inner)| {
+                    let inner = if is_sensitive_name(key) && !inner.is_null() {
+                        Json::String(REDACTED.to_owned())
+                    } else {
+                        redact_json_at(inner, depth + 1)
+                    };
+                    (scrub_value(key), inner)
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// One cell of a result row as the assistant may see it: `[redacted]` when its column is named like a credential (a
+/// null stays null), otherwise [`redact_json`]'s rules applied to nested documents, arrays, JSON and text.
+pub fn redact_cell(column: &str, value: &Value) -> Value {
+    match value {
+        Value::Null => Value::Null,
+        _ if is_sensitive_name(column) => Value::Text(REDACTED.to_owned()),
+        other => redact_value(other, 0),
+    }
+}
+
+fn redact_value(value: &Value, depth: usize) -> Value {
+    if depth > MAX_REDACT_DEPTH {
+        return Value::Text(REDACTED.to_owned());
+    }
+    match value {
+        Value::Text(text) => Value::Text(redact_text(text)),
+        Value::Json(text) => Value::Json(redact_text(text)),
+        Value::Other { type_name, text } => Value::Other {
+            type_name: type_name.clone(),
+            text: scrub_value(text),
+        },
+        Value::Array(items) => Value::Array(items.iter().map(|item| redact_value(item, depth + 1)).collect()),
+        Value::Document(fields) => Value::Document(
+            fields
+                .iter()
+                .map(|(key, inner)| {
+                    let inner = match inner {
+                        Value::Null => Value::Null,
+                        _ if is_sensitive_name(key) => Value::Text(REDACTED.to_owned()),
+                        _ => redact_value(inner, depth + 1),
+                    };
+                    (scrub_value(key), inner)
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Text that is a JSON document redacted as one (re-serialised only when something changed), other text scrubbed.
+fn redact_text(text: &str) -> String {
+    match json_in(text) {
+        Some(json) => {
+            let redacted = redact_json(&json);
+            if redacted == json {
+                text.to_owned()
+            } else {
+                redacted.to_string()
+            }
+        }
+        None => scrub_value(text),
+    }
+}
+
+/// Documents given as text (one JSON value, or one per line, as the collection workspace sends them with the chat
+/// context) with [`redact_json`]'s rules applied; lines that are not JSON are scrubbed.
+pub fn redact_documents_text(text: &str) -> String {
+    if let Some(json) = json_in(text) {
+        return redact_json(&json).to_string();
+    }
+    text.lines()
+        .map(|line| match json_in(line) {
+            Some(json) => redact_json(&json).to_string(),
+            None => scrub_uncut(line),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // --- Identifiers in names: Redis key segments, document field paths ------------------------------
@@ -708,6 +944,174 @@ mod tests {
         ] {
             assert_eq!(scrub(text), text);
         }
+    }
+
+    #[test]
+    fn personal_data_columns_are_recognised() {
+        for name in [
+            "email",
+            "Email",
+            "e_mail",
+            "contact.email",
+            "emailAddress",
+            "phone",
+            "contact.phone",
+            "phone_number",
+            "mobile_number",
+            "address",
+            "billing_address",
+            "street",
+            "ip",
+            "ip_address",
+            "client_ip",
+            "IPAddress",
+            "mac_address",
+            "macAddr",
+            "full_name",
+            "first_name",
+            "lastName",
+            "customerName",
+            "contact.name",
+            "surname",
+            "username",
+            "passport_no",
+        ] {
+            assert!(is_personal_name(name), "{name}");
+        }
+        for name in [
+            "status",
+            "name",
+            "product_name",
+            "category_name",
+            "file_name",
+            "country",
+            "zip",
+            "tip",
+            "mobile",
+            "mailbox_size",
+        ] {
+            assert!(!is_personal_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn password_hashes_are_redacted() {
+        assert_eq!(scrub("$2b$12$KIXQJFakeHashValueForTests0123456789abcdefABCDEF"), REDACTED);
+        assert_eq!(
+            scrub("hash: '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA'"),
+            format!("hash: {REDACTED}")
+        );
+        assert_eq!(scrub("{SSHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g="), REDACTED);
+        assert_eq!(scrub("costs $25 today"), "costs $25 today");
+    }
+
+    #[test]
+    fn nested_documents_lose_credential_values_and_secrets() {
+        let document = serde_json::json!({
+            "_id": { "$oid": "5f2b9c0e1d2a3b4c5d6e7f80" },
+            "email": "ann@example.com",
+            "contact": { "email": "ann@example.com", "password": "secret-0", "apiKey": null },
+            "logins": [
+                { "at": "2026-11-12", "sessionToken": "abc" },
+                { "note": "used key sk-abcdefghijklmnopqrstuvwx1234" }
+            ],
+            "credentials": { "user": "ann", "pass": "pw" },
+            "contact.password": "flat-0",
+            "tags": ["vip", "$2b$12$KIXQJFakeHashValueForTests0123456789abcdefABCDEF"]
+        });
+        let redacted = redact_json(&document);
+        assert_eq!(redacted["_id"]["$oid"], "5f2b9c0e1d2a3b4c5d6e7f80");
+        assert_eq!(redacted["email"], "ann@example.com", "contact data is kept");
+        assert_eq!(redacted["contact"]["email"], "ann@example.com");
+        assert_eq!(redacted["contact"]["password"], REDACTED);
+        assert!(redacted["contact"]["apiKey"].is_null(), "a null stays null");
+        assert_eq!(redacted["logins"][0]["sessionToken"], REDACTED);
+        assert_eq!(redacted["logins"][0]["at"], "2026-11-12");
+        assert_eq!(redacted["logins"][1]["note"], format!("used key {REDACTED}"));
+        assert_eq!(redacted["credentials"], REDACTED, "a sensitive field loses its whole subdocument");
+        assert_eq!(redacted["contact.password"], REDACTED, "dotted keys are checked too");
+        assert_eq!(redacted["tags"], serde_json::json!(["vip", REDACTED]));
+        let text = redacted.to_string();
+        assert!(
+            !text.contains("secret-0") && !text.contains("flat-0") && !text.contains("sk-abc"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn documents_given_as_text_are_redacted() {
+        let lines = "{\"email\": \"ann@example.com\", \"password\": \"secret-0\"}\nnot json key=sk-abcdefghijklmnopqrstuvwx1234";
+        let redacted = redact_documents_text(lines);
+        assert!(!redacted.contains("secret-0") && !redacted.contains("sk-abc"), "{redacted}");
+        assert!(
+            redacted.contains("ann@example.com") && redacted.contains("\"password\":\"[redacted]\""),
+            "{redacted}"
+        );
+        let array = redact_documents_text("[{\"contact\": {\"pin\": \"1234\"}}]");
+        assert_eq!(
+            serde_json::from_str::<Json>(&array).unwrap(),
+            serde_json::json!([{ "contact": { "pin": REDACTED } }])
+        );
+    }
+
+    #[test]
+    fn result_cells_lose_credential_values_and_secrets() {
+        let text = |value: &str| Value::Text(value.to_owned());
+        assert_eq!(redact_cell("password", &text("hunter2")), text(REDACTED));
+        assert_eq!(redact_cell("user_password", &Value::Int(4)), text(REDACTED));
+        assert_eq!(redact_cell("api_key", &Value::Null), Value::Null);
+        assert_eq!(redact_cell("email", &text("ann@example.com")), text("ann@example.com"));
+        assert_eq!(
+            redact_cell("note", &text("token sk-abcdefghijklmnopqrstuvwx1234")),
+            text(&format!("token {REDACTED}"))
+        );
+        assert_eq!(redact_cell("total", &Value::Int(42)), Value::Int(42));
+        // JSON columns and JSON text are redacted inside; untouched JSON keeps its formatting.
+        let Value::Json(profile) = redact_cell(
+            "profile",
+            &Value::Json(r#"{"name": "Ann", "secret": "x", "nested": [{"pin": 1234}]}"#.into()),
+        ) else {
+            panic!("JSON stays JSON");
+        };
+        assert_eq!(
+            serde_json::from_str::<Json>(&profile).unwrap(),
+            serde_json::json!({ "name": "Ann", "secret": REDACTED, "nested": [{ "pin": REDACTED }] })
+        );
+        assert_eq!(redact_cell("payload", &text(r#"{"a": 1}"#)), text(r#"{"a": 1}"#));
+        assert_eq!(
+            redact_cell("payload", &text(r#"[{"token": "abc"}]"#)),
+            text(r#"[{"token":"[redacted]"}]"#)
+        );
+        // Nested documents and arrays (MongoDB, Elasticsearch).
+        let document = Value::Document(vec![
+            ("name".into(), text("Ann")),
+            (
+                "contact".into(),
+                Value::Document(vec![
+                    ("email".into(), text("ann@example.com")),
+                    ("password".into(), text("secret-1")),
+                ]),
+            ),
+            (
+                "keys".into(),
+                Value::Array(vec![Value::Document(vec![
+                    ("secret".into(), text("s")),
+                    ("label".into(), text("ci")),
+                ])]),
+            ),
+        ]);
+        let Value::Document(fields) = redact_cell("doc", &document) else {
+            panic!("a document stays a document");
+        };
+        assert_eq!(fields[0], ("name".into(), text("Ann")));
+        let Value::Document(contact) = &fields[1].1 else { panic!() };
+        assert_eq!(contact[1], ("password".into(), text(REDACTED)));
+        assert_eq!(contact[0], ("email".into(), text("ann@example.com")));
+        let Value::Array(keys) = &fields[2].1 else { panic!() };
+        assert_eq!(
+            keys[0],
+            Value::Document(vec![("secret".into(), text(REDACTED)), ("label".into(), text("ci"))])
+        );
     }
 
     #[test]

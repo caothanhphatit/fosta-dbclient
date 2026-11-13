@@ -9,12 +9,15 @@
 //! the server, or name another database (`{ db, coll }` in `$lookup`, `$unionWith`, `$merge.into`).
 //! - `sample_documents` (ReadRows, only where the user lets the assistant read data, like `run_read_query`) reads at
 //!   most [`MAX_SAMPLE`] documents of the chat's database through the gateway (`gateway::assistant::invoke_read`:
-//!   `mongo.find`, or `mongo.aggregatePreview` for what leaves a pipeline stage on a bounded sample). Values are cut
-//!   per field before the model (and the chat) sees them, and the read is audited.
+//!   `mongo.find`, or `mongo.aggregatePreview` for what leaves a pipeline stage on a bounded sample). Values are
+//!   redacted like learned profiles (`profile::redact::redact_json`: fields named like credentials keep their key and
+//!   lose their value, secret-looking text is replaced, at any depth and in arrays) and cut per field before the model
+//!   and the chat see them, and the read is audited.
 
 use serde_json::{json, Map, Value};
 
 use super::{
+    profile::redact,
     tools::{ToolSpec, MAX_CELL_CHARS, MAX_RESULT_CHARS},
     ChatContext, ChatEvent, ChatSink, UiAction,
 };
@@ -112,7 +115,7 @@ pub(super) fn definitions(read_rows: bool) -> Vec<ToolSpec> {
         );
         tools.push(ToolSpec {
             name: SAMPLE_DOCUMENTS,
-            description: "Reads a few documents of a collection in the chat's current database (at most 20, long values cut), optionally matching a filter, or as they leave a stage of an aggregation pipeline. Use it to see real field values and shapes before writing a filter or a stage. The documents are sent to you, so read only what you need. It never writes.",
+            description: "Reads a few documents of a collection in the chat's current database (at most 20, credentials redacted, long values cut), optionally matching a filter, or as they leave a stage of an aggregation pipeline. Use it to see real field values and shapes before writing a filter or a stage. The documents are sent to you, so read only what you need. It never writes.",
             schema: json!({ "type": "object", "properties": sample, "additionalProperties": false }),
         });
     }
@@ -455,7 +458,15 @@ pub(super) async fn sample(
         .and_then(|(_, _, result)| result.get("elapsedMs").and_then(Value::as_u64))
         .unwrap_or_default();
     let (documents, more) = match &outcome {
-        Ok((documents, more, _)) => (documents.iter().take(limit as usize).map(cut).collect::<Vec<_>>(), *more),
+        // Redacted before they are cut (a cut could hide a secret from the checks), and the chat shows what the model gets.
+        Ok((documents, more, _)) => (
+            documents
+                .iter()
+                .take(limit as usize)
+                .map(|document| cut(&redact::redact_json(document)))
+                .collect::<Vec<_>>(),
+            *more,
+        ),
         Err(_) => (Vec::new(), false),
     };
     let (columns, rows) = table_of(&documents);
@@ -564,7 +575,7 @@ fn model_text(documents: &[Value], more: bool) -> String {
     if more {
         text.push_str(" (more match; only these were read)");
     }
-    text.push_str(", long values cut:");
+    text.push_str(", credentials redacted, long values cut:");
     let mut shown = 0;
     for document in documents {
         let line = document.to_string();
@@ -673,7 +684,15 @@ mod tests {
         async fn invoke(&self, name: &str, args: Value, ctx: &CallContext) -> AppResult<Value> {
             assert!(ctx.limits.read_only, "the assistant reads read-only");
             self.engine.calls.lock().unwrap().push((name.to_owned(), args.clone()));
-            let document = |n: u64| json!({ "_id": n, "note": "x".repeat(5000), "tags": (0..30).collect::<Vec<_>>() });
+            let document = |n: u64| {
+                json!({
+                    "_id": n,
+                    "note": "x".repeat(5000),
+                    "tags": (0..30).collect::<Vec<_>>(),
+                    "contact": { "email": format!("user{n}@example.com"), "password": format!("secret-{n}") },
+                    "logins": [{ "token": format!("tok-{n}"), "via": "key sk-abcdefghijklmnopqrstuvwx1234" }],
+                })
+            };
             let limit = args["limit"].as_u64().unwrap_or(5);
             let documents: Vec<Value> = (0..limit).map(document).collect();
             Ok(match name {
@@ -858,8 +877,22 @@ mod tests {
         assert_eq!(calls[0].1["filter"], json!({ "status": "paid" }));
         let shown = seen.lock().unwrap().clone();
         assert_eq!(shown[0]["type"], "query");
-        assert_eq!(shown[0]["columns"], json!(["_id", "note", "tags"]));
+        let columns: Vec<&str> = shown[0]["columns"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        for column in ["_id", "note", "tags", "contact", "logins"] {
+            assert!(columns.contains(&column), "{columns:?}");
+        }
         assert_eq!(shown[0]["rows"].as_array().unwrap().len(), 20);
+        // Credentials never reach the model or the chat, at any depth; contact data does, and keys stay.
+        let rows = shown[0]["rows"].to_string();
+        for leaked in ["secret-", "tok-", "sk-abc"] {
+            assert!(!text.contains(leaked), "{leaked} in {text}");
+            assert!(!rows.contains(leaked), "{leaked} in {rows}");
+        }
+        assert!(
+            text.contains(r#""password":"[redacted]""#) && text.contains(r#""token":"[redacted]""#),
+            "{text}"
+        );
+        assert!(text.contains("user0@example.com") && rows.contains("[redacted]"), "{rows}");
 
         // What leaves a stage: a preview of the stages up to it, the filter as a leading $match.
         let input =

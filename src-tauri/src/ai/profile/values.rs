@@ -7,10 +7,13 @@
 //! - MongoDB: `mongo.distinct` (at most 20 values, a short `maxTimeMS`) through `gateway::assistant::invoke_read`;
 //! - other engines (Elasticsearch, Redis): no bounded distinct read, so no hints, and the outcome says so.
 //!
-//! Sensitive columns ([`redact::is_sensitive_name`]), primary keys and types unlikely to hold few values are never read;
-//! excluded objects are not in the profile to begin with. Values that look like secrets are dropped, and values of
-//! formats that carry personal data or identifiers (emails, phone numbers, URLs, UUIDs, JSON) are never kept, only the
-//! format. The work is bounded per object, per build and in time, and stops with the build's cancellation.
+//! Sensitive columns ([`redact::is_sensitive_name`]), columns named like personal data ([`redact::is_personal_name`]:
+//! emails, phones, addresses, person names, IP and MAC addresses; flags excepted), primary keys and types unlikely to
+//! hold few values (network addresses among them) are never read; excluded objects are not in the profile to begin with.
+//! Values that look like secrets are dropped, and values of formats that carry personal data or identifiers (emails,
+//! phone numbers, IP and MAC addresses, URLs, UUIDs, JSON) are never kept: only the format when all values share it,
+//! nothing when they are mixed with other values. The work is bounded per object, per build and in time, and stops with
+//! the build's cancellation.
 //!
 //! [`Engine::distinct_values_statement`]: crate::contract::Engine::distinct_values_statement
 
@@ -102,7 +105,8 @@ fn small_int(type_name: &str) -> bool {
 }
 
 /// Types that never hold a short list of values, or that cannot be compared for DISTINCT on some engines.
-const SKIPPED_TYPES: [&str; 16] = [
+/// Network address types (`inet`, `cidr`, `macaddr`, ClickHouse `IPv4`) hold personal data, not a short list of values.
+const SKIPPED_TYPES: [&str; 21] = [
     "blob",
     "clob",
     "ntext",
@@ -119,12 +123,21 @@ const SKIPPED_TYPES: [&str; 16] = [
     "range",
     "json",
     "lob",
+    "inet",
+    "cidr",
+    "macaddr",
+    "ipv4",
+    "ipv6",
 ];
 
-/// Whether a column is worth reading: not sensitive, not a key, and of a type that can hold a short list of values.
+/// Whether a column is worth reading: not sensitive or personal data, not a key, and of a type that can hold a short
+/// list of values. A flag named like personal data (`email_verified`, a boolean) is still read.
 pub(super) fn sampled(column: &ColumnProfile) -> bool {
     // `prefs.{key}` stands for many fields whose names were values.
     if column.sensitive || column.primary || redact::is_sensitive_name(&column.name) || column.name.contains(redact::KEY_PLACEHOLDER) {
+        return false;
+    }
+    if column.kind != ValueKind::Bool && redact::is_personal_name(&column.name) {
         return false;
     }
     let lower = column.type_name.to_ascii_lowercase();
@@ -231,13 +244,27 @@ fn is_phone(text: &str) -> bool {
 /// Formats whose values are never kept (personal data, identifiers, documents), most specific first.
 type FormatTest = fn(&str) -> bool;
 
-const PRIVATE_FORMATS: [(&str, FormatTest); 5] = [
+const PRIVATE_FORMATS: [(&str, FormatTest); 7] = [
     ("uuid", is_uuid),
     ("email", is_email),
     ("url", is_url),
     ("json", is_json),
+    ("ip", redact::is_ip),
+    ("mac", is_mac),
     ("phone-ish", is_phone),
 ];
+
+/// A MAC address: six pairs of hex digits joined by `:` or `-`, or three groups of four joined by `.`.
+fn is_mac(text: &str) -> bool {
+    let groups = |separator: char, count: usize, width: usize| {
+        let parts: Vec<&str> = text.split(separator).collect();
+        parts.len() == count
+            && parts
+                .iter()
+                .all(|part| part.len() == width && part.chars().all(|c| c.is_ascii_hexdigit()))
+    };
+    groups(':', 6, 2) || groups('-', 6, 2) || groups('.', 3, 4)
+}
 
 /// The hint a sample gives: a private format, an ISO date, the values (when few and short), or a numeric format.
 /// `more` says the sample had more distinct values than it returned.
@@ -263,8 +290,10 @@ pub fn hint_of(column: &ColumnProfile, sample: &[String], more: bool) -> Option<
             return format("iso-date");
         }
     }
-    // A value that looks like a secret anywhere means the column is not listed at all.
-    if values.iter().any(|value| redact::scrub(value) != *value) {
+    // A value that looks like a secret, or of a private format (an email, an IP address among other values), anywhere
+    // means the column is not listed at all.
+    let private = |value: &&str| PRIVATE_FORMATS.iter().any(|(_, test)| test(value));
+    if values.iter().any(|value| redact::scrub(value) != *value) || (textual && values.iter().any(private)) {
         return None;
     }
     let few = !more && values.len() <= MAX_ENUM_VALUES && values.iter().all(|value| value.chars().count() <= MAX_VALUE_CHARS);
@@ -547,6 +576,43 @@ mod tests {
         // A secret-looking value drops the column.
         assert!(hint_of(&status, &strings(&["new", "sk-abcdefghijklmnopqrstuvwx1234"]), false).is_none());
         assert!(hint_of(&status, &[], false).is_none());
+        // IP and MAC addresses give their format only; mixed with other values, nothing.
+        assert_eq!(format(&["192.168.1.10", "10.0.0.1"], false).as_deref(), Some("ip"));
+        assert_eq!(format(&["::1"], false).as_deref(), Some("ip"));
+        assert_eq!(format(&["08:00:2b:01:02:03", "08-00-2B-01-02-04"], false).as_deref(), Some("mac"));
+        assert_eq!(format(&["0800.2b01.0203"], false).as_deref(), Some("mac"));
+        for mixed in [
+            &["new", "192.168.1.10"][..],
+            &["new", "ann@example.com"],
+            &["new", "+1 555 123 4567"],
+            &["new", "08:00:2b:01:02:03"],
+        ] {
+            assert!(hint_of(&status, &strings(mixed), false).is_none(), "{mixed:?}");
+        }
+        assert!(!is_mac("12:34") && !is_mac("gg:00:2b:01:02:03") && !is_mac("2026-11-13"));
+    }
+
+    #[test]
+    fn personal_data_columns_are_never_read() {
+        for (name, type_name) in [
+            ("email", "varchar(255)"),
+            ("contact.email", "string"),
+            ("phone", "text"),
+            ("full_name", "text"),
+            ("first_name", "varchar(50)"),
+            ("lastName", "string"),
+            ("billing_address", "text"),
+            ("ip_address", "text"),
+            ("mac_addr", "text"),
+        ] {
+            assert!(!sampled(&column(name, type_name, ValueKind::Text)), "{name}");
+        }
+        for (name, type_name) in [("c_inet", "inet"), ("c_cidr", "cidr"), ("c_macaddr", "macaddr"), ("peer", "IPv4")] {
+            assert!(!sampled(&column(name, type_name, ValueKind::Other)), "{name}");
+        }
+        // Flags named like personal data, and names of things, are still read.
+        assert!(sampled(&column("email_verified", "boolean", ValueKind::Bool)));
+        assert!(sampled(&column("category_name", "text", ValueKind::Text)));
     }
 
     #[test]

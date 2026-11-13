@@ -354,12 +354,11 @@ async fn the_hook_adds_fields_references_hints_and_patterns() {
     assert_eq!((sku.type_name.as_str(), sku.presence), ("string | int", Some(75.5)));
     assert!(orders.column("contact.password").unwrap().sensitive);
     assert_eq!(orders.primary_key, ["_id"]);
-    // Hints follow the value rules: values for a short list, the format only for emails, nothing for sensitive
-    // fields or keys.
+    // Hints follow the value rules: values for a short list, nothing for sensitive or personal fields (emails) or
+    // keys.
     let hint = |column: &str| orders.value_hints.iter().find(|hint| hint.column == column).cloned();
     assert_eq!(hint("status").unwrap().values, ["new", "paid"]);
-    let email = hint("contact.email").unwrap();
-    assert_eq!((email.format.as_deref(), email.values.is_empty()), (Some("email"), true));
+    assert!(hint("contact.email").is_none(), "personal data is never kept");
     assert!(hint("contact.password").is_none() && hint("_id").is_none());
     assert!(profile.data_read);
     // The matched reference replaces the guess from the name.
@@ -582,8 +581,7 @@ async fn live_mongo_extras() {
     assert!(reference.confidence > 0.9, "{reference:?}");
     let hint = |column: &str| orders.value_hints.iter().find(|hint| hint.column == column).cloned();
     assert_eq!(hint("status").unwrap().values, STATUSES);
-    assert_eq!(hint("contact.email").unwrap().format.as_deref(), Some("email"));
-    assert!(hint("contact.email").unwrap().values.is_empty());
+    assert!(hint("contact.email").is_none(), "personal data is never kept");
     assert!(hint("contact.password").is_none() && hint("_id").is_none());
     let extras = first.extras.unwrap();
     assert_eq!(extras.failed, 0, "{extras:?}");

@@ -336,15 +336,12 @@ async fn sql_hints_are_read_when_allowed_within_the_caps() {
     let orders = hints(&profile, "orders");
     assert_eq!(orders["status"].values, ["new", "paid", "shipped"]);
     assert_eq!(orders["level"].values, ["1", "2"]);
-    // Emails give their format, never the addresses; a column with many values gives nothing.
-    assert_eq!(
-        (orders["email"].format.as_deref(), orders["email"].values.is_empty()),
-        (Some("email"), true)
-    );
+    // Personal data columns (emails) are never read; a column with many values gives nothing.
+    assert!(!orders.contains_key("email"));
     assert!(!orders.contains_key("note"));
-    // Never the key, the sensitive column or a wide integer; at most 30 columns of `wide`.
+    // Never the key, the sensitive or personal column or a wide integer; at most 30 columns of `wide`.
     let columns = read_columns(&state);
-    for skipped in ["id", "password", "total"] {
+    for skipped in ["id", "password", "email", "total"] {
         assert!(!columns.iter().any(|column| column == skipped), "{skipped}: {columns:?}");
     }
     let statements = state.statements.lock().unwrap().clone();
@@ -542,8 +539,7 @@ async fn live_mongo_hints() {
     let orders = hints(&profile, "orders");
     assert_eq!(orders["status"].values, ["new", "paid", "shipped"]);
     assert_eq!(orders["active"].values, ["false", "true"]);
-    assert_eq!(orders["email"].format.as_deref(), Some("email"));
-    assert!(orders["email"].values.is_empty());
+    assert!(!orders.contains_key("email"), "personal data is never sampled");
     assert!(!orders.contains_key("password") && !orders.contains_key("note") && !orders.contains_key("_id"));
     assert!(profile.data_read && outcome.values.unwrap().failed == 0);
     let _ = std::fs::remove_dir_all(dir);
@@ -631,9 +627,9 @@ async fn sqlite_hints_through_the_real_engine() {
     let hints = hints(&profile, "order items");
     assert_eq!(hints["st\"atus"].values, ["new", "paid"], "{values:?}");
     assert_eq!(hints["level"].values, ["0", "1", "2"]);
-    assert_eq!(hints["email"].format.as_deref(), Some("email"));
+    assert!(!hints.contains_key("email"), "personal data is never sampled");
     assert!(!hints.contains_key("password") && !hints.contains_key("note") && !hints.contains_key("id"));
-    assert_eq!((values.columns, values.failed), (4, 0), "{values:?}");
+    assert_eq!((values.columns, values.failed), (3, 0), "{values:?}");
     assert!(profile.data_read);
     manager.disconnect("c").await;
     let _ = std::fs::remove_file(&file);

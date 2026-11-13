@@ -2,7 +2,8 @@
 //! names, DDL) through the engine contract (`super::catalog`), ask the UI to open
 //! a view, or, only where the user allows it, run one read-only statement
 //! (`run_read_query` through `gateway::assistant`: Read category only, 50 rows,
-//! 10 s). None of them changes data. Each tool is registered with the statement
+//! 10 s; its cells are redacted like learned profiles before the model and the
+//! chat see them). None of them changes data. Each tool is registered with the statement
 //! gateway (`gateway::assistant_tool_effect`), and a filter from `open_table` is
 //! only pre-filled in the grid for the user to apply.
 
@@ -10,7 +11,10 @@ use serde_json::{json, Value};
 
 use super::{
     catalog, collections,
-    profile::digest::{self, ChatProfile},
+    profile::{
+        digest::{self, ChatProfile},
+        redact,
+    },
     prompt::{truncate, untrusted_block},
     ChatContext, ChatEvent, ChatSink, ToolCall, UiAction, Wire,
 };
@@ -36,6 +40,10 @@ pub(super) struct ToolSpec {
     pub(super) schema: Value,
 }
 
+const OVERVIEW: &str = "Returns every table of a database with its columns (keys marked) and all foreign keys between tables. Use it before writing joins across several tables or explaining how tables relate.";
+/// With a learned profile the profile tools come first: the overview is a live read of the whole schema.
+const OVERVIEW_WITH_PROFILE: &str = "Reads every table of a database live, with its columns (keys marked) and foreign keys. This database has a learned profile: use search_profile and get_object_profile first, and this only for objects the profile misses or when it is marked stale.";
+
 /// The tools offered to the model; `read_queries` adds `run_read_query` (the user allows it for the workspace),
 /// `collections` (a document engine) the collection tools (`super::collections`; `sample_documents` only with reads),
 /// and `profile` (a learned profile of the chat's database) `search_profile` and `get_object_profile`.
@@ -44,7 +52,7 @@ pub(super) fn tool_definitions(read_queries: bool, collections: bool, profile: b
     let mut tools = vec![
         ToolSpec {
             name: "schema_overview",
-            description: "Returns every table of a database with its columns (keys marked) and all foreign keys between tables. Use it before writing joins across several tables or explaining how tables relate.",
+            description: if profile { OVERVIEW_WITH_PROFILE } else { OVERVIEW },
             schema: json!({ "type": "object", "properties": { "database": database }, "additionalProperties": false }),
         },
         ToolSpec {
@@ -577,10 +585,21 @@ fn show_event(events: &dyn ChatSink, event: ChatEvent) {
     let _ = events.send(event);
 }
 
-/// Column names and cells as text, each cell on one line and cut at [`MAX_CELL_CHARS`].
+/// Column names and cells as text: each cell redacted ([`redact::redact_cell`]: credential columns and fields lose their
+/// values, secret-looking text is replaced, inside JSON and documents too), then put on one line and cut at
+/// [`MAX_CELL_CHARS`]. The chat shows the same cells the model gets.
 fn result_cells(result: &ReadResult) -> (Vec<String>, Vec<Vec<String>>) {
-    let columns = result.columns.iter().map(|column| column.name.clone()).collect();
-    let rows = result.rows.iter().map(|row| row.iter().map(cell_text).collect()).collect();
+    let columns: Vec<String> = result.columns.iter().map(|column| column.name.clone()).collect();
+    let rows = result
+        .rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .enumerate()
+                .map(|(index, value)| cell_text(&redact::redact_cell(columns.get(index).map_or("", String::as_str), value)))
+                .collect()
+        })
+        .collect();
     (columns, rows)
 }
 
@@ -967,6 +986,67 @@ mod tests {
         assert_eq!(long.chars().count(), MAX_CELL_CHARS + 1);
         assert_eq!(cell_text(&Cell::Text("a\nb".into())), "a b");
         assert_eq!(format_rows(&[], &[], false), "The statement ran and returned no result set.");
+    }
+
+    #[test]
+    fn query_results_lose_credentials_before_the_model_and_the_chat() {
+        use crate::contract::{ColumnInfo, ValueKind};
+        let column = |name: &str| ColumnInfo::result(name, "text", ValueKind::Text);
+        let result = ReadResult {
+            columns: vec![
+                column("email"),
+                column("password"),
+                column("api_key"),
+                column("profile"),
+                column("note"),
+            ],
+            rows: vec![vec![
+                Cell::Text("ann@example.com".into()),
+                Cell::Text("hunter2".into()),
+                Cell::Null,
+                Cell::Json(r#"{"theme": "dark", "auth": {"token": "abc", "pin": 1234}}"#.into()),
+                Cell::Text("uses sk-abcdefghijklmnopqrstuvwx1234 and $2b$12$KIXQJFakeHashValueForTests0123456789".into()),
+            ]],
+            truncated: false,
+            affected: None,
+            elapsed_ms: 1,
+        };
+        let (columns, rows) = result_cells(&result);
+        assert_eq!(columns, ["email", "password", "api_key", "profile", "note"]);
+        let row = &rows[0];
+        assert_eq!(row[0], "ann@example.com", "contact data is kept where reads are allowed");
+        assert_eq!(row[1], redact::REDACTED);
+        assert_eq!(row[2], "NULL", "a null credential stays null");
+        let profile: Value = serde_json::from_str(&row[3]).unwrap();
+        assert_eq!(
+            profile,
+            json!({ "theme": "dark", "auth": { "token": redact::REDACTED, "pin": redact::REDACTED } })
+        );
+        assert_eq!(row[4], "uses [redacted] and [redacted]");
+        // The model gets the same cells the chat shows.
+        let text = format_rows(&columns, &rows, false);
+        assert!(
+            !text.contains("hunter2") && !text.contains("sk-abc") && !text.contains("\"abc\""),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn schema_overview_defers_to_a_learned_profile() {
+        let overview = |profile: bool| {
+            tool_definitions(false, false, profile)
+                .into_iter()
+                .find(|tool| tool.name == "schema_overview")
+                .unwrap()
+                .description
+        };
+        assert!(overview(false).contains("before writing joins"));
+        let with = overview(true);
+        assert!(!with.contains("before writing joins"), "{with}");
+        assert!(
+            with.contains("search_profile and get_object_profile first") && with.contains("stale"),
+            "{with}"
+        );
     }
 
     // --- Against the dev MariaDB (`dev/compose/mariadb.yml`, demo database `shop`) ------------------------------------
