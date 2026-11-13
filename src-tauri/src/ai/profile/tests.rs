@@ -446,7 +446,7 @@ async fn refreshing_keeps_notes_and_descriptions_and_reports_staleness() {
     store
         .update_description("c", "shop", "products", Some("What we sell".into()))
         .unwrap();
-    let status = status(&store, Some(&handle), "c", "shop", false).await.unwrap();
+    let status = status(&store, Some(&handle), "c", "shop", 0, false).await.unwrap();
     assert_eq!((status.exists, status.stale), (true, Some(false)));
     catalog.tables.lock().unwrap()[1]
         .columns
@@ -454,15 +454,25 @@ async fn refreshing_keeps_notes_and_descriptions_and_reports_staleness() {
     catalog.tables.lock().unwrap().push(table("public", "invoices", &[("id", "int")]));
     // The cached answer holds for ten minutes unless forced.
     assert_eq!(
-        super::status(&store, Some(&handle), "c", "shop", false).await.unwrap().stale,
+        super::status(&store, Some(&handle), "c", "shop", 0, false).await.unwrap().stale,
         Some(false)
     );
+    // ... but not once a statement that may change the schema ran through the app (the gateway's epoch moved).
     assert_eq!(
-        super::status(&store, Some(&handle), "c", "shop", true).await.unwrap().stale,
+        super::status(&store, Some(&handle), "c", "shop", 1, false).await.unwrap().stale,
         Some(true)
     );
     assert_eq!(
-        super::status(&store, None, "c", "other", false).await.unwrap(),
+        super::status(&store, Some(&handle), "c", "shop", 1, false).await.unwrap().stale,
+        Some(true),
+        "the new answer is cached at the new epoch"
+    );
+    assert_eq!(
+        super::status(&store, Some(&handle), "c", "shop", 0, true).await.unwrap().stale,
+        Some(true)
+    );
+    assert_eq!(
+        super::status(&store, None, "c", "other", 0, false).await.unwrap(),
         ProfileStatus::default()
     );
     let refreshed = learn(&runs, &store, &handle, "shop", "r", None, &quiet).await.unwrap();

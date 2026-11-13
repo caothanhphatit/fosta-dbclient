@@ -767,8 +767,43 @@ mod tests {
             assert_eq!(ids.first().map(String::as_str), Some(expected), "{query}: {ids:?}");
         }
         assert!(top_ids("how do I port forward", 3).contains(&String::from("connection-command")));
+        // The ways people ask about updates (the model translates other languages into English queries) all lead to
+        // the entry with the check-now action.
+        for query in [
+            "check for updates",
+            "how do I check for updates",
+            "update the app",
+            "is there a new version",
+            "upgrade to the latest version",
+            "check update",
+        ] {
+            assert_eq!(top_ids(query, 1), ["updates"], "{query}");
+            assert!(search_app_help(query).contains("UI action: run:check_for_updates"), "{query}");
+        }
         assert!(search("zzzz qqqq", 3).is_empty());
         assert!(search("how do I", 3).is_empty(), "stop words alone match nothing");
+    }
+
+    #[test]
+    fn the_help_describes_the_real_settings_icon_and_splits_update_steps_by_edition() {
+        let entries = parse_entries(APP_HELP_YAML).unwrap();
+        // The rail's Settings button and the assistant's "LLM providers" button draw the sliders icon, not a gear.
+        let icon = include_str!("../../../src/core/dom.ts");
+        let settings: String = icon
+            .split("\n  settings:")
+            .nth(1)
+            .expect("dom.ts draws a settings icon")
+            .lines()
+            .take(2)
+            .collect();
+        assert_eq!(settings.split("<circle").count(), 4, "the settings icon is three sliders");
+        for entry in &entries {
+            assert!(!entry.body.contains("gear"), "{}: the settings icon is sliders", entry.id);
+        }
+        let updates = entries.iter().find(|entry| entry.id == "updates").unwrap();
+        assert_eq!(updates.action.as_deref(), Some("run:check_for_updates"));
+        assert!(updates.body.contains("Desktop edition only:") && updates.body.contains("Web edition only:"));
+        assert!(updates.body.contains("on/off setting"), "{}", updates.body);
     }
 
     #[test]

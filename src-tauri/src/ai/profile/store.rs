@@ -100,6 +100,14 @@ impl ProfileStatus {
     }
 }
 
+/// A cached stale check.
+struct StaleAnswer {
+    at: Instant,
+    checked_at: i64,
+    stale: bool,
+    schema_epoch: u64,
+}
+
 pub struct ProfileStore {
     dir: PathBuf,
     /// Serialises read-modify-write of the files.
@@ -109,7 +117,9 @@ pub struct ProfileStore {
     /// Profiles deleted while a build ran: the build's write is refused, so a deletion wins.
     discarded: Mutex<HashSet<String>>,
     /// Recent stale answers by profile key: when, and whether it was stale.
-    stale: Mutex<HashMap<String, (Instant, i64, bool)>>,
+    /// The connection's schema epoch (`Gateway::schema_epoch`) at the check is kept with it: a statement that may have
+    /// changed the schema since makes the answer unusable.
+    stale: Mutex<HashMap<String, StaleAnswer>>,
 }
 
 /// Releases a profile's build slot when the build ends.
@@ -411,12 +421,16 @@ impl ProfileStore {
         Ok(removed)
     }
 
-    /// The stale answer computed for this profile within [`STALE_CHECK_TTL`], with when it was computed.
-    pub fn cached_stale(&self, connection_id: &str, database: &str) -> Option<(i64, bool)> {
+    /// The stale answer computed for this profile within [`STALE_CHECK_TTL`] at the connection's current schema epoch
+    /// (`schema_epoch`, see `Gateway::schema_epoch`), with when it was computed. An answer from before a statement that
+    /// may have changed the schema is dropped.
+    pub fn cached_stale(&self, connection_id: &str, database: &str, schema_epoch: u64) -> Option<(i64, bool)> {
         let key = profile_key(connection_id, database);
         let mut cache = lock(&self.stale);
         match cache.get(&key) {
-            Some((at, checked_at, stale)) if at.elapsed() < STALE_CHECK_TTL => Some((*checked_at, *stale)),
+            Some(answer) if answer.at.elapsed() < STALE_CHECK_TTL && answer.schema_epoch == schema_epoch => {
+                Some((answer.checked_at, answer.stale))
+            }
             Some(_) => {
                 cache.remove(&key);
                 None
@@ -425,9 +439,16 @@ impl ProfileStore {
         }
     }
 
-    pub fn remember_stale(&self, connection_id: &str, database: &str, stale: bool) -> i64 {
+    /// Keeps a stale answer computed at `schema_epoch` (read before the check started); returns when it was computed.
+    pub fn remember_stale(&self, connection_id: &str, database: &str, stale: bool, schema_epoch: u64) -> i64 {
         let checked_at = now_millis();
-        lock(&self.stale).insert(profile_key(connection_id, database), (Instant::now(), checked_at, stale));
+        let answer = StaleAnswer {
+            at: Instant::now(),
+            checked_at,
+            stale,
+            schema_epoch,
+        };
+        lock(&self.stale).insert(profile_key(connection_id, database), answer);
         checked_at
     }
 

@@ -301,7 +301,7 @@
   keywords: [provider, llm, api key, openai, gemini, claude, anthropic, ollama, model, fosta, custom endpoint, switch model]
   action: open_settings:llm_providers
   body: |
-    Settings → "LLM providers…" (or the gear in the assistant panel, or "Add provider…" in its model switcher). Pick the "Provider": Fosta (default), OpenAI, Gemini, Claude, or Custom (any OpenAI-compatible endpoint such as Ollama at http://localhost:11434/v1, LM Studio, OpenRouter). Fill "Name", "API key" and "Default model" ("Endpoint" for Custom), then "Test connection" and "Save".
+    Settings → "LLM providers…" (or the sliders "LLM providers" button in the assistant panel's header, or "Add provider…" in its model switcher). Pick the "Provider": Fosta (default), OpenAI, Gemini, Claude, or Custom (any OpenAI-compatible endpoint such as Ollama at http://localhost:11434/v1, LM Studio, OpenRouter). Fill "Name", "API key" and "Default model" ("Endpoint" for Custom), then "Test connection" and "Save".
     The key is kept in Windows Credential Manager (the encrypted secret file in the web edition) and requests go straight from your machine to the provider. A key already saved for the same provider and URL can be kept.
 
 - id: assistant-read-queries
@@ -489,9 +489,9 @@
 - id: settings-menu
   group: App
   title: Settings menu
-  keywords: [settings, preferences, options, gear, density, debug logging, diagnostics, log folder, theme]
+  keywords: [settings, preferences, options, settings button, sliders, density, debug logging, diagnostics, log folder, theme]
   body: |
-    The gear "Settings" button at the bottom of the rail opens the menu: "LLM providers…", "Allow the assistant to run read-only queries (rows go to your AI provider)", "Embedding API…", "MCP server…", "Comfortable density", "Record query history", "Clear query history…", "Debug logging", "Copy diagnostics", "Open log folder", "Check for updates", "Check for updates now" and "Community (Discord)" (plus "Sign out…" in the web edition).
+    The "Settings" button (the sliders icon) at the bottom of the rail opens the menu: "LLM providers…", "Allow the assistant to run read-only queries (rows go to your AI provider)", "Embedding API…", "MCP server…", "Comfortable density", "Record query history", "Clear query history…", "Debug logging", "Copy diagnostics", "Open log folder", "Check for updates", "Check for updates now" and "Community (Discord)" (plus "Sign out…" in the web edition).
     The theme button next to it switches light and dark; right-click it for "Light", "Dark" or "Follow system".
     Configuration (workspaces, connections, commands, providers) lives in fosta-studio.json next to the app; passwords and keys never do.
 
@@ -513,11 +513,15 @@
 
 - id: updates
   group: App
-  title: Updates
-  keywords: [update, upgrade, new version, release, restart to update, what's new, check for updates]
+  title: Updates and checking for a new version
+  keywords: [update, updates, upgrade, check for updates, check for updates now, update check, new version, latest version, newer version, version, release, install update, automatic updates, restart to update, what's new]
   action: run:check_for_updates
   body: |
-    Once a day the app asks GitHub for the latest release (only the app version is sent). Turn it off with Settings → "Check for updates", or use "Check for updates now". A newer version shows "Update X.Y.Z" in the status bar. The installed Windows app downloads it and installs it when you quit, or right away with "Restart to update" (open transactions and unsaved edits are asked about first); a note then links to "What's new". The portable app links to the release page; the web edition shows the Docker commands.
+    Check now: Settings (the sliders button at the bottom of the rail) → "Check for updates now".
+    - "Check for updates" in the same menu is an on/off setting (checked = on): once a day at startup the app asks GitHub for the latest release (only the app version is sent). Turning it off stops the daily check; "Check for updates now" still works.
+    - A newer version shows "Update X.Y.Z" in the status bar.
+    - Desktop edition only: the installed Windows app downloads the update and installs it when you quit, or right away with "Restart to update" (open transactions and unsaved edits are asked about first); a note then links to "What's new". The portable app links to the release page instead.
+    - Web edition only: the update shows the Docker commands; update by pulling the image and re-creating the container on the same volume. Desktop users skip this.
 
 - id: web-edition
   group: App
@@ -525,7 +529,7 @@
   keywords: [web edition, docker, container, browser, server, access token, sign in, host.docker.internal, self-hosted]
   body: |
     Run docker run -d --name fosta-studio -p 127.0.0.1:8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio, then open the sign-in address with the access token from docker logs fosta-studio (print it again with /app/fosta-studio-server token; rotate it with rotate-token).
-    Data, including encrypted saved passwords, lives in the /data volume. Inside the container localhost is the container: use host.docker.internal for databases on your machine. Exports download in the browser, commands need FOSTA_STUDIO_TASKS=on, and "Sign out…" ends every session. Update by pulling the image and re-creating the container on the same volume.
+    Data, including encrypted saved passwords, lives in the /data volume. Inside the container localhost is the container: use host.docker.internal for databases on your machine. Exports download in the browser, commands need FOSTA_STUDIO_TASKS=on, and "Sign out…" ends every session. To update the web edition (not the desktop app), pull the image and re-create the container on the same volume.
 
 - id: shortcuts
   group: App

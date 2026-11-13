@@ -161,7 +161,8 @@ pub async fn learn_with(
     progress(Progress::new(Step::Saving, 1, 1));
     let mut status = status_of(&profile);
     status.stale = Some(false);
-    status.checked_at = Some(store.remember_stale(&profile.connection_id, &profile.database, false));
+    // Cached by the caller, which knows the connection's schema epoch (`ProfileStore::remember_stale`).
+    status.checked_at = Some(crate::audit::now_millis());
     Ok(LearnOutcome {
         status,
         refreshed,
@@ -185,12 +186,15 @@ fn status_of(profile: &DatabaseProfile) -> ProfileStatus {
 
 /// Whether a profile exists and whether the structure changed since it was built. The check lists the database again
 /// (and reads its schema graph where the engine has one), without describing objects; its answer is reused for
-/// [`store::STALE_CHECK_TTL`] unless `force`. Without an open connection (`handle` none) staleness is unknown.
+/// [`store::STALE_CHECK_TTL`] unless `force`, and only while the connection's `schema_epoch` (`Gateway::schema_epoch`,
+/// read before calling) is the same: DDL run from the app makes the next status check again. Without an open
+/// connection (`handle` none) staleness is unknown.
 pub async fn status(
     store: &Arc<ProfileStore>,
     handle: Option<&Handle>,
     connection_id: &str,
     database: &str,
+    schema_epoch: u64,
     force: bool,
 ) -> AppResult<ProfileStatus> {
     let reader = Arc::clone(store);
@@ -203,7 +207,7 @@ pub async fn status(
     };
     let mut status = ProfileStatus::of(&header);
     if !force {
-        if let Some((checked_at, stale)) = store.cached_stale(connection_id, database) {
+        if let Some((checked_at, stale)) = store.cached_stale(connection_id, database, schema_epoch) {
             status.stale = Some(stale);
             status.checked_at = Some(checked_at);
             return Ok(status);
@@ -217,7 +221,7 @@ pub async fn status(
             let graph_changed = matches!((&header.checks.graph, &now.graph), (Some(before), Some(after)) if before != after);
             let stale = now.listing != header.checks.listing || graph_changed;
             status.stale = Some(stale);
-            status.checked_at = Some(store.remember_stale(connection_id, database, stale));
+            status.checked_at = Some(store.remember_stale(connection_id, database, stale, schema_epoch));
         }
         Err(error) => tracing::debug!(%error, "the profile's stale check failed"),
     }

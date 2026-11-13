@@ -22,6 +22,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `ISODate("…")` instead of Extended JSON.
 - Assistant panel: a "Thinking…" row shows while the model works between tool calls.
 - Assistant panel: the quick prompts of a MongoDB collection say "Query this collection" and ask for documents, not rows.
+- Learn this database: cancelling shows "Stopped. Nothing was saved." with every spinner stopped and the heading
+  updated, instead of a red "The request was cancelled" with the wrong step marked failed. MongoDB's document sampling
+  is its own step ("Sampling documents and keys"), so the step list no longer jumps back to "Reading columns".
+- Learn this database: the summary step counts objects ("10 / 12 objects", then "writing the database summary"), like
+  the cost shown before, and the cost step has a Cancel button (nothing is sent to the model).
+- Learn this database: "Schema changed — refresh" shows right after DDL (CREATE, ALTER, DROP…) runs from the app on that
+  connection, instead of up to ten minutes later.
+- Learned profiles record the ON DELETE / ON UPDATE actions of foreign keys (PostgreSQL, MySQL, MariaDB, SQL Server,
+  SQLite, Oracle), and the assistant sees them, so it no longer claims a key blocks a delete that cascades. "What the
+  assistant knows" tags them (e.g. "foreign key · on delete cascade") and counts documents, not rows, in MongoDB
+  collections. Learn again to add them to an existing profile.
+- Assistant: the model refers to the app-action button as below its answer (where it is), searches the app help in
+  English, and leaves out web-edition Docker steps for desktop users (and the reverse).
+- App help: the update entry offers the "Check for updates now" action for more phrasings, explains that "Check for
+  updates" is an on/off setting and marks desktop-only and web-only steps; the Settings button is described as the
+  sliders icon, not a gear.
 
 ### Security
 
@@ -34,6 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   `full_name`, IP and MAC addresses) and network address types (`inet`, `cidr`, `macaddr`) are no longer read for value
   hints, as 0.3.0 promised. IP and MAC address values are kept only as a format, a value list that mixes emails, phone
   numbers or addresses with other values is dropped, and password hashes (`$2b$…`, `$argon2…`) count as secrets.
+- Assistant: documents sampled in a collection workspace and sent with the chat context are redacted the same way.
 
 ### Changed
 

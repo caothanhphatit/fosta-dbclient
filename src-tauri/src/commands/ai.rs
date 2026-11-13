@@ -87,7 +87,8 @@ pub async fn test_ai(
 }
 
 /// Streams one assistant reply over `on_event`; resolves with the full text.
-pub async fn ai_chat(state: &AppState, request: ChatRequest, on_event: &dyn ChatSink) -> AppResult<String> {
+pub async fn ai_chat(state: &AppState, mut request: ChatRequest, on_event: &dyn ChatSink) -> AppResult<String> {
+    request.context.edition = Some(state.capabilities.edition.to_owned());
     let config = state.config.snapshot();
     let (settings, api_key) = chat_settings(&config, &request)?;
     let reads = request

@@ -11,7 +11,18 @@ import { showError } from "../../core/errorPanel";
 import type { DatabaseProfile, ObjectProfile, ProfileNote, ProfileStatus } from "../../core/profileTypes";
 import type { TabContent } from "../../core/tabs";
 import type { LearnTarget } from "./learnDialog";
-import { columnSignature, editedNote, formatTokens, formatWhen, hintText, qualifiedName, relationsOf, searchObjects } from "./profileLogic";
+import {
+  columnSignature,
+  editedNote,
+  formatTokens,
+  formatWhen,
+  hintText,
+  qualifiedName,
+  relationsOf,
+  relationTag,
+  searchObjects,
+  sizeText,
+} from "./profileLogic";
 
 export interface ProfileViewHost {
   /** Opens the learn dialog (a refresh when a profile exists); resolves once it closed. */
@@ -292,6 +303,7 @@ export class ProfileView implements TabContent {
 
   private objectRow(profile: DatabaseProfile, object: ObjectProfile): HTMLElement {
     const name = qualifiedName(object);
+    const size = sizeText(object);
     const row = h("div", { class: "knows-object" });
     const toggle = h(
       "button",
@@ -299,7 +311,7 @@ export class ProfileView implements TabContent {
       icon("chevron", "knows-chevron"),
       h("span", { class: "knows-object-name" }, name),
       h("span", { class: "knows-object-kind" }, object.kind),
-      object.rowEstimate !== undefined ? h("span", { class: "knows-muted knows-small" }, `~${object.rowEstimate.toLocaleString()} rows`) : null,
+      size ? h("span", { class: "knows-muted knows-small" }, size) : null,
     );
     toggle.addEventListener("click", () => {
       const open = !row.classList.contains("open");
@@ -433,15 +445,7 @@ function objectBody(profile: DatabaseProfile, object: ObjectProfile): HTMLElemen
         { class: "mono" },
         `${relation.from}(${relation.columns.join(", ")}) → ${relation.toDatabase ? `${relation.toDatabase}.` : ""}${relation.to}(${relation.toColumns.join(", ")})`,
       ),
-      h(
-        "span",
-        { class: "knows-tag muted" },
-        relation.source === "fk"
-          ? "foreign key"
-          : relation.source === "mongoRef"
-            ? `reference ${Math.round(relation.confidence * 100)}%`
-            : `by name ${Math.round(relation.confidence * 100)}%`,
-      ),
+      h("span", { class: "knows-tag muted" }, relationTag(relation)),
     ),
   );
   const indexes = (object.indexes ?? []).map((index) =>

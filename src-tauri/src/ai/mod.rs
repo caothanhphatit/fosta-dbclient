@@ -230,6 +230,10 @@ pub struct ChatContext {
     /// `run_read_query`); otherwise the prompt leaves it out.
     #[serde(default)]
     pub sampled_documents: Option<String>,
+    /// The running edition ("desktop" or "web"), set by the app (never by the UI), so the model can skip the other
+    /// edition's steps.
+    #[serde(skip)]
+    pub edition: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -467,7 +471,8 @@ async fn run(
         (Some(store), Some(connection_id)) => {
             let handle = db.handle(connection_id).ok();
             let database = context.database.as_deref().unwrap_or_default();
-            profile::digest::for_chat(store, handle.as_ref(), connection_id, database, reads.is_some()).await
+            let epoch = db.gateway.schema_epoch(connection_id);
+            profile::digest::for_chat(store, handle.as_ref(), connection_id, database, epoch, reads.is_some()).await
         }
         _ => None,
     };

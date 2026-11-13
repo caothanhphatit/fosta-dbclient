@@ -57,7 +57,9 @@ pub async fn profile_learn(
     // Hints are kept only while this build may sample them.
     let keep_hints = values;
     let progress = progress_emitter(state, &run_id, &connection_id, &database);
-    let outcome = profile::learn_with(
+    // Read before the build: DDL run while it reads makes the cached "up to date" answer unusable.
+    let schema_epoch = state.engines.gateway.schema_epoch(&connection_id);
+    let mut outcome = profile::learn_with(
         &state.ai,
         &state.profiles,
         &handle,
@@ -68,6 +70,7 @@ pub async fn profile_learn(
         &progress,
     )
     .await?;
+    outcome.status.checked_at = Some(state.profiles.remember_stale(&connection_id, &database, false, schema_epoch));
     let diff = &outcome.diff;
     let statement = if outcome.refreshed {
         format!(
@@ -304,10 +307,19 @@ pub async fn profile_get(state: &AppState, connection_id: String, database: Stri
 }
 
 /// Whether a profile exists and whether the database changed since (checked on the open connection at most every ten
-/// minutes, unless `force`).
+/// minutes, unless `force` or a statement that may change the schema ran on it through the app since).
 pub async fn profile_status(state: &AppState, connection_id: String, database: String, force: Option<bool>) -> AppResult<ProfileStatus> {
     let handle = state.engines.handle(&connection_id).ok();
-    profile::status(&state.profiles, handle.as_ref(), &connection_id, &database, force.unwrap_or(false)).await
+    let schema_epoch = state.engines.gateway.schema_epoch(&connection_id);
+    profile::status(
+        &state.profiles,
+        handle.as_ref(),
+        &connection_id,
+        &database,
+        schema_epoch,
+        force.unwrap_or(false),
+    )
+    .await
 }
 
 /// Replaces the user's notes on a profile.

@@ -3,7 +3,8 @@
  * sampling (mirrors of `commands/profile.rs::learning_allowed` and `gateway/assistant.rs::reads_allowed`), step labels,
  * object signatures and search. No DOM here, so the rules are tested on their own.
  */
-import type { ColumnProfile, DatabaseProfile, ObjectProfile, ProfileNote, ProfileStep, ValueHint } from "../../core/profileTypes";
+import { errorText, isCancelError } from "../../core/errors";
+import type { ColumnProfile, DatabaseProfile, ObjectProfile, ProfileNote, ProfileStep, RelationProfile, ValueHint } from "../../core/profileTypes";
 import type { AppConfig, AssistantQueries, Workspace } from "../../core/types";
 import { connectionSafety, PRODUCTION_ICON } from "../safety/safety";
 
@@ -48,11 +49,58 @@ export const LEARN_STEPS: { step: ProfileStep; label: string }[] = [
   { step: "listing", label: "Listing objects" },
   { step: "describing", label: "Reading columns, keys and indexes" },
   { step: "relations", label: "Finding relations" },
+  // Only engines that sample documents or keys (MongoDB, Redis) report it; the dialog shows it once it starts.
+  { step: "sampling", label: "Sampling documents and keys" },
   { step: "values", label: "Sampling column values" },
   { step: "saving", label: "Saving" },
 ];
 
 export const SUMMARY_STEP_LABEL = "Writing the summary and descriptions";
+
+/** "~1,200 rows" for a table, "~10 documents" for a collection (MongoDB); null without an estimate. */
+export function sizeText(object: ObjectProfile): string | null {
+  if (object.rowEstimate === undefined) return null;
+  const documents = object.kind === "collection";
+  const unit = documents ? (object.rowEstimate === 1 ? "document" : "documents") : object.rowEstimate === 1 ? "row" : "rows";
+  return `~${object.rowEstimate.toLocaleString()} ${unit}`;
+}
+
+/**
+ * The counter of the summary step. The run reports `total` as the objects to describe plus one request for the database
+ * summary; the counter counts objects, like the cost shown before ("Objects to describe"), then names the last request.
+ */
+export function summaryCount(done: number, total: number): string {
+  const objects = Math.max(total - 1, 0);
+  if (done < objects) return `${done} / ${objects} objects`;
+  return done >= total ? "" : "writing the database summary";
+}
+
+/**
+ * Where the progress list goes on a build's progress event: the index of `step` in `order` when it is the current step
+ * or a later one, null when the event is about an earlier step (the list never moves backwards) or a step not listed.
+ */
+export function progressIndex(order: readonly ProfileStep[], current: number, step: ProfileStep): number | null {
+  const index = order.indexOf(step);
+  return index < 0 || index < current ? null : index;
+}
+
+/** Whether a Learn or summary run ended because the user stopped it (Cancel, Escape), not because something failed. */
+export function isStopped(error: unknown): boolean {
+  return isCancelError(error) || errorText(error) === "Stopped";
+}
+
+/** The tag of a relation in "What the assistant knows": its source, and a declared key's actions that do something. */
+export function relationTag(relation: RelationProfile): string {
+  if (relation.source === "mongoRef") return `reference ${Math.round(relation.confidence * 100)}%`;
+  if (relation.source !== "fk") return `by name ${Math.round(relation.confidence * 100)}%`;
+  const actions = [
+    ["on delete", relation.onDelete],
+    ["on update", relation.onUpdate],
+  ]
+    .filter(([, action]) => action && action !== "NO ACTION" && action !== "RESTRICT")
+    .map(([clause, action]) => `${clause} ${action!.toLowerCase()}`);
+  return ["foreign key", ...actions].join(" · ");
+}
 
 /** "1.2k", "34k", "980": a rounded token count. */
 export function formatTokens(tokens: number): string {

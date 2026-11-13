@@ -183,6 +183,9 @@ struct Request<'a> {
 pub struct Gateway {
     tokens: Mutex<HashMap<String, Pending>>,
     audit: Mutex<Option<Arc<AuditLog>>>,
+    /// Per connection, how many statements that may change the schema were let through: the assistant's cached
+    /// "did the schema change since it learned the database" answer is not reused once this moves.
+    schema_changes: Mutex<HashMap<String, u64>>,
 }
 
 impl Gateway {
@@ -191,6 +194,20 @@ impl Gateway {
         Self {
             tokens: Mutex::default(),
             audit: Mutex::new(Some(Arc::new(log))),
+            schema_changes: Mutex::default(),
+        }
+    }
+
+    /// How many statements that may change the schema (DDL, destructive or unclassified ones) were let through on this
+    /// connection so far. Cheap: a counter, no database call.
+    pub fn schema_epoch(&self, connection_id: &str) -> u64 {
+        lock(&self.schema_changes).get(connection_id).copied().unwrap_or(0)
+    }
+
+    /// Moves the connection's schema epoch when `classification` may change the schema.
+    fn note_schema_change(&self, connection_id: &str, classification: &Classification) {
+        if may_change_schema(classification) {
+            *lock(&self.schema_changes).entry(connection_id.to_owned()).or_insert(0) += 1;
         }
     }
 
@@ -211,6 +228,12 @@ impl Gateway {
     }
 
     fn authorize(&self, request: &Request<'_>) -> AppResult<()> {
+        self.authorize_rules(request)?;
+        self.note_schema_change(&request.context.connection_id, request.classification);
+        Ok(())
+    }
+
+    fn authorize_rules(&self, request: &Request<'_>) -> AppResult<()> {
         let effective = request.context.safety.effective();
         let statements = &request.classification.statements;
         // Hard refusals (an unknown engine operation, a command the console cannot run) hold whatever the rules say.
@@ -391,6 +414,15 @@ impl Gateway {
             },
         ))
     }
+}
+
+/// Whether a statement may change the schema: DDL, destructive statements (DROP, TRUNCATE…) and statements that could
+/// not be classified.
+fn may_change_schema(classification: &Classification) -> bool {
+    classification
+        .statements
+        .iter()
+        .any(|statement| matches!(statement.category, Category::Ddl | Category::Destructive | Category::Unknown))
 }
 
 fn worst_category(classification: &Classification) -> Option<Category> {
@@ -684,7 +716,10 @@ pub async fn run_limited(
     if let Some(max_rows) = max_rows {
         options.row_limit = options.row_limit.min(max_rows.max(1));
     }
-    handle.run(session, request.clone(), options, sink).await
+    let summary = handle.run(session, request.clone(), options, sink).await;
+    // Moved again once it ran: a stale check that listed the schema while the statement ran is not reused.
+    mgr.gateway.note_schema_change(&context.connection_id, &classification);
+    summary
 }
 
 /// How the engine classifies `text` in the session's language, one category per statement, without running it. A
@@ -912,6 +947,26 @@ mod tests {
         assert_eq!(audit[0].caller, "queryTab");
         assert_eq!(audit[0].workspace, "Production");
         assert!(audit[0].statement.starts_with("INSERT INTO t"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn schema_epoch_moves_only_for_allowed_statements_that_may_change_the_schema() {
+        let (gateway, path) = gateway();
+        let open = context(Preset::Open);
+        assert_eq!(gateway.schema_epoch("c"), 0);
+        for sql in ["SELECT 1", "DELETE FROM t WHERE id = 1", "COMMIT"] {
+            ask(&gateway, &open, sql, None).unwrap();
+        }
+        assert_eq!(gateway.schema_epoch("c"), 0, "reads and writes leave the schema alone");
+        ask(&gateway, &open, "CREATE TABLE u (id int)", None).unwrap();
+        assert_eq!(gateway.schema_epoch("c"), 1);
+        // Waiting for a confirmation (or blocked) runs nothing, so nothing moves.
+        assert!(ask(&gateway, &open, "DROP TABLE t", None).is_err());
+        let read_only = context(Preset::ReadOnly);
+        assert!(ask(&gateway, &read_only, "ALTER TABLE t ADD COLUMN b int", None).is_err());
+        assert_eq!(gateway.schema_epoch("c"), 1);
+        assert_eq!(gateway.schema_epoch("other"), 0, "per connection");
         let _ = std::fs::remove_file(path);
     }
 

@@ -216,6 +216,12 @@ pub struct RelationProfile {
     pub source: RelationSource,
     /// 1.0 for declared keys; below for inferred ones.
     pub confidence: f32,
+    /// A declared key's referential actions as the engine reports them ("CASCADE", "SET NULL", "NO ACTION",
+    /// "RESTRICT", "SET DEFAULT"); none when unknown (inferred relations, engines that do not say, older profiles).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_delete: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_update: Option<String>,
 }
 
 /// A function or procedure: its name and the signature the tree shows.

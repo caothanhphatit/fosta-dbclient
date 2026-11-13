@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
-import type { DatabaseProfile, ObjectProfile } from "../../core/profileTypes";
+import type { DatabaseProfile, ObjectProfile, RelationProfile } from "../../core/profileTypes";
 import type { AppConfig, Workspace } from "../../core/types";
 import { presetSettings } from "../safety/safety";
-import { columnSignature, editedNote, formatTokens, learningAllowed, learningRefusal, readsAllowed, searchObjects } from "./profileLogic";
+import {
+  columnSignature,
+  editedNote,
+  formatTokens,
+  isStopped,
+  LEARN_STEPS,
+  learningAllowed,
+  learningRefusal,
+  progressIndex,
+  readsAllowed,
+  relationTag,
+  searchObjects,
+  sizeText,
+  summaryCount,
+} from "./profileLogic";
 
 function config(workspace: Partial<Workspace>, rest: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -79,5 +93,64 @@ describe("the knowledge view", () => {
     expect(searchObjects(profile, "public status").length).toBe(2);
     expect(searchObjects(profile, "items status").map((object) => object.name)).toEqual(["items"]);
     expect(searchObjects(profile, "nothing")).toEqual([]);
+  });
+});
+
+describe("the learn dialog", () => {
+  const order = LEARN_STEPS.map((item) => item.step);
+
+  it("never moves the progress list back to an earlier step", () => {
+    const relations = order.indexOf("relations");
+    expect(progressIndex(order, -1, "listing")).toBe(0);
+    expect(progressIndex(order, relations, "relations")).toBe(relations);
+    // MongoDB's document sampling comes after the relations, as its own step.
+    expect(order.indexOf("sampling")).toBe(relations + 1);
+    expect(progressIndex(order, relations, "sampling")).toBe(relations + 1);
+    expect(progressIndex(order, relations, "describing")).toBeNull();
+    expect(progressIndex(order, 0, "summary")).toBeNull();
+  });
+
+  it("tells a stop from a failure by the error's code", () => {
+    expect(isStopped({ code: "CANCELLED", message: "The request was cancelled" })).toBe(true);
+    expect(isStopped("Stopped")).toBe(true);
+    expect(isStopped({ code: "ENGINE", message: "connection refused" })).toBe(false);
+    expect(isStopped("The request was cancelled by the server")).toBe(false);
+  });
+
+  it("counts the summary step in objects, like the cost", () => {
+    // 12 objects to describe: the run reports 13 requests' worth (the last one is the database summary).
+    expect(summaryCount(0, 13)).toBe("0 / 12 objects");
+    expect(summaryCount(10, 13)).toBe("10 / 12 objects");
+    expect(summaryCount(12, 13)).toBe("writing the database summary");
+    expect(summaryCount(13, 13)).toBe("");
+    expect(summaryCount(0, 1)).toBe("writing the database summary");
+  });
+});
+
+describe("what the assistant knows", () => {
+  const relation = (rest: Partial<RelationProfile>): RelationProfile => ({
+    from: "order_items",
+    columns: ["order_id"],
+    to: "orders",
+    toColumns: ["id"],
+    source: "fk",
+    confidence: 1,
+    ...rest,
+  });
+
+  it("tags declared keys with the actions that do something", () => {
+    expect(relationTag(relation({}))).toBe("foreign key");
+    expect(relationTag(relation({ onDelete: "CASCADE", onUpdate: "NO ACTION" }))).toBe("foreign key · on delete cascade");
+    expect(relationTag(relation({ onDelete: "RESTRICT", onUpdate: "SET NULL" }))).toBe("foreign key · on update set null");
+    expect(relationTag(relation({ source: "inferredName", confidence: 0.8 }))).toBe("by name 80%");
+    expect(relationTag(relation({ source: "mongoRef", confidence: 1 }))).toBe("reference 100%");
+  });
+
+  it("counts documents in MongoDB collections and rows in tables", () => {
+    const object = (kind: string, rowEstimate?: number) => ({ name: "orders", kind, columns: [], rowEstimate }) as unknown as ObjectProfile;
+    expect(sizeText(object("collection", 10))).toBe("~10 documents");
+    expect(sizeText(object("collection", 1))).toBe("~1 document");
+    expect(sizeText(object("table", 1200))).toBe(`~${(1200).toLocaleString()} rows`);
+    expect(sizeText(object("table"))).toBeNull();
   });
 });

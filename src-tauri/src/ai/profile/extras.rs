@@ -242,7 +242,7 @@ async fn read_planned(
         };
         progress(Progress {
             object: read.object.as_ref().map(|object| object.name.clone()),
-            ..Progress::new(Step::Describing, done, total)
+            ..Progress::new(Step::Sampling, done, total)
         });
         let call = gateway::assistant::invoke_read_audited(
             sampler.manager,
@@ -273,7 +273,7 @@ async fn read_planned(
             }
         }
     }
-    progress(Progress::new(Step::Describing, total, total));
+    progress(Progress::new(Step::Sampling, total, total));
     Ok(answered)
 }
 
@@ -473,6 +473,8 @@ fn apply(profile: &mut DatabaseProfile, enrichment: ProfileEnrichment, keep_valu
             to_database: None,
             source: RelationSource::MongoRef,
             confidence: reference.confidence.clamp(0.0, 1.0),
+            on_delete: None,
+            on_update: None,
             from,
         };
         if !seen.insert((relation.from.clone(), relation.columns.clone(), relation.to.clone())) {

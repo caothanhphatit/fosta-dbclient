@@ -69,6 +69,9 @@ export interface RelationProfile {
   toDatabase?: string;
   source: RelationSource;
   confidence: number;
+  /** A declared key's referential actions as the engine reports them ("CASCADE", "SET NULL", "NO ACTION"…). */
+  onDelete?: string;
+  onUpdate?: string;
 }
 
 export interface RoutineProfile {
@@ -150,7 +153,7 @@ export interface LearnOutcome {
   values?: ValuesOutcome;
 }
 
-export type ProfileStep = "listing" | "describing" | "relations" | "values" | "summary" | "saving";
+export type ProfileStep = "listing" | "describing" | "relations" | "sampling" | "values" | "summary" | "saving";
 
 /** The `profile-progress` event: `done` of `total` in `step` (0 of 0 while the total is unknown). */
 export interface ProfileProgress {

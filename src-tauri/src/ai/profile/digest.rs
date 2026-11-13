@@ -67,16 +67,20 @@ impl ChatProfile {
     }
 }
 
-/// The profile of `database` on `connection_id` for a chat, with its stale state (the check is cached for ten minutes;
-/// without `handle` the cached answer only). `None` when nothing was learned or the file cannot be read.
+/// The profile of `database` on `connection_id` for a chat, with its stale state (the check is cached for ten minutes
+/// while the connection's `schema_epoch` stays the same; without `handle` the cached answer only).
+/// `None` when nothing was learned or the file cannot be read.
 pub async fn for_chat(
     store: &Arc<ProfileStore>,
     handle: Option<&Handle>,
     connection_id: &str,
     database: &str,
+    schema_epoch: u64,
     reads_allowed: bool,
 ) -> Option<ChatProfile> {
-    let status = super::status(store, handle, connection_id, database, false).await.ok()?;
+    let status = super::status(store, handle, connection_id, database, schema_epoch, false)
+        .await
+        .ok()?;
     if !status.exists {
         return None;
     }
@@ -178,6 +182,7 @@ pub fn digest(chat: &ChatProfile, focus: &Focus, budget: usize) -> String {
 
     let names: HashSet<String> = included.iter().map(|&index| profile.objects[index].qualified()).collect();
     let mut edges = String::new();
+    let mut actions_known = false;
     for relation in &profile.relations {
         let from = resolve(profile, &relation.from);
         let to = resolve(profile, &relation.to);
@@ -186,14 +191,20 @@ pub fn digest(chat: &ChatProfile, focus: &Focus, budget: usize) -> String {
         if !inside {
             continue;
         }
-        let line = format!("- {}\n", flat(&edge(relation)));
+        let line = format!("- {}\n", flat(&edge(relation, false)));
         if edges.len() + line.len() > edges_cap {
             break;
         }
         edges.push_str(&line);
+        actions_known |= relation.source == RelationSource::Fk && relation.on_delete.is_some();
     }
     if !edges.is_empty() {
-        out.push_str("Relations:\n");
+        out.push_str(if actions_known {
+            "Relations (declared keys show ON DELETE / ON UPDATE only when not NO ACTION or RESTRICT; without one, a \
+             referenced row cannot be deleted while rows point at it):\n"
+        } else {
+            "Relations:\n"
+        });
         out.push_str(&edges);
     }
 
@@ -506,7 +517,16 @@ fn about(object: &ObjectProfile) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn edge(relation: &RelationProfile) -> String {
+/// Whether a referential action stops a referenced row from being deleted or its key from being changed while rows
+/// point at it (the engines' default).
+fn blocking_action(action: &str) -> bool {
+    matches!(action, "NO ACTION" | "RESTRICT")
+}
+
+/// A relation as one line. Declared keys carry their ON DELETE / ON UPDATE actions where the engine reported them: all
+/// of them with `all_actions` (one object's profile), otherwise only those that do something (the digest; its legend
+/// says the others block).
+fn edge(relation: &RelationProfile, all_actions: bool) -> String {
     let to = match &relation.to_database {
         Some(database) => format!("{database}.{}", relation.to),
         None => relation.to.clone(),
@@ -516,8 +536,14 @@ fn edge(relation: &RelationProfile) -> String {
         RelationSource::InferredName => format!(" (inferred from the name, {:.0}%)", relation.confidence * 100.0),
         RelationSource::MongoRef => format!(" (field reference, {:.0}%)", relation.confidence * 100.0),
     };
+    let mut actions = String::new();
+    for (clause, action) in [("ON DELETE", &relation.on_delete), ("ON UPDATE", &relation.on_update)] {
+        if let Some(action) = action.as_deref().filter(|action| all_actions || !blocking_action(action)) {
+            actions.push_str(&format!(" {clause} {action}"));
+        }
+    }
     format!(
-        "{}({}) → {to}({}){source}",
+        "{}({}) → {to}({}){source}{actions}",
         relation.from,
         relation.columns.join(", "),
         relation.to_columns.join(", ")
@@ -683,7 +709,7 @@ pub fn get_object_profile(chat: &ChatProfile, name: &str) -> Result<String, Stri
         .filter_map(|relation| {
             let from = resolve(profile, &relation.from).as_deref() == Some(qualified.as_str());
             let to = relation.to_database.is_none() && resolve(profile, &relation.to).as_deref() == Some(qualified.as_str());
-            (from || to).then(|| format!("- {}", edge(relation)))
+            (from || to).then(|| format!("- {}", edge(relation, true)))
         })
         .collect();
     if !relations.is_empty() {
@@ -948,6 +974,8 @@ pub(crate) mod fixtures {
             to_database: None,
             source,
             confidence: if source == RelationSource::Fk { 1.0 } else { 0.8 },
+            on_delete: None,
+            on_update: None,
         }
     }
 
@@ -1208,6 +1236,45 @@ mod tests {
             missing.contains("not in the profile") && missing.contains("describe_table"),
             "{missing}"
         );
+    }
+
+    #[test]
+    fn declared_keys_carry_their_referential_actions() {
+        let mut profile = shop();
+        for relation in &mut profile.relations {
+            match (relation.from.as_str(), relation.to.as_str()) {
+                ("order_items", "orders") => relation.on_delete = Some("CASCADE".into()),
+                ("orders", "customers") => {
+                    relation.on_delete = Some("NO ACTION".into());
+                    relation.on_update = Some("CASCADE".into());
+                }
+                _ => {}
+            }
+        }
+        let actions = ChatProfile::new(profile, false, true);
+        let digest = digest(&actions, &Focus::default(), DIGEST_BUDGET);
+        assert!(
+            digest.contains("- order_items(order_id) → orders(id) ON DELETE CASCADE\n"),
+            "{digest}"
+        );
+        // The digest leaves out the blocking default and says so once.
+        assert!(
+            digest.contains("- orders(customer_id) → customers(id) ON UPDATE CASCADE\n"),
+            "{digest}"
+        );
+        assert!(digest.contains("without one, a referenced row cannot be deleted"), "{digest}");
+        let orders = get_object_profile(&actions, "orders").unwrap();
+        assert!(
+            orders.contains("- order_items(order_id) → orders(id) ON DELETE CASCADE"),
+            "{orders}"
+        );
+        assert!(
+            orders.contains("- orders(customer_id) → customers(id) ON DELETE NO ACTION ON UPDATE CASCADE"),
+            "{orders}"
+        );
+        // Without actions (inferred relations, older profiles) the digest makes no claim.
+        let plain = super::digest(&chat(true), &Focus::default(), DIGEST_BUDGET);
+        assert!(plain.contains("Relations:\n") && !plain.contains("ON DELETE"), "{plain}");
     }
 
     #[test]

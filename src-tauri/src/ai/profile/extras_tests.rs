@@ -387,6 +387,30 @@ async fn the_hook_adds_fields_references_hints_and_patterns() {
 }
 
 #[tokio::test]
+async fn progress_never_goes_back_to_an_earlier_step() {
+    let (manager, handle, _) = setup();
+    let (store, dir) = store("progress");
+    let steps = Mutex::new(Vec::new());
+    let record = |progress: Progress| steps.lock().unwrap().push(progress.step);
+    let reads = BuildReads {
+        sampler: Sampler {
+            manager: &manager,
+            context: open(),
+        },
+        values: true,
+    };
+    learn_with(&AiRuns::default(), &store, &handle, "shop", "r", Some(reads), true, &record)
+        .await
+        .unwrap();
+    let steps = steps.into_inner().unwrap();
+    assert!(steps.windows(2).all(|pair| pair[0] <= pair[1]), "{steps:?}");
+    // The document samples are a step of their own, after the relations (the dialog shows it when it starts).
+    assert!(steps.contains(&super::Step::Sampling), "{steps:?}");
+    assert_eq!(steps.last(), Some(&super::Step::Saving));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn sampled_values_need_the_values_gate() {
     let (manager, handle, _) = setup();
     let (store, dir) = store("gate");

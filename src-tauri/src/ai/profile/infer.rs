@@ -93,6 +93,8 @@ pub fn infer_relations(objects: &[ObjectProfile], declared: &[RelationProfile]) 
                 to_database: None,
                 source: RelationSource::InferredName,
                 confidence,
+                on_delete: None,
+                on_update: None,
             });
         }
     }

@@ -9,7 +9,17 @@ import { h, icon } from "../../core/dom";
 import type { DatabaseProfile, ProfileProgress, ProfileStep, SummaryCost, SummaryOutcome } from "../../core/profileTypes";
 import type { AppConfig } from "../../core/types";
 import { connectionSettings, providerPreset } from "./aiProviders";
-import { formatTokens, LEARN_STEPS, learningAllowed, learningRefusal, readsAllowed, SUMMARY_STEP_LABEL } from "./profileLogic";
+import {
+  formatTokens,
+  isStopped,
+  LEARN_STEPS,
+  learningAllowed,
+  learningRefusal,
+  progressIndex,
+  readsAllowed,
+  summaryCount,
+  SUMMARY_STEP_LABEL,
+} from "./profileLogic";
 
 export interface LearnTarget {
   connectionId: string;
@@ -142,19 +152,27 @@ class LearnFlow {
       entry.row.querySelector(".learn-step-mark")?.replaceChildren(...stepMark(state));
       if (state !== "running") entry.detail.textContent = "";
     };
+    // Steps only some engines report (document and key sampling) stay hidden until they start.
+    const optional = new Set<ProfileStep>(["sampling"]);
+    for (const step of optional) rows.get(step)?.row.setAttribute("hidden", "");
     const order = steps.map((item) => item.step);
     let current = -1;
     const progress = (event: ProfileProgress) => {
-      const index = order.indexOf(event.step);
-      if (index < 0) return;
-      for (let earlier = Math.max(current, 0); earlier < index; earlier += 1) setState(order[earlier], "done");
-      current = Math.max(current, index);
-      setState(event.step, "running");
+      // The list only moves forward: a late event about an earlier step is ignored.
+      const index = progressIndex(order, current, event.step);
+      if (index === null) return;
+      for (let earlier = Math.max(current, 0); earlier < index; earlier += 1) {
+        if (!rows.get(order[earlier])?.row.hidden) setState(order[earlier], "done");
+      }
+      current = index;
       const entry = rows.get(event.step)!;
+      entry.row.removeAttribute("hidden");
+      setState(event.step, "running");
       entry.count.textContent = event.total > 0 ? `${event.done} / ${event.total}` : event.done > 0 ? String(event.done) : "";
       entry.detail.textContent = event.object ?? "";
     };
-    this.body.replaceChildren(h("p", { class: "learn-text" }, `Learning ${shownName(this.target)}…`), list);
+    const heading = h("p", { class: "learn-text" }, `Learning ${shownName(this.target)}…`);
+    this.body.replaceChildren(heading, list);
     const runId = crypto.randomUUID();
     this.runId = runId;
     this.buttons(this.button("Cancel", () => void api.aiCancel(runId)));
@@ -163,7 +181,7 @@ class LearnFlow {
     });
     try {
       const outcome = await api.profileLearn(this.target.connectionId, this.target.database, runId, sampleValues);
-      for (const step of order) setState(step, "done");
+      for (const step of order) if (!rows.get(step)?.row.hidden) setState(step, "done");
       this.learned = true;
       this.runId = null;
       if (this.closed) return;
@@ -171,10 +189,15 @@ class LearnFlow {
       await this.offerSummary(note);
     } catch (error) {
       this.runId = null;
-      if (current >= 0) setState(order[current], "failed");
+      const stopped = isStopped(error);
+      // A stop is not a failure: the step that ran is left unmarked; nothing keeps spinning either way.
+      for (const [index, step] of order.entries()) {
+        const running = rows.get(step)?.row.classList.contains("running");
+        if (running || index === current) setState(step, stopped ? "pending" : "failed");
+      }
       if (this.closed) return;
-      const message = errorText(error);
-      this.body.append(h("p", { class: "learn-error" }, message === "Stopped" ? "Stopped. Nothing was saved." : message));
+      heading.textContent = stopped ? `Stopped learning ${shownName(this.target)}.` : `Learning ${shownName(this.target)} failed.`;
+      this.body.append(stopped ? h("p", { class: "learn-note" }, "Stopped. Nothing was saved.") : h("p", { class: "learn-error" }, errorText(error)));
       this.buttons(this.button("Close", () => this.close(), "primary"));
     } finally {
       unlisten();
@@ -221,6 +244,8 @@ class LearnFlow {
     );
     this.buttons(
       this.button("Skip (structure only)", () => void this.finish(null, [note]), "left"),
+      // Closes without asking the model: nothing is sent; the structure saved above stays.
+      this.button("Cancel", () => this.close()),
       summarise,
     );
     void estimate();
@@ -249,7 +274,7 @@ class LearnFlow {
     this.body.replaceChildren(h("p", { class: "learn-text" }, `Asking ${model}…`), h("ol", { class: "learn-steps" }, row));
     this.buttons(this.button("Cancel", () => void api.aiCancel(runId)));
     const unlisten = await onProfileProgress((event) => {
-      if (event.runId === runId && event.total > 0) count.textContent = `${event.done} / ${event.total}`;
+      if (event.runId === runId && event.total > 0) count.textContent = summaryCount(event.done, event.total);
     });
     try {
       const outcome = await api.profileSummarize(this.target.connectionId, this.target.database, runId, model, this.options.onlyChanged ?? false);
@@ -258,9 +283,8 @@ class LearnFlow {
     } catch (error) {
       this.runId = null;
       if (this.closed) return;
-      const message = errorText(error);
-      const stopped = message === "Stopped";
-      await this.finish(null, [stopped ? "Stopped. The descriptions written before you stopped are kept." : `The summary failed: ${message}`]);
+      const stopped = isStopped(error);
+      await this.finish(null, [stopped ? "Stopped. The descriptions written before you stopped are kept." : `The summary failed: ${errorText(error)}`]);
     } finally {
       unlisten();
     }

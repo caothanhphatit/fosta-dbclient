@@ -4,7 +4,12 @@
 //! checks (listing, and the schema graph where the engine has one). Every engine gets a profile without engine code
 //! here; nothing reads rows.
 
-use std::{collections::HashSet, future::Future, pin::Pin, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    pin::Pin,
+    time::Duration,
+};
 
 use serde::Serialize;
 
@@ -41,13 +46,15 @@ const MAX_EXTRA: usize = 20;
 /// How long a cancelled engine call may take to stop before its task is aborted.
 const CANCEL_GRACE: Duration = Duration::from_secs(2);
 
-/// Where a build is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+/// Where a build is. A build reports the steps in this order (never going back to an earlier one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Step {
     Listing,
     Describing,
     Relations,
+    /// The engine's own reads (MongoDB document samples, Redis key names): only where the assistant may read data.
+    Sampling,
     /// Reading value hints (only where the assistant may read data and the caller asked for them).
     Values,
     Saving,
@@ -326,6 +333,8 @@ fn declared_relations(database: &str, object: &ObjectProfile, description: &Obje
         to_database: other_database(&key.ref_database),
         source: RelationSource::Fk,
         confidence: 1.0,
+        on_delete: referential_action(&key.on_delete),
+        on_update: referential_action(&key.on_update),
     });
     let incoming = description
         .referenced_by
@@ -340,8 +349,46 @@ fn declared_relations(database: &str, object: &ObjectProfile, description: &Obje
             to_database: None,
             source: RelationSource::Fk,
             confidence: 1.0,
+            // The referencing side reports the actions; the duplicate from there fills them in (`merge_declared`).
+            on_delete: None,
+            on_update: None,
         });
     outgoing.chain(incoming).collect()
+}
+
+/// A referential action as one upper-case phrase ("SET NULL"); none when empty. Engines spell them differently
+/// ("NO_ACTION", "set null"), and the text comes from the database, so it is cut short.
+fn referential_action(action: &Option<String>) -> Option<String> {
+    let words: Vec<String> = action
+        .as_deref()?
+        .split(|c: char| c == '_' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+    let phrase = words.join(" ");
+    (!phrase.is_empty()).then(|| redact::cut(&phrase, 32))
+}
+
+/// Keeps one relation per (from, columns, to): a declared key is seen from both of its objects, and only the
+/// referencing side reports its ON DELETE / ON UPDATE actions, which the kept one takes over.
+fn merge_declared(relations: Vec<RelationProfile>) -> Vec<RelationProfile> {
+    let mut kept: Vec<RelationProfile> = Vec::with_capacity(relations.len());
+    let mut at: HashMap<(String, Vec<String>, String), usize> = HashMap::new();
+    for relation in relations {
+        let key = (relation.from.clone(), relation.columns.clone(), relation.to.clone());
+        match at.get(&key) {
+            Some(&index) => {
+                let first = &mut kept[index];
+                first.on_delete = first.on_delete.take().or(relation.on_delete);
+                first.on_update = first.on_update.take().or(relation.on_update);
+            }
+            None => {
+                at.insert(key, kept.len());
+                kept.push(relation);
+            }
+        }
+    }
+    kept
 }
 
 /// The schema graph's fingerprint, where a SQL engine has one (a failure leaves the check out). Document engines are
@@ -422,8 +469,7 @@ pub async fn build(
     }
     progress(Progress::new(Step::Describing, detail_total, detail_total));
     progress(Progress::new(Step::Relations, 0, 1));
-    let mut seen = HashSet::new();
-    relations.retain(|relation| seen.insert((relation.from.clone(), relation.columns.clone(), relation.to.clone())));
+    let mut relations = merge_declared(relations);
     let inferred = infer_relations(&objects, &relations);
     relations.extend(inferred);
     let checks = StructureChecks {
@@ -470,4 +516,47 @@ pub async fn build(
         notes: Vec::new(),
         extras: serde_json::Map::new(),
     })
+}
+
+#[cfg(test)]
+mod relation_tests {
+    use super::*;
+
+    fn declared(from: &str, to: &str, on_delete: Option<&str>) -> RelationProfile {
+        RelationProfile {
+            name: Some(format!("{from}_fk")),
+            from: from.into(),
+            columns: vec!["order_id".into()],
+            to: to.into(),
+            to_columns: vec!["id".into()],
+            to_database: None,
+            source: RelationSource::Fk,
+            confidence: 1.0,
+            on_delete: on_delete.map(str::to_owned),
+            on_update: None,
+        }
+    }
+
+    #[test]
+    fn referential_actions_are_spelled_one_way() {
+        let action = |text: &str| referential_action(&Some(text.to_owned()));
+        assert_eq!(action("CASCADE").as_deref(), Some("CASCADE"));
+        assert_eq!(action("NO_ACTION").as_deref(), Some("NO ACTION"), "SQL Server");
+        assert_eq!(action("set null").as_deref(), Some("SET NULL"));
+        assert_eq!(action("  "), None);
+        assert_eq!(referential_action(&None), None);
+    }
+
+    #[test]
+    fn a_key_seen_from_both_objects_keeps_the_referencing_sides_actions() {
+        // The referenced object was described first: its copy has no actions.
+        let merged = merge_declared(vec![
+            declared("order_items", "orders", None),
+            declared("order_items", "orders", Some("CASCADE")),
+            declared("payments", "orders", Some("RESTRICT")),
+        ]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].on_delete.as_deref(), Some("CASCADE"));
+        assert_eq!(merged[1].on_delete.as_deref(), Some("RESTRICT"));
+    }
 }
