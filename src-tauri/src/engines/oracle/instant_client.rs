@@ -1121,8 +1121,9 @@ mod tests {
         assert_eq!(e.kind, ClientErrorKind::Network);
     }
 
-    /// Downloads the real package for this platform into the default install root (target/<profile>/deps/fosta-studio-oracle
-    /// for the test binary), so the Oracle live tests find it. Run with
+    /// Downloads the real package for this platform into the default install root (`fosta-studio-oracle` next to the test
+    /// binary), so the Oracle live tests find it; on Linux in CI it also writes `LD_LIBRARY_PATH=<folder>` to `$GITHUB_ENV`.
+    /// Run with
     /// `cargo test live_oracle_instant_client_download -- --ignored --nocapture`.
     #[tokio::test]
     #[ignore]
@@ -1146,8 +1147,15 @@ mod tests {
         assert!(has_client_lib(&dir));
         if cfg!(target_os = "linux") {
             // Loading needs the folder on LD_LIBRARY_PATH from process start (see `linux_library_path_hint`); CI sets it
-            // for the contract tests, which run in a new process.
+            // for the contract tests, which run in a new process. The folder sits next to the test binary, whose place
+            // depends on Cargo's build-dir layout (target/<profile>/deps before, target/<profile>/build/<crate>/<hash>/out
+            // on newer Cargo), so the real path goes to $GITHUB_ENV from here instead of CI guessing it.
             eprintln!("downloaded to {}", dir.display());
+            if let Some(env_file) = std::env::var_os("GITHUB_ENV").filter(|v| !v.is_empty()) {
+                use std::io::Write;
+                let mut f = std::fs::OpenOptions::new().append(true).open(env_file).unwrap();
+                writeln!(f, "LD_LIBRARY_PATH={}", dir.display()).unwrap();
+            }
             return;
         }
         let s = initialize_at(None, &SearchEnv::default(), Some(&root)).unwrap();
