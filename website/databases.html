@@ -446,7 +446,15 @@
                 <dt data-i18n="dbp.works">What works</dt>
                 <dd data-i18n="dbp.mongo.works">
                   Collections as tables with BSON-typed columns and edits, JSON filters, Atlas URIs, query tabs that run database commands as JSON, an ER
-                  diagram with inferred links between collections, SSH and TLS.
+                  diagram with inferred links between collections, SSH and TLS. Double-click a collection to open its workspace: a query bar in mongosh syntax
+                  with completion and history, List, JSON and Table views with edits reviewed before Save, bulk updates and deletes with a preview, and saved
+                  queries.
+                </dd>
+                <dt data-i18n="dbp.views">Engine views</dt>
+                <dd data-i18n="dbp.mongo.views">
+                  The collection workspace's sections: Aggregations (stage cards with a preview each, export to mongosh, Node.js or Python), Schema (a sample
+                  of up to 10,000 documents, mixed types highlighted), Indexes (usage, create, hide and drop), Explain (a visual plan with index suggestions)
+                  and Validation (rules generated from the schema and checked against existing documents).
                 </dd>
                 <dt data-i18n="dbp.notes">Notes</dt>
                 <dd data-i18n="dbp.mongo.notes">No transactions, and no Stop for a running command.</dd>
@@ -618,7 +626,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg
               ></span>
               <h3 data-i18n="dbp.shared.ai.title">AI agent</h3>
-              <p data-i18n="dbp.shared.ai.text">The agent reads the schema, writes and explains queries, and opens the right view on any engine.</p>
+              <p data-i18n="dbp.shared.ai.text">The agent reads the schema, writes and explains queries, and opens the right view on any engine. It can learn a database once, so later chats already know it.</p>
             </li>
             <li class="mini-card">
               <span class="why-icon"

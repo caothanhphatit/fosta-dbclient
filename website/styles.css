@@ -1967,6 +1967,19 @@ kbd {
   height: 14px;
 }
 
+/* MongoDB workspace mock: six section tabs in a narrow figure (all of them shown on phones too) */
+.mock-mongo .am-tabs {
+  overflow: hidden;
+}
+
+.mock-mongo .am-tab {
+  padding: 0 10px;
+}
+
+.mock-mongo .am-tab:nth-child(3) {
+  display: flex;
+}
+
 /* Tasks mock */
 .mock-tasks {
   display: flex;

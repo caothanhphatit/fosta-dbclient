@@ -1083,7 +1083,7 @@
               ></span>
               <h3 data-i18n="why.ai.title">An AI agent that knows your schema</h3>
               <p data-i18n="why.ai.text">
-                Ask in plain words. The agent explores tables and relations, writes and explains queries, opens the right view and reads task logs to help you debug. Use Claude, GPT, Gemini, Fosta or a local Ollama model.
+                Ask in plain words. The agent explores tables and relations, writes and explains queries, opens the right view and reads task logs to help you debug. It can learn a database once and know it in every later chat. Use Claude, GPT, Gemini, Fosta or a local Ollama model.
               </p>
             </li>
             <li class="why-card">
@@ -1432,7 +1432,7 @@
                 ><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg
               ></span>
               <h3 id="f-assistant" data-i18n="ai.title">A built-in AI agent for your databases</h3>
-              <p data-i18n="ai.text">Ask in plain words. The agent looks up tables, columns and relations, writes and explains queries, fixes errors, and opens a table, a diagram or a new query tab for you. Every code block has <b>Run</b>, <b>Insert</b> and <b>New tab</b> buttons.</p>
+              <p data-i18n="ai.text">Ask in plain words. The agent looks up tables, columns and relations, writes and explains queries, fixes errors, and opens a table, a diagram, a MongoDB collection or a new query tab for you. Every code block has <b>Run</b>, <b>Insert</b> and <b>New tab</b> buttons.</p>
               <p class="callout">
                 <svg class="icon" aria-hidden="true"><use href="#i-ban" /></svg
                 ><span data-i18n="ai.callout"
@@ -1443,6 +1443,8 @@
                 <li data-i18n="ai.item1">Bring your own model: Fosta, OpenAI, Gemini, Claude, or any OpenAI-compatible endpoint such as a local Ollama</li>
                 <li data-i18n="ai.item2">Your key is stored in Windows Credential Manager and requests go straight from your machine to the provider</li>
                 <li data-i18n="ai.item3">It sees metadata and what you share; the optional read-only query tool can read up to 50 rows, which go to your provider</li>
+                <li data-i18n="ai.item4">"Learn this database" keeps a profile of a database on this machine (structure, relations, and value hints only where it may read data), so later chats already know it; review it in "What the assistant knows"</li>
+                <li data-i18n="ai.item5">It knows Fosta Studio itself: it answers from the built-in help and can offer an app action as a button that runs only when you click it</li>
               </ul>
               <p class="fineprint" data-i18n="ai.disclosure">
                 Disclosure: Fosta, the default provider, is a separate AI API service run by the author of Fosta Studio. It is listed first for convenience
@@ -1479,6 +1481,83 @@
                 </div>
               </div>
               <figcaption data-i18n="ai.caption">From question to a ready-to-run query in seconds.</figcaption>
+            </figure>
+          </article>
+
+          <!-- MongoDB collection workspace -->
+          <article class="feature reverse" aria-labelledby="f-mongo">
+            <div class="feature-text">
+              <span class="feature-icon"
+                ><svg class="icon" aria-hidden="true"><use href="#i-folder" /></svg
+              ></span>
+              <h3 id="f-mongo" data-i18n="mongo.title">A workspace for every MongoDB collection</h3>
+              <p data-i18n="mongo.text">
+                Double-click a collection to open it with Documents, Aggregations, Schema, Indexes, Explain and Validation sections. Every read goes through the safety gateway, and edits, new indexes and validation rules follow your workspace's rules.
+              </p>
+              <ul class="checks">
+                <li data-i18n="mongo.item1">A query bar in mongosh syntax with completion of fields, operators and values, and the recent filters of each collection</li>
+                <li data-i18n="mongo.item2">List, JSON and Table views, with edits that wait for Save and a diff to review</li>
+                <li data-i18n="mongo.item3">An aggregation builder: a preview for each stage, stages you turn on and off or drag into order, and export to mongosh, Node.js or Python</li>
+                <li data-i18n="mongo.item4">Schema analysis of a sample of up to 10,000 documents, with mixed types highlighted</li>
+                <li data-i18n="mongo.item5">Index management, visual explain plans with index suggestions, and validation rules generated from the schema</li>
+              </ul>
+            </div>
+            <figure
+              class="shot"
+              data-shot="assets/screenshots/mongo.png"
+              data-i18n-attr="data-shot-alt:mongo.shotAlt"
+              data-shot-alt="A MongoDB collection workspace in Fosta Studio, with its section tabs, a query bar and documents in the Table view."
+            >
+              <div class="shot-mock mock-grid mock-mongo" aria-hidden="true">
+                <div class="am-tabs">
+                  <span class="am-tab active">Documents</span><span class="am-tab">Aggregations</span><span class="am-tab">Schema</span
+                  ><span class="am-tab">Indexes</span><span class="am-tab">Explain</span><span class="am-tab">Validation</span>
+                </div>
+                <div class="am-toolbar">
+                  <span class="am-filter">{ status: <span class="s">"paid"</span>, total: { <span class="k">$gt</span>: <span class="n">100</span> } }</span
+                  ><span class="am-tool-btn">Explain</span><span class="am-btn primary">Find</span>
+                </div>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>
+                        _id<span class="th-type"><span class="type-badge type-json">oid</span></span>
+                      </th>
+                      <th>
+                        address.city<span class="th-type"><span class="type-badge type-text">abc</span></span>
+                      </th>
+                      <th>
+                        items<span class="th-type"><span class="type-badge type-json">[ ]</span></span>
+                      </th>
+                      <th class="num">
+                        total<span class="th-type"><span class="type-badge type-number">123</span></span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>6542f1…a3</td>
+                      <td>Lisbon</td>
+                      <td>[3 items]</td>
+                      <td class="num">129.90</td>
+                    </tr>
+                    <tr>
+                      <td>6542f1…b7</td>
+                      <td>Osaka</td>
+                      <td>[2 items]</td>
+                      <td class="num">212.00</td>
+                    </tr>
+                    <tr>
+                      <td>6542f2…0c</td>
+                      <td>Hanoi</td>
+                      <td>[2 items]</td>
+                      <td class="num">104.50</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="am-status"><span>List · JSON · <b>Table</b></span><span>3 of 1,284 documents · 8 ms</span></div>
+              </div>
+              <figcaption data-i18n="mongo.caption">Filter in mongosh syntax; nested fields become dotted-path columns in the Table view.</figcaption>
             </figure>
           </article>
 
@@ -1583,7 +1662,7 @@
               ></span>
               <div>
                 <h3><a class="engine-link" href="databases/#mongodb">MongoDB</a></h3>
-                <p data-i18n="engines.mongodb">JSON filters, Atlas URIs, inferred diagram links, commands in the query tab</p>
+                <p data-i18n="engines.mongodb">Collection workspace: mongosh query bar, aggregation builder, schema, indexes, explain and validation; Atlas URIs</p>
               </div>
               <span class="status status-ok" data-i18n="engines.supported">Supported</span>
             </li>
@@ -1704,7 +1783,7 @@
               <svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg>
               <div>
                 <h3 data-i18n="privacy.ai.title">What the agent sees</h3>
-                <p data-i18n="privacy.ai.text">The model sees table and column metadata plus the editor text, errors and logs you choose to share. Statements run only when you run them. The optional read-only query tool reads up to 50 rows per query, which go to your provider; turn it off in Settings or per workspace.</p>
+                <p data-i18n="privacy.ai.text">The model sees table and column metadata plus the editor text, errors and logs you choose to share. Statements run only when you run them. The optional read-only query tool reads up to 50 rows per query, which go to your provider; turn it off in Settings or per workspace. A database the assistant learns is kept as a profile on this machine; learning sends nothing to the model, and a summary is sent only when you choose "Summarise".</p>
               </div>
             </li>
             <li class="wide">
@@ -1747,8 +1826,8 @@
               <p data-i18n="roadmap.backup.text">Logical dumps built by the app, no external tools required.</p>
             </li>
             <li>
-              <h3 data-i18n="roadmap.mongo.title">MongoDB beyond Compass</h3>
-              <p data-i18n="roadmap.mongo.text">A query bar with autocomplete, document views and an aggregation builder.</p>
+              <h3 data-i18n="roadmap.compare.title">Schema compare &amp; sync</h3>
+              <p data-i18n="roadmap.compare.text">Compare schemas between environments and sync them with migration scripts.</p>
             </li>
             <li>
               <h3 data-i18n="roadmap.servers.title">Local database servers</h3>
