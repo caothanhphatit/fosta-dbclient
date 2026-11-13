@@ -21,7 +21,8 @@ export interface Navigator {
   /**
    * Opens the assistant panel and sends `prompt` (an inline "Ask" in a view). `extra` is the context of this message
    * only (the filter, the stage and its error); `samples` are sampled documents, which reach the model only where the
-   * workspace lets the assistant read data.
+   * workspace lets the assistant read data. `shown` is what the chat shows as the user's message (`prompt` holds the
+   * instructions for the model).
    */
-  askAssistant?(prompt: string, extra?: string, samples?: string): void;
+  askAssistant?(prompt: string, extra?: string, samples?: string, shown?: string): void;
 }

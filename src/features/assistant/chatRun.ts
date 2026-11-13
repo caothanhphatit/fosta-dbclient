@@ -12,6 +12,7 @@ import { renderError } from "../../core/errorPanel";
 import type { ChatQuery } from "../../core/types";
 import { displayValue } from "../../core/values";
 import { describeResult, RunResults } from "../query/runResults";
+import { isDocumentCall, shellCell, toolCallTitle } from "./chatText";
 import { withConfirmation } from "../safety/confirmationDialog";
 
 /** Rows a Run from the chat keeps (the rest stay on the server: "Open in tab" runs it in full). */
@@ -113,7 +114,10 @@ export function resultTable(columns: string[], rows: (string | null)[][]): HTMLE
   return h("div", { class: "chat-grid" }, h("table", {}, h("thead", {}, head), h("tbody", {}, ...body)));
 }
 
-/** A read-only query the assistant ran: the statement and row count, the rows it was sent when expanded. */
+/**
+ * A read-only query the assistant ran: the statement and row count, the rows it was sent when expanded. Documents it
+ * sampled say so, with their values in shell syntax (`ObjectId("…")`) like the rest of the app.
+ */
 export function queryToolCall(query: ChatQuery): HTMLElement {
   const outcome = query.error
     ? "refused or failed"
@@ -122,13 +126,14 @@ export function queryToolCall(query: ChatQuery): HTMLElement {
     "summary",
     {},
     icon(query.error ? "x" : "query"),
-    h("span", { class: "chat-tool-title" }, "Ran a read-only query"),
+    h("span", { class: "chat-tool-title" }, toolCallTitle(query.statement)),
     h("span", { class: "chat-tool-outcome" }, outcome),
   );
   const body: HTMLElement[] = [h("pre", { class: "chat-tool-statement" }, h("code", {}, query.statement))];
   if (query.error) body.push(h("div", { class: "chat-error" }, query.error));
   else {
-    if (query.columns.length > 0) body.push(resultTable(query.columns, query.rows));
+    const rows = isDocumentCall(query.statement) ? query.rows.map((row) => row.map(shellCell)) : query.rows;
+    if (query.columns.length > 0) body.push(resultTable(query.columns, rows));
     body.push(h("div", { class: "chat-tool-note muted" }, "These rows were sent to your AI provider."));
   }
   return h("details", { class: `chat-tool chat-tool-query${query.error ? " failed" : ""}` }, summary, ...body);

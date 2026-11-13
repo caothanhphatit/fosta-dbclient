@@ -295,6 +295,48 @@
   height: 13px;
 }
 
+/* Between tool rounds, while the model works on what a tool returned. */
+.chat-thinking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+/* A markdown table in an answer. */
+.chat-md-table {
+  max-width: 100%;
+  margin: 0 0 8px;
+  overflow-x: auto;
+}
+
+.chat-md-table table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.chat-md-table th,
+.chat-md-table td {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-md-table th {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.chat-md-table .align-right {
+  text-align: right;
+}
+
+.chat-md-table .align-center {
+  text-align: center;
+}
+
 .chat-error {
   margin-top: 6px;
   padding: 6px 9px;

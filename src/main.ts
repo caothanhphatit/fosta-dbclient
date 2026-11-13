@@ -106,9 +106,9 @@ const navigation = new AppNavigation(tabs, {
     currentConfig?.workspaces.flatMap((item) => item.connections).find((profile) => profile.id === connectionId)?.name ?? connectionId,
   historyEnabled: () => currentConfig?.queryHistory !== false,
   ensureConnected: (connectionId): Promise<boolean> => tree.ensureConnected(connectionId),
-  askAssistant: (prompt, extra, samples) => {
+  askAssistant: (prompt, extra, samples, shown) => {
     showAssistant(true);
-    assistant.ask(prompt, extra, samples);
+    assistant.ask(prompt, extra, samples, shown);
   },
   taskOf: (taskId) => currentConfig?.workspaces.flatMap((item) => item.tasks).find((task) => task.id === taskId),
   writesBlocked: (connectionId) => writesBlocked(connectionSafety(currentConfig?.workspaces ?? [], connectionId)),
@@ -171,6 +171,15 @@ const tree = new ConnectionTree({
     assistant.refreshContext();
   },
 });
+
+// Selecting a node changes what the chat is about when no tab says otherwise: the panel (context, Learn, its
+// conversation) and the status bar follow at once. The tree's own handlers select first; these run as the event bubbles.
+for (const type of ["click", "keydown", "contextmenu"]) {
+  tree.element.addEventListener(type, () => {
+    assistant.refreshContext();
+    refreshStatusContext();
+  });
+}
 
 const tasksPanel = new TasksPanel({
   openLogs: (task) => navigation.openLogs(task),

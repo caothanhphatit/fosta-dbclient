@@ -27,7 +27,7 @@ import type { HistoryEntry, SavedQuery } from "../../core/types";
 import type { SectionContent, SectionContext } from "../../features/objectWorkspace/sectionWorkspace";
 import { gatewayProblem } from "../../features/safety/safety";
 import { SchemaCache } from "../../lang/schemaCache";
-import { needsReview, pipelineText, sampledDocumentsText, stageQuestion, type StageQuestion } from "./assistantModel";
+import { needsReview, pipelineText, sampledDocumentsText, stageQuestion, stageQuestionShown, type StageQuestion } from "./assistantModel";
 import { exportPipeline } from "./codegen";
 import { openCodeExport } from "./codeExportDialog";
 import { DocTree } from "./docTree";
@@ -372,6 +372,7 @@ class AggregationsSection implements SectionContent {
       stageQuestion(question, index, operator, `${this.database}.${this.collection}`),
       context.join("\n"),
       this.assistantSamples() ?? undefined,
+      stageQuestionShown(question, index, operator),
     );
   }
 

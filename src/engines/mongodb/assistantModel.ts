@@ -231,6 +231,11 @@ export function filterQuestion(collection: string, request: string): string {
   return `Write a MongoDB filter for the collection ${collection}: ${request.trim()}\n\nAnswer with one \`${FILTER_FENCE}\` code block (mongosh syntax) and at most one sentence.`;
 }
 
+/** What the chat shows for the query bar's "Ask" (the instructions to the model stay in `filterQuestion`). */
+export function filterQuestionShown(collection: string, request: string): string {
+  return `Filter ${collection}: ${request.trim()}`;
+}
+
 /** The message of a stage card's "Ask" (`index` 0-based). */
 export function stageQuestion(question: StageQuestion, index: number, operator: string, collection: string): string {
   const stage = `stage ${index + 1} (${operator}) of the aggregation pipeline on ${collection}`;
@@ -241,6 +246,19 @@ export function stageQuestion(question: StageQuestion, index: number, operator: 
       return `Suggest the next stage after ${stage}. Answer with one \`${PIPELINE_FENCE}\` code block holding just the new stage, and one sentence.`;
     case "fix":
       return `${stage[0].toUpperCase()}${stage.slice(1)} fails with the error in the context. Fix it: answer with one \`${PIPELINE_FENCE}\` code block holding just the fixed stage, and the cause in one sentence.`;
+  }
+}
+
+/** What the chat shows for a stage card's "Ask" (the full question goes to the model). */
+export function stageQuestionShown(question: StageQuestion, index: number, operator: string): string {
+  const stage = `stage ${index + 1} (${operator})`;
+  switch (question) {
+    case "explain":
+      return `Explain ${stage}`;
+    case "next":
+      return `Suggest the stage after ${stage}`;
+    case "fix":
+      return `Fix ${stage}`;
   }
 }
 

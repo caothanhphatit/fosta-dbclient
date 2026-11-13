@@ -52,7 +52,7 @@ import {
   type PageCursor,
   type QueryState,
 } from "./queryModel";
-import { filterQuestion, needsReview, sampledDocumentsText } from "./assistantModel";
+import { filterQuestion, filterQuestionShown, needsReview, sampledDocumentsText } from "./assistantModel";
 import { refFields, RefResolver } from "./refs";
 import { reviewChange } from "./reviewDialog";
 import { stagesFromQuery } from "./pipelineModel";
@@ -191,6 +191,7 @@ class DocumentsSection implements SectionContent {
               filterQuestion(this.collection, request),
               this.assistantContext() ?? undefined,
               this.assistantSamples() ?? undefined,
+              filterQuestionShown(this.collection, request),
             )
         : undefined,
       saved: new SavedQueries({

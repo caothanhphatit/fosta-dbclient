@@ -13,6 +13,7 @@ import { toast } from "../../core/dialogs";
 import { copyText, h, icon, iconButton, iconOrDefault, spacer, type IconName } from "../../core/dom";
 import { capabilityOf, defaultLanguage, engineInfo, isKnownFence, languageForFence, visibleEngines, type EngineInfo } from "../../core/engines";
 import { ChatRun, queryToolCall } from "./chatRun";
+import { conversationMove, objectWords, parseMarkdown, thinkingAfter, topicKey, type Align, type ChatTopic } from "./chatText";
 import { ModelSwitcher } from "./modelSwitcher";
 import type { ObjectRef } from "../../core/contract";
 import type { ProfileStatus } from "../../core/profileTypes";
@@ -72,13 +73,19 @@ interface QuickAction {
   prompt: () => string;
 }
 
+/** One chat: its messages (sent as history) and its log. A conversation belongs to one connection and database. */
 interface Conversation {
   messages: ChatMessage[];
   log: HTMLElement;
+  /** What it is about; null until the chat first has a connection. */
+  topic: ChatTopic | null;
 }
 
 const MAX_HISTORY = 30;
-const CODE_FENCE = /^```([\w+-]*)\s*$/;
+
+function newConversation(): Conversation {
+  return { messages: [], log: h("div", { class: "chat-log" }), topic: null };
+}
 
 export class AssistantPanel {
   readonly element: HTMLElement;
@@ -97,8 +104,12 @@ export class AssistantPanel {
   private readonly stopButton: HTMLButtonElement;
   private readonly setup: HTMLElement;
   private readonly chat: HTMLElement;
+  /** The conversations of each workspace by topic ("scope\u0000connection|database"); switching keeps the others. */
   private readonly conversations = new Map<string, Conversation>();
-  private conversation: Conversation = { messages: [], log: h("div", { class: "chat-log" }) };
+  /** The conversation last open in each workspace. */
+  private readonly openByScope = new Map<string, Conversation>();
+  private scope = "";
+  private conversation: Conversation = newConversation();
   private readonly switcher: ModelSwitcher;
   private configured = false;
   private activeRequest: string | null = null;
@@ -185,21 +196,51 @@ export class AssistantPanel {
     this.chat.hidden = !this.configured;
   }
 
-  /** One conversation per workspace; switching keeps the others. */
+  /** Conversations per workspace; switching keeps the others. */
   setScope(scope: string): void {
-    let conversation = this.conversations.get(scope);
-    if (!conversation) {
-      conversation = { messages: [], log: h("div", { class: "chat-log" }) };
-      this.conversations.set(scope, conversation);
-    }
-    this.conversation = conversation;
-    this.logHost.replaceChildren(conversation.log);
+    this.scope = scope;
+    this.show(this.openByScope.get(scope) ?? newConversation());
     this.refreshContext();
   }
 
-  /** Re-reads the host context: chip under the header and quick actions. */
+  private show(conversation: Conversation): void {
+    this.conversation = conversation;
+    this.openByScope.set(this.scope, conversation);
+    this.logHost.replaceChildren(conversation.log);
+    this.scrollToEnd();
+  }
+
+  /**
+   * Opens the conversation of the context's connection and database (kept from before, or a new one), so a chat never
+   * sends another database's history. Not while an answer streams: the panel follows once it is done.
+   */
+  private followContext(context: AssistantContext): void {
+    if (this.activeRequest) return;
+    const move = conversationMove(this.conversation.topic, context);
+    if (move.kind === "stay") return;
+    const key = `${this.scope}\u0000${topicKey(move.topic)}`;
+    if (move.kind === "adopt") {
+      // A chat without a topic yet becomes this topic's, unless the topic already has one.
+      const existing = this.conversations.get(key);
+      if (existing && existing !== this.conversation) this.show(existing);
+      else {
+        this.conversation.topic = move.topic;
+        this.conversations.set(key, this.conversation);
+      }
+      return;
+    }
+    let next = this.conversations.get(key);
+    if (!next) {
+      next = { ...newConversation(), topic: move.topic };
+      this.conversations.set(key, next);
+    }
+    if (next !== this.conversation) this.show(next);
+  }
+
+  /** Re-reads the host context: chip under the header, quick actions, and the conversation it belongs to. */
   refreshContext(): void {
     const context = this.host.context();
+    this.followContext(context);
     const key = context.connectionId ? `${context.connectionId}|${context.database ?? ""}` : "";
     if (key !== this.knowledge.key) {
       this.knowledge = { key, status: null };
@@ -293,11 +334,12 @@ export class AssistantPanel {
   /**
    * Sends a prepared question, e.g. from an "Ask assistant" button elsewhere.
    * `extra` is added to the context of this message only (a task log, say),
-   * so the answer does not depend on which tab happens to be active; `samples` likewise (sampled documents).
+   * so the answer does not depend on which tab happens to be active; `samples` likewise (sampled documents). `shown`
+   * is what the chat shows as the user's message when `prompt` carries instructions for the model (a query bar's "Ask").
    */
-  ask(prompt: string, extra?: string, samples?: string): void {
+  ask(prompt: string, extra?: string, samples?: string, shown?: string): void {
     this.composer.value = prompt;
-    void this.send(extra, samples);
+    void this.send(extra, samples, shown);
   }
 
   private reset(): void {
@@ -307,15 +349,18 @@ export class AssistantPanel {
     this.renderContext(this.host.context());
   }
 
-  private async send(extra?: string, samples?: string): Promise<void> {
+  private async send(extra?: string, samples?: string, shown?: string): Promise<void> {
     const text = this.composer.value.trim();
     if (!text || this.activeRequest || !this.configured) return;
     this.composer.value = "";
     this.growComposer();
     const current = this.host.context();
+    // The question goes to the conversation of the connection and database it is about.
+    this.followContext(current);
+    const conversation = this.conversation;
     let context: AssistantContext = extra ? { ...current, extra: () => extra } : current;
     if (samples !== undefined) context = { ...context, samples: () => samples };
-    this.append({ role: "user", content: text });
+    this.append({ role: "user", content: text }, shown?.trim() || undefined);
     // The "Learn this database" chip is for new chats only.
     this.actions.querySelector(".learn-chip")?.remove();
     this.actions.hidden = this.actions.childElementCount === 0;
@@ -327,11 +372,19 @@ export class AssistantPanel {
     let reply = "";
     let pendingTool: HTMLElement | null = null;
     let suggestions: HTMLElement | null = null;
+    // Between tool rounds the model is working again: a "Thinking…" row under the tool calls until it writes.
+    const thinking = h("div", { class: "chat-thinking", role: "status" }, h("span", { class: "chat-run-spinner" }), "Thinking…");
+    const think = (on: boolean | null) => {
+      if (on) {
+        bubble.before(thinking);
+        this.scrollToEnd();
+      } else if (on === false) thinking.remove();
+    };
     // Code blocks run against the connection the question was about, even if the user moves on.
     const render = () => body.replaceChildren(...this.renderMarkdown(reply, context));
     body.append(h("span", { class: "chat-cursor" }));
     try {
-      const request = { id, messages: this.conversation.messages.slice(-MAX_HISTORY), context: chatContext(context) };
+      const request = { id, messages: conversation.messages.slice(-MAX_HISTORY), context: chatContext(context) };
       const full = await api.aiChat(request, (event: ChatEvent) => {
         if (event.type === "text") {
           reply += event.text;
@@ -341,12 +394,11 @@ export class AssistantPanel {
           bubble.before(pendingTool);
           this.scrollToEnd();
         } else if (event.type === "query") {
-          // The result of the tool call announced just before.
+          // The result of the tool call announced just before; the model now works on it.
           const call = queryToolCall(event);
           if (pendingTool) pendingTool.replaceWith(call);
           else bubble.before(call);
           pendingTool = null;
-          this.scrollToEnd();
         } else if (event.type === "action" && event.action.kind === "suggestAppAction") {
           // Only a button: nothing runs until the user clicks it.
           suggestions ??= h("div", { class: "chat-app-actions" });
@@ -356,19 +408,23 @@ export class AssistantPanel {
         } else if (event.type === "action") {
           this.host.perform(event.action);
         }
+        think(thinkingAfter(event));
       });
       reply = full || reply;
       render();
-      this.conversation.messages.push({ role: "assistant", content: reply });
+      conversation.messages.push({ role: "assistant", content: reply });
     } catch (error) {
       const message = errorText(error);
-      if (reply) this.conversation.messages.push({ role: "assistant", content: reply });
+      if (reply) conversation.messages.push({ role: "assistant", content: reply });
       render();
       body.append(h("div", { class: "chat-error" }, message === "Stopped" ? "Stopped." : message));
     } finally {
+      think(false);
       this.activeRequest = null;
       this.setBusy(false);
       this.scrollToEnd();
+      // The context may have moved on while the answer streamed.
+      this.refreshContext();
     }
   }
 
@@ -382,10 +438,11 @@ export class AssistantPanel {
     this.element.classList.toggle("busy", busy);
   }
 
-  private append(message: ChatMessage): void {
+  /** Adds a message to the conversation; the chat shows `shown` instead of its content when given. */
+  private append(message: ChatMessage, shown?: string): void {
     this.conversation.messages.push(message);
     const bubble = this.bubble(message.role);
-    bubble.querySelector(".chat-body")!.append(...this.renderMarkdown(message.content, this.host.context()));
+    bubble.querySelector(".chat-body")!.append(...this.renderMarkdown(shown ?? message.content, this.host.context()));
     this.scrollToEnd();
   }
 
@@ -436,22 +493,24 @@ export class AssistantPanel {
         if (info.assistant.translateFrom) actions.push({ label: "Translate to…", icon: "globe", mode: "translate", prompt: () => "" });
         return actions;
       }
-      case "table":
+      case "table": {
+        const words = objectWords(context.object?.kind);
         return [
           {
             label: "Describe",
             icon: "design",
             mode: "send",
-            prompt: () => `Describe ${table}: what each column is for, the keys, and how it relates to other tables.`,
+            prompt: () => `Describe ${table}: ${words.describe}.`,
           },
           {
             label: "Test data",
             icon: "table",
             mode: "send",
-            prompt: () => `Generate 20 rows of realistic test data for ${table} as ${info.assistant.testData}.`,
+            prompt: () => `Generate 20 ${words.records} of realistic test data for ${table} as ${info.assistant.testData}.`,
           },
-          { label: "Query this table", icon: "query", mode: "prefill", prompt: () => `Write a query on ${table} that ` },
+          { label: `Query this ${words.object}`, icon: "query", mode: "prefill", prompt: () => `Write a query on ${table} that ` },
         ];
+      }
       case "task":
         return [
           {
@@ -506,64 +565,20 @@ export class AssistantPanel {
   // --- Markdown-lite -----------------------------------------------------
 
   private renderMarkdown(text: string, context: AssistantContext): HTMLElement[] {
-    const nodes: HTMLElement[] = [];
-    const lines = text.split("\n");
-    let paragraph: string[] = [];
-    let list: { ordered: boolean; items: string[] } | null = null;
-    const flushParagraph = () => {
-      if (paragraph.length) nodes.push(h("p", {}, ...inline(paragraph.join(" "))));
-      paragraph = [];
-    };
-    const flushList = () => {
-      if (list) nodes.push(h(list.ordered ? "ol" : "ul", {}, ...list.items.map((item) => h("li", {}, ...inline(item)))));
-      list = null;
-    };
-    for (let index = 0; index < lines.length; index += 1) {
-      const line = lines[index];
-      const fenceMatch = CODE_FENCE.exec(line.trim());
-      if (fenceMatch) {
-        flushParagraph();
-        flushList();
-        const language = fenceMatch[1].toLowerCase();
-        const code: string[] = [];
-        index += 1;
-        while (index < lines.length && !lines[index].trim().startsWith("```")) {
-          code.push(lines[index]);
-          index += 1;
-        }
-        nodes.push(this.codeBlock(code.join("\n"), language, context));
-        continue;
+    return parseMarkdown(text).map((block) => {
+      switch (block.type) {
+        case "code":
+          return this.codeBlock(block.code, block.language, context);
+        case "heading":
+          return h("p", { class: "chat-heading" }, ...inline(block.text));
+        case "list":
+          return h(block.ordered ? "ol" : "ul", {}, ...block.items.map((item) => h("li", {}, ...inline(item))));
+        case "table":
+          return markdownTable(block.header, block.align, block.rows);
+        default:
+          return h("p", {}, ...inline(block.text));
       }
-      const bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
-      const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
-      if (bullet || numbered) {
-        flushParagraph();
-        const ordered = Boolean(numbered);
-        if (!list || list.ordered !== ordered) {
-          flushList();
-          list = { ordered, items: [] };
-        }
-        list.items.push((bullet ?? numbered)![1]);
-        continue;
-      }
-      if (!line.trim()) {
-        flushParagraph();
-        flushList();
-        continue;
-      }
-      const heading = /^#{1,4}\s+(.*)$/.exec(line);
-      if (heading) {
-        flushParagraph();
-        flushList();
-        nodes.push(h("p", { class: "chat-heading" }, ...inline(heading[1])));
-        continue;
-      }
-      if (list) list.items[list.items.length - 1] += ` ${line.trim()}`;
-      else paragraph.push(line.trim());
-    }
-    flushParagraph();
-    flushList();
-    return nodes;
+    });
   }
 
   /**
@@ -657,6 +672,21 @@ export function appActionButton(action: { id: string; label: string }, run: (() 
   );
   button.addEventListener("click", () => run());
   return button;
+}
+
+/** A GFM table of the answer; cells are text with inline markdown, never HTML. */
+function markdownTable(header: string[], align: Align[], rows: string[][]): HTMLElement {
+  const cell = (tag: "th" | "td", text: string, column: number) => h(tag, align[column] ? { class: `align-${align[column]}` } : {}, ...inline(text));
+  return h(
+    "div",
+    { class: "chat-md-table" },
+    h(
+      "table",
+      {},
+      h("thead", {}, h("tr", {}, ...header.map((text, column) => cell("th", text, column)))),
+      h("tbody", {}, ...rows.map((row) => h("tr", {}, ...row.map((text, column) => cell("td", text, column))))),
+    ),
+  );
 }
 
 /** Inline markdown: `code`, **bold**. Everything else is text. */

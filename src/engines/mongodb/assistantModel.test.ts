@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   dedent,
   filterQuestion,
+  filterQuestionShown,
   lineDiff,
   needsReview,
   parseFilterFence,
@@ -10,6 +11,7 @@ import {
   sampledDocumentsText,
   splitArray,
   stageQuestion,
+  stageQuestionShown,
 } from "./assistantModel";
 
 describe("the mongo-filter fence", () => {
@@ -101,6 +103,14 @@ describe("the inline Ask", () => {
     expect(stageQuestion("next", 1, "$match", "orders")).toContain("after stage 2 ($match)");
     expect(stageQuestion("fix", 0, "$group", "orders")).toMatch(/^Stage 1 \(\$group\).*`mongo-pipeline` code block/s);
     expect(stageQuestion("explain", 0, "$group", "orders")).not.toContain("```");
+  });
+
+  it("shows the user only their own words, not the instructions to the model", () => {
+    expect(filterQuestionShown("orders", " paid orders over 100 ")).toBe("Filter orders: paid orders over 100");
+    expect(filterQuestionShown("orders", "x")).not.toContain("code block");
+    expect(stageQuestionShown("explain", 0, "$group")).toBe("Explain stage 1 ($group)");
+    expect(stageQuestionShown("next", 1, "$match")).toBe("Suggest the stage after stage 2 ($match)");
+    expect(stageQuestionShown("fix", 2, "$project")).toBe("Fix stage 3 ($project)");
   });
 });
 

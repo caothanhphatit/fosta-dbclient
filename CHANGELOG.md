@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Assistant panel: selecting a database in the tree updates the panel at once (its context, the Learn button and the
+  "Learn this database" chip), instead of after reopening the panel or one click late.
+- Assistant panel: markdown tables in answers render as tables instead of one line of pipes.
+- Assistant panel: each connection and database has its own conversation, so switching the tab or the tree selection to
+  another database no longer sends the previous one's history; going back shows the earlier chat. The query bar's and
+  the stage cards' "Ask" go to the conversation of that collection's database.
+- Assistant panel: the query bar's and the stage cards' "Ask" show the user's own words (e.g. "Filter orders: paid
+  orders over 100") instead of the instructions sent to the model.
+- Assistant panel: documents the assistant sampled are labelled "Sampled documents from <collection>" (or "Previewed a
+  pipeline on <collection>") instead of "Ran a read-only query", with ObjectIds and dates shown as `ObjectId("…")` and
+  `ISODate("…")` instead of Extended JSON.
+- Assistant panel: a "Thinking…" row shows while the model works between tool calls.
+- Assistant panel: the quick prompts of a MongoDB collection say "Query this collection" and ask for documents, not rows.
+
 ## [0.3.0] - 2026-11-12
 
 This release also includes the fixes and additions of
