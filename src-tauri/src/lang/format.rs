@@ -645,10 +645,7 @@ impl<'a> Formatter<'a> {
             }
             return self.operator_is_binary(a);
         }
-        if punct_a && matches!(ta, ")" | "]" | "}") && adjacent && punct_b {
-            return false;
-        }
-        true
+        !(punct_a && matches!(ta, ")" | "]" | "}") && adjacent && punct_b)
     }
 
     /// Whether any whitespace (a line break included) may go between two items that touch in the source.
