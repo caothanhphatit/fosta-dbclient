@@ -94,34 +94,100 @@ pub fn is_reg_alias(name: &str) -> bool {
     )
 }
 
-/// Replaces the OID of every `reg*` cell with its text form (`public.orders`), the way psql prints it. The binary protocol
-/// carries only the OID, so the names are looked up with `SELECT $1::oid::regclass::text`, once per distinct OID of a result.
-/// A lookup that fails leaves the OID as it was.
-pub async fn resolve_reg_aliases(
-    client: &tokio_postgres::Client,
-    row: &tokio_postgres::Row,
-    values: &mut [Value],
-    cache: &mut std::collections::HashMap<(String, u32), String>,
-) {
-    for (i, column) in row.columns().iter().enumerate() {
-        let name = column.type_().name();
-        if !is_reg_alias(name) {
-            continue;
+/// The `reg*` name behind a column type (the element type for arrays), when it is one.
+fn reg_name_of(ty: &Type) -> Option<&str> {
+    match ty.kind() {
+        Kind::Array(elem) => reg_name_of(elem),
+        _ if is_reg_alias(ty.name()) => Some(ty.name()),
+        _ => None,
+    }
+}
+
+/// Turns the OIDs of `reg*` columns (and `reg*[]` arrays) into their text form (`public.orders`), the way psql prints them.
+/// The binary protocol carries only the OID, so rows are held back in chunks and each chunk costs one lookup per such
+/// column: `SELECT o, o::regclass::text FROM unnest($1::oid[]) AS o` over the distinct OIDs not seen yet. A lookup that
+/// fails leaves the OIDs as they were. Results without such columns pass straight through.
+pub struct RegResolver {
+    columns: Vec<(usize, String)>,
+    cache: std::collections::HashMap<(String, u32), String>,
+    pending: Vec<Vec<Value>>,
+    chunk: usize,
+}
+
+impl RegResolver {
+    pub fn new(columns: &[tokio_postgres::Column], chunk: usize) -> Self {
+        let columns = columns
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| reg_name_of(c.type_()).map(|n| (i, n.to_owned())))
+            .collect();
+        Self {
+            columns,
+            cache: Default::default(),
+            pending: Vec::new(),
+            chunk: chunk.max(1),
         }
-        let Some(Value::Int(oid)) = values.get(i) else { continue };
-        let Ok(oid) = u32::try_from(*oid) else { continue };
-        if let Some(text) = cache.get(&(name.to_owned(), oid)) {
-            values[i] = Value::Text(text.clone());
-            continue;
+    }
+
+    /// Takes a row; returns the rows ready to go on (a full chunk, resolved), possibly none.
+    pub async fn push(&mut self, client: &tokio_postgres::Client, values: Vec<Value>) -> Vec<Vec<Value>> {
+        if self.columns.is_empty() {
+            return vec![values];
         }
-        // `name` is one of the fixed alias names above, so it is safe in the statement text.
-        let sql = format!("SELECT $1::oid::{name}::text");
-        if let Ok(found) = client.query_one(&sql, &[&oid]).await {
-            if let Ok(Some(text)) = found.try_get::<_, Option<String>>(0) {
-                cache.insert((name.to_owned(), oid), text.clone());
-                values[i] = Value::Text(text);
+        self.pending.push(values);
+        if self.pending.len() >= self.chunk {
+            return self.finish(client).await;
+        }
+        Vec::new()
+    }
+
+    /// Resolves and returns the rows held back.
+    pub async fn finish(&mut self, client: &tokio_postgres::Client) -> Vec<Vec<Value>> {
+        let mut rows = std::mem::take(&mut self.pending);
+        for (index, name) in self.columns.clone() {
+            let mut wanted = Vec::new();
+            for row in &rows {
+                collect_oids(&row[index], &mut wanted);
+            }
+            wanted.retain(|oid| !self.cache.contains_key(&(name.clone(), *oid)));
+            wanted.sort_unstable();
+            wanted.dedup();
+            if !wanted.is_empty() {
+                // `name` is one of the fixed alias names above, so it is safe in the statement text.
+                let sql = format!("SELECT o, o::{name}::text FROM unnest($1::oid[]) AS o");
+                if let Ok(found) = client.query(&sql, &[&wanted]).await {
+                    for r in found {
+                        if let (Ok(oid), Ok(Some(text))) = (r.try_get::<_, u32>(0), r.try_get::<_, Option<String>>(1)) {
+                            self.cache.insert((name.clone(), oid), text);
+                        }
+                    }
+                }
+            }
+            for row in &mut rows {
+                replace_oids(&mut row[index], &name, &self.cache);
             }
         }
+        rows
+    }
+}
+
+fn collect_oids(value: &Value, out: &mut Vec<u32>) {
+    match value {
+        Value::Int(oid) => out.extend(u32::try_from(*oid)),
+        Value::Array(items) => items.iter().for_each(|v| collect_oids(v, out)),
+        _ => {}
+    }
+}
+
+fn replace_oids(value: &mut Value, name: &str, cache: &std::collections::HashMap<(String, u32), String>) {
+    match value {
+        Value::Int(oid) => {
+            if let Some(text) = u32::try_from(*oid).ok().and_then(|o| cache.get(&(name.to_owned(), o))) {
+                *value = Value::Text(text.clone());
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|v| replace_oids(v, name, cache)),
+        _ => {}
     }
 }
 

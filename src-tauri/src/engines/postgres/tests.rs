@@ -557,7 +557,7 @@ async fn live_engine_postgres_reg_aliases_show_names() {
     s.run(
         "SELECT 'public.orders'::regclass AS c, 'now'::regproc AS p, 'int4'::regtype AS t, 'public'::regnamespace AS n, \
          'postgres'::regrole AS r, '+(int4,int4)'::regoperator AS o, 0::regclass AS z, NULL::regclass AS x; \
-         SELECT tableoid::regclass FROM orders LIMIT 2",
+         SELECT tableoid::regclass FROM orders LIMIT 2; SELECT ARRAY['orders'::regclass, 'customers'::regclass] AS a",
         &opts,
         &mut sink,
     )
@@ -575,4 +575,8 @@ async fn live_engine_postgres_reg_aliases_show_names() {
     assert!(row[7].is_null());
     assert_eq!(sink.sets[0].columns[0].kind, ValueKind::Text);
     assert_eq!(sink.sets[1].rows[0][0], Value::Text("orders".into()));
+    assert_eq!(
+        sink.sets[2].rows[0][0],
+        Value::Array(vec![Value::Text("orders".into()), Value::Text("customers".into())])
+    );
 }
