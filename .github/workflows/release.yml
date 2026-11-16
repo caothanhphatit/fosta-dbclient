@@ -20,7 +20,6 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
-      notes: ${{ steps.notes.outputs.notes }}
       docker: ${{ steps.docker.outputs.present }}
     steps:
       # The installed app only accepts updates signed with this key (plugins.updater.pubkey in tauri.conf.json).
@@ -79,26 +78,11 @@ jobs:
         run: |
           node scripts/version.mjs check "$GITHUB_REF_NAME"
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      # Only checks the notes here: GitHub drops a job output that "may contain secret" (any masked value
+      # appearing in the text), which left the 0.3.0 and 0.3.1 drafts and latest.json without notes.
+      # The Windows job builds them again for tauri-action.
       - name: Release notes from CHANGELOG.md
-        id: notes
-        run: |
-          {
-            echo "notes<<FOSTA_RELEASE_NOTES_EOF"
-            node scripts/version.mjs changelog "$GITHUB_REF_NAME"
-            if [ -f Dockerfile ]; then
-              version="${GITHUB_REF_NAME#v}"
-              echo
-              echo "### Docker (web edition)"
-              echo
-              echo '```sh'
-              echo "docker run -d --name fosta-studio -p 127.0.0.1:8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio:$version"
-              echo "docker logs fosta-studio"
-              echo '```'
-              echo
-              echo "Open the sign-in address printed in the log. Image: [ghcr.io/caothanhphatit/fosta-studio](https://github.com/caothanhphatit/fosta-dbclient/pkgs/container/fosta-studio); settings in [docs/web-edition.md](https://github.com/caothanhphatit/fosta-dbclient/blob/$GITHUB_REF_NAME/docs/web-edition.md)."
-            fi
-            echo "FOSTA_RELEASE_NOTES_EOF"
-          } >> "$GITHUB_OUTPUT"
+        run: node scripts/version.mjs notes "$GITHUB_REF_NAME"
       - name: Is there a Docker web edition?
         id: docker
         run: |
@@ -121,6 +105,15 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - name: Release notes from CHANGELOG.md
+        id: notes
+        shell: bash
+        run: |
+          {
+            echo "notes<<FOSTA_RELEASE_NOTES_EOF"
+            node scripts/version.mjs notes "$GITHUB_REF_NAME"
+            echo "FOSTA_RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Tool versions
         shell: bash
         run: |
@@ -141,7 +134,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Fosta Studio ${{ needs.verify.outputs.version }}
-          releaseBody: ${{ needs.verify.outputs.notes }}
+          releaseBody: ${{ steps.notes.outputs.notes }}
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           # latest.json, read by installed apps from releases/latest/download/latest.json.

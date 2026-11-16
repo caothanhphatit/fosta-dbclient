@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- Releases: the GitHub release notes and the update notes in `latest.json` are filled from CHANGELOG.md again (0.3.0 and
+  0.3.1 went out with none, because GitHub dropped the notes passed between jobs).
 - CI runs the MySQL contract tests (`contract_mysql`, MySQL 8.4) next to the MariaDB ones, from `dev/compose/mysql.yml`.
 
 ### Fixed

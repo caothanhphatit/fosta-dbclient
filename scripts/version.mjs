@@ -4,13 +4,15 @@
 //   node scripts/version.mjs get                    print the version (package.json is the source of truth)
 //   node scripts/version.mjs check [X.Y.Z|vX.Y.Z]   fail when the files disagree, or differ from the given version
 //   node scripts/version.mjs set <X.Y.Z|patch|minor|major>
-//   node scripts/version.mjs changelog [X.Y.Z]      print that version's section of CHANGELOG.md (release notes)
+//   node scripts/version.mjs changelog [X.Y.Z]      print that version's section of CHANGELOG.md
+//   node scripts/version.mjs notes <vX.Y.Z>         print the GitHub release notes: the changelog section, plus the
+//                                                   Docker run lines when the repo has a Dockerfile
 //
 // `set` rewrites package.json, the root entries of package-lock.json, src-tauri/tauri.conf.json,
 // src-tauri/Cargo.toml and the app's entry in src-tauri/Cargo.lock. Edits are targeted text
 // replacements so every file keeps its formatting. No dependencies.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -109,6 +111,28 @@ function changelog(version) {
   console.log(body);
 }
 
+/** Release notes for the GitHub release (and latest.json): changelog section plus the Docker web edition lines. */
+function notes(tag) {
+  if (!tag) fail("Usage: node scripts/version.mjs notes <vX.Y.Z>");
+  const version = normalize(tag);
+  changelog(version);
+  if (!existsSync(join(root, "Dockerfile"))) return;
+  const repo = "https://github.com/caothanhphatit/fosta-dbclient";
+  console.log(
+    [
+      "",
+      "### Docker (web edition)",
+      "",
+      "```sh",
+      `docker run -d --name fosta-studio -p 127.0.0.1:8080:8080 -v fosta-studio-data:/data ghcr.io/caothanhphatit/fosta-studio:${version}`,
+      "docker logs fosta-studio",
+      "```",
+      "",
+      `Open the sign-in address printed in the log. Image: [ghcr.io/caothanhphatit/fosta-studio](${repo}/pkgs/container/fosta-studio); settings in [docs/web-edition.md](${repo}/blob/${tag}/docs/web-edition.md).`,
+    ].join("\n"),
+  );
+}
+
 function fail(message) {
   console.error(message);
   process.exit(1);
@@ -118,5 +142,6 @@ const [command, arg] = process.argv.slice(2);
 if (command === "set") set(arg);
 else if (command === "check") check(arg);
 else if (command === "changelog") changelog(arg);
+else if (command === "notes") notes(arg);
 else if (command === "get") console.log(current());
-else fail("Usage: node scripts/version.mjs <get | check [X.Y.Z] | set <X.Y.Z|patch|minor|major> | changelog [X.Y.Z]>");
+else fail("Usage: node scripts/version.mjs <get | check [X.Y.Z] | set <X.Y.Z|patch|minor|major> | changelog [X.Y.Z] | notes <vX.Y.Z>>");
