@@ -33,7 +33,7 @@ fn seed() -> Vec<String> {
         .collect()
 }
 
-fn key_filter(key: i64) -> Filter {
+pub(super) fn key_filter(key: i64) -> Filter {
     Filter::Raw {
         language: RawFilterLang::Sql,
         text: format!("`id` = {key}"),
@@ -54,6 +54,31 @@ pub(super) fn spec(database: Option<&str>) -> ConnectionSpec {
 pub(super) fn secrets() -> ConnectSecrets {
     ConnectSecrets::password(&env("PASSWORD", "studio-root"))
 }
+
+/// What differs between the engines that share these checks (MariaDB and MySQL): how to reach the server, a statement
+/// that outlasts any timeout (MariaDB has the SEQUENCE engine, MySQL a recursive CTE), the server label and whether the
+/// shop seed has a vector column.
+pub(super) struct Target {
+    pub fixture: fn() -> Fixture,
+    pub spec: fn(Option<&str>) -> ConnectionSpec,
+    pub secrets: fn() -> ConnectSecrets,
+    pub slow_select: &'static str,
+    pub label_prefix: &'static str,
+    pub vector: bool,
+    pub read_only_var: &'static str,
+    pub int_literal_type: &'static str,
+}
+
+const MARIADB: Target = Target {
+    fixture,
+    spec,
+    secrets,
+    slow_select: "SELECT SUM(a.seq * b.seq) FROM seq_1_to_100000 a, seq_1_to_100000 b",
+    label_prefix: "MariaDB ",
+    vector: true,
+    read_only_var: "tx_read_only",
+    int_literal_type: "int",
+};
 
 pub fn fixture() -> Fixture {
     Fixture {
@@ -90,14 +115,17 @@ crate::contract_tests!(contract_mariadb, fixture());
 
 // --- MariaDB-specific checks (ported from live_tests.rs) ----------------------------------------------------------------
 
-async fn shop() -> (ConnectionManager, Handle) {
+pub(super) async fn shop(target: &Target) -> (ConnectionManager, Handle) {
     let manager = ConnectionManager::default();
-    manager.connect("shop", spec(Some("shop")), secrets()).await.expect("connect");
+    manager
+        .connect("shop", (target.spec)(Some("shop")), (target.secrets)())
+        .await
+        .expect("connect");
     let handle = manager.handle("shop").unwrap();
     (manager, handle)
 }
 
-async fn session(handle: &Handle) -> Arc<dyn Session> {
+pub(super) async fn session(handle: &Handle) -> Arc<dyn Session> {
     handle
         .call("opened a session", |conn| async move {
             conn.open_session(&SessionOptions::default(), &CallContext::default()).await
@@ -107,7 +135,7 @@ async fn session(handle: &Handle) -> Arc<dyn Session> {
         .session
 }
 
-async fn run(handle: &Handle, session: &Arc<dyn Session>, text: &str, options: RunOptions) -> AppResult<CollectSink> {
+pub(super) async fn run(handle: &Handle, session: &Arc<dyn Session>, text: &str, options: RunOptions) -> AppResult<CollectSink> {
     let mut sink = CollectSink::default();
     let request = RunRequest {
         text: text.to_owned(),
@@ -118,7 +146,7 @@ async fn run(handle: &Handle, session: &Arc<dyn Session>, text: &str, options: R
     Ok(sink)
 }
 
-async fn browse(handle: &Handle, request: BrowseRequest) -> crate::contract::Page {
+pub(super) async fn browse(handle: &Handle, request: BrowseRequest) -> crate::contract::Page {
     handle
         .call("browsed", |conn| async move {
             conn.tabular().unwrap().browse(&request, &CallContext::default()).await
@@ -127,11 +155,11 @@ async fn browse(handle: &Handle, request: BrowseRequest) -> crate::contract::Pag
         .expect("browse")
 }
 
-fn shop_table(name: &str) -> ObjectRef {
+pub(super) fn shop_table(name: &str) -> ObjectRef {
     ObjectRef::new(Some("shop"), None, name, NodeKind::TABLE)
 }
 
-fn column<'a>(page: &'a crate::contract::Page, row: usize, name: &str) -> &'a Value {
+pub(super) fn column<'a>(page: &'a crate::contract::Page, row: usize, name: &str) -> &'a Value {
     let index = page
         .columns
         .iter()
@@ -140,12 +168,10 @@ fn column<'a>(page: &'a crate::contract::Page, row: usize, name: &str) -> &'a Va
     &page.rows[row][index]
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs dev/compose/mariadb.yml"]
-async fn contract_mariadb_shop_catalog_and_edits() {
-    let (manager, handle) = shop().await;
+pub(super) async fn check_shop_catalog_and_edits(t: &Target) {
+    let (manager, handle) = shop(t).await;
     let info = manager.connect_info("shop").unwrap();
-    assert!(info.server.label.starts_with("MariaDB "), "{}", info.server.label);
+    assert!(info.server.label.starts_with(t.label_prefix), "{}", info.server.label);
     let ctx = CallContext::default();
     let top = handle
         .call("listed", |conn| async move {
@@ -182,7 +208,9 @@ async fn contract_mariadb_shop_catalog_and_edits() {
         .await
         .unwrap();
     assert!(!products.foreign_keys.is_empty() && !products.referenced_by.is_empty());
-    assert_eq!(products.column("embedding").unwrap().hints.vector_dims, Some(4));
+    if t.vector {
+        assert_eq!(products.column("embedding").unwrap().hints.vector_dims, Some(4));
+    }
     assert!(products.ddl.as_deref().unwrap_or_default().contains("CREATE TABLE"));
     assert!(products.indexes.iter().any(|index| index.primary));
     assert!(products.extra.iter().any(|(label, _)| label == "Engine"));
@@ -215,7 +243,9 @@ async fn contract_mariadb_shop_catalog_and_edits() {
     })
     .await;
     assert!(filtered.total.unwrap().value < all.total.unwrap().value);
-    assert!(matches!(column(&all, 0, "embedding"), Value::Other { type_name, .. } if type_name == "vector"));
+    if t.vector {
+        assert!(matches!(column(&all, 0, "embedding"), Value::Other { type_name, .. } if type_name == "vector"));
+    }
 
     // Query results carry SQL type names and typed values.
     let tab = session(&handle).await;
@@ -228,7 +258,7 @@ async fn contract_mariadb_shop_catalog_and_edits() {
     .await
     .unwrap();
     let names: Vec<&str> = typed.sets[0].columns.iter().map(|c| c.type_name.as_str()).collect();
-    assert_eq!(names, ["int", "decimal", "date"]);
+    assert_eq!(names, [t.int_literal_type, "decimal", "date"]);
     assert_eq!(typed.sets[0].rows[0][0], Value::Int(1));
     assert_eq!(typed.sets[0].rows[0][1], Value::Decimal("1.50".into()));
     assert_eq!(typed.sets[0].rows[0][2].display().as_deref(), Some("2025-01-02"));
@@ -286,10 +316,8 @@ async fn contract_mariadb_shop_catalog_and_edits() {
     manager.disconnect("shop").await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs dev/compose/mariadb.yml"]
-async fn contract_mariadb_typed_values() {
-    let f = fixture();
+pub(super) async fn check_typed_values(t: &Target) {
+    let f = (t.fixture)();
     let (_manager, handle) = connect(&f).await;
     let mut request = BrowseRequest::new(f.table.clone(), 1);
     request.filter = key_filter(6);
@@ -368,10 +396,8 @@ async fn contract_mariadb_typed_values() {
     assert_eq!(after.rows[0][7], Value::Bytes(vec![0xca, 0xfe]));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs dev/compose/mariadb.yml"]
-async fn contract_mariadb_transactions_and_backstops() {
-    let f = fixture();
+pub(super) async fn check_transactions_and_backstops(t: &Target) {
+    let f = (t.fixture)();
     let (_manager, handle) = connect(&f).await;
     let tab = session(&handle).await;
     let options = RunOptions::default();
@@ -444,14 +470,7 @@ async fn contract_mariadb_transactions_and_backstops() {
         ..RunOptions::default()
     };
     let started = std::time::Instant::now();
-    let timed_out = run(
-        &handle,
-        &tab,
-        "SELECT SUM(a.seq * b.seq) FROM seq_1_to_100000 a, seq_1_to_100000 b",
-        slow,
-    )
-    .await
-    .expect_err("timed out");
+    let timed_out = run(&handle, &tab, t.slow_select, slow).await.expect_err("timed out");
     assert_eq!(timed_out.code(), Some("TIMEOUT"), "{timed_out:?}");
     assert!(started.elapsed() < Duration::from_secs(10));
     // Errors name the failing statement of a script.
@@ -462,10 +481,8 @@ async fn contract_mariadb_transactions_and_backstops() {
     tab.close().await;
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs dev/compose/mariadb.yml"]
-async fn contract_mariadb_read_only_is_reasserted_every_run() {
-    let (_manager, handle) = shop().await;
+pub(super) async fn check_read_only_is_reasserted_every_run(t: &Target) {
+    let (_manager, handle) = shop(t).await;
     let tab = session(&handle).await;
     let read_only = RunOptions {
         read_only: true,
@@ -474,13 +491,14 @@ async fn contract_mariadb_read_only_is_reasserted_every_run() {
     let session_read_only = |sink: CollectSink| sink.sets.last().unwrap().rows[0][0].clone();
     // Statements that lift the session's read-only mode (classified Admin; here run past the gateway) do not survive into
     // the next read-only run.
+    let var = t.read_only_var;
     for lift in [
-        "SET SESSION TRANSACTION READ WRITE",
-        "SET SESSION `tx_read_only` = 0",
-        "SET @@session.tx_read_only = OFF",
+        "SET SESSION TRANSACTION READ WRITE".to_owned(),
+        format!("SET SESSION `{var}` = 0"),
+        format!("SET @@session.{var} = OFF"),
     ] {
-        run(&handle, &tab, lift, read_only.clone()).await.unwrap();
-        let after = run(&handle, &tab, "SELECT @@session.tx_read_only", read_only.clone())
+        run(&handle, &tab, &lift, read_only.clone()).await.unwrap();
+        let after = run(&handle, &tab, &format!("SELECT @@session.{var}"), read_only.clone())
             .await
             .unwrap();
         assert_eq!(session_read_only(after), Value::Int(1), "after {lift}");
@@ -491,7 +509,7 @@ async fn contract_mariadb_read_only_is_reasserted_every_run() {
     run(&handle, &tab, "SELECT 2", read_only.clone()).await.unwrap();
     tab.transaction(TransactionOp::Rollback, &read_only).await.unwrap();
     // Read-write runs switch it off again.
-    let back = run(&handle, &tab, "SELECT @@session.tx_read_only", RunOptions::default())
+    let back = run(&handle, &tab, &format!("SELECT @@session.{var}"), RunOptions::default())
         .await
         .unwrap();
     assert_eq!(session_read_only(back), Value::Int(0));
@@ -499,7 +517,11 @@ async fn contract_mariadb_read_only_is_reasserted_every_run() {
 }
 
 /// The diagram's keys agree with `describe` (an independent catalog path): each table's primary key and each foreign key.
-async fn assert_graph_matches_descriptions(handle: &Handle, graph: &crate::contract::SchemaGraph, object: impl Fn(&str) -> ObjectRef) {
+pub(super) async fn assert_graph_matches_descriptions(
+    handle: &Handle,
+    graph: &crate::contract::SchemaGraph,
+    object: impl Fn(&str) -> ObjectRef,
+) {
     for table in graph.tables.iter().filter(|table| table.kind == "table") {
         let target = object(&table.name);
         let described = handle
@@ -531,10 +553,8 @@ async fn assert_graph_matches_descriptions(handle: &Handle, graph: &crate::contr
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs dev/compose/mariadb.yml"]
-async fn contract_mariadb_schema_graph() {
-    let (manager, handle) = shop().await;
+pub(super) async fn check_schema_graph(t: &Target) {
+    let (manager, handle) = shop(t).await;
     let graph = handle
         .call("read the schema", |conn| async move {
             conn.schema_graph().unwrap().schema_graph("shop", &CallContext::default()).await
@@ -579,7 +599,7 @@ async fn contract_mariadb_vector() {
 
 const INJECTED_FILTER: &str = "1=0; DELETE FROM gate_probe; SELECT 1 WHERE 1";
 
-fn gate(preset: Preset) -> Context {
+pub(super) fn gate(preset: Preset) -> Context {
     Context {
         workspace_id: "contract".into(),
         workspace_name: "Contract".into(),
@@ -589,7 +609,7 @@ fn gate(preset: Preset) -> Context {
     }
 }
 
-fn raw_filter(text: &str) -> Filter {
+pub(super) fn raw_filter(text: &str) -> Filter {
     Filter::Raw {
         language: RawFilterLang::Sql,
         text: text.to_owned(),
@@ -597,7 +617,7 @@ fn raw_filter(text: &str) -> Filter {
 }
 
 /// Creates `shop.gate_probe` with the given rows, outside the gateway (the test's own fixture).
-async fn gate_probe(handle: &Handle, rows: &str) {
+pub(super) async fn gate_probe(handle: &Handle, rows: &str) {
     let tab = session(handle).await;
     let setup = format!("CREATE TABLE IF NOT EXISTS gate_probe (id INT PRIMARY KEY); DELETE FROM gate_probe; {rows}");
     run(handle, &tab, setup.trim_end_matches("; "), RunOptions::default())
@@ -606,7 +626,7 @@ async fn gate_probe(handle: &Handle, rows: &str) {
     tab.close().await;
 }
 
-async fn drop_gate_probe(handle: &Handle) {
+pub(super) async fn drop_gate_probe(handle: &Handle) {
     let tab = session(handle).await;
     run(handle, &tab, "DROP TABLE gate_probe", RunOptions::default())
         .await
@@ -616,10 +636,8 @@ async fn drop_gate_probe(handle: &Handle) {
 
 /// A filter that tries to stack statements is refused by the gateway, and even the engine alone cannot run it (browse
 /// queries are prepared statements); the probe row survives.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs dev/compose/mariadb.yml"]
-async fn contract_mariadb_gateway_rejects_injected_filters() {
-    let (manager, handle) = shop().await;
+pub(super) async fn check_gateway_rejects_injected_filters(t: &Target) {
+    let (manager, handle) = shop(t).await;
     gate_probe(&handle, "INSERT INTO gate_probe VALUES (1)").await;
     let context = gate(Preset::Open);
     let request = |filter: &str| {
@@ -648,10 +666,8 @@ async fn contract_mariadb_gateway_rejects_injected_filters() {
 
 /// Read-only blocks writes; Guarded asks for a confirmation whose token runs the statement once; the rules' statement
 /// timeout reaches the server.
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "needs dev/compose/mariadb.yml"]
-async fn contract_mariadb_gateway_rules_and_confirmation() {
-    let (manager, handle) = shop().await;
+pub(super) async fn check_gateway_rules_and_confirmation(t: &Target) {
+    let (manager, handle) = shop(t).await;
     gate_probe(&handle, "").await;
     manager
         .open_session("shop", "tab".into(), SessionOptions::default())
@@ -706,16 +722,9 @@ async fn contract_mariadb_gateway_rules_and_confirmation() {
     slow.safety.rules.write = gateway::rules::Action::Allow;
     slow.safety.statement_timeout_secs = 1;
     let started = std::time::Instant::now();
-    let timed_out = gateway::run(
-        &manager,
-        &slow,
-        "tab",
-        &request("SELECT SUM(a.seq * b.seq) FROM seq_1_to_100000 a, seq_1_to_100000 b"),
-        None,
-        &mut sink,
-    )
-    .await
-    .expect_err("max_statement_time stops the query");
+    let timed_out = gateway::run(&manager, &slow, "tab", &request(t.slow_select), None, &mut sink)
+        .await
+        .expect_err("max_statement_time stops the query");
     assert_eq!(timed_out.code(), Some("TIMEOUT"), "{timed_out:?}");
     assert!(started.elapsed() < Duration::from_secs(10));
 
@@ -723,3 +732,28 @@ async fn contract_mariadb_gateway_rules_and_confirmation() {
     drop_gate_probe(&handle).await;
     manager.disconnect("shop").await;
 }
+
+// --- The checks above, run against MariaDB ------------------------------------------------------------------------------
+
+macro_rules! shared_checks {
+    ($target:expr, $ignore:literal; $($name:ident => $check:ident),* $(,)?) => {
+        $(
+            #[tokio::test(flavor = "multi_thread")]
+            #[ignore = $ignore]
+            async fn $name() {
+                $check(&$target).await;
+            }
+        )*
+    };
+}
+pub(super) use shared_checks;
+
+shared_checks!(MARIADB, "needs dev/compose/mariadb.yml";
+    contract_mariadb_shop_catalog_and_edits => check_shop_catalog_and_edits,
+    contract_mariadb_typed_values => check_typed_values,
+    contract_mariadb_transactions_and_backstops => check_transactions_and_backstops,
+    contract_mariadb_read_only_is_reasserted_every_run => check_read_only_is_reasserted_every_run,
+    contract_mariadb_schema_graph => check_schema_graph,
+    contract_mariadb_gateway_rejects_injected_filters => check_gateway_rejects_injected_filters,
+    contract_mariadb_gateway_rules_and_confirmation => check_gateway_rules_and_confirmation,
+);

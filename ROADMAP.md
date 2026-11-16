@@ -29,7 +29,6 @@ Where Fosta Studio is heading. Plans change; open an issue to discuss an item or
 - **Oracle thin protocol**: connect without Oracle Instant Client.
 - **Redis Cluster and Sentinel**: today Redis connects to a single node.
 - **Code signing** for the Windows executable, and packages for **winget**, **Scoop** and **npm**.
-- **MySQL in CI**: a MySQL container next to the MariaDB one in the live test suite.
 
 ## Later
 

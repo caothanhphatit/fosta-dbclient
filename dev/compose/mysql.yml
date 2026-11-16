@@ -1,0 +1,22 @@
+# MySQL 8.4 LTS (MYSQL_TAG overrides the image tag) for the contract tests.
+# Test-only credentials; never reuse them.
+# docker compose -f dev/compose/mysql.yml up -d --wait
+# 127.0.0.1:3307  root / studio-root  database shop (no vector column: that is MariaDB's); contract data in fosta_contract
+
+name: fosta-dev-mysql
+
+services:
+  mysql:
+    image: mysql:${MYSQL_TAG:-8.4}
+    # The seeds build their rows with recursive CTEs (MySQL has no SEQUENCE engine); the default depth limit is 1000.
+    command: ["--cte-max-recursion-depth=100000"]
+    environment:
+      MYSQL_ROOT_PASSWORD: studio-root
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - ../seed/mysql.sql:/docker-entrypoint-initdb.d/01-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pstudio-root", "--silent"]
+      interval: 5s
+      retries: 30

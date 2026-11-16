@@ -1,6 +1,5 @@
 {
   "id": "mysql",
-  "enabled": false,
   "compose": "dev/compose/mysql.yml",
   "versions": ["8.4"],
   "versionEnv": "MYSQL_TAG",
@@ -11,9 +10,13 @@
     "src-tauri/src/contract/**",
     "src-tauri/src/runtime/**",
     "src-tauri/src/gateway/**",
+    "src-tauri/src/ai/**",
+    "dev/compose/mysql.yml",
+    "dev/seed/mysql.sql",
+    "dev/seed/mysql/**",
     "ci/engines/mysql.json"
   ],
   "nightlyOnly": false,
   "filter": "contract_mysql",
-  "note": "Disabled until dev/compose/mysql.yml, a MySQL contract seed and a contract_mysql fixture exist (the adapter is shared with MariaDB)."
+  "note": "The shop seed has no vector column and the contract tests skip the MariaDB vector suite; the seeds use recursive CTEs (the compose file raises cte_max_recursion_depth)."
 }

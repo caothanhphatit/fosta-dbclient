@@ -94,7 +94,7 @@ cargo test --no-default-features --features web
 ## Test databases and contract tests
 
 `dev/compose/<engine>.yml` starts one engine each (`dev/docker-compose.yml` includes them all): MariaDB 11.8 (`shop`, with a vector
-column), SQL Server 2022 (`ERP`), MongoDB 8 (`events`) and the others, all with generated sample data. The credentials in those files
+column), MySQL 8.4 (`shop`, no vector column), SQL Server 2022 (`ERP`), MongoDB 8 (`events`) and the others, all with generated sample data. The credentials in those files
 are for local testing only.
 
 ```sh

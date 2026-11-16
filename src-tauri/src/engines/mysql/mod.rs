@@ -8,6 +8,8 @@ mod catalog;
 mod connect;
 #[cfg(test)]
 mod contract_tests;
+#[cfg(test)]
+mod contract_tests_mysql;
 pub mod descriptor;
 #[cfg(test)]
 mod perf_tests;
