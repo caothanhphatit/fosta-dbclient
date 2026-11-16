@@ -55,7 +55,8 @@ pub fn kind_of(ty: &Type) -> ValueKind {
 pub fn kind_by_name(name: &str, category: &str) -> ValueKind {
     match name {
         "bool" => ValueKind::Bool,
-        "int2" | "int4" | "int8" | "oid" | "xid" | "cid" | "regclass" | "regproc" | "regtype" => ValueKind::Int,
+        "int2" | "int4" | "int8" | "oid" | "xid" | "cid" => ValueKind::Int,
+        n if is_reg_alias(n) => ValueKind::Text,
         "float4" | "float8" => ValueKind::Float,
         "numeric" | "money" => ValueKind::Decimal,
         "text" | "varchar" | "bpchar" | "name" | "char" | "citext" | "unknown" => ValueKind::Text,
@@ -72,6 +73,55 @@ pub fn kind_by_name(name: &str, category: &str) -> ValueKind {
             "S" => ValueKind::Text,
             _ => ValueKind::Other,
         },
+    }
+}
+
+/// The OID alias types (`regclass`, `regproc`, ...): the binary form is only the OID, psql shows the name.
+pub fn is_reg_alias(name: &str) -> bool {
+    matches!(
+        name,
+        "regclass"
+            | "regproc"
+            | "regprocedure"
+            | "regoper"
+            | "regoperator"
+            | "regtype"
+            | "regnamespace"
+            | "regrole"
+            | "regconfig"
+            | "regdictionary"
+            | "regcollation"
+    )
+}
+
+/// Replaces the OID of every `reg*` cell with its text form (`public.orders`), the way psql prints it. The binary protocol
+/// carries only the OID, so the names are looked up with `SELECT $1::oid::regclass::text`, once per distinct OID of a result.
+/// A lookup that fails leaves the OID as it was.
+pub async fn resolve_reg_aliases(
+    client: &tokio_postgres::Client,
+    row: &tokio_postgres::Row,
+    values: &mut [Value],
+    cache: &mut std::collections::HashMap<(String, u32), String>,
+) {
+    for (i, column) in row.columns().iter().enumerate() {
+        let name = column.type_().name();
+        if !is_reg_alias(name) {
+            continue;
+        }
+        let Some(Value::Int(oid)) = values.get(i) else { continue };
+        let Ok(oid) = u32::try_from(*oid) else { continue };
+        if let Some(text) = cache.get(&(name.to_owned(), oid)) {
+            values[i] = Value::Text(text.clone());
+            continue;
+        }
+        // `name` is one of the fixed alias names above, so it is safe in the statement text.
+        let sql = format!("SELECT $1::oid::{name}::text");
+        if let Ok(found) = client.query_one(&sql, &[&oid]).await {
+            if let Ok(Some(text)) = found.try_get::<_, Option<String>>(0) {
+                cache.insert((name.to_owned(), oid), text.clone());
+                values[i] = Value::Text(text);
+            }
+        }
     }
 }
 
@@ -114,6 +164,7 @@ pub fn decode(ty: &Type, b: &[u8]) -> Value {
         Type::OID | Type::XID | Type::CID | Type::REGCLASS | Type::REGPROC | Type::REGTYPE => {
             be_i32(b, 0).map(|v| Value::Int(i64::from(v as u32)))
         }
+        _ if is_reg_alias(ty.name()) => be_i32(b, 0).map(|v| Value::Int(i64::from(v as u32))),
         Type::FLOAT4 => b
             .get(0..4)
             .and_then(|s| s.try_into().ok())
@@ -555,6 +606,15 @@ mod tests {
         let arr = Value::Array(vec![Value::Text("y z".into()), Value::Null, Value::Text("a\"b".into())]);
         assert_eq!(to_param_text(&arr).unwrap(), r#"{"y z",NULL,"a\"b"}"#);
         assert_eq!(to_param_text(&Value::Null), None);
+    }
+
+    #[test]
+    fn reg_aliases_are_text_kind_and_decode_to_the_oid_before_resolving() {
+        assert_eq!(kind_by_name("regclass", ""), ValueKind::Text);
+        assert_eq!(kind_by_name("regnamespace", ""), ValueKind::Text);
+        assert_eq!(kind_by_name("oid", ""), ValueKind::Int);
+        assert!(is_reg_alias("regcollation") && !is_reg_alias("regexp"));
+        assert_eq!(decode(&Type::REGCLASS, &16385u32.to_be_bytes()), Value::Int(16385));
     }
 
     #[test]

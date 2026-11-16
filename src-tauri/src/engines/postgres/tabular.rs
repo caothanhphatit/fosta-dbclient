@@ -166,7 +166,7 @@ impl PgEngine {
         // Table columns without the version, for the filter and sort lookups; the select list adds the version.
         let built = sqlbuild::build_browse_with_raw(&EditDialect, &core, &selected, &primary_key, raw.as_deref())?;
         let params = text_params(&built.params);
-        let rows = self
+        let raw_rows = self
             .timed(client, ctx.limits.timeout_secs, async {
                 client
                     .query(&built.sql, &as_sql(&params))
@@ -174,7 +174,11 @@ impl PgEngine {
                     .map_err(|error| map_err(error).into())
             })
             .await?;
-        let mut rows: Vec<Vec<Value>> = rows.iter().map(super::types::row_values).collect();
+        let mut rows: Vec<Vec<Value>> = raw_rows.iter().map(super::types::row_values).collect();
+        let mut reg_cache = std::collections::HashMap::new();
+        for (values, row) in rows.iter_mut().zip(&raw_rows) {
+            super::types::resolve_reg_aliases(client, row, values, &mut reg_cache).await;
+        }
         let versions = versioned.then(|| rows.iter_mut().map(|row| row.pop().unwrap_or(Value::Null)).collect::<Vec<_>>());
         let total = if request.exact_total || request.estimate_total {
             self.total(client, &description, request, &built, &params, ctx.limits.timeout_secs)

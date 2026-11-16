@@ -7,6 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- CI runs the MySQL contract tests (`contract_mysql`, MySQL 8.4) next to the MariaDB ones, from `dev/compose/mysql.yml`.
+
+### Fixed
+
+- PostgreSQL: `regclass`, `regproc`, `regtype`, `regnamespace`, `regrole` and the other `reg*` columns show the object name
+  (`public.orders`) like psql, instead of the OID number.
+
 ## [0.3.1] - 2026-11-13
 
 ### Fixed

@@ -276,6 +276,7 @@ impl PgSession {
             let mut wants_rows = true;
             let mut reading = true;
             let mut received = 0usize;
+            let mut reg_cache = std::collections::HashMap::new();
             while let Some(row) = stream.try_next().await.map_err(map_err)? {
                 if !columns_sent {
                     columns_sent = true;
@@ -287,7 +288,9 @@ impl PgSession {
                 }
                 received += 1;
                 if reading {
-                    reading = batcher.push(types::row_values(&row), sink);
+                    let mut values = types::row_values(&row);
+                    types::resolve_reg_aliases(&self.client, &row, &mut values, &mut reg_cache).await;
+                    reading = batcher.push(values, sink);
                 }
             }
             batcher.flush(sink);
@@ -378,9 +381,12 @@ impl PgSession {
         let mut batcher = Batcher::new(index, opts);
         let mut truncated = false;
         let mut reading = wants_rows;
+        let mut reg_cache = std::collections::HashMap::new();
         while let Some(row) = stream.try_next().await.map_err(map_err)? {
             if reading {
-                reading = batcher.push(types::row_values(&row), sink);
+                let mut values = types::row_values(&row);
+                types::resolve_reg_aliases(&self.client, &row, &mut values, &mut reg_cache).await;
+                reading = batcher.push(values, sink);
             } else {
                 truncated = true;
             }

@@ -541,3 +541,38 @@ async fn live_engine_postgres_read_only_backstop_is_reasserted() {
     s.run(probe, &rw, &mut CollectSink::default()).await.unwrap();
     s.run("DROP TABLE fosta_ro_probe", &rw, &mut CollectSink::default()).await.unwrap();
 }
+
+#[tokio::test]
+#[ignore]
+async fn live_engine_postgres_reg_aliases_show_names() {
+    let e = engine().await;
+    let s = e.open_session().await.unwrap();
+    let opts = RunOptions {
+        read_only: false,
+        row_limit: 100,
+        batch_size: 100,
+        timeout: None,
+    };
+    let mut sink = CollectSink::default();
+    s.run(
+        "SELECT 'public.orders'::regclass AS c, 'now'::regproc AS p, 'int4'::regtype AS t, 'public'::regnamespace AS n, \
+         'postgres'::regrole AS r, '+(int4,int4)'::regoperator AS o, 0::regclass AS z, NULL::regclass AS x; \
+         SELECT tableoid::regclass FROM orders LIMIT 2",
+        &opts,
+        &mut sink,
+    )
+    .await
+    .unwrap();
+    let row = &sink.sets[0].rows[0];
+    let text = |i: usize| row[i].display().unwrap();
+    assert_eq!(text(0), "orders");
+    assert_eq!(text(1), "now");
+    assert_eq!(text(2), "integer");
+    assert_eq!(text(3), "public");
+    assert_eq!(text(4), "postgres");
+    assert_eq!(text(5), "+(integer,integer)");
+    assert_eq!(text(6), "-");
+    assert!(row[7].is_null());
+    assert_eq!(sink.sets[0].columns[0].kind, ValueKind::Text);
+    assert_eq!(sink.sets[1].rows[0][0], Value::Text("orders".into()));
+}
