@@ -169,6 +169,20 @@ impl RegResolver {
         }
         rows
     }
+
+    /// Resolves a whole result already in memory (a table page, vector search hits): one lookup per `reg*` column.
+    pub async fn resolve_all(
+        client: &tokio_postgres::Client,
+        columns: &[tokio_postgres::Column],
+        rows: Vec<Vec<Value>>,
+    ) -> Vec<Vec<Value>> {
+        let mut resolver = Self::new(columns, usize::MAX);
+        if resolver.columns.is_empty() {
+            return rows;
+        }
+        resolver.pending = rows;
+        resolver.finish(client).await
+    }
 }
 
 fn collect_oids(value: &Value, out: &mut Vec<u32>) {

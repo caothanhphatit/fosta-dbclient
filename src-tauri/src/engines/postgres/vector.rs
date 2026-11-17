@@ -411,13 +411,14 @@ impl VectorStore for PgVectors<'_> {
         let rows = tx.query(&statement, &[]).await.map_err(map_err)?;
         let elapsed_ms = started.elapsed().as_millis() as u64;
         tx.rollback().await.map_err(map_err)?;
+        let values = rows.iter().map(types::row_values).collect();
         let result = RowSet {
             columns: statement
                 .columns()
                 .iter()
                 .map(|column| ColumnInfo::result(column.name(), column.type_().name(), types::kind_of(column.type_())))
                 .collect(),
-            rows: rows.iter().map(types::row_values).collect(),
+            rows: types::RegResolver::resolve_all(self.client, statement.columns(), values).await,
         };
         Ok(VectorSearchResult {
             index_used: index_in_plan(&plan),

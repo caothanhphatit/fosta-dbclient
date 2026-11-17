@@ -176,13 +176,7 @@ impl PgEngine {
             .await?;
         let mut rows: Vec<Vec<Value>> = raw_rows.iter().map(super::types::row_values).collect();
         if let Some(first) = raw_rows.first() {
-            let mut regs = super::types::RegResolver::new(first.columns(), usize::MAX);
-            let mut resolved = Vec::with_capacity(rows.len());
-            for values in std::mem::take(&mut rows) {
-                resolved.extend(regs.push(client, values).await);
-            }
-            resolved.extend(regs.finish(client).await);
-            rows = resolved;
+            rows = super::types::RegResolver::resolve_all(client, first.columns(), rows).await;
         }
         let versions = versioned.then(|| rows.iter_mut().map(|row| row.pop().unwrap_or(Value::Null)).collect::<Vec<_>>());
         let total = if request.exact_total || request.estimate_total {
