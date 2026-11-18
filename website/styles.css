@@ -4184,3 +4184,371 @@ kbd {
     display: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Sponsor: Fosta AI. A strip above the header on every page, and a card after the hero on the home page. Both keep
+   their own dark brand gradient in light and dark themes, so they read as a sponsor message rather than page content.
+   --------------------------------------------------------------------------- */
+
+.sponsor-strip {
+  position: relative;
+  z-index: 51;
+  background: linear-gradient(90deg, #0d1430 0%, #1b1f55 55%, #34186b 100%);
+  color: #e6ebff;
+  font-size: 14px;
+}
+
+.sponsor-strip-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 12px;
+  min-height: 40px;
+  padding: 7px 16px;
+  color: inherit;
+  text-align: center;
+  text-decoration: none;
+}
+
+.sponsor-strip-link:hover {
+  text-decoration: none;
+}
+
+.sponsor-strip-text strong {
+  color: #fff;
+  font-weight: 700;
+}
+
+.sponsor-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #dbe4ff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sponsor-strip-cta {
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #5b8def, #8e5cf6);
+  color: #fff;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: filter 0.15s;
+}
+
+.sponsor-strip-link:hover .sponsor-strip-cta {
+  filter: brightness(1.12);
+}
+
+.sponsor-strip-link:focus-visible {
+  outline: 2px solid #9db8ff;
+  outline-offset: -4px;
+}
+
+/* Home page card */
+.sponsor {
+  position: relative;
+  z-index: 1;
+  padding: 24px 0 8px;
+}
+
+.sponsor-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  align-items: center;
+  gap: 40px;
+  padding: 48px;
+  overflow: hidden;
+  border: 1px solid rgba(142, 168, 255, 0.35);
+  border-radius: 20px;
+  background:
+    radial-gradient(ellipse 55% 70% at 88% 0%, rgba(91, 141, 239, 0.5), transparent 70%),
+    radial-gradient(ellipse 50% 70% at 0% 100%, rgba(142, 92, 246, 0.42), transparent 70%), linear-gradient(135deg, #0a1022 0%, #141a46 55%, #2b1563 100%);
+  box-shadow: 0 24px 60px rgba(20, 26, 70, 0.35);
+  color: #e6ebff;
+}
+
+.sponsor-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 32px 32px;
+  pointer-events: none;
+}
+
+.sponsor-card > * {
+  position: relative;
+}
+
+.sponsor-eyebrow {
+  margin: 0 0 14px;
+}
+
+.sponsor-card h2 {
+  margin: 0;
+  background: linear-gradient(90deg, #fff, #c4d4ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: clamp(28px, 4.2vw, 44px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.12;
+}
+
+.sponsor-lede {
+  margin: 16px 0 0;
+  color: #c9d5f5;
+  font-size: clamp(16px, 1.8vw, 18px);
+  line-height: 1.55;
+}
+
+.sponsor-points {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 24px;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 15.5px;
+}
+
+.sponsor-points li {
+  position: relative;
+  padding-left: 28px;
+  line-height: 1.45;
+}
+
+.sponsor-points li::before {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5.5 10.2l3 3 6-6.4' fill='none' stroke='%235fe0a0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+      center / 100% no-repeat,
+    rgba(63, 191, 127, 0.2);
+}
+
+.sponsor-points strong {
+  color: #fff;
+}
+
+.sponsor-points kbd {
+  padding: 1px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+.sponsor-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+  margin-top: 30px;
+}
+
+.btn-sponsor {
+  min-height: 50px;
+  padding: 0 28px;
+  border-color: rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  background: linear-gradient(135deg, #5b8def, #8e5cf6);
+  box-shadow: 0 10px 28px rgba(110, 100, 246, 0.45);
+  color: #fff;
+  font-size: 17px;
+}
+
+.btn-sponsor:hover {
+  filter: brightness(1.1);
+}
+
+.btn-sponsor:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
+.sponsor-url {
+  color: #aebcf0;
+  font-family: var(--font-mono);
+  font-size: 15px;
+}
+
+/* The app sketch */
+.sponsor-win {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  background: rgba(10, 14, 34, 0.72);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+  font-size: 13.5px;
+  transform: rotate(1.5deg);
+}
+
+.sponsor-win-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: #aebcf0;
+  font-size: 12.5px;
+}
+
+.sponsor-win-bar i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.sponsor-win-bar span {
+  margin-left: 8px;
+}
+
+.sponsor-win-body {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 18px;
+}
+
+.sponsor-win-body > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.sponsor-win-body dt {
+  color: #8f9cc9;
+  font-size: 12.5px;
+}
+
+.sponsor-win-body dd {
+  min-width: 0;
+  margin: 0;
+  padding: 7px 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #e6ebff;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sponsor-win-body code {
+  color: #c4d4ff;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.sponsor-pick {
+  border-color: rgba(142, 168, 255, 0.6) !important;
+  box-shadow: 0 0 0 3px rgba(91, 141, 239, 0.25);
+  font-weight: 700;
+}
+
+.sponsor-pick b {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(91, 141, 239, 0.3);
+  color: #dbe4ff;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sponsor-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  white-space: normal !important;
+}
+
+.sponsor-chip {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(142, 92, 246, 0.3);
+  font-size: 12px;
+}
+
+.sponsor-win-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #8f9cc9;
+  font-size: 12.5px;
+}
+
+.sponsor-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3fbf7f;
+  box-shadow: 0 0 0 3px rgba(63, 191, 127, 0.25);
+}
+
+@media (max-width: 900px) {
+  .sponsor-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+    padding: 36px 32px;
+  }
+  .sponsor-win {
+    transform: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .sponsor {
+    padding-top: 12px;
+  }
+  .sponsor-card {
+    padding: 28px 20px;
+    border-radius: 16px;
+  }
+  .sponsor-points {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .btn-sponsor {
+    flex: 1 1 100%;
+  }
+  .sponsor-strip {
+    font-size: 13px;
+  }
+  .sponsor-strip-link {
+    gap: 4px 8px;
+  }
+  .sponsor-strip .sponsor-tag {
+    display: none;
+  }
+}
+
+.sponsor-note {
+  margin: 18px 0 0;
+  color: #8f9cc9;
+  font-size: 13px;
+}

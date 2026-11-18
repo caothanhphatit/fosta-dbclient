@@ -209,6 +209,13 @@
     </svg>
 
     <a class="skip-link" href="#main" data-i18n="a11y.skip">Skip to content</a>
+    <aside class="sponsor-strip" data-i18n-attr="aria-label:sponsor.label" aria-label="Sponsor">
+      <a class="sponsor-strip-link" href="https://codex.fosta.app/" target="_blank" rel="sponsored noopener">
+        <span class="sponsor-tag" data-i18n="sponsor.tag">Sponsor</span>
+        <span class="sponsor-strip-text" data-i18n="sponsor.strip">Sponsored by <strong>Fosta AI</strong>: GPT Codex & Claude API keys, pay by bank transfer</span>
+        <span class="sponsor-strip-cta"><span data-i18n="sponsor.stripCta">Get a key</span><span aria-hidden="true"> →</span></span>
+      </a>
+    </aside>
     <!-- i18n:lang-offer -->
 
     <header class="site-header">
@@ -1011,6 +1018,47 @@
             ></p>
           </div>
           <p class="mock-caption" data-i18n="hero.mockCaption">Illustration of the app's layout.</p>
+        </div>
+      </section>
+
+      <!-- Sponsor ------------------------------------------------------ -->
+      <section class="sponsor" id="sponsor" aria-labelledby="sponsor-title">
+        <div class="container">
+          <div class="sponsor-card">
+            <div class="sponsor-text">
+              <p class="sponsor-eyebrow"><span class="sponsor-tag" data-i18n="sponsor.tag">Sponsor</span></p>
+              <h2 id="sponsor-title" data-i18n="sponsor.title">Fosta AI: API keys for GPT Codex and Claude</h2>
+              <p class="sponsor-lede" data-i18n="sponsor.lede">
+                Real GPT Codex models for Codex CLI, VS Code and your terminal through the Responses API, plus Claude in beta. Pay by Vietnamese bank transfer with a QR code, no international card needed; customers abroad can pay in USDT.
+              </p>
+              <ul class="sponsor-points">
+                <li data-i18n="sponsor.point.bot">A key in seconds from the Telegram bot</li>
+                <li data-i18n="sponsor.point.free"><strong>2M free tokens</strong> when you start</li>
+                <li data-i18n="sponsor.point.dash">Usage dashboard on the web</li>
+                <li data-i18n="sponsor.point.agent">The default <strong>Fosta</strong> provider in Fosta Studio's AI agent (<kbd>Ctrl+Shift+A</kbd>)</li>
+              </ul>
+              <div class="sponsor-cta">
+                <a class="btn btn-sponsor" href="https://codex.fosta.app/" target="_blank" rel="sponsored noopener"
+                  ><span data-i18n="sponsor.cta">Get a key</span><span aria-hidden="true">→</span></a
+                >
+                <span class="sponsor-url">codex.fosta.app</span>
+              </div>
+              <p class="sponsor-note" data-i18n="sponsor.note">Fosta AI is run by the author of Fosta Studio. The app works with any provider and never requires a Fosta account.</p>
+            </div>
+            <!-- A sketch of the app's AI agent settings with Fosta AI selected; the app is English only. -->
+            <div class="sponsor-visual" aria-hidden="true">
+              <div class="sponsor-win">
+                <div class="sponsor-win-bar"><i></i><i></i><i></i><span>AI agent · Ctrl+Shift+A</span></div>
+                <dl class="sponsor-win-body">
+                  <div><dt>Provider</dt><dd class="sponsor-pick">Fosta <b>default</b></dd></div>
+                  <div><dt>Endpoint</dt><dd><code>https://admin.fosta.app/v1</code></dd></div>
+                  <div><dt>API key</dt><dd><code>••••••••••••••••</code></dd></div>
+                  <div><dt>Models</dt><dd class="sponsor-models"><span class="sponsor-chip">GPT Codex</span><span class="sponsor-chip">Claude (beta)</span></dd></div>
+                </dl>
+                <div class="sponsor-win-foot"><span class="sponsor-dot"></span>Connected</div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 

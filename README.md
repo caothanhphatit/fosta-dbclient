@@ -6,6 +6,8 @@
 
 **English** · [Tiếng Việt](README.vi.md)
 
+<a href="https://codex.fosta.app/"><img src="website/assets/sponsor-fosta-ai.svg" alt="Sponsor: Fosta AI, API keys for real GPT Codex models and Claude, pay by bank transfer with no card needed, 2M free tokens to start. Get a key at codex.fosta.app" width="100%"></a>
+
 A small, fast database client for **11 engines**: MariaDB, MySQL, SQL Server, MongoDB, PostgreSQL, SQLite, Redis, Elasticsearch,
 OpenSearch, ClickHouse and Oracle. A desktop app for Windows, or a web edition in Docker. Free and open source (GPL-3.0).
 
