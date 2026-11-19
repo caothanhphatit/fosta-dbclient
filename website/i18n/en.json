@@ -110,7 +110,7 @@
   "ai.title": "A built-in AI agent for your databases",
   "ai.text": "Ask in plain words. The agent looks up tables, columns and relations, writes and explains queries, fixes errors, and opens a table, a diagram, a MongoDB collection or a new query tab for you. Every code block has <b>Run</b>, <b>Insert</b> and <b>New tab</b> buttons.",
   "ai.callout": "<b>You stay in control.</b> Run on a code block follows your workspace's safety rules, like any run of your own. The agent's own queries are read-only, and you can turn them off.",
-  "ai.item1": "Bring your own model: Fosta, OpenAI, Gemini, Claude, or any OpenAI-compatible endpoint such as a local Ollama",
+  "ai.item1": "Bring your own model: OpenAI, Claude, Gemini, Fosta, or any OpenAI-compatible endpoint such as a local Ollama",
   "ai.item2": "Your key is stored in Windows Credential Manager and requests go straight from your machine to the provider",
   "ai.item3": "It sees metadata and what you share; the optional read-only query tool can read up to 50 rows, which go to your provider",
   "ai.item4": "\"Learn this database\" keeps a profile of a database on this machine (structure, relations, and value hints only where it may read data), so later chats already know it; review it in \"What the assistant knows\"",

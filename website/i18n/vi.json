@@ -110,7 +110,7 @@
   "ai.title": "AI agent tích hợp cho database của bạn",
   "ai.text": "Hỏi bằng ngôn ngữ thường. Agent tra cứu bảng, cột và quan hệ, viết và giải thích query, sửa lỗi, rồi mở bảng, sơ đồ, collection MongoDB hoặc tab query mới cho bạn. Mỗi khối code đều có nút <b>Run</b>, <b>Insert</b> và <b>New tab</b>.",
   "ai.callout": "<b>Bạn luôn nắm quyền.</b> Nút Run trên khối code tuân theo quy tắc an toàn của workspace, như mọi lần bạn tự chạy. Query do chính agent chạy chỉ đọc, và bạn có thể tắt chúng.",
-  "ai.item1": "Dùng model của riêng bạn: Fosta, OpenAI, Gemini, Claude, hoặc bất kỳ endpoint nào tương thích OpenAI, chẳng hạn Ollama chạy local",
+  "ai.item1": "Dùng model của riêng bạn: OpenAI, Claude, Gemini, Fosta, hoặc bất kỳ endpoint nào tương thích OpenAI, chẳng hạn Ollama chạy local",
   "ai.item2": "Key của bạn được lưu trong Windows Credential Manager và request đi thẳng từ máy bạn đến nhà cung cấp",
   "ai.item3": "Trợ lý thấy metadata và những gì bạn chia sẻ; công cụ query chỉ đọc (tuỳ chọn) có thể đọc tối đa 50 dòng, và các dòng này được gửi tới nhà cung cấp của bạn",
   "ai.item4": "\"Learn this database\" lưu hồ sơ của database ngay trên máy (cấu trúc, quan hệ, và gợi ý giá trị chỉ khi trợ lý được phép đọc dữ liệu), để các cuộc chat sau đã hiểu sẵn; xem lại trong \"What the assistant knows\"",

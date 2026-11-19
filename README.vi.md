@@ -27,7 +27,7 @@ Elasticsearch, OpenSearch, ClickHouse và Oracle. Có bản desktop cho Windows 
 - **Trình soạn query** gợi ý theo cột, format SQL, kết quả trả về dần với nút Stop dừng thật trên server, transaction và lịch sử
   theo từng tab.
 - **Import và export**: nhập CSV, TSV, JSON; xuất CSV, CSV cho Excel, JSON, câu `INSERT` SQL và Markdown.
-- **AI agent** (`Ctrl+Shift+A`) với provider và key của bạn (Fosta, OpenAI, Gemini, Claude, Ollama…). Agent hiểu schema, viết và
+- **AI agent** (`Ctrl+Shift+A`) với provider và key của bạn (OpenAI, Claude, Gemini, Fosta, Ollama…). Agent hiểu schema, viết và
   sửa query, và chỉ đọc dữ liệu mẫu khi bạn cho phép.
 - **MCP server** cho Claude Code, Claude Desktop, Cursor, VS Code và Zed: các client dùng kết nối đã lưu mà không thấy mật khẩu,
   chỉ trong những workspace bạn cho phép, và mọi lệnh ghi đều chờ bạn duyệt. Mặc định tắt; xem [docs/mcp.md](docs/mcp.md) (tiếng Anh).

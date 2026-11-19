@@ -110,7 +110,7 @@
   "ai.title": "为数据库打造的内置 AI 智能体",
   "ai.text": "用自然语言提问。智能体会查询表、列和关系，编写并解释查询、修复错误，并为你打开表格、ER 图、MongoDB 集合或新的查询标签页。每个代码块都有 <b>Run</b>、<b>Insert</b> 和 <b>New tab</b> 按钮。",
   "ai.callout": "<b>一切由你掌控。</b>代码块上的 Run 遵循工作区的安全规则，与你自己运行时一样。智能体自己发起的查询只读，你也可以关闭它们。",
-  "ai.item1": "使用你自己的模型：Fosta、OpenAI、Gemini、Claude，或任何兼容 OpenAI 的端点，例如本地运行的 Ollama",
+  "ai.item1": "使用你自己的模型：OpenAI、Claude、Gemini、Fosta，或任何兼容 OpenAI 的端点，例如本地运行的 Ollama",
   "ai.item2": "你的密钥保存在 Windows 凭据管理器中，请求直接从你的电脑发送到服务商",
   "ai.item3": "它能看到元数据和你分享的内容；可选的只读查询工具最多读取 50 行，这些行会发送给你的服务商",
   "ai.item4": "\"Learn this database\" 会在本机保存数据库的档案（结构、关系，仅在允许读取数据时才包含值提示），之后的对话无需重新查找；可在 \"What the assistant knows\" 中查看",

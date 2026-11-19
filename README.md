@@ -25,7 +25,7 @@ OpenSearch, ClickHouse and Oracle. A desktop app for Windows, or a web edition i
   workspaces start read-only, enforced by the database too, and a save never overwrites a row someone else changed.
 - **Query editor** with column-aware completion, a formatter, streaming results with a real Stop, transactions and per-tab history.
 - **Import and export**: CSV, TSV and JSON in; CSV, CSV for Excel, JSON, SQL `INSERT` and Markdown out.
-- **AI agent** (`Ctrl+Shift+A`) with your own provider and key (Fosta, OpenAI, Gemini, Claude, Ollama…). It knows your schema,
+- **AI agent** (`Ctrl+Shift+A`) with your own provider and key (OpenAI, Claude, Gemini, Fosta, Ollama…). It knows your schema,
   writes and fixes queries, and reads sample rows only if you allow it.
 - **MCP server** for Claude Code, Claude Desktop, Cursor, VS Code and Zed: they use your saved connections without seeing passwords,
   only in the workspaces you allow, and every write waits for your approval. Off by default; see [docs/mcp.md](docs/mcp.md).
