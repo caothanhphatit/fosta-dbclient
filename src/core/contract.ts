@@ -440,6 +440,14 @@ export interface FieldSpec {
   section: FormSection;
   default: string | null;
   required: boolean;
+  /** Shown (and validated) only while the field `key` has one of `equals`; a hidden field keeps its value. Optional in mocks. */
+  visibleWhen?: FieldCondition | null;
+}
+
+/** A condition on another field of the same form: its value (its default when unset) is one of `equals`. */
+export interface FieldCondition {
+  key: string;
+  equals: string[];
 }
 
 export interface UrlSpec {

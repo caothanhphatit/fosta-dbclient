@@ -53,6 +53,8 @@ export class ValueView implements TabContent {
   private readonly api: RedisApi;
   private readonly key: Blob;
   private readonly readonly: boolean;
+  /** One database only (Redis Cluster): the database is not named. */
+  private readonly singleDb: boolean;
   private readonly head = h("div", { class: "rd-head" });
   private readonly meta = h("div", { class: "rd-meta" });
   private readonly banner = h("div", { class: "rd-banner", hidden: true });
@@ -66,6 +68,7 @@ export class ValueView implements TabContent {
     this.key = target.key;
     this.api = new RedisApi(ctx.connection, target.db);
     this.readonly = ctx.navigator.writesBlocked(ctx.connection.connectionId);
+    this.singleDb = !ctx.info.capabilities.includes("multipleDatabases");
     this.element = h("div", { class: "view rd-value" }, this.head, this.meta, this.banner, this.body);
     void this.load();
   }
@@ -168,8 +171,8 @@ export class ValueView implements TabContent {
       ...present([this.readonly || read.value.type === "none" ? null : button("Delete key", () => void this.deleteKey(), "tool-button danger")]),
     );
     this.meta.replaceChildren(
-      h("span", {}, `db${this.api.db}`),
       ...present<HTMLElement>([
+        this.singleDb ? null : h("span", {}, `db${this.api.db}`),
         info.length === null ? null : h("span", {}, `${info.length.toLocaleString()} ${info.keyType === "string" ? "bytes" : "elements"}`),
         info.memoryBytes === null ? null : h("span", { title: "MEMORY USAGE (sampled)" }, formatBytes(info.memoryBytes)),
         info.encoding ? h("span", { title: "OBJECT ENCODING" }, info.encoding) : null,

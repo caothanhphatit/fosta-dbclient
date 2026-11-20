@@ -95,7 +95,9 @@ fn descriptor() -> EngineDescriptor {
                     "TLS",
                 )
                 .section(FormSection::Advanced),
-                FieldSpec::new("options.compress", FieldKind::Checkbox, "Compress").default_value("false"),
+                FieldSpec::new("options.compress", FieldKind::Checkbox, "Compress")
+                    .default_value("false")
+                    .visible_when("options.sslMode", &["require"]),
             ],
             ssh: true,
             tls: Some(TlsSupport {

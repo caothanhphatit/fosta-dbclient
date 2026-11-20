@@ -424,14 +424,15 @@
   keywords: [redis, console, redis-cli, command, select database, flush, flushdb, completion]
   body: |
     Right-click a database → "New console": one command per line as in redis-cli, with completion of commands and options. The database picker sends SELECT on the tab's own connection. "Stop" unblocks a blocking command. "Flush database…" on a database runs FLUSHDB after a typed confirmation.
-    Commands are classified: GET, SCAN, INFO are reads; SET, DEL, EXPIRE writes; FLUSHALL, FLUSHDB, EVAL destructive; CONFIG SET, KEYS * administrative; SUBSCRIBE and MONITOR are never run. Cluster and Sentinel are not supported yet.
+    Commands are classified: GET, SCAN, INFO are reads; SET, DEL, EXPIRE writes; FLUSHALL, FLUSHDB, EVAL destructive; CONFIG SET, KEYS * administrative; SUBSCRIBE and MONITOR are never run. On a Redis Cluster the console refuses MULTI/EXEC, WATCH and SCAN (the key browser scans every shard).
 
 - id: redis-server
   group: Redis
   title: Redis server info and slow log
-  keywords: [redis, server, info, slow log, slowlog, memory, clients, hit rate, keyspace]
+  keywords: [redis, server, info, slow log, slowlog, memory, clients, hit rate, keyspace, cluster, sentinel, shards, slots, failover]
   body: |
     Right-click the connection → "Server info and slow log": version, mode, role, uptime, clients, memory, command count and hit rate, the keyspace per database, every INFO section with a search box, and the "Slow log" (32 to 512 entries). "Refresh" reloads it.
+    Redis Cluster adds a "Cluster" panel (state, slot coverage, one row per shard with master, replicas and their health, slots, keys, memory; click a node for its INFO); Sentinel adds a "Sentinel" panel (master name, current master, flags, quorum, replicas with link status, sentinels). A standalone connection to one cluster node shows a warning.
 
 - id: elasticsearch-browse
   group: Elasticsearch and OpenSearch

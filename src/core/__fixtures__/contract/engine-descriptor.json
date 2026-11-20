@@ -40,7 +40,8 @@
         "hint": null,
         "section": "general",
         "default": null,
-        "required": false
+        "required": false,
+        "visibleWhen": null
       },
       {
         "key": "options.sslMode",
@@ -62,7 +63,8 @@
         "hint": null,
         "section": "advanced",
         "default": null,
-        "required": false
+        "required": false,
+        "visibleWhen": null
       },
       {
         "key": "options.compress",
@@ -74,7 +76,13 @@
         "hint": null,
         "section": "general",
         "default": "false",
-        "required": false
+        "required": false,
+        "visibleWhen": {
+          "key": "options.sslMode",
+          "equals": [
+            "require"
+          ]
+        }
       }
     ],
     "ssh": true,

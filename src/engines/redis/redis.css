@@ -394,3 +394,87 @@
   font-weight: 600;
   text-transform: capitalize;
 }
+
+/* Server view: cluster and sentinel panels */
+
+.rd-server-banner {
+  margin: 0 0 12px;
+}
+
+.rd-topology-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.rd-fact {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rd-subtitle {
+  margin: 12px 0 4px;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rd-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rd-badge.ok {
+  color: var(--success);
+}
+
+.rd-badge.warn {
+  color: var(--warning);
+}
+
+.rd-badge.bad {
+  color: var(--danger);
+}
+
+.rd-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  vertical-align: middle;
+}
+
+.rd-dot.warn {
+  background: var(--warning);
+}
+
+.rd-dot.bad {
+  background: var(--danger);
+}
+
+.rd-node-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+}
+
+.rd-node-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.rd-node-info {
+  margin-top: 8px;
+}

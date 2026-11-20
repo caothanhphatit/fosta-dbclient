@@ -43,6 +43,11 @@ backend and UI also ship as a web edition in a Docker image (see [Two front-ends
 - **Engines** (`src-tauri/src/engines/<id>/`). One self-contained adapter per engine; `engines/common/` holds the shared SQL toolkit
   (statement splitter and classifier, SQL builder with bound values, typed catalog helpers). Commands, the gateway and the assistant
   reach engines only through the registry and the contract, never an engine module (`architecture_tests.rs` checks it).
+  Redis (`engines/redis/`) connects to a standalone server, a Redis Cluster or a master behind Sentinel: `connection.rs` hides the
+  topology behind one `Conn` (a node or a cluster connection) and a `Backend`; `cluster.rs` keeps the shard map (`CLUSTER SHARDS`,
+  or `CLUSTER SLOTS` on older servers), sends commands to one node and walks every master with a composite `<nodeId>@<cursor>` SCAN
+  cursor; `sentinel.rs` asks the sentinels for the master and swaps the shared connection after a failover. A cluster has database 0
+  only; cluster and sentinel connections through SSH are refused (an address map stands in for forwarded ports).
 
 `AppState` (in `lib.rs`) holds the `ConfigStore`, the `ConnectionManager`, the `TaskManager`, the in-flight assistant runs, the query
 `HistoryStore` and the edition's `Capabilities`.
@@ -278,7 +283,8 @@ example, `engines/mysql/` a large one.
 
 1. **Descriptor** (`src-tauri/src/engines/<id>/descriptor.rs`): an `EngineDescriptor` with the id, label, icon, family, SQL dialect,
    the capability upper bound, the connection form (host or file, default port and user, database label, extra `fields`, auth methods,
-   TLS, SSH), the query languages and the filter support. The UI renders the connection dialog and the engine pickers from it. Start
+   TLS, SSH; a field with `visible_when` shows, and is required, only while another field such as a select has one of the given
+   values, and keeps its value while hidden), the query languages and the filter support. The UI renders the connection dialog and the engine pickers from it. Start
    with `status: Planned` (connect refuses with `ENGINE_NOT_WIRED`), then `Preview`, then `Ready`.
 2. **Adapter** (`src-tauri/src/engines/<id>/adapter.rs`): `impl Engine` (descriptor, `classify`, `connect`, optionally
    `parse_connection_string` / `format_connection_string` with tests; passwords come back separately, never inside `options`) and

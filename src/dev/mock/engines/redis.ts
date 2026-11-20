@@ -8,7 +8,7 @@
  * (someone else changes the key) and save: `redis.edit` fails with `CONFLICT`.
  */
 import type { ColumnInfo, ConnectInfo, EngineDescriptor, ObjectDescription, ObjectNode, RunRequest, StreamEvent, Value } from "../../../core/contract";
-import type { StatementInfo } from "../../../core/types";
+import type { ConnectionProfile, StatementInfo } from "../../../core/types";
 import { builtin, queryAction, viewAction } from "../catalog";
 import { DESCRIPTORS, ORDER } from "../descriptors";
 import { mockError } from "../errors";
@@ -98,6 +98,92 @@ const sizeOf = (entry: Entry): number => {
   return value instanceof Map || value instanceof Set ? value.size : 0;
 };
 
+// --- Topology -------------------------------------------------------------------------------------------------------------
+//
+// One data set behind every topology: a profile with `options.topology` "cluster" reads as a three-shard Redis Cluster
+// (database 0 only), "sentinel" as a master behind three sentinels, and a standalone profile on port 7001-7006 as one node
+// of a cluster (the server view's warning).
+
+type Topology = "standalone" | "cluster" | "sentinel" | "clusterNode";
+
+function topologyOf(profile?: ConnectionProfile): Topology {
+  const topology = profile?.options.topology;
+  if (topology === "cluster" || topology === "sentinel") return topology;
+  return profile && profile.port >= 7001 && profile.port <= 7006 ? "clusterNode" : "standalone";
+}
+
+const SHARDS: { master: string; id: string; replica: string; replicaId: string; slots: [number, number][]; health: string; replicaHealth: string }[] = [
+  {
+    master: "127.0.0.1:7001",
+    id: "3c1e9b7a0f5d42e8a6b1c9d0e7f2a4b6c8d0e1f3",
+    replica: "127.0.0.1:7005",
+    replicaId: "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+    slots: [[0, 5460]],
+    health: "online",
+    replicaHealth: "online",
+  },
+  {
+    master: "127.0.0.1:7002",
+    id: "5f2d8c4b1a0e9f7d6c5b4a3e2d1c0b9a8f7e6d5c",
+    replica: "127.0.0.1:7006",
+    replicaId: "1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c",
+    slots: [[5461, 10922]],
+    health: "online",
+    replicaHealth: "loading",
+  },
+  {
+    master: "127.0.0.1:7003",
+    id: "8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d",
+    replica: "127.0.0.1:7004",
+    replicaId: "2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d",
+    slots: [[10923, 16383]],
+    health: "online",
+    replicaHealth: "failed",
+  },
+];
+
+function clusterOverview(keys: number) {
+  return {
+    state: "ok",
+    slotsAssigned: 16384,
+    slotsOk: 16384,
+    knownNodes: 6,
+    shards: SHARDS.map((shard, index) => ({
+      master: { id: shard.id, host: "127.0.0.1", port: 7001 + index, addr: shard.master, role: "master", health: shard.health },
+      replicas: [
+        {
+          id: shard.replicaId,
+          host: "127.0.0.1",
+          port: Number(shard.replica.split(":")[1]),
+          addr: shard.replica,
+          role: "replica",
+          health: shard.replicaHealth,
+        },
+      ],
+      slots: shard.slots,
+      slotCount: shard.slots.reduce((sum, [start, end]) => sum + end - start + 1, 0),
+      keys: Math.round(keys / 3) + index,
+      usedMemory: 1_650_000 + index * 120_000,
+    })),
+  };
+}
+
+const SENTINEL = {
+  masterName: "fosta",
+  master: "127.0.0.1:6390",
+  masterFlags: "master",
+  quorum: 2,
+  replicas: [
+    { address: "127.0.0.1:6391", flags: "slave", link: "ok" },
+    { address: "127.0.0.1:6392", flags: "slave,s_down,disconnected", link: "err" },
+  ],
+  sentinels: [
+    { address: "127.0.0.1:26390", flags: "sentinel", link: null },
+    { address: "127.0.0.1:26391", flags: "sentinel", link: null },
+    { address: "127.0.0.1:26392", flags: "sentinel", link: null },
+  ],
+};
+
 // --- Tree ---------------------------------------------------------------------------------------------------------------
 
 const databaseNode = (n: number): ObjectNode => {
@@ -139,22 +225,34 @@ const keyNode = (n: number, key: string, entry: Entry): ObjectNode => {
   };
 };
 
-export const tree: NonNullable<EngineMock["tree"]> = (parent) => {
-  if (!parent) return Array.from({ length: DATABASES }, (_, n) => databaseNode(n));
+export const tree: NonNullable<EngineMock["tree"]> = (parent, profile) => {
+  // A cluster has database 0 only.
+  if (!parent) return topologyOf(profile) === "cluster" ? [databaseNode(0)] : Array.from({ length: DATABASES }, (_, n) => databaseNode(n));
   if (parent.kind !== "database") return [];
   const n = Number(parent.object?.database ?? 0);
   return [...db(n).entries()].filter(([key]) => alive(db(n), key)).map(([key, entry]) => keyNode(n, key, entry));
 };
 
-export const connectInfo = (): ConnectInfo => ({
-  engine: ENGINE,
-  server: { product: "Redis", version: VERSION, label: `Redis ${VERSION}`, flavor: "standalone" },
-  capabilities: descriptor.capabilities,
-  languages: descriptor.languages,
-  connectionActions: [
-    { id: "server", label: "Server info and slow log", icon: "server", target: { kind: "view", role: "server" }, danger: false, separatorBefore: false },
-  ],
-});
+export const connectInfo = (profile?: ConnectionProfile): ConnectInfo => {
+  const topology = topologyOf(profile);
+  const label =
+    topology === "cluster"
+      ? `Redis ${VERSION} · cluster (${SHARDS.length} shards)`
+      : topology === "sentinel"
+        ? `Redis ${VERSION} · sentinel ${SENTINEL.masterName}`
+        : `Redis ${VERSION}`;
+  return {
+    engine: ENGINE,
+    server: { product: "Redis", version: VERSION, label, flavor: topology },
+    // A cluster: database 0 only, no vector search.
+    capabilities:
+      topology === "cluster" ? descriptor.capabilities.filter((name) => name !== "multipleDatabases" && name !== "vector") : descriptor.capabilities,
+    languages: descriptor.languages,
+    connectionActions: [
+      { id: "server", label: "Server info and slow log", icon: "server", target: { kind: "view", role: "server" }, danger: false, separatorBefore: false },
+    ],
+  };
+};
 
 export const describe: NonNullable<EngineMock["describe"]> = (object): ObjectDescription => {
   const n = Number(object.database ?? 0);
@@ -511,7 +609,8 @@ const SLOWLOG = [
   },
 ];
 
-function info() {
+function info(profile?: ConnectionProfile, node?: string) {
+  const topology = topologyOf(profile);
   const keyspace = [...store.entries()]
     .map(([n, entries]) => ({
       db: n,
@@ -528,11 +627,28 @@ function info() {
     replication: { role: "master", connected_slaves: "0" },
     keyspace: Object.fromEntries(keyspace.map((item) => [`db${item.db}`, `keys=${item.keys},expires=${item.expires},avg_ttl=${item.avgTtlMs}`])),
   };
+  const cluster = topology === "cluster" ? clusterOverview(keyspace.find((item) => item.db === 0)?.keys ?? 0) : null;
+  // A cluster node (`redis.info { node }`): its own role; replicas have no keys of their own to count here.
+  const shard = node ? SHARDS.find((item) => item.master === node || item.replica === node) : undefined;
+  if (node && topology !== "cluster") throw mockError("ERROR", `${node} is not this server: only a Redis Cluster connection shows other nodes.`);
+  if (node && !shard) throw mockError("ERROR", `${node} is not a node of this cluster.`);
+  const role = shard && shard.replica === node ? "slave" : "master";
+  const mode = topology === "cluster" || topology === "clusterNode" ? "cluster" : "standalone";
+  sections.server.redis_mode = mode;
+  sections.replication.role = role;
+  if (node) sections.server.tcp_port = node.split(":")[1];
+  if (topology === "cluster" || topology === "clusterNode") Object.assign(sections, { cluster: { cluster_enabled: "1" } });
   return {
+    topology: node ? "cluster" : topology,
+    node:
+      node ??
+      (topology === "cluster" ? SHARDS[0].master : topology === "sentinel" ? SENTINEL.master : `${profile?.host ?? "127.0.0.1"}:${profile?.port ?? 6379}`),
+    cluster: node ? null : cluster,
+    sentinel: topology === "sentinel" ? SENTINEL : null,
     version: VERSION,
     flavor: "redis",
-    mode: "standalone",
-    role: "master",
+    mode,
+    role,
     os: "Linux 6.8 x86_64",
     uptimeSeconds: 93_784,
     connectedClients: 3,
@@ -543,21 +659,27 @@ function info() {
     totalCommandsProcessed: 182_044,
     keyspaceHits: 9120,
     keyspaceMisses: 311,
-    databases: DATABASES,
+    databases: topology === "cluster" ? 1 : DATABASES,
     currentDb: 0,
-    keyspace,
+    keyspace: topology === "cluster" ? keyspace.filter((item) => item.db === 0) : keyspace,
     modules: [{ name: "ReJSON", version: 20_800 }],
     sections,
   };
 }
 
-export const invoke: NonNullable<EngineMock["invoke"]> = (name, raw) => {
+export const invoke: NonNullable<EngineMock["invoke"]> = (name, raw, profile) => {
   const args = (raw ?? {}) as Record<string, unknown>;
   switch (name) {
     case "redis.info":
-      return info();
-    case "redis.slowlog":
-      return { length: SLOWLOG.length, entries: SLOWLOG.slice(0, Number(args.count ?? 128)), slowerThanUs: "10000", maxLen: "128" };
+      return info(profile, typeof args.node === "string" && args.node ? args.node : undefined);
+    case "redis.slowlog": {
+      // A cluster merges every node's log, each entry naming its node.
+      const cluster = topologyOf(profile) === "cluster";
+      const entries = SLOWLOG.slice(0, Number(args.count ?? 128)).map((entry, index) =>
+        cluster ? { ...entry, node: SHARDS[index % SHARDS.length].master } : entry,
+      );
+      return { length: SLOWLOG.length, entries, slowerThanUs: "10000", maxLen: "128" };
+    }
     case "redis.scan":
       return scan(args);
     case "redis.keyInfo":

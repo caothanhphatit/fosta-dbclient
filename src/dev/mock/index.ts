@@ -296,9 +296,9 @@ async function run(
 let treePageSize: number | null = null;
 
 function treeChildren(connectionId: string, request: TreeRequest): TreeChildren {
-  const { engine } = connection(connectionId);
+  const { engine, profile } = connection(connectionId);
   const filter = request.filter?.trim().toLowerCase();
-  const all = need(engine, "tree", "a tree")(request.parent).filter((node) => !filter || node.label.toLowerCase().includes(filter));
+  const all = need(engine, "tree", "a tree")(request.parent, profile).filter((node) => !filter || node.label.toLowerCase().includes(filter));
   const start = Number(request.cursor ?? 0) || 0;
   const limit = Math.min(request.limit ?? 500, treePageSize ?? Number.MAX_SAFE_INTEGER);
   const nodes = all.slice(start, start + limit);
@@ -328,11 +328,11 @@ function applyEdits(connectionId: string, changes: RowChangeSet, caller: Caller 
 }
 
 function invokeCapability(connectionId: string, name: string, args: unknown, confirmation: Confirmation | null) {
-  const { engine } = connection(connectionId);
+  const { engine, profile } = connection(connectionId);
   // Engine views call operations as "engineView"; writes go through the rules like the backend gateway.
   const statements = engine.classifyOperation?.(name, args);
   if (statements) gate(state.config, connectionId, "engineView" as Caller, statements, confirmation);
-  const result = engine.invoke?.(name, args);
+  const result = engine.invoke?.(name, args, profile);
   if (result === undefined) refuseOperation(state.config, connectionId, name);
   return result;
 }

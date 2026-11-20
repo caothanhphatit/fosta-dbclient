@@ -24,8 +24,9 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
   - **Oracle**: schemas, packages, procedures and PL/SQL source with compile errors, `OCIBreak` to stop a statement, edits by key or
     `ROWID`; vector tools on 23ai. Needs Oracle Instant Client; see the note below.
   - **Redis** (and Valkey): key browser with `SCAN`, TTL and memory, an editor for each data type (strings, hashes, lists, sets, sorted
-    sets, streams), a console with completion and a server view; vector tools on search indexes with Redis 8. Redis Cluster and
-    Sentinel are not supported yet.
+    sets, streams), a console with completion and a server view; vector tools on search indexes with Redis 8. Standalone servers,
+    Redis Cluster (keys of every shard, a cluster overview with per-node INFO) and Redis Sentinel (follows a failover to the new
+    master).
   - **Elasticsearch and OpenSearch**: indices, data streams and aliases, a document grid typed by the mapping, a Dev Tools console,
     ES|QL and SQL tabs, `search_after` paging past 10,000 documents, Mapping as the design view.
 - **Workspaces**: each workspace (project, customer, environment) has its own connections, commands and tabs. Switch from the rail on

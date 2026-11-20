@@ -22,12 +22,13 @@ Where Fosta Studio is heading. Plans change; open an issue to discuss an item or
 - The assistant can learn a database once (structure, and sampled values only where it may read data) and answers
   questions about Fosta Studio itself from the built-in help.
 - Vector search tools for MariaDB and PostgreSQL (pgvector).
+- Redis Cluster and Redis Sentinel connections (Valkey too): key browsing across every shard, a console, guarded edits, a
+  cluster overview with shards and per-node INFO, and failover that follows the new master.
 - A web edition: one Docker image to use Fosta Studio in a browser.
 
 ## Next
 
 - **Oracle thin protocol**: connect without Oracle Instant Client.
-- **Redis Cluster and Sentinel**: today Redis connects to a single node.
 - **Code signing** for the Windows executable, and packages for **winget**, **Scoop** and **npm**.
 
 ## Later

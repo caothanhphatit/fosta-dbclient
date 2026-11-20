@@ -48,8 +48,9 @@ export class RedisApi {
 export class RedisServerApi {
   constructor(private readonly connection: ConnectionApi) {}
 
-  info(): Promise<ServerInfo> {
-    return this.connection.invokeCapability<ServerInfo>("redis.info", {});
+  /** The server's INFO; with `node` (`host:port`) one node of a Redis Cluster. */
+  info(node?: string): Promise<ServerInfo> {
+    return this.connection.invokeCapability<ServerInfo>("redis.info", node ? { node } : {});
   }
 
   slowlog(count = 128): Promise<Slowlog> {

@@ -21,7 +21,8 @@ const views: ViewRegistration[] = [
     kinds: ["database"],
     role: "keys",
     icon: "key",
-    title: (ctx) => `db${ctx.object?.database ?? ""} · keys`,
+    // A Redis Cluster has database 0 only: its key list is just "Keys".
+    title: (ctx) => (ctx.info.capabilities.includes("multipleDatabases") ? `db${ctx.object?.database ?? ""} · keys` : "Keys"),
     load: async () => (await import("./keysView")).keysViewFactory,
   },
   // A key opens in the value editor from the tree (`value`), and from the key list through the navigator (`data`).

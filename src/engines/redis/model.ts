@@ -175,6 +175,8 @@ export interface SlowlogEntry {
   command: string[];
   client: string | null;
   clientName: string | null;
+  /** The cluster node the entry came from (a cluster's slow log merges every node). */
+  node?: string | null;
 }
 
 export interface Slowlog {
@@ -184,7 +186,64 @@ export interface Slowlog {
   maxLen: string | null;
 }
 
+/** One cluster node as the shard map names it. */
+export interface ClusterNode {
+  /** The 40-character node id ("" when the server did not say). */
+  id: string;
+  host: string;
+  port: number;
+  /** `host:port` as the cluster announces it. */
+  addr: string;
+  role: string;
+  /** `online`, `failed` or `loading`; null from `CLUSTER SLOTS` (older servers). */
+  health: string | null;
+}
+
+export interface ClusterShard {
+  master: ClusterNode;
+  replicas: ClusterNode[];
+  /** Inclusive slot ranges. */
+  slots: [number, number][];
+  slotCount: number;
+  keys: number | null;
+  usedMemory: number | null;
+}
+
+/** `CLUSTER INFO` headline figures and the shards. */
+export interface ClusterOverview {
+  state: string;
+  slotsAssigned: number | null;
+  slotsOk: number | null;
+  knownNodes: number | null;
+  shards: ClusterShard[];
+}
+
+export interface SentinelPeer {
+  address: string;
+  flags: string;
+  /** A replica's `master-link-status` (`ok`, `err`). */
+  link: string | null;
+}
+
+/** What the sentinels report about the monitored master. */
+export interface SentinelOverview {
+  masterName: string;
+  master: string;
+  masterFlags: string;
+  quorum: number | null;
+  replicas: SentinelPeer[];
+  sentinels: SentinelPeer[];
+}
+
+export type Topology = "standalone" | "cluster" | "sentinel" | "clusterNode";
+
 export interface ServerInfo {
+  /** How the connection reaches Redis; `clusterNode` is one node of a cluster connected as standalone. */
+  topology: Topology | string;
+  /** `host:port` of the node whose INFO this is. */
+  node: string;
+  cluster: ClusterOverview | null;
+  sentinel: SentinelOverview | null;
   version: string;
   flavor: string;
   mode: string;
@@ -365,4 +424,43 @@ export function describeCurrent(conflict: RedisConflict): string {
     case "exists":
       return "The key already exists.";
   }
+}
+
+// --- Cluster ----------------------------------------------------------------------------------------------------------------
+
+/** The number of hash slots of a Redis Cluster. */
+export const CLUSTER_SLOTS = 16384;
+
+/** Slot ranges as text: `0-5460, 10923`. */
+export function slotRanges(slots: [number, number][]): string {
+  return slots.map(([start, end]) => (start === end ? String(start) : `${start}-${end}`)).join(", ");
+}
+
+/** Slot coverage as text: `16384 of 16384 slots (100%)`, with the failing ones when some are not ok. */
+export function slotCoverage(cluster: ClusterOverview): string {
+  const assigned = cluster.slotsAssigned ?? cluster.shards.reduce((sum, shard) => sum + shard.slotCount, 0);
+  const percent = Math.floor((1000 * assigned) / CLUSTER_SLOTS) / 10;
+  const ok = cluster.slotsOk;
+  const failing = ok !== null && ok < assigned ? ` · ${assigned - ok} not ok` : "";
+  return `${assigned} of ${CLUSTER_SLOTS} slots (${percent}%)${failing}`;
+}
+
+export type Health = "ok" | "warn" | "bad";
+
+/**
+ * The health of a cluster node (`health`: online, loading, failed) or a sentinel peer (`flags`, a replica's `link`):
+ * `bad` when failed, down or its link is broken, `warn` while loading, else `ok`.
+ */
+export function nodeHealth(health: string | null, flags = ""): Health {
+  if (health === "failed" || health === "err" || /\b(s_down|o_down|disconnected|fail\??)(?![\w])/.test(flags)) return "bad";
+  return health === "loading" ? "warn" : "ok";
+}
+
+/** The Mode card's text: the topology first (`cluster · 3 shards`, `sentinel fosta · master`), then the role. */
+export function modeText(info: ServerInfo): string {
+  const role = info.role === "slave" ? "replica" : info.role;
+  if (info.topology === "cluster") return `cluster · ${info.cluster?.shards.length ?? "?"} shards`;
+  if (info.topology === "sentinel") return info.sentinel ? `sentinel ${info.sentinel.masterName} · ${role}` : `sentinel · ${role}`;
+  if (info.topology === "clusterNode") return `cluster node · ${role}`;
+  return `${info.mode} · ${role}`;
 }

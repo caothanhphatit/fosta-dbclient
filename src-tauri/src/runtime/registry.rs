@@ -77,6 +77,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn every_visible_when_names_a_field_of_the_same_descriptor() {
+        for descriptor in registry().descriptors() {
+            let fields = &descriptor.connection.fields;
+            for field in fields {
+                let Some(condition) = &field.visible_when else { continue };
+                assert_ne!(condition.key, field.key, "{}: {} depends on itself", descriptor.id, field.key);
+                assert!(
+                    fields.iter().any(|other| other.key == condition.key),
+                    "{}: {} depends on the unknown field {}",
+                    descriptor.id,
+                    field.key,
+                    condition.key
+                );
+                assert!(
+                    !condition.equals.is_empty(),
+                    "{}: {} has an empty condition",
+                    descriptor.id,
+                    field.key
+                );
+            }
+        }
+    }
+
+    #[test]
     #[cfg(feature = "engines-all")]
     fn every_engine_is_registered_once_with_a_matching_descriptor() {
         let ids = registry().ids();

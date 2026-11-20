@@ -1,7 +1,7 @@
 /**
  * Config, workspaces and query history of the mock backend (this page load only). "Client A staging" is guarded (run an
  * UPDATE or DELETE to see the confirmation dialog) and has an unreachable server to see a failing connect; "Production"
- * is read-only. "Local" has PostgreSQL and SQLite profiles on the mock engines. "Empty" has no connections, to see the
+ * is read-only. "Local" has PostgreSQL, SQLite and Redis (standalone, Cluster, Sentinel, one cluster node) profiles on the mock engines. "Empty" has no connections, to see the
  * first-run state.
  */
 import { presetSettings } from "../../features/safety/safety";
@@ -73,6 +73,54 @@ const workspaces: Workspace[] = [
         database: "FREEPDB1",
         savePassword: true,
         options: {},
+      },
+      {
+        // Redis: sixteen databases, the key browser, value editors and the server view.
+        id: "c-local-redis",
+        name: "Local Redis",
+        driver: "redis",
+        host: "127.0.0.1",
+        port: 6379,
+        user: "",
+        database: null,
+        savePassword: false,
+        options: { topology: "standalone", db: "0" },
+      },
+      {
+        // Redis Cluster: database 0 only; the server view shows the shards (a node opens its INFO).
+        id: "c-local-redis-cluster",
+        name: "Redis Cluster",
+        driver: "redis",
+        host: "127.0.0.1",
+        port: 7001,
+        user: "",
+        database: null,
+        savePassword: true,
+        options: { topology: "cluster", nodes: "127.0.0.1:7002, 127.0.0.1:7003" },
+      },
+      {
+        // Redis Sentinel: the server view shows the master, its replicas and the sentinels.
+        id: "c-local-redis-sentinel",
+        name: "Redis Sentinel",
+        driver: "redis",
+        host: "127.0.0.1",
+        port: 26390,
+        user: "",
+        database: null,
+        savePassword: true,
+        options: { topology: "sentinel", nodes: "127.0.0.1:26391, 127.0.0.1:26392", masterName: "fosta", db: "0" },
+      },
+      {
+        // One node of the cluster connected as standalone: the server view warns.
+        id: "c-local-redis-node",
+        name: "Cluster node (standalone)",
+        driver: "redis",
+        host: "127.0.0.1",
+        port: 7002,
+        user: "",
+        database: null,
+        savePassword: true,
+        options: { topology: "standalone" },
       },
     ],
     tasks: [],

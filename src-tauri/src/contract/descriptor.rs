@@ -112,6 +112,18 @@ pub struct FieldSpec {
     pub default: Option<String>,
     #[serde(default)]
     pub required: bool,
+    /// Shown (and validated) only while another field of the same form has one of the given values; a hidden field
+    /// keeps its saved value.
+    #[serde(default)]
+    pub visible_when: Option<FieldCondition>,
+}
+
+/// A condition on another field of the same form: its value (its default when unset) is one of `equals`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldCondition {
+    pub key: String,
+    pub equals: Vec<String>,
 }
 
 impl FieldSpec {
@@ -125,7 +137,17 @@ impl FieldSpec {
             section: FormSection::General,
             default: None,
             required: false,
+            visible_when: None,
         }
+    }
+
+    /// Shows the field only while the field `key` has one of `values`.
+    pub fn visible_when(mut self, key: &str, values: &[&str]) -> Self {
+        self.visible_when = Some(FieldCondition {
+            key: key.to_owned(),
+            equals: values.iter().map(|value| (*value).to_owned()).collect(),
+        });
+        self
     }
 
     pub fn hint(mut self, hint: &str) -> Self {

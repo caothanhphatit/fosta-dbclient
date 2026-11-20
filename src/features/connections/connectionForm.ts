@@ -5,7 +5,9 @@
  *
  * Everything is read from the `EngineDescriptor` (`connection` form): host/port/user per `usesHost`, the file per
  * `usesFile`, the database per `databaseLabel` (none when empty), extra `fields` keyed `database` / `file` / `url` /
- * `options.<name>` (password-kind fields are secrets with their slot), auth methods per `auth`. No engine id appears.
+ * `options.<name>` (password-kind fields are secrets with their slot), auth methods per `auth`. A field with `visibleWhen`
+ * shows only while another field has one of the listed values (`fieldVisible`); hidden, it is not required and keeps
+ * its value. No engine id appears.
  */
 import type { AuthMethodId, ConnectionSpec, EngineDescriptor, FieldSpec, SecretSlot, SshConfig, TlsConfig } from "../../core/contract";
 import type { ConnectionProfile } from "../../core/types";
@@ -123,6 +125,53 @@ export function authInputs(descriptor: EngineDescriptor, method: AuthMethodId): 
 export function initialAuth(descriptor: EngineDescriptor, saved: AuthMethodId | null | undefined): AuthMethodId {
   const offered = descriptor.connection.auth;
   return saved && offered.includes(saved) ? saved : (offered[0] ?? "password");
+}
+
+/**
+ * A field's current value for `visibleWhen`: the form's value, else the field's default (a select's first option).
+ * Keys are `database`, `file`, `url` or `options.<name>`.
+ */
+export function fieldValue(form: ConnectionForm, descriptor: EngineDescriptor, key: string): string {
+  if (key === "database") return form.database;
+  if (key === "file") return form.file;
+  if (key === "url") return form.url;
+  if (!key.startsWith("options.")) return "";
+  const value = form.options[key.slice("options.".length)];
+  if (value !== undefined && value !== "") return value;
+  const spec = descriptor.connection.fields.find((field) => field.key === key);
+  if (!spec) return "";
+  return spec.default ?? (spec.kind.type === "select" ? (spec.kind.options[0]?.[0] ?? "") : "");
+}
+
+/** Whether `spec` is shown for the form's current values (no `visibleWhen`: always). */
+export function fieldVisible(spec: FieldSpec, form: ConnectionForm, descriptor: EngineDescriptor): boolean {
+  const condition = spec.visibleWhen;
+  if (!condition) return true;
+  return condition.equals.includes(fieldValue(form, descriptor, condition.key));
+}
+
+/** Whether some field's visibility depends on the field `key` (the dialog re-checks visibility when it changes). */
+export function controlsVisibility(descriptor: EngineDescriptor, key: string): boolean {
+  return descriptor.connection.fields.some((spec) => spec.visibleWhen?.key === key);
+}
+
+/**
+ * The labels of the inputs the form still needs: Host (unless a connection string connects), the file, and required
+ * shown fields (hidden ones are not required; passwords and checkboxes never are).
+ */
+export function missingInputs(form: ConnectionForm, descriptor: EngineDescriptor): string[] {
+  const layout = formLayout(descriptor);
+  const missing: string[] = [];
+  if (layout.host && !form.host.trim() && !form.url.trim()) missing.push("Host");
+  if (layout.file && !form.file.trim()) missing.push(layout.file.label);
+  for (const spec of [...layout.general, ...layout.auth, ...layout.advanced]) {
+    if (!spec.required || spec.kind.type === "password" || spec.kind.type === "checkbox") continue;
+    if (!fieldVisible(spec, form, descriptor)) continue;
+    const target = fieldTarget(spec);
+    const empty = target.kind === "option" ? !(form.options[target.name] ?? "").trim() : target.kind === "url" ? !form.url.trim() : false;
+    if (empty) missing.push(spec.label);
+  }
+  return missing;
 }
 
 function optionDefaults(descriptor: EngineDescriptor): Record<string, string> {
@@ -291,7 +340,8 @@ export interface FormSecrets {
 
 /**
  * The secrets the form sends. An empty password keeps the saved one when the profile saves passwords; a method without a
- * password sends "" so the backend does not ask for one. `extra` are the sections' secrets (SSH, TLS key passphrase).
+ * password sends "" so the backend does not ask for one, and secrets typed into fields now hidden are not sent. `extra`
+ * are the sections' secrets (SSH, TLS key passphrase).
  */
 export function formSecrets(
   form: ConnectionForm,
@@ -303,7 +353,8 @@ export function formSecrets(
   const password = inputs.password ? (form.password === "" && savedPassword ? null : form.password) : "";
   const used = new Set<SecretSlot>();
   if (inputs.secret) used.add(inputs.secret.slot);
-  for (const field of descriptor.connection.fields) if (field.kind.type === "password") used.add(field.kind.slot);
+  // A hidden field's typed secret is not sent: its saved one stays.
+  for (const field of descriptor.connection.fields) if (field.kind.type === "password" && fieldVisible(field, form, descriptor)) used.add(field.kind.slot);
   const secrets: Partial<Record<SecretSlot, string>> = {};
   for (const [slot, value] of Object.entries(form.secrets) as [SecretSlot, string][]) {
     if (used.has(slot) && value !== "" && slot !== "password") secrets[slot] = value;

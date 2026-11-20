@@ -41,7 +41,7 @@ export interface EngineMock {
   /** Position in `engine_descriptors` (the backend's registry order). */
   order: number;
   connectInfo?(profile: ConnectionProfile): ConnectInfo;
-  tree?(parent: TreeRequest["parent"]): TreeChildren["nodes"];
+  tree?(parent: TreeRequest["parent"], profile?: ConnectionProfile): TreeChildren["nodes"];
   describe?(object: ObjectRef): ObjectDescription;
   browse?(request: BrowseRequest): Page;
   apply?(changes: RowChangeSet): ApplyResult;
@@ -49,8 +49,8 @@ export interface EngineMock {
   run?(request: RunRequest, emit: (event: StreamEvent) => void, context: RunContext): Promise<number>;
   /** How the gateway sees a run's text (statement categories). */
   classify?(text: string): StatementInfo[];
-  /** Engine operations (`invoke_capability`); undefined for an unknown name. */
-  invoke?(name: string, args: unknown): unknown;
+  /** Engine operations (`invoke_capability`) of the connection `profile`; undefined for an unknown name. */
+  invoke?(name: string, args: unknown, profile?: ConnectionProfile): unknown;
   /** How the gateway classifies an engine operation (rules apply to writes); null or absent: reads. */
   classifyOperation?(name: string, args: unknown): StatementInfo[] | null;
   schemaGraph?(database: string): SchemaGraph;

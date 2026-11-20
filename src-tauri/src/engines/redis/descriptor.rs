@@ -80,13 +80,20 @@ pub fn descriptor() -> EngineDescriptor {
                 .default_value("standalone")
                 .hint("Redis Cluster: Host and Port name one seed node; the others are discovered. Sentinel: Host and Port name one sentinel (port 26379 by default)."),
                 FieldSpec::new("options.nodes", FieldKind::Text, "More nodes")
+                    .visible_when("options.topology", &["cluster", "sentinel"])
                     .placeholder("10.0.0.2:6379, 10.0.0.3:6379")
                     .hint("Redis Cluster: more seed nodes; Sentinel: more sentinels (host:port, separated by commas), tried when the first is down."),
-                FieldSpec::new("options.masterName", FieldKind::Text, "Master name")
-                    .placeholder("mymaster")
-                    .hint("Sentinel: the name the sentinels monitor (sentinel monitor <name> ...)."),
+                // Required only while shown (Sentinel).
+                FieldSpec {
+                    required: true,
+                    ..FieldSpec::new("options.masterName", FieldKind::Text, "Master name")
+                        .placeholder("mymaster")
+                        .hint("The name the sentinels monitor (sentinel monitor <name> ...).")
+                        .visible_when("options.topology", &["sentinel"])
+                },
                 FieldSpec::new("options.sentinelUser", FieldKind::Text, "Sentinel user")
-                    .hint("Sentinel: the sentinels' ACL user, when they have one.")
+                    .hint("The sentinels' ACL user, when they have one.")
+                    .visible_when("options.topology", &["sentinel"])
                     .section(FormSection::Auth),
                 FieldSpec::new(
                     "options.sentinelPassword",
@@ -95,18 +102,22 @@ pub fn descriptor() -> EngineDescriptor {
                     },
                     "Sentinel password",
                 )
-                .hint("Sentinel: the sentinels' own password. Empty: none, or the data password when the sentinels ask for one.")
+                .hint("The sentinels' own password. Empty: none, or the data password when the sentinels ask for one.")
+                .visible_when("options.topology", &["sentinel"])
                 .section(FormSection::Auth),
                 FieldSpec::new("options.db", FieldKind::Number, "Database index")
                     .default_value("0")
-                    .hint("The logical database (SELECT); Redis Cluster has database 0 only."),
+                    .hint("The logical database (SELECT).")
+                    .visible_when("options.topology", &["standalone", "sentinel"]),
                 FieldSpec::new("options.readFromReplicas", FieldKind::Checkbox, "Read from replicas")
                     .default_value("false")
-                    .hint("Redis Cluster: send reads to replicas (they may lag behind their master).")
+                    .hint("Send reads to replicas (they may lag behind their master).")
+                    .visible_when("options.topology", &["cluster"])
                     .section(FormSection::Advanced),
                 FieldSpec::new("options.addressMap", FieldKind::Text, "Address map")
                     .placeholder("10.0.1.5:6379=127.0.0.1:17001")
                     .hint("Redis Cluster and Sentinel: dial another address than the one a node or master announces (forwarded ports, NAT).")
+                    .visible_when("options.topology", &["cluster", "sentinel"])
                     .section(FormSection::Advanced),
                 FieldSpec::new("options.resp3", FieldKind::Checkbox, "Use RESP3")
                     .default_value("false")
@@ -148,5 +159,45 @@ pub fn descriptor() -> EngineDescriptor {
             test_data: "Redis commands (SET, HSET, RPUSH, …)".into(),
             ..AssistantHints::default()
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn field<'a>(descriptor: &'a EngineDescriptor, key: &str) -> &'a FieldSpec {
+        descriptor.connection.fields.iter().find(|field| field.key == key).expect(key)
+    }
+
+    #[test]
+    fn topology_fields_show_for_their_topology_only() {
+        let descriptor = descriptor();
+        let shown = |key: &str| {
+            field(&descriptor, key)
+                .visible_when
+                .as_ref()
+                .map(|condition| condition.equals.clone())
+        };
+        let list = |values: &[&str]| Some(values.iter().map(|value| value.to_string()).collect::<Vec<_>>());
+        assert_eq!(shown("options.topology"), None);
+        assert_eq!(shown("options.nodes"), list(&["cluster", "sentinel"]));
+        assert_eq!(shown("options.masterName"), list(&["sentinel"]));
+        assert_eq!(shown("options.sentinelUser"), list(&["sentinel"]));
+        assert_eq!(shown("options.sentinelPassword"), list(&["sentinel"]));
+        assert_eq!(shown("options.db"), list(&["standalone", "sentinel"]));
+        assert_eq!(shown("options.readFromReplicas"), list(&["cluster"]));
+        assert_eq!(shown("options.addressMap"), list(&["cluster", "sentinel"]));
+        assert!(field(&descriptor, "options.masterName").required);
+        // Every condition names a select of this form and values it offers.
+        for spec in &descriptor.connection.fields {
+            let Some(condition) = &spec.visible_when else { continue };
+            let FieldKind::Select { options } = &field(&descriptor, &condition.key).kind else {
+                panic!("{} depends on a field that is not a select", spec.key);
+            };
+            for value in &condition.equals {
+                assert!(options.iter().any(|(option, _)| option == value), "{}: {value}", spec.key);
+            }
+        }
     }
 }

@@ -22,10 +22,13 @@ import {
   applySpec,
   AUTH_LABELS,
   authInputs,
+  controlsVisibility,
   fieldTarget,
+  fieldVisible,
   formFromProfile,
   formLayout,
   formSecrets,
+  missingInputs,
   newForm,
   profileFromForm,
   sameTarget,
@@ -130,8 +133,26 @@ export function connectionDialog(
       urlError.replaceChildren();
     };
 
-    /** An input for a descriptor field, bound to its place in the form. */
+    /** The rendered descriptor fields with a `visibleWhen`, shown or hidden as the fields they depend on change. */
+    let conditional: { spec: FieldSpec; element: HTMLElement }[] = [];
+    const applyVisibility = () => {
+      conditional = conditional.filter(({ element }) => element.isConnected);
+      for (const { spec, element } of conditional) element.hidden = !fieldVisible(spec, form, descriptor);
+      // A section whose fields are all hidden is hidden too.
+      advanced.hidden = ![...advancedBody.children].some((child) => !(child as HTMLElement).hidden);
+    };
+
+    /** An input for a descriptor field, bound to its place in the form, hidden while its `visibleWhen` does not hold. */
     const fieldControl = (spec: FieldSpec): HTMLElement => {
+      const element = buildControl(spec);
+      if (spec.visibleWhen) {
+        conditional.push({ spec, element });
+        element.hidden = !fieldVisible(spec, form, descriptor);
+      }
+      return element;
+    };
+
+    const buildControl = (spec: FieldSpec): HTMLElement => {
       const target = fieldTarget(spec);
       const get = (): string => {
         switch (target.kind) {
@@ -194,7 +215,10 @@ export function connectionDialog(
       } else {
         control = textInput(get(), { type: kind.type === "number" ? "number" : "text", placeholder: spec.placeholder ?? "" });
       }
-      control.addEventListener(kind.type === "select" ? "change" : "input", () => set(control.value));
+      control.addEventListener(kind.type === "select" ? "change" : "input", () => {
+        set(control.value);
+        if (kind.type === "select" && controlsVisibility(descriptor, spec.key)) applyVisibility();
+      });
       return field(label, control, spec.hint ?? "");
     };
 
@@ -279,7 +303,7 @@ export function connectionDialog(
     const renderAdvanced = () => {
       const fields = formLayout(descriptor).advanced;
       advancedBody.replaceChildren(...fields.map(fieldControl));
-      advanced.hidden = fields.length === 0;
+      advanced.hidden = !fields.some((spec) => fieldVisible(spec, form, descriptor));
     };
 
     const renderSections = () => sectionsHost.replaceChildren(advanced, tls.element, ssh.element);
@@ -375,20 +399,7 @@ export function connectionDialog(
       clearFeedback();
       if (mode === "url" && !(await applyUrl())) return null;
       if (mode === "url") renderAll();
-      const layout = formLayout(descriptor);
-      const missing = [
-        layout.host && !form.host.trim() && !form.url.trim() ? "Host" : null,
-        layout.file && !form.file.trim() ? layout.file.label : null,
-        ...[...layout.general, ...layout.auth, ...layout.advanced]
-          .filter((spec) => spec.required && spec.kind.type !== "password" && spec.kind.type !== "checkbox")
-          .filter((spec) => {
-            const target = fieldTarget(spec);
-            if (target.kind === "option") return !(form.options[target.name] ?? "").trim();
-            if (target.kind === "url") return !form.url.trim();
-            return false;
-          })
-          .map((spec) => spec.label),
-      ].filter((label): label is string => label !== null);
+      const missing = missingInputs(form, descriptor);
       if (missing.length) {
         showFeedback(errorHost, invalid(`Fill in: ${missing.join(", ")}.`), context);
         return null;

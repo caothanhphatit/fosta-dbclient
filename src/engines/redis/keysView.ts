@@ -58,6 +58,8 @@ export class KeysView implements TabContent {
   readonly element: HTMLElement;
   private readonly api: RedisApi;
   private readonly readonly: boolean;
+  /** A Redis Cluster connection has database 0 only: the views do not name it. */
+  private readonly singleDb: boolean;
   private readonly pattern = textInput("", "Pattern, e.g. user:*  (plain text matches anywhere)", "input rd-pattern");
   private readonly typeSelect = h("select", { class: "input" }, ...TYPES.map((type) => h("option", { value: type }, type === "" ? "any type" : type)));
   private readonly memory = h("input", { type: "checkbox" });
@@ -76,6 +78,7 @@ export class KeysView implements TabContent {
     const db = Number(ctx.object?.database ?? 0);
     this.api = new RedisApi(ctx.connection, db);
     this.readonly = ctx.navigator.writesBlocked(ctx.connection.connectionId);
+    this.singleDb = !ctx.info.capabilities.includes("multipleDatabases");
     this.pattern.addEventListener("keydown", (event) => {
       if (event.key === "Enter") void this.scan(true);
     });
@@ -138,7 +141,7 @@ export class KeysView implements TabContent {
     } catch (error) {
       if (this.disposed || generation !== this.generation) return;
       this.status.textContent = "";
-      showError(error, `Scan db${this.api.db}`);
+      showError(error, this.singleDb ? "Scan keys" : `Scan db${this.api.db}`);
     } finally {
       this.more.disabled = false;
     }
@@ -150,7 +153,8 @@ export class KeysView implements TabContent {
     if (this.rows.length === 0)
       this.body.replaceChildren(h("tr", {}, h("td", { colspan: 4 }, emptyHint(this.done ? "No keys match." : "No keys in this page yet: load more."))));
     this.more.hidden = this.done;
-    const total = this.dbSize === null ? "" : ` of ${formatNumber(this.dbSize)} in db${this.api.db}`;
+    const where = this.singleDb ? "" : ` in db${this.api.db}`;
+    const total = this.dbSize === null ? "" : ` of ${formatNumber(this.dbSize)}${where}`;
     this.status.textContent = `${formatNumber(this.rows.length)} keys${total}${this.done ? "" : " · more to scan"}`;
   }
 

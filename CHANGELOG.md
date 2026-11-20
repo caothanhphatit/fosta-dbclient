@@ -7,6 +7,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Redis Cluster and Redis Sentinel connections (Redis 7.4+, Valkey 8.1). The connection form has a Topology choice and shows
+  only that topology's fields: more seed nodes or sentinels, the master name, the sentinels' own user and password (kept in
+  the credential store), read from replicas and an address map. `redis+cluster://`, `redis+sentinel://` (and the `rediss`,
+  `valkey` variants) and Lettuce's `redis-sentinel://...#master` connection strings are read.
+- Redis Cluster: the key browser scans every shard behind one cursor, edits and the console reach the key's node, and the
+  server view adds a Cluster panel (state, slot coverage, shards with their replicas and health, slots, keys, memory; click a
+  node for its INFO) and a slow log merged from every node. A cluster has database 0 only; the console refuses MULTI/EXEC,
+  WATCH and SCAN, and keys in different hash slots get a message suggesting a `{hashtag}`.
+- Redis Sentinel: the master is found through the sentinels and followed after a failover; the server view adds a Sentinel
+  panel (master, flags, quorum, replicas with link status, sentinels).
+- A standalone connection to one node of a cluster shows a warning in the server view.
+- Connection forms: an engine field can show only while another field has given values (`visibleWhen`); hidden fields are
+  not required and keep their saved values.
+- Redis Cluster and Sentinel through an SSH tunnel are refused: the nodes announce their own addresses, which one tunnel
+  cannot reach. Forward each node yourself and fill Address map, or connect to one node as Standalone.
+- Cluster nodes usually announce IP addresses: with TLS, use Verify CA unless the certificates carry those IPs.
+
 ## [0.3.2] - 2026-11-17
 
 ### Changed

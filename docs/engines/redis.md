@@ -5,21 +5,29 @@ The engine id is `redis`; the code is in `src-tauri/src/engines/redis/` and the 
 
 ## Scope
 
-**Supported:** one standalone server, with a password and an optional ACL user, TLS (`rediss://`), an SSH tunnel, RESP2 or
-RESP3, and all logical databases of the server (`db0` to `db15` by default).
+**Supported:** a standalone server, a **Redis Cluster** or a master behind **Redis Sentinel** (Valkey too), with a password and
+an optional ACL user, TLS (`rediss://`), RESP2 or RESP3. A standalone server or a Sentinel master shows all its logical databases
+(`db0` to `db15` by default); a cluster has database 0 only.
 
-**Not supported:** Redis **Cluster** and **Sentinel**. Connecting to a cluster node browses that node only; there is no
-slot routing, no cluster-wide `SCAN` and no Sentinel master lookup. Point the connection at a single node (or at the
-master's address) instead. Pub/Sub (`SUBSCRIBE`, `PSUBSCRIBE`, `SSUBSCRIBE`) and `MONITOR` are refused by the console, because
-they need a stream that never ends.
+**Not supported:** a Redis Cluster or Sentinel connection **through an SSH tunnel** (the nodes announce their own addresses, which
+one tunnel cannot reach: forward each node yourself and fill **Address map**, or connect to one node as Standalone). On a
+cluster: `MULTI`/`EXEC`, `WATCH` and `SCAN` in the console (the key browser scans every shard), vector search, and commands
+whose keys live in different hash slots (use a `{hashtag}`). Pub/Sub (`SUBSCRIBE`, `PSUBSCRIBE`, `SSUBSCRIBE`) and `MONITOR` are
+refused by the console, because they need a stream that never ends.
 
 ## Connecting
 
 | Field | Meaning |
 |---|---|
-| Host, port | The server (default 6379). Through an SSH tunnel the engine connects to the tunnel's local end. |
+| Topology | Standalone, Redis Cluster or Sentinel. The form shows the fields of the chosen topology only. |
+| Host, port | The server (default 6379); on a cluster one seed node, behind Sentinel one sentinel (port 26379 by default). Through an SSH tunnel (standalone only) the engine connects to the tunnel's local end. |
+| More nodes | Cluster and Sentinel: more seed nodes or sentinels (`host:port`, separated by commas), tried when the first is down. |
+| Master name | Sentinel: the name the sentinels monitor (`sentinel monitor <name> ...`). Required. |
+| Sentinel user, sentinel password | Sentinel: the sentinels' own login, when they have one. An empty sentinel password sends none, and the data password when a sentinel asks for one. |
 | User, password | Empty user means the `default` ACL user. The password is kept in the secret store, never in the profile. |
-| Database index | The logical database of the connection (`SELECT`). The tree lists every database whatever this says. |
+| Database index | Standalone and Sentinel: the logical database of the connection (`SELECT`). The tree lists every database whatever this says. Hidden on a cluster, which has database 0 only. |
+| Read from replicas | Cluster: send reads to replicas (they may lag behind their master). |
+| Address map | Cluster and Sentinel: `announced=dialled` pairs such as `10.0.1.5:6379=127.0.0.1:17001`, for nodes behind NAT or forwarded ports. |
 | Use RESP3 | Typed maps, sets and doubles in replies. Off by default. |
 | Command timeout | Per command, 30 s by default. |
 | Client name | Sent as `CLIENT SETNAME`, shown in `CLIENT LIST`. |
@@ -27,14 +35,23 @@ they need a stream that never ends.
 TLS modes: `require` encrypts without checking the certificate, `verifyCa` checks the chain but not the host name,
 `verifyFull` checks both. The endpoint of a tunnel is `127.0.0.1`, so use `verifyCa` through a tunnel. The CA file and a client
 certificate and key (mutual TLS) are read from the files named in the profile. `prefer` is not offered: Redis cannot negotiate TLS.
+A cluster or Sentinel connection uses the same TLS settings and login on every node and sentinel. Nodes usually announce IP
+addresses, so `verifyFull` needs IP addresses in the certificates' SANs; `verifyCa` is the practical choice there.
+
+Connection strings: `redis://`, `rediss://` (also `valkey://`, `valkeys://`); `redis+cluster://[user[:password]@]h1:7001,h2:7002`
+(also `rediss+cluster`, `valkey+cluster`, `valkeys+cluster`); `redis+sentinel://[user[:password]@]s1:26379,s2:26379/<master>[/<db>]`
+(also `rediss+sentinel`) and Lettuce's `redis-sentinel://s1:26379,s2:26379/<db>#<master>`. The user and password of a URL are the
+data login; the sentinel password is never read from a URL. A connection to one node of a cluster made as Standalone works, but sees
+that node's keys only: the server view says so.
 
 ## The tree and the key browser
 
 The tree shows `db0` to `db15` (the number comes from `CONFIG GET databases`, or 16 when the ACL forbids `CONFIG`) with the key
-count from `INFO keyspace`. Expanding a database lists its keys 200 at a time with their type and TTL; the filter box is a `MATCH`
+count from `INFO keyspace`; a cluster shows `db0` only, with the keys of every shard summed. Expanding a database lists its keys 200 at a time with their type and TTL; the filter box is a `MATCH`
 pattern. Double-click a database for the **key browser**:
 
-- `SCAN` only, never `KEYS`. The pattern is a glob (`user:*`); plain text without `* ? [` matches keys that contain it.
+- `SCAN` only, never `KEYS`; on a cluster every master in turn, behind one cursor (a resharding or failover during a scan may
+  repeat or skip keys). The pattern is a glob (`user:*`); plain text without `* ? [` matches keys that contain it.
 - A page collects keys until it has 200 or the time budget (1.5 s) runs out, then hands back the cursor: **Load more** continues.
   A sparse pattern on a big database therefore returns part-filled pages instead of blocking the server.
 - Filter by type (`SCAN ... TYPE`), show the **memory** of each key (`MEMORY USAGE`, sampled, one pipelined round trip per page),
@@ -103,6 +120,12 @@ same gateway as `redis.edit` (writes confirm, deleting keys needs the typed name
 On the connection's context menu, **Server info and slow log**: version, mode, role, uptime, clients, memory, command count and hit
 rate; the keyspace per database; every `INFO` section with a search box; and the slow log (`SLOWLOG GET`, 32 to 512 entries) with
 the threshold and length the server reports.
+
+- **Cluster**: the cluster state, slot coverage and known nodes, then one row per shard: the master (address and id), its replicas
+  with their health, the slot ranges, the keys and the memory. Click a node for its own `INFO`. The slow log merges every node by
+  time, with a Node column.
+- **Sentinel**: the master name, the current master and its flags, the quorum, the replicas with their link status, and the sentinels.
+- A standalone connection to one node of a cluster shows a warning: switch Topology to Redis Cluster to see every shard.
 
 ## Vectors (Redis 8 Query Engine)
 

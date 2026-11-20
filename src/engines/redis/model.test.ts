@@ -12,6 +12,11 @@ import {
   keyBlob,
   keyIdentity,
   matchPattern,
+  modeText,
+  nodeHealth,
+  slotCoverage,
+  slotRanges,
+  type ServerInfo,
   parseTtl,
   sameBlob,
   splitKey,
@@ -180,5 +185,40 @@ describe("stream ids", () => {
   it("accepts automatic ids, times and time-sequence pairs", () => {
     for (const id of ["", "*", "1712345678901", "1712345678901-0", "1712345678901-*"]) expect(validStreamId(id), id).toBe(true);
     for (const id of ["abc", "-1", "1-2-3", "1-"]) expect(validStreamId(id), id).toBe(false);
+  });
+});
+
+describe("cluster and sentinel text", () => {
+  it("writes slot ranges and coverage", () => {
+    expect(
+      slotRanges([
+        [0, 5460],
+        [7000, 7000],
+      ]),
+    ).toBe("0-5460, 7000");
+    const shard = { master: { id: "", host: "h", port: 1, addr: "h:1", role: "master", health: null }, replicas: [], slots: [], keys: null, usedMemory: null };
+    expect(slotCoverage({ state: "ok", slotsAssigned: 16384, slotsOk: 16384, knownNodes: 6, shards: [] })).toBe("16384 of 16384 slots (100%)");
+    expect(slotCoverage({ state: "fail", slotsAssigned: null, slotsOk: 8000, knownNodes: null, shards: [{ ...shard, slotCount: 8192 }] })).toBe(
+      "8192 of 16384 slots (50%) · 192 not ok",
+    );
+  });
+
+  it("grades node health from the shard map and sentinel flags", () => {
+    expect(nodeHealth("online")).toBe("ok");
+    expect(nodeHealth(null)).toBe("ok");
+    expect(nodeHealth("loading")).toBe("warn");
+    expect(nodeHealth("failed")).toBe("bad");
+    expect(nodeHealth("ok", "slave")).toBe("ok");
+    expect(nodeHealth("err", "slave")).toBe("bad");
+    expect(nodeHealth(null, "slave,s_down,disconnected")).toBe("bad");
+    expect(nodeHealth(null, "master,fail?")).toBe("bad");
+  });
+
+  it("names the topology on the Mode card", () => {
+    const base = { mode: "standalone", role: "master", cluster: null, sentinel: null } as unknown as ServerInfo;
+    expect(modeText({ ...base, topology: "standalone" })).toBe("standalone · master");
+    expect(modeText({ ...base, topology: "clusterNode", role: "slave" })).toBe("cluster node · replica");
+    expect(modeText({ ...base, topology: "cluster", cluster: { shards: [{}, {}, {}] } } as unknown as ServerInfo)).toBe("cluster · 3 shards");
+    expect(modeText({ ...base, topology: "sentinel", sentinel: { masterName: "fosta" } } as unknown as ServerInfo)).toBe("sentinel fosta · master");
   });
 });

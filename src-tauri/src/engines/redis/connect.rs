@@ -5,7 +5,7 @@
 use std::fs;
 
 use super::{
-    connection::{cluster_db_error, HostPort, RedisConnectOptions, RedisTls, RedisTopology, TlsVerify, DEFAULT_PORT},
+    connection::{HostPort, RedisConnectOptions, RedisTls, RedisTopology, TlsVerify, DEFAULT_PORT},
     sentinel::{master_name_required, DEFAULT_SENTINEL_PORT},
 };
 use crate::{
@@ -71,7 +71,7 @@ pub fn options(request: &ConnectRequest) -> AppResult<RedisConnectOptions> {
             })
             .transpose()
     };
-    let db = match spec.option("db").or(spec.database.as_deref().filter(|name| !name.is_empty())) {
+    let mut db = match spec.option("db").or(spec.database.as_deref().filter(|name| !name.is_empty())) {
         Some(text) => text
             .trim()
             .trim_start_matches("db")
@@ -110,9 +110,9 @@ pub fn options(request: &ConnectRequest) -> AppResult<RedisConnectOptions> {
                         .filter(|password| !password.is_empty()),
                     read_replica: false,
                 }
-            } else if db != 0 {
-                return Err(cluster_db_error());
             } else {
+                // The form hides Database index on a cluster but keeps its saved value: database 0 regardless.
+                db = 0;
                 RedisTopology::Cluster {
                     seeds: nodes,
                     read_from_replicas: matches!(spec.option("readFromReplicas"), Some("true" | "1")),
@@ -244,9 +244,10 @@ mod tests {
     }
 
     #[test]
-    fn cluster_refuses_other_databases_ssh_and_bad_addresses() {
-        let error = options_of(cluster_spec(&[("topology", "cluster"), ("db", "3")])).unwrap_err();
-        assert_eq!(error.to_string(), "Redis Cluster has only database 0.");
+    fn cluster_ignores_the_hidden_database_and_refuses_ssh_and_bad_addresses() {
+        // Database index is hidden on a cluster but keeps the value saved under Standalone.
+        let options = options_of(cluster_spec(&[("topology", "cluster"), ("db", "3")])).unwrap();
+        assert_eq!(options.db, 0);
         let mut spec = cluster_spec(&[("topology", "cluster")]);
         spec.ssh = Some(
             serde_json::from_value(serde_json::json!({ "enabled": true, "host": "bastion", "user": "me", "auth": { "method": "agent" } }))

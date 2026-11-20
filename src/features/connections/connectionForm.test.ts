@@ -5,10 +5,14 @@ import { DESCRIPTORS } from "../../dev/mock/descriptors";
 import {
   applySpec,
   authInputs,
+  controlsVisibility,
   defaultName,
+  fieldValue,
+  fieldVisible,
   formFromProfile,
   formLayout,
   formSecrets,
+  missingInputs,
   newForm,
   profileFromForm,
   sameTarget,
@@ -261,5 +265,61 @@ describe("sameTarget", () => {
       { commandId: "pf" },
     ];
     for (const change of changed) expect(sameTarget(saved, { ...saved, ...change }), JSON.stringify(change)).toBe(false);
+  });
+});
+
+describe("visibleWhen", () => {
+  const redis = engine("redis");
+  const shown = (form: ReturnType<typeof newForm>) => redis.connection.fields.filter((spec) => fieldVisible(spec, form, redis)).map((spec) => spec.key);
+  const withTopology = (topology: string) => {
+    const form = newForm(redis, "127.0.0.1");
+    form.options.topology = topology;
+    return form;
+  };
+
+  it("reads a field's value, else its default", () => {
+    const form = newForm(redis, "127.0.0.1");
+    delete form.options.topology;
+    expect(fieldValue(form, redis, "options.topology")).toBe("standalone");
+    form.options.topology = "cluster";
+    expect(fieldValue(form, redis, "options.topology")).toBe("cluster");
+    expect(controlsVisibility(redis, "options.topology")).toBe(true);
+    expect(controlsVisibility(redis, "options.db")).toBe(false);
+  });
+
+  it("shows the fields of the chosen topology only", () => {
+    expect(shown(withTopology("standalone"))).toEqual(["options.topology", "options.db", "options.resp3", "options.commandTimeoutMs", "options.clientName"]);
+    const cluster = shown(withTopology("cluster"));
+    expect(cluster).toContain("options.nodes");
+    expect(cluster).toContain("options.readFromReplicas");
+    expect(cluster).toContain("options.addressMap");
+    expect(cluster).not.toContain("options.db");
+    expect(cluster).not.toContain("options.masterName");
+    const sentinel = shown(withTopology("sentinel"));
+    expect(sentinel).toEqual(expect.arrayContaining(["options.nodes", "options.masterName", "options.sentinelUser", "options.sentinelPassword", "options.db"]));
+    expect(sentinel).not.toContain("options.readFromReplicas");
+  });
+
+  it("requires a field only while it is shown", () => {
+    expect(missingInputs(withTopology("standalone"), redis)).toEqual([]);
+    expect(missingInputs(withTopology("cluster"), redis)).toEqual([]);
+    const sentinel = withTopology("sentinel");
+    expect(missingInputs(sentinel, redis)).toEqual(["Master name"]);
+    sentinel.options.masterName = "fosta";
+    expect(missingInputs(sentinel, redis)).toEqual([]);
+    sentinel.host = "";
+    expect(missingInputs(sentinel, redis)).toEqual(["Host"]);
+  });
+
+  it("keeps hidden values in the profile but does not send hidden secrets", () => {
+    const form = withTopology("sentinel");
+    form.options.masterName = "fosta";
+    form.options.db = "3";
+    form.secrets.secondaryPassword = "sentinel-secret";
+    expect(formSecrets(form, redis, false).secrets).toEqual({ secondaryPassword: "sentinel-secret" });
+    form.options.topology = "cluster";
+    const profile = profileFromForm("id", form, redis, null, null);
+    expect(profile.options).toMatchObject({ topology: "cluster", masterName: "fosta", db: "3" });
+    expect(formSecrets(form, redis, false).secrets).toEqual({});
   });
 });
