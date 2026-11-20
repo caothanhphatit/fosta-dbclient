@@ -65,7 +65,8 @@ impl From<::redis::RedisError> for AppError {
     fn from(error: ::redis::RedisError) -> Self {
         let message = redis_error_message(&error);
         let code = error.code().map(str::to_owned);
-        let login = matches!(code.as_deref(), Some("NOAUTH" | "WRONGPASS"));
+        let login =
+            matches!(code.as_deref(), Some("NOAUTH" | "WRONGPASS")) || matches!(error.kind(), ::redis::ErrorKind::AuthenticationFailed);
         let kind = if error.is_timeout() {
             ErrorKind::Timeout
         } else if login
@@ -154,6 +155,22 @@ mod tests {
 
     fn server_error(code: &str, detail: &str) -> AppError {
         ::redis::make_extension_error(code.into(), Some(detail.into())).into()
+    }
+
+    #[test]
+    fn a_refused_login_is_a_connection_error() {
+        let refused: AppError =
+            ::redis::RedisError::from((::redis::ErrorKind::AuthenticationFailed, "Password authentication failed")).into();
+        assert_eq!(refused.code(), Some("CONNECTION_ERROR"));
+        assert!(
+            refused.message().contains("rejected the user name or password"),
+            "{}",
+            refused.message()
+        );
+        assert_eq!(
+            server_error("WRONGPASS", "invalid username-password pair").code(),
+            Some("CONNECTION_ERROR")
+        );
     }
 
     #[test]

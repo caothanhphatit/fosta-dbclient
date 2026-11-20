@@ -393,8 +393,20 @@ async fn cluster_edits_rename_within_a_slot_and_delete_across_slots() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs dev/compose/redis-cluster.yml"]
 async fn cluster_guarded_edits_detect_conflicts() {
-    let (_manager, handle) = suites::connect(&fixture()).await;
-    let name = "ccontract:edit:str";
+    guarded_edits_detect_conflicts(fixture(), "ccontract:edit:str").await;
+}
+
+/// With "Read from replicas" the comparison still reads the master: a lagging replica must not let a stale edit through.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs dev/compose/redis-cluster.yml"]
+async fn cluster_guarded_edits_compare_on_the_master_with_replica_reads() {
+    let mut fixture = fixture();
+    fixture.spec.options.insert("readFromReplicas".into(), "true".into());
+    guarded_edits_detect_conflicts(fixture, "ccontract:edit:replicas").await;
+}
+
+async fn guarded_edits_detect_conflicts(fixture: Fixture, name: &'static str) {
+    let (_manager, handle) = suites::connect(&fixture).await;
     let guarded = |value: &str, expect: Json| {
         let mut edit = set(name, value);
         edit["expect"] = expect;

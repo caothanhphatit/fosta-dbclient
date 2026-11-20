@@ -9,7 +9,9 @@
 //! server's error name (`WRONGTYPE`, `ERR`) as the vendor code and the failing line as position and statement; the lines
 //! before it keep their results. Stop cancels with `CLIENT UNBLOCK` (blocking commands), falling back to killing the
 //! session's connection, which the next run replaces. Without a client id (a cluster console spans nodes) Stop makes the
-//! run stop waiting and replaces the connection the same way.
+//! run stop waiting and replaces the connection the same way. Behind Sentinel the cancel goes to the server the session
+//! is connected to, on a connection of its own (after a failover the shared connection is on another master, where the
+//! same client id is somebody else); when that server cannot be reached, the run stops waiting instead.
 
 use std::sync::{
     atomic::{AtomicBool, AtomicI64, Ordering},
@@ -18,11 +20,12 @@ use std::sync::{
 
 use async_trait::async_trait;
 use futures_util::{future::BoxFuture, FutureExt};
+use redis::aio::MultiplexedConnection;
 use tokio::sync::{Mutex, Notify};
 
 use super::{
     classify::CommandClass,
-    connection::RedisEngine,
+    connection::{with_timeout, HostPort, RedisEngine},
     console::{split_lines, tokenize, RedisConsole, RedisReply},
     types::as_i64,
 };
@@ -38,6 +41,9 @@ pub const LANGUAGE: &str = "redis";
 struct Shared {
     /// `CLIENT ID` of the session's connection (0 until known).
     client_id: AtomicI64,
+    /// Behind Sentinel, the server the session's connection is on: `client_id` is a client there, wherever the engine's
+    /// shared connection has moved since.
+    node: std::sync::Mutex<Option<HostPort>>,
     /// The cancel killed the connection: the next run opens a new one.
     killed: AtomicBool,
     /// A cancel was requested during the current run, so its failure reads as "cancelled".
@@ -53,6 +59,16 @@ impl Shared {
         self.cancelled.store(true, Ordering::SeqCst);
         self.killed.store(true, Ordering::SeqCst);
         self.abort.notify_one();
+    }
+
+    /// Remembers which client of which server the session's (new) connection is.
+    fn bind(&self, console: &RedisConsole) {
+        self.client_id.store(console.client_id().unwrap_or(0), Ordering::SeqCst);
+        *self.node.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = console.node().cloned();
+    }
+
+    fn node(&self) -> Option<HostPort> {
+        self.node.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
     }
 
     /// Forgets an abort that arrived while no run was waiting.
@@ -108,7 +124,7 @@ impl RedisSession {
     pub async fn open(engine: RedisEngine, db: i64) -> AppResult<(Self, Arc<dyn Canceller>)> {
         let console = engine.open_console().await?;
         let shared = Arc::new(Shared::default());
-        shared.client_id.store(console.client_id().unwrap_or(0), Ordering::SeqCst);
+        shared.bind(&console);
         let canceller = Arc::new(RedisCanceller {
             control: engine.clone(),
             shared: Arc::clone(&shared),
@@ -126,9 +142,39 @@ impl RedisSession {
 }
 
 struct RedisCanceller {
-    /// The shared connection of the database, never the session's own (the run is using that one).
+    /// The engine of the database, never the session's own connection (the run is using that one).
     control: RedisEngine,
     shared: Arc<Shared>,
+}
+
+/// Where `CLIENT UNBLOCK` / `CLIENT KILL` go: the server the session's connection is on.
+enum ControlRoute<'a> {
+    /// The engine's shared connection (one server: the session's).
+    Shared(&'a RedisEngine),
+    /// A one-off connection to the session's server behind Sentinel: the shared connection may follow a failover to
+    /// another master, where the same client id names somebody else's connection.
+    Node(MultiplexedConnection, std::time::Duration),
+}
+
+impl<'a> ControlRoute<'a> {
+    /// The route for a session on `node` (behind Sentinel); `None` when that server cannot be reached.
+    async fn open(control: &'a RedisEngine, node: Option<&HostPort>) -> Option<Self> {
+        match node {
+            None => Some(Self::Shared(control)),
+            Some(node) => control
+                .connect_to(node)
+                .await
+                .ok()
+                .map(|conn| Self::Node(conn, control.command_timeout())),
+        }
+    }
+
+    async fn query(&mut self, cmd: &redis::Cmd) -> AppResult<redis::Value> {
+        match self {
+            Self::Shared(engine) => engine.query(cmd).await,
+            Self::Node(conn, timeout) => with_timeout(*timeout, cmd.query_async::<redis::Value>(conn)).await,
+        }
+    }
 }
 
 impl Canceller for RedisCanceller {
@@ -142,8 +188,13 @@ impl Canceller for RedisCanceller {
                 shared.abort();
                 return Ok(());
             }
+            let Some(mut route) = ControlRoute::open(&control, shared.node().as_ref()).await else {
+                // The session's server is gone (a failover): never send the id elsewhere; stop waiting instead.
+                shared.abort();
+                return Ok(());
+            };
             shared.cancelled.store(true, Ordering::SeqCst);
-            let unblocked = control
+            let unblocked = route
                 .query(redis::cmd("CLIENT").arg("UNBLOCK").arg(id).arg("ERROR"))
                 .await
                 .ok()
@@ -152,7 +203,7 @@ impl Canceller for RedisCanceller {
             if unblocked == 0 {
                 // Not blocked in a blocking command (a long script, DEBUG SLEEP): drop the connection.
                 shared.killed.store(true, Ordering::SeqCst);
-                control.query(redis::cmd("CLIENT").arg("KILL").arg("ID").arg(id)).await?;
+                route.query(redis::cmd("CLIENT").arg("KILL").arg("ID").arg(id)).await?;
             }
             Ok(())
         })
@@ -240,7 +291,7 @@ impl Session for RedisSession {
         if self.shared.killed.swap(false, Ordering::SeqCst) {
             *console = self.engine.open_console().await?;
             *db = self.initial_db;
-            self.shared.client_id.store(console.client_id().unwrap_or(0), Ordering::SeqCst);
+            self.shared.bind(console);
         }
         if let Some(timeout) = options.timeout {
             console.set_timeout(timeout);

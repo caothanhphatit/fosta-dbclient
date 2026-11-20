@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     classify::{classify, Classification, CommandClass},
-    connection::{with_timeout, Conn, RedisEngine},
+    connection::{with_timeout, Conn, HostPort, RedisEngine},
     types::Blob,
 };
 use crate::error::{AppError, AppResult};
@@ -327,30 +327,35 @@ pub struct RedisConsole {
     /// `CLIENT ID` of this connection, so another connection can `CLIENT UNBLOCK` or kill what it runs. `None` on a
     /// cluster, where the console spans nodes.
     client_id: Option<i64>,
+    /// Behind Sentinel, the address this connection dialed (the master when it opened): `client_id` is a client of
+    /// that server, which the engine's shared connection may have left after a failover.
+    node: Option<HostPort>,
     /// A Redis Cluster console: commands that need one node for the whole session are refused (see [`cluster_refusal`]).
     cluster: bool,
 }
 
 impl RedisEngine {
     pub async fn open_console(&self) -> AppResult<RedisConsole> {
-        let mut conn = self.new_connection().await?;
+        let (mut conn, node) = self.new_connection_on().await?;
         let cluster = matches!(conn, Conn::Cluster(_));
         let client_id = if cluster {
             None
         } else {
-            redis::cmd("CLIENT")
-                .arg("ID")
-                .query_async::<Value>(&mut conn)
-                .await
-                .ok()
-                .as_ref()
-                .and_then(super::types::as_i64)
+            with_timeout(
+                self.command_timeout(),
+                redis::cmd("CLIENT").arg("ID").query_async::<Value>(&mut conn),
+            )
+            .await
+            .ok()
+            .as_ref()
+            .and_then(super::types::as_i64)
         };
         Ok(RedisConsole {
             conn,
             timeout: self.command_timeout(),
             queued: None,
             client_id,
+            node,
             cluster,
         })
     }
@@ -359,6 +364,11 @@ impl RedisEngine {
 impl RedisConsole {
     pub fn client_id(&self) -> Option<i64> {
         self.client_id
+    }
+
+    /// Behind Sentinel, the server this console is connected to (see `node`).
+    pub fn node(&self) -> Option<&HostPort> {
+        self.node.as_ref()
     }
 
     pub fn set_timeout(&mut self, timeout: Duration) {

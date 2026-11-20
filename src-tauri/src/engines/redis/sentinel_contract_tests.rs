@@ -266,6 +266,13 @@ async fn ask(conn: &mut MultiplexedConnection, args: &[&str]) -> redis::RedisRes
     cmd.query_async(conn).await
 }
 
+/// `CLIENT ID` of a new direct connection to a data node (each call takes the node's next id).
+async fn client_id(node: &HostPort) -> i64 {
+    let mut conn = direct(node, &data_password()).await;
+    let reply = ask(&mut conn, &["CLIENT", "ID"]).await;
+    reply.ok().as_ref().and_then(super::types::as_i64).unwrap_or(0)
+}
+
 /// The master `sentinel` names now.
 async fn named_master(sentinel: &HostPort) -> Option<HostPort> {
     let mut conn = direct(sentinel, &sentinel_password()).await;
@@ -548,9 +555,28 @@ async fn sentinel_browses_and_edits_keys_in_several_databases() {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs dev/compose/redis-sentinel.yml"]
 async fn z_failover_moves_the_master_and_the_open_connection_follows() {
-    let (before, _) = wait_settled(Duration::from_secs(60)).await;
+    let (before, promoted) = wait_settled(Duration::from_secs(60)).await;
     let (_manager, handle) = suites::connect(&fixture()).await;
     let session = open_session(&handle).await;
+    // A console left on the old master: Stop after the failover must not reach the client with its id on the new one.
+    // Client ids count up per server; push the master's past the replica's (promoted below) so that the new master can
+    // still hand out the stale console's id afterwards.
+    let replica_id = client_id(&promoted).await;
+    for _ in 0..5000 {
+        if client_id(&before).await > replica_id + 200 {
+            break;
+        }
+    }
+    let stale = handle
+        .call("opened a session", |conn| async move {
+            conn.open_session(&SessionOptions::default(), &CallContext::default()).await
+        })
+        .await
+        .expect("session");
+    let stale_id = match first_cell(&run(&handle, &stale.session, "CLIENT ID").await.unwrap()) {
+        Value::Int(id) => id,
+        other => panic!("CLIENT ID: {other:?}"),
+    };
     call(&handle, "redis.edit", set("scontract:failover", "before")).await.unwrap();
     assert_eq!(read_text(&handle, 14, "scontract:failover").await.unwrap(), "before");
     // Wait for the replica to have the value, so the promoted node holds it.
@@ -608,6 +634,34 @@ async fn z_failover_moves_the_master_and_the_open_connection_follows() {
     let info = call(&handle, "redis.info", Json::Null).await.unwrap();
     assert_eq!(info["node"], after.to_string());
     assert_eq!(info["role"], "master");
+    // The engine's shared connection is on the new master now. Give a connection there the stale console's client id
+    // (ids count up per server), then Stop the stale console: the new master's client must survive.
+    let mut victim = None;
+    for _ in 0..5000 {
+        let mut conn = direct(&after, &data_password()).await;
+        let id = ask(&mut conn, &["CLIENT", "ID"])
+            .await
+            .ok()
+            .as_ref()
+            .and_then(super::types::as_i64)
+            .unwrap_or(0);
+        if id == stale_id {
+            victim = Some(conn);
+            break;
+        }
+        if id > stale_id {
+            break;
+        }
+    }
+    let _ = stale.canceller.expect("a canceller").cancel().await;
+    match victim {
+        Some(mut victim) => assert!(
+            ask(&mut victim, &["PING"]).await.is_ok(),
+            "Stop killed client {stale_id} of the new master"
+        ),
+        None => eprintln!("the new master is past client id {stale_id}; the stale Stop check did not apply"),
+    }
+    drop(stale.session);
     // The console opened before the failover reconnects (one run may fail) and lands on the new master.
     let deadline = Instant::now() + Duration::from_secs(40);
     let mut outcomes = Vec::new();

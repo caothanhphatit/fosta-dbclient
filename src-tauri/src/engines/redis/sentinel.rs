@@ -8,7 +8,10 @@
 //! [`SentinelLink`] holds the engine's shared master connection. When a command fails because the master went away
 //! (connection refused or dropped) or turned into a replica (`READONLY`, `MASTERDOWN`), the link resolves again and swaps
 //! the connection. Only `READONLY`/`MASTERDOWN` and a refused connection retry the command (it never ran); a connection
-//! that dropped mid-command is swapped but the command is not sent again, since it may have run.
+//! that dropped mid-command is swapped but the command is not sent again, since it may have run. A command that timed out
+//! is not sent again either, but the sentinels are asked in the background and the connection is swapped when they name
+//! another master (a master that went silent never refuses nor drops the connection). One resolve is bounded by a few
+//! connect timeouts.
 
 use std::{
     sync::{
@@ -23,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use super::{
-    connection::{open_node, HostPort, RedisConnectOptions, RedisTopology, DEFAULT_CONNECT_TIMEOUT_MS},
+    connection::{dial_node, name_node, HostPort, RedisConnectOptions, RedisTopology, DEFAULT_CONNECT_TIMEOUT_MS},
     types::{as_items, as_pairs, as_string},
 };
 use crate::{
@@ -146,9 +149,11 @@ impl SentinelResolver {
         }
     }
 
-    /// A connection to the first sentinel that answers, and its address.
+    /// A connection to the first sentinel that answers and lets us in, and its address. Like
+    /// [`SentinelResolver::resolve`], a sentinel that refuses the login is skipped (another may have the password the
+    /// profile has); only when none lets us in is that the error.
     pub async fn sentinel(&self) -> AppResult<(HostPort, MultiplexedConnection)> {
-        let mut last = None;
+        let (mut last, mut refused) = (None, false);
         for index in self.order() {
             let sentinel = &self.sentinels[index];
             match self.sentinel_at(sentinel).await {
@@ -156,16 +161,33 @@ impl SentinelResolver {
                     self.last_good.store(index, Ordering::Relaxed);
                     return Ok((sentinel.clone(), conn));
                 }
-                Err(error) if is_auth_error(&error) => return Err(sentinel_auth_error()),
+                Err(error) if is_auth_error(&error) => refused = true,
                 Err(error) => last = Some(format!("{sentinel}: {error}")),
             }
+        }
+        if refused {
+            return Err(sentinel_auth_error());
         }
         Err(unreachable_error(last.unwrap_or_default()))
     }
 
+    /// How long one whole [`SentinelResolver::resolve`] may take: a few connect timeouts, enough for one sentinel that
+    /// does not answer and another that does, never unbounded (a failover recovery holds the link's refresh lock).
+    fn resolve_deadline(&self) -> Duration {
+        self.connect_timeout() * 3
+    }
+
     /// Asks the sentinels for the master, connects to it with the data credentials (database `db` of the options) and
-    /// checks that it is a master.
+    /// checks that it is a master, within [`SentinelResolver::resolve_deadline`].
     pub async fn resolve(&self) -> AppResult<Resolved> {
+        let deadline = self.resolve_deadline();
+        match tokio::time::timeout(deadline, self.resolve_unbounded()).await {
+            Ok(resolved) => resolved,
+            Err(_) => Err(unreachable_error(format!("no master found within {} ms", deadline.as_millis()))),
+        }
+    }
+
+    async fn resolve_unbounded(&self) -> AppResult<Resolved> {
         let mut misses = Vec::new();
         for index in self.order() {
             let sentinel = &self.sentinels[index];
@@ -216,15 +238,19 @@ impl SentinelResolver {
                 topology: RedisTopology::Standalone,
                 ..self.data.clone()
             };
-            let mut master = match open_node(&options.client()?, &options).await {
+            let mut master = match dial_node(&options.client()?, &options).await {
                 Ok(conn) => conn,
                 // Wrong data credentials: every sentinel would lead to the same refusal.
-                Err(error) if error.code() == Some("CONNECTION_ERROR") && is_login_message(error.message()) => return Err(error),
+                Err(error) if is_auth_error(&error) => return Err(error.into()),
                 Err(error) => {
-                    misses.push(Miss::Unreachable(format!("master {dialed}: {}", error.message())));
+                    misses.push(Miss::Unreachable(format!("master {dialed}: {}", AppError::from(error).message())));
                     continue;
                 }
             };
+            if let Err(error) = name_node(&mut master, &options).await {
+                misses.push(Miss::Unreachable(format!("master {dialed}: {}", error.message())));
+                continue;
+            }
             let role = tokio::time::timeout(self.connect_timeout(), redis::cmd("ROLE").query_async::<Value>(&mut master)).await;
             let is_master = match role {
                 Ok(Ok(reply)) => role_of(reply).as_deref() == Some("master"),
@@ -414,6 +440,25 @@ impl SentinelLink {
         Some(resolved.conn)
     }
 
+    /// After a command on the connection of `generation` timed out: asks the sentinels again and swaps the connection only
+    /// when they name another master (a master that went silent, e.g. behind a dead route, never refuses or drops the
+    /// connection). A slow command on the right master changes nothing. The command is never sent again.
+    pub async fn recheck(&self, generation: u64) {
+        let _one_at_a_time = self.refresh.lock().await;
+        if self.current.read().unwrap_or_else(|poisoned| poisoned.into_inner()).generation != generation {
+            return;
+        }
+        let Ok(resolved) = self.resolver.resolve().await else {
+            return;
+        };
+        let mut current = self.current.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if current.master != resolved.master {
+            current.generation += 1;
+            current.master = resolved.master;
+            current.conn = resolved.conn;
+        }
+    }
+
     /// The message when the master was lost mid-command and the link reconnected: the user runs it again.
     pub fn reconnected_error(&self, error: &RedisError) -> AppError {
         AppError::from(EngineError::connect(format!(
@@ -482,18 +527,10 @@ fn role_of(reply: Value) -> Option<String> {
     as_items(reply).into_iter().next().and_then(as_string)
 }
 
+/// A refused login, told by the client's error kind or the server's error code, never by the message text (a host name
+/// or a master name may well contain "password").
 fn is_auth_error(error: &RedisError) -> bool {
-    if matches!(error.kind(), redis::ErrorKind::AuthenticationFailed) || matches!(error.code(), Some("NOAUTH" | "WRONGPASS")) {
-        return true;
-    }
-    is_login_message(&error.to_string())
-}
-
-fn is_login_message(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    ["noauth", "wrongpass", "invalid username-password", "authentication", "password"]
-        .iter()
-        .any(|needle| lower.contains(needle))
+    matches!(error.kind(), redis::ErrorKind::AuthenticationFailed) || matches!(error.code(), Some("NOAUTH" | "WRONGPASS"))
 }
 
 fn sentinel_auth_error() -> AppError {
@@ -590,5 +627,138 @@ mod tests {
         resolver.last_good.store(1, Ordering::Relaxed);
         assert_eq!(resolver.order(), [1, 0]);
         assert!(SentinelResolver::new(&RedisConnectOptions::default()).is_err());
+    }
+
+    #[test]
+    fn logins_are_told_by_kind_and_code_not_by_text() {
+        let server = |code: &str, detail: &str| redis::make_extension_error(code.into(), Some(detail.into()));
+        assert!(is_auth_error(&server("WRONGPASS", "invalid username-password pair")));
+        assert!(is_auth_error(&server("NOAUTH", "Authentication required.")));
+        assert!(is_auth_error(&RedisError::from((redis::ErrorKind::AuthenticationFailed, "x"))));
+        assert!(!is_auth_error(&server("ERR", "No such master with that name: password-store")));
+        let io = RedisError::from(std::io::Error::other("connect to authentication.internal failed"));
+        assert!(!is_auth_error(&io));
+    }
+
+    /// A fake RESP server on 127.0.0.1: `reply` answers each command (its arguments), `None` never answers it.
+    async fn fake_server(reply: fn(&[String]) -> Option<String>) -> HostPort {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buffer = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let Ok(read) = socket.read(&mut chunk).await else { return };
+                        if read == 0 {
+                            return;
+                        }
+                        buffer.extend_from_slice(&chunk[..read]);
+                        while let Some((args, used)) = parse_command(&buffer) {
+                            buffer.drain(..used);
+                            match reply(&args) {
+                                Some(answer) => {
+                                    if socket.write_all(answer.as_bytes()).await.is_err() {
+                                        return;
+                                    }
+                                }
+                                // Hold the connection, never answer.
+                                None => std::future::pending::<()>().await,
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        HostPort::new("127.0.0.1", port)
+    }
+
+    /// One `*N` array of bulk strings from the front of `buffer`, and the bytes it used.
+    fn parse_command(buffer: &[u8]) -> Option<(Vec<String>, usize)> {
+        fn line(buffer: &[u8], at: usize) -> Option<(&str, usize)> {
+            let end = at + buffer.get(at..)?.windows(2).position(|pair| pair == b"\r\n")?;
+            Some((std::str::from_utf8(&buffer[at..end]).ok()?, end + 2))
+        }
+        let (header, mut at) = line(buffer, 0)?;
+        let count: usize = header.strip_prefix('*')?.parse().ok()?;
+        let mut args = Vec::new();
+        for _ in 0..count {
+            let (size, next) = line(buffer, at)?;
+            let size: usize = size.strip_prefix('$')?.parse().ok()?;
+            let arg = buffer.get(next..next + size)?;
+            args.push(String::from_utf8_lossy(arg).into_owned());
+            at = next + size + 2;
+            if buffer.len() < at {
+                return None;
+            }
+        }
+        Some((args, at))
+    }
+
+    fn resolver_for(sentinels: Vec<HostPort>, client_name: Option<&str>) -> SentinelResolver {
+        SentinelResolver::new(&RedisConnectOptions {
+            connect_timeout_ms: Some(300),
+            client_name: client_name.map(str::to_owned),
+            topology: RedisTopology::Sentinel {
+                master_name: "fosta".into(),
+                sentinels,
+                sentinel_username: None,
+                sentinel_password: None,
+                read_replica: false,
+            },
+            ..Default::default()
+        })
+        .unwrap()
+    }
+
+    fn upper(args: &[String]) -> Vec<String> {
+        args.iter().map(|arg| arg.to_ascii_uppercase()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_sentinel_that_refuses_the_login_is_skipped() {
+        let refusing = fake_server(|_| Some("-WRONGPASS invalid username-password pair or user is disabled.\r\n".into())).await;
+        let open = fake_server(|args| match upper(args).first().map(String::as_str) {
+            Some("PING") => Some("+PONG\r\n".into()),
+            _ => Some("+OK\r\n".into()),
+        })
+        .await;
+        let resolver = resolver_for(vec![refusing.clone(), open.clone()], None);
+        let (answered, _) = resolver.sentinel().await.expect("the second sentinel lets us in");
+        assert_eq!(answered, open);
+        // Only when none lets us in is it the sentinels' login.
+        let resolver = resolver_for(vec![refusing], None);
+        let Err(error) = resolver.sentinel().await else {
+            panic!("the only sentinel refuses the login");
+        };
+        assert!(error.to_string().contains("sentinels rejected"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_master_that_never_answers_its_client_name_does_not_hold_the_resolve() {
+        // The master answers the connection setup and ROLE but never CLIENT SETNAME.
+        let master = fake_server(|args| match upper(args).as_slice() {
+            [client, setname, ..] if client == "CLIENT" && setname == "SETNAME" => None,
+            [role] if role == "ROLE" => Some("*1\r\n$6\r\nmaster\r\n".into()),
+            _ => Some("+OK\r\n".into()),
+        })
+        .await;
+        static MASTER_PORT: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+        MASTER_PORT.store(master.port, Ordering::SeqCst);
+        let sentinel = fake_server(|args| match upper(args).as_slice() {
+            [ping] if ping == "PING" => Some("+PONG\r\n".into()),
+            [sentinel, get, ..] if sentinel == "SENTINEL" && get == "GET-MASTER-ADDR-BY-NAME" => {
+                let port = MASTER_PORT.load(Ordering::SeqCst).to_string();
+                Some(format!("*2\r\n$9\r\n127.0.0.1\r\n${}\r\n{port}\r\n", port.len()))
+            }
+            _ => Some("+OK\r\n".into()),
+        })
+        .await;
+        let resolver = resolver_for(vec![sentinel], Some("studio"));
+        let outcome = tokio::time::timeout(Duration::from_secs(10), resolver.resolve()).await;
+        let error = outcome.expect("the resolve is bounded").err().expect("no usable master");
+        assert!(error.to_string().contains("SETNAME"), "{error}");
     }
 }

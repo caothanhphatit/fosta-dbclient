@@ -26,6 +26,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   cannot reach. Forward each node yourself and fill Address map, or connect to one node as Standalone.
 - Cluster nodes usually announce IP addresses: with TLS, use Verify CA unless the certificates carry those IPs.
 
+### Fixed
+
+- Redis: a password the server rejects is reported as a connection error, not an engine error.
+
 ## [0.3.2] - 2026-11-17
 
 ### Changed

@@ -18,7 +18,10 @@ use super::{
     sentinel::{Failover, SentinelLink, SentinelOverview, SentinelResolver, DEFAULT_SENTINEL_PORT},
     types::{as_items, as_pairs, as_string},
 };
-use crate::error::{AppError, AppResult};
+use crate::{
+    contract::EngineError,
+    error::{AppError, AppResult},
+};
 
 pub const DEFAULT_PORT: u16 = 6379;
 pub(crate) const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 10_000;
@@ -289,8 +292,10 @@ impl RedisConnectOptions {
                 "A Redis Sentinel URL names at least one sentinel: redis+sentinel://host:26379/mymaster.",
             ));
         };
-        let fragment = rest.split_once('#').map(|(_, fragment)| fragment);
-        let query_master = rest
+        // The fragment and query follow the hosts; the user info before them may hold `#` or `?` itself.
+        let after_userinfo = rest.rsplit_once('@').map_or(rest, |(_, after)| after);
+        let fragment = after_userinfo.split_once('#').map(|(_, fragment)| fragment);
+        let query_master = after_userinfo
             .split_once('?')
             .map(|(_, query)| query.split('#').next().unwrap_or_default())
             .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("sentinelMasterId=")));
@@ -580,7 +585,32 @@ impl RedisEngine {
     /// A fresh connection of its own (consoles, guarded edits): a new node connection, a new cluster connection, or a
     /// connection to the master the sentinels name now.
     pub(crate) async fn new_connection(&self) -> AppResult<Conn> {
-        open_connection(&self.backend, &self.options).await
+        Ok(self.new_connection_on().await?.0)
+    }
+
+    /// [`RedisEngine::new_connection`], and behind Sentinel the address it dialed (the master then; the shared
+    /// connection may follow a failover elsewhere later, this one stays there).
+    pub(crate) async fn new_connection_on(&self) -> AppResult<(Conn, Option<HostPort>)> {
+        if let Backend::Sentinel { link } = &self.backend {
+            let resolved = link.resolver.resolve().await?;
+            return Ok((Conn::Node(resolved.conn), Some(self.options.mapped(&resolved.master))));
+        }
+        Ok((open_connection(&self.backend, &self.options).await?, None))
+    }
+
+    /// A one-off connection to the server at `node` (an address to dial), with the engine's login and TLS, database 0,
+    /// unnamed.
+    pub(crate) async fn connect_to(&self, node: &HostPort) -> AppResult<MultiplexedConnection> {
+        let options = RedisConnectOptions {
+            host: node.host.clone(),
+            port: Some(node.port),
+            db: 0,
+            client_name: None,
+            topology: RedisTopology::Standalone,
+            address_map: Vec::new(),
+            ..self.options.clone()
+        };
+        open_node(&options.client()?, &options).await
     }
 
     /// The engine reaches its master through Redis Sentinel.
@@ -634,7 +664,11 @@ impl RedisEngine {
         let error = match tokio::time::timeout(timeout, cmd.query_async::<Value>(&mut conn)).await {
             Ok(Ok(reply)) => return Ok(reply),
             Ok(Err(error)) => error,
-            Err(_) => return Err(timeout_error(timeout)),
+            Err(_) => {
+                // A silent master never refuses nor drops the connection: ask the sentinels whether it moved.
+                recheck_later(link, generation);
+                return Err(timeout_error(timeout));
+            }
         };
         let Some(failover) = Failover::of(&error) else {
             return Err(error.into());
@@ -716,7 +750,11 @@ impl RedisEngine {
                 Some(failover) => (failover, error),
                 None => return Err(error.into()),
             },
-            Err(_) => return Err(timeout_error(timeout)),
+            Err(_) => {
+                // A silent master never refuses nor drops the connection: ask the sentinels whether it moved.
+                recheck_later(link, generation);
+                return Err(timeout_error(timeout));
+            }
         };
         match link.recover(generation).await {
             Some(mut conn) if failover.retry() => with_timeout(timeout, pipe.query_async::<Vec<Value>>(&mut conn)).await,
@@ -854,16 +892,24 @@ impl RedisEngine {
     }
 }
 
-/// Splits what follows `scheme://` into the user info (before the last `@`), the hosts and the path (without query or
-/// fragment).
+/// After a command timed out on the Sentinel link's connection of `generation`: checks in the background whether the
+/// sentinels name another master now (see [`SentinelLink::recheck`]), so the caller gets its timeout at once.
+fn recheck_later(link: &Arc<SentinelLink>, generation: u64) {
+    let link = Arc::clone(link);
+    tokio::spawn(async move { link.recheck(generation).await });
+}
+
+/// Splits what follows `scheme://` into the user info (before the last `@`, so a password may hold `/`, `?` or `#`), the
+/// hosts and the path (without query or fragment).
 fn url_authority(rest: &str) -> (Option<&str>, &str, &str) {
+    let (userinfo, rest) = match rest.rsplit_once('@') {
+        Some((userinfo, rest)) => (Some(userinfo), rest),
+        None => (None, rest),
+    };
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, path) = rest.split_at(end);
+    let (hosts, path) = rest.split_at(end);
     let path = &path[..path.find(['?', '#']).unwrap_or(path.len())];
-    match authority.rsplit_once('@') {
-        Some((userinfo, hosts)) => (Some(userinfo), hosts, path),
-        None => (None, authority, path),
-    }
+    (userinfo, hosts, path)
 }
 
 /// User and password from URL user info: `user:password`, or `user` alone; Lettuce (`password_only`) reads a lone value
@@ -955,17 +1001,40 @@ async fn open_connection(backend: &Backend, options: &RedisConnectOptions) -> Ap
 
 /// A connection to one server with the options' connect timeout and client name.
 pub(crate) async fn open_node(client: &Client, options: &RedisConnectOptions) -> AppResult<MultiplexedConnection> {
+    let mut conn = dial_node(client, options).await?;
+    name_node(&mut conn, options).await?;
+    Ok(conn)
+}
+
+/// The connection and login part of [`open_node`], with the client's own error (so a failed login can be told apart by
+/// its kind).
+pub(crate) async fn dial_node(client: &Client, options: &RedisConnectOptions) -> RedisResult<MultiplexedConnection> {
     let connect_timeout = Duration::from_millis(options.connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS));
     // The per-command timeout is applied by the callers (the console has its own), so the connection itself waits.
     let config = AsyncConnectionConfig::new()
         .set_connection_timeout(Some(connect_timeout))
         .set_response_timeout(None);
-    let mut conn = client.get_multiplexed_async_connection_with_config(&config).await?;
+    client.get_multiplexed_async_connection_with_config(&config).await
+}
+
+/// Sends the options' client name, if any (see [`open_node`]).
+pub(crate) async fn name_node(conn: &mut MultiplexedConnection, options: &RedisConnectOptions) -> AppResult<()> {
+    let connect_timeout = Duration::from_millis(options.connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS));
     if let Some(name) = client_name(options) {
-        // Older servers or restrictive ACLs may refuse this; the connection is still usable.
-        let _ = redis::cmd("CLIENT").arg("SETNAME").arg(name).query_async::<Value>(&mut conn).await;
+        // Older servers or restrictive ACLs may refuse this; the connection is still usable. A server that does not answer
+        // at all fails the connect instead of holding it (and a Sentinel re-resolve) forever.
+        let mut setname = redis::cmd("CLIENT");
+        setname.arg("SETNAME").arg(name);
+        let setname = setname.query_async::<Value>(conn);
+        if tokio::time::timeout(connect_timeout, setname).await.is_err() {
+            return Err(AppError::from(EngineError::connect(format!(
+                "Redis did not answer CLIENT SETNAME within {} ms.",
+                connect_timeout.as_millis()
+            )))
+            .with_engine(super::descriptor::ID));
+        }
     }
-    Ok(conn)
+    Ok(())
 }
 
 /// The `CLIENT SETNAME` value: printable ASCII only.
@@ -1199,6 +1268,28 @@ mod tests {
             "redis+sentinel://s1:port/fosta",
         ] {
             assert!(RedisConnectOptions::from_url(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_password_with_slashes_or_hashes_stays_in_the_user_info() {
+        let cluster = RedisConnectOptions::from_url("redis+cluster://app:se/cr?et#x@h1:7001,h2:7002").unwrap();
+        assert_eq!(cluster.password.as_deref(), Some("se/cr?et#x"));
+        assert_eq!((cluster.host.as_str(), cluster.port), ("h1", Some(7001)));
+        let sentinel = RedisConnectOptions::from_url("redis+sentinel://:se/cr#et@s1:26390/fosta/2").unwrap();
+        assert_eq!((sentinel.password.as_deref(), sentinel.db), (Some("se/cr#et"), 2));
+        assert_eq!(sentinel_of(&sentinel).0, "fosta");
+        let lettuce = RedisConnectOptions::from_url("redis-sentinel://se/cr#et@s1#fosta").unwrap();
+        assert_eq!((lettuce.password.as_deref(), sentinel_of(&lettuce).0), (Some("se/cr#et"), "fosta"));
+        // A URL that does not parse never shows the user info in its error.
+        for bad in [
+            "redis+cluster://app:topsecret/x@h1:port",
+            "redis+sentinel://app:topsecret/x@s1:port/fosta",
+            "redis://app:topsecret/x@h1,h2",
+            "redis://app:topsecret/x@h1:port",
+        ] {
+            let error = RedisConnectOptions::from_url(bad).expect_err(bad);
+            assert!(!error.to_string().contains("topsecret"), "{bad}: {error}");
         }
     }
 

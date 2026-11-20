@@ -5,7 +5,11 @@
 //! 2. different: `UNWATCH` and fail with `CONFLICT` carrying the current value, nothing is written;
 //! 3. equal: `MULTI`, the edit, `EXEC`. Redis aborts the transaction when the key changed after the WATCH (the reply is
 //!    nil), which is also a `CONFLICT`.
+//!
+//! On a Redis Cluster the comparison reads go to the key's master even with "Read from replicas": a lagging replica
+//! could match a stale `expect` and the edit would overwrite a newer value.
 
+use redis::cluster_routing::{Route, SingleNodeRoutingInfo, SlotAddr};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -107,7 +111,7 @@ impl Expect {
             }
         }
         pipe.ignore_errors();
-        let replies: Vec<redis::Value> = with_timeout(engine.command_timeout(), pipe.query_async(conn)).await?;
+        let replies: Vec<redis::Value> = with_timeout(engine.command_timeout(), observe_on_master(conn, pipe, key)).await?;
         let replies = replies.into_iter().map(check).collect::<AppResult<Vec<_>>>()?;
         let first = replies.first().cloned().unwrap_or(redis::Value::Nil);
         Ok(match self {
@@ -154,6 +158,24 @@ impl Expect {
                 }
             }
         })
+    }
+}
+
+/// The route of the comparison reads: the master that owns `key`'s slot, where the WATCH and the transaction run. With
+/// "Read from replicas" the cluster would send these reads to a replica, which may lag behind and match a stale
+/// `expect`: the edit would then overwrite a newer value.
+fn master_route(key: &Blob) -> SingleNodeRoutingInfo {
+    SingleNodeRoutingInfo::SpecificNode(Route::with_key(&key.0, SlotAddr::Master))
+}
+
+/// Runs the comparison reads where the WATCH is: on a cluster, the key's master (see [`master_route`]).
+async fn observe_on_master(conn: &mut Conn, pipe: redis::Pipeline, key: &Blob) -> redis::RedisResult<Vec<redis::Value>> {
+    match conn {
+        Conn::Cluster(cluster) => {
+            let count = pipe.cmd_iter().count();
+            cluster.route_pipeline(pipe, 0, count, master_route(key)).await
+        }
+        conn => pipe.query_async(conn).await,
     }
 }
 
@@ -225,6 +247,15 @@ pub(crate) async fn apply_guarded_after(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comparison_reads_go_to_the_master_of_the_key() {
+        let key = Blob::text("user:{42}:name");
+        // Same slot as the WATCH and the transaction, and never a replica (even with "Read from replicas").
+        let route = |addr| SingleNodeRoutingInfo::SpecificNode(Route::with_key("{42}", addr));
+        assert_eq!(master_route(&key), route(SlotAddr::Master));
+        assert_ne!(master_route(&key), route(SlotAddr::ReplicaOptional));
+    }
 
     #[test]
     fn expectations_have_a_tagged_wire_form() {
