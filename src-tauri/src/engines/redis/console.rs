@@ -3,12 +3,12 @@
 
 use std::time::{Duration, Instant};
 
-use redis::{aio::MultiplexedConnection, Value};
+use redis::{aio::ConnectionLike, Value};
 use serde::{Deserialize, Serialize};
 
 use super::{
     classify::{classify, Classification, CommandClass},
-    connection::{with_timeout, RedisEngine},
+    connection::{with_timeout, Conn, RedisEngine},
     types::Blob,
 };
 use crate::error::{AppError, AppResult};
@@ -300,7 +300,7 @@ pub struct ConsoleResult {
 
 /// A console session with its own connection, so `SELECT`, `MULTI` and client settings stay in this console.
 pub struct RedisConsole {
-    conn: MultiplexedConnection,
+    conn: Conn,
     timeout: Duration,
     /// Commands queued since `MULTI`; `EXEC` is classified as the highest of them.
     queued: Option<Vec<CommandClass>>,
@@ -357,7 +357,7 @@ impl RedisConsole {
             cmd.arg(arg.as_slice());
         }
         let mut conn = self.conn.clone();
-        let reply = with_timeout(self.timeout, conn.send_packed_command(&cmd)).await;
+        let reply = with_timeout(self.timeout, conn.req_packed_command(&cmd)).await;
         self.track_transaction(&classification, &reply);
         Ok((classification, RedisReply::from_value(reply?)))
     }
@@ -418,7 +418,7 @@ impl RedisConsole {
             cmd.arg(arg.as_slice());
         }
         let mut conn = self.conn.clone();
-        let reply = with_timeout(self.timeout, conn.send_packed_command(&cmd)).await;
+        let reply = with_timeout(self.timeout, conn.req_packed_command(&cmd)).await;
         self.track_transaction(&classification, &reply);
         match reply {
             Ok(value) => done(classification, Some(RedisReply::from_value(value)), None),

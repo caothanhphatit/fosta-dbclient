@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{
-    connection::{with_timeout, RedisEngine},
+    connection::{with_timeout, Conn, RedisEngine},
     edit::{EditResult, RedisEdit},
     types::{as_bytes, as_f64, as_i64, as_items, check, Blob},
 };
@@ -78,7 +78,7 @@ fn blob(value: &redis::Value) -> Option<Blob> {
 
 impl Expect {
     /// Reads the same part of the key as it is now, in the same shape.
-    async fn observe(&self, engine: &RedisEngine, conn: &mut redis::aio::MultiplexedConnection, key: &Blob) -> AppResult<Expect> {
+    async fn observe(&self, engine: &RedisEngine, conn: &mut Conn, key: &Blob) -> AppResult<Expect> {
         let mut pipe = redis::pipe();
         match self {
             Expect::String { .. } => {

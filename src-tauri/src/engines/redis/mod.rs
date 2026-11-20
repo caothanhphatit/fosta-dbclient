@@ -59,7 +59,12 @@ impl From<::redis::RedisError> for AppError {
         let login = matches!(code.as_deref(), Some("NOAUTH" | "WRONGPASS"));
         let kind = if error.is_timeout() {
             ErrorKind::Timeout
-        } else if login || error.is_connection_refusal() || error.is_connection_dropped() || error.is_io_error() {
+        } else if login
+            || error.is_connection_refusal()
+            || error.is_connection_dropped()
+            || error.is_io_error()
+            || is_cluster_unreachable(&error)
+        {
             ErrorKind::Connect
         } else if code.is_some() {
             ErrorKind::Server
@@ -72,10 +77,48 @@ impl From<::redis::RedisError> for AppError {
     }
 }
 
+/// No cluster node could be reached: none of the seeds answered, or the node owning a slot has no connection.
+fn is_cluster_unreachable(error: &::redis::RedisError) -> bool {
+    matches!(error.kind(), ::redis::ErrorKind::ClusterConnectionNotFound)
+        || error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("failed to create initial connections")
+}
+
 /// Turns a client error into a sentence for the user.
 pub(crate) fn redis_error_message(error: &::redis::RedisError) -> String {
     let text = error.to_string();
     let lower = text.to_ascii_lowercase();
+    let detail = error.detail().unwrap_or(&text);
+    match error.code() {
+        Some("CROSSSLOT") => {
+            return "The keys live in different hash slots of the cluster, so one command cannot touch them together. Give \
+                    them a common {hashtag} (user:{42}:name, user:{42}:email) or run one command per key."
+                .into()
+        }
+        Some("MOVED" | "ASK") => {
+            return format!(
+                "This key lives on another node of a Redis Cluster ({detail}). Connect with the Cluster topology to follow \
+                 the cluster's redirects."
+            )
+        }
+        Some("CLUSTERDOWN") => return format!("The Redis Cluster is down or does not cover every hash slot: {detail}"),
+        Some("READONLY") => {
+            return "This server is a read-only replica, so it refuses writes. Connect to the master (or through Sentinel) \
+                    to change data."
+                .into()
+        }
+        Some("MASTERDOWN") => {
+            return "The replica lost its link with the master and refuses to answer until it is back (failover in \
+                    progress?)."
+                .into()
+        }
+        _ => {}
+    }
+    if is_cluster_unreachable(error) {
+        return format!("Could not reach any node of the Redis Cluster. Check the seed nodes and their ports. ({text})");
+    }
     if lower.contains("noauth") || lower.contains("authentication required") {
         "Redis asks for a password. Enter the password (and the ACL user name if there is one).".into()
     } else if lower.contains("wrongpass") || lower.contains("invalid username-password") || lower.contains("authentication failed") {
@@ -93,5 +136,31 @@ pub(crate) fn redis_error_message(error: &::redis::RedisError) -> String {
         detail.to_owned()
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn server_error(code: &str, detail: &str) -> AppError {
+        ::redis::make_extension_error(code.into(), Some(detail.into())).into()
+    }
+
+    #[test]
+    fn cluster_errors_read_as_sentences() {
+        let cross = server_error("CROSSSLOT", "Keys in request don't hash to the same slot");
+        assert!(cross.message().contains("hashtag"), "{}", cross.message());
+        assert_eq!(cross.payload().unwrap()["vendorCode"], "CROSSSLOT");
+        assert!(server_error("MOVED", "3999 127.0.0.1:7002").message().contains("127.0.0.1:7002"));
+        assert!(server_error("READONLY", "You can't write against a read only replica.")
+            .message()
+            .contains("replica"));
+        assert!(server_error("CLUSTERDOWN", "Hash slot not served")
+            .message()
+            .contains("Hash slot not served"));
+        assert!(server_error("MASTERDOWN", "Link with MASTER is down").message().contains("master"));
+        let unreachable: AppError = ::redis::RedisError::from((::redis::ErrorKind::ClusterConnectionNotFound, "no node")).into();
+        assert_eq!(unreachable.code(), Some("CONNECTION_ERROR"));
     }
 }

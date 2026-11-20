@@ -4,7 +4,7 @@
 //! |---------------|------------------------------------------------------------|------------------------------------------------------------|
 //! | `Read`        | Reads data or metadata                                     | GET, HGETALL, SCAN, ZRANGE, XRANGE, INFO, JSON.GET, FT.SEARCH |
 //! | `Write`       | Changes data of the keys it names                          | SET, HSET, LPUSH, ZADD, XADD, EXPIRE, DEL/UNLINK of keys    |
-//! | `Destructive` | Can drop data beyond the keys it names, or cannot be checked | FLUSHALL, FLUSHDB, SWAPDB, EVAL/EVALSHA/FCALL (scripts can delete by pattern), FUNCTION FLUSH, FT.DROPINDEX DD |
+//! | `Destructive` | Can drop data beyond the keys it names, or cannot be checked | FLUSHALL, FLUSHDB, SWAPDB, EVAL/EVALSHA/FCALL (scripts can delete by pattern), FUNCTION FLUSH, FT.DROPINDEX DD, CLUSTER RESET/FORGET/FLUSHSLOTS/DELSLOTS |
 //! | `Admin`       | Changes server state, not data, or blocks the server; reads that expose secrets or other clients (CONFIG GET, ACL LIST/USERS/GETUSER/LOG, CLIENT LIST/INFO, SLOWLOG GET, LATENCY) | CONFIG SET, SHUTDOWN, DEBUG, KEYS *, SCRIPT FLUSH, ACL SETUSER, CLIENT KILL, REPLICAOF, CLUSTER ... |
 //! | `Session`     | Changes only this connection                               | SELECT, MULTI/EXEC/DISCARD, WATCH, CLIENT SETNAME, HELLO, AUTH |
 //! | `Unsupported` | Needs a streaming channel (deferred)                       | SUBSCRIBE, PSUBSCRIBE, SSUBSCRIBE, MONITOR, SYNC, PSYNC     |
@@ -443,7 +443,7 @@ const CONTAINERS: &[(&str, &[&str], &[&str])] = &[
             "GETKEYSINSLOT",
             "LINKS",
         ],
-        &[],
+        &["RESET", "FORGET", "FLUSHSLOTS", "DELSLOTS", "DELSLOTSRANGE"],
     ),
     ("XINFO", &["STREAM", "GROUPS", "CONSUMERS", "HELP"], &[]),
     ("XGROUP", &[], &[]),
@@ -541,7 +541,12 @@ pub fn classify(args: &[Vec<u8>]) -> Classification {
             } else {
                 CommandClass::Destructive
             };
-            return result(class, full, Some("Removes server-side scripts or functions."));
+            let reason = if name == "CLUSTER" {
+                "Removes hash slots or nodes from the cluster: the keys they hold become unreachable."
+            } else {
+                "Removes server-side scripts or functions."
+            };
+            return result(class, full, Some(reason));
         }
         return match name.as_str() {
             "CLIENT" if CLIENT_SESSION.contains(&sub.as_str()) => result(CommandClass::Session, full, None),
@@ -656,5 +661,30 @@ mod tests {
         let config = classify(&[b"config".to_vec(), b"set".to_vec()]);
         assert_eq!(config.command, "CONFIG SET");
         assert!(config.reason.is_some());
+    }
+
+    #[test]
+    fn cluster_commands_that_drop_slots_or_nodes_are_destructive() {
+        use CommandClass::*;
+        for line in [
+            "cluster reset hard",
+            "CLUSTER FORGET 07c37dfeb235213a872192d90877d0cd55635b91",
+            "cluster flushslots",
+            "cluster delslots 1 2 3",
+            "cluster delslotsrange 0 100",
+        ] {
+            assert_eq!(class_of(line), Destructive, "{line}");
+        }
+        assert!(classify(&[b"cluster".to_vec(), b"reset".to_vec()])
+            .reason
+            .unwrap()
+            .contains("cluster"));
+        for (line, expected) in [
+            ("cluster info", Read),
+            ("cluster shards", Read),
+            ("cluster meet 127.0.0.1 7001", Admin),
+        ] {
+            assert_eq!(class_of(line), expected, "{line}");
+        }
     }
 }

@@ -95,7 +95,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
 base64 = "0.22"
-redis = { version = "1.7", default-features = false, features = ["tokio-rustls-comp", "tls-rustls-insecure"], optional = true }
+redis = { version = "1.7", default-features = false, features = ["tokio-rustls-comp", "tls-rustls-insecure", "cluster-async"], optional = true }
 # Engine modules (PostgreSQL, SQLite, ClickHouse over reqwest, Oracle). Oracle Instant Client is loaded at runtime.
 tokio-postgres = { version = "0.7.18", optional = true }
 tokio-postgres-rustls = { version = "0.14", features = ["ring"], optional = true }

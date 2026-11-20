@@ -1,8 +1,15 @@
 //! Connection options, connecting, and server information.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use redis::{aio::MultiplexedConnection, AsyncConnectionConfig, Client, ConnectionAddr, ConnectionInfo, IntoConnectionInfo, Value};
+use redis::{
+    aio::{ConnectionLike, MultiplexedConnection},
+    cluster::ClusterClient,
+    cluster_async::ClusterConnection,
+    cluster_routing::{MultipleNodeRoutingInfo, RoutingInfo},
+    AsyncConnectionConfig, Client, Cmd, ConnectionAddr, ConnectionInfo, IntoConnectionInfo, Pipeline, RedisError, RedisFuture, RedisResult,
+    ServerError, Value,
+};
 use serde::{Deserialize, Serialize};
 
 use super::types::{as_items, as_pairs, as_string};
@@ -183,12 +190,52 @@ impl RedisConnectOptions {
     }
 }
 
-/// An open Redis connection. Browsing and edits share one multiplexed connection (cheap to clone); each console gets its
-/// own so `SELECT`, `MULTI` and `CLIENT` state stay in that console.
+/// A connection the engine runs commands on: one node (standalone, or the master Sentinel resolved) or a whole Redis
+/// Cluster, which routes each command to the node that owns its slot. Cheap to clone; clones share the connection.
+#[derive(Clone)]
+pub enum Conn {
+    Node(MultiplexedConnection),
+    Cluster(ClusterConnection),
+}
+
+impl ConnectionLike for Conn {
+    fn req_packed_command<'a>(&'a mut self, cmd: &'a Cmd) -> RedisFuture<'a, Value> {
+        match self {
+            Self::Node(conn) => conn.req_packed_command(cmd),
+            Self::Cluster(conn) => conn.req_packed_command(cmd),
+        }
+    }
+
+    fn req_packed_commands<'a>(&'a mut self, pipeline: &'a Pipeline, offset: usize, count: usize) -> RedisFuture<'a, Vec<Value>> {
+        match self {
+            Self::Node(conn) => conn.req_packed_commands(pipeline, offset, count),
+            Self::Cluster(conn) => conn.req_packed_commands(pipeline, offset, count),
+        }
+    }
+
+    fn get_db(&self) -> i64 {
+        match self {
+            Self::Node(conn) => conn.get_db(),
+            Self::Cluster(conn) => conn.get_db(),
+        }
+    }
+}
+
+/// Where new connections come from.
+#[derive(Clone)]
+pub enum Backend {
+    /// One server, reached through `client`.
+    Node { client: Arc<Client> },
+    /// A Redis Cluster, discovered from its seed nodes.
+    Cluster { client: Arc<ClusterClient> },
+}
+
+/// An open Redis connection. Browsing and edits share one connection (cheap to clone); each console gets its own so
+/// `SELECT`, `MULTI` and `CLIENT` state stay in that console.
 #[derive(Clone)]
 pub struct RedisEngine {
-    pub(crate) client: Client,
-    pub(crate) conn: MultiplexedConnection,
+    pub(crate) backend: Backend,
+    pub(crate) conn: Conn,
     pub(crate) options: RedisConnectOptions,
     pub(crate) modules: Vec<RedisModule>,
 }
@@ -208,10 +255,12 @@ impl RedisEngine {
                 ))
             }
         }
-        let client = options.client()?;
-        let conn = open_connection(&client, &options).await?;
+        let backend = Backend::Node {
+            client: Arc::new(options.client()?),
+        };
+        let conn = open_connection(&backend, &options).await?;
         let mut engine = Self {
-            client,
+            backend,
             conn,
             options,
             modules: Vec::new(),
@@ -220,8 +269,14 @@ impl RedisEngine {
         Ok(engine)
     }
 
-    pub(crate) async fn new_connection(&self) -> AppResult<MultiplexedConnection> {
-        open_connection(&self.client, &self.options).await
+    /// A fresh connection of its own (consoles, guarded edits): a new node connection, or a new cluster connection.
+    pub(crate) async fn new_connection(&self) -> AppResult<Conn> {
+        open_connection(&self.backend, &self.options).await
+    }
+
+    /// The engine talks to a Redis Cluster.
+    pub fn is_cluster(&self) -> bool {
+        matches!(self.backend, Backend::Cluster { .. })
     }
 
     pub fn options(&self) -> &RedisConnectOptions {
@@ -251,15 +306,55 @@ impl RedisEngine {
         with_timeout(self.command_timeout(), cmd.query_async::<Value>(&mut conn)).await
     }
 
+    /// Runs one command on every master: one `(address, reply)` per master. A single node answers alone.
+    pub(crate) async fn query_masters(&self, cmd: &redis::Cmd) -> AppResult<Vec<(String, Value)>> {
+        match &self.conn {
+            Conn::Node(_) => {
+                let reply = self.query(cmd).await?;
+                Ok(vec![(self.address(), reply)])
+            }
+            Conn::Cluster(conn) => {
+                let mut conn = conn.clone();
+                let routing = RoutingInfo::MultiNode((MultipleNodeRoutingInfo::AllMasters, None));
+                let reply = with_timeout(self.command_timeout(), conn.route_command(cmd.clone(), routing)).await?;
+                Ok(as_pairs(reply)
+                    .into_iter()
+                    .map(|(address, reply)| (as_string(address).unwrap_or_default(), reply))
+                    .collect())
+            }
+        }
+    }
+
+    /// `host:port` of the configured endpoint.
+    fn address(&self) -> String {
+        format!("{}:{}", self.options.host.trim(), self.options.port.unwrap_or(DEFAULT_PORT))
+    }
+
     /// Runs a pipeline; server errors come back as `Value::ServerError` items instead of failing the whole batch.
+    ///
+    /// On a cluster a non-atomic pipeline may span hash slots, which one cluster pipeline cannot: each command then runs
+    /// on its own, concurrently, and the replies come back in order. Ignored commands (`.ignore()`) still answer there.
     pub(crate) async fn pipeline(&self, pipe: &mut redis::Pipeline) -> AppResult<Vec<Value>> {
-        let mut conn = self.conn.clone();
         pipe.ignore_errors();
-        with_timeout(self.command_timeout(), pipe.query_async::<Vec<Value>>(&mut conn)).await
+        match &self.conn {
+            Conn::Cluster(conn) if !pipe.is_transaction() => {
+                let replies = pipe.cmd_iter().map(|cmd| {
+                    let mut conn = conn.clone();
+                    async move { conn.req_packed_command(cmd).await }
+                });
+                let replies = futures_util::future::join_all(replies);
+                let replies = with_timeout(self.command_timeout(), async { Ok(replies.await) }).await?;
+                replies.into_iter().map(server_error_value).collect()
+            }
+            conn => {
+                let mut conn = conn.clone();
+                with_timeout(self.command_timeout(), pipe.query_async::<Vec<Value>>(&mut conn)).await
+            }
+        }
     }
 
     pub async fn ping(&self) -> AppResult<()> {
-        self.query(&redis::cmd("PING")).await.map(|_| ())
+        self.query_masters(&redis::cmd("PING")).await.map(|_| ())
     }
 
     /// `INFO` parsed into sections, plus the figures the connection view shows.
@@ -365,8 +460,25 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-async fn open_connection(client: &Client, options: &RedisConnectOptions) -> AppResult<MultiplexedConnection> {
+/// A server error reply stays a `Value::ServerError` item; any other failure (connection, timeout) fails the batch.
+fn server_error_value(reply: RedisResult<Value>) -> AppResult<Value> {
+    match reply {
+        Ok(value) => Ok(value),
+        Err(error) => ServerError::try_from(error)
+            .map(Value::ServerError)
+            .map_err(|error: RedisError| error.into()),
+    }
+}
+
+async fn open_connection(backend: &Backend, options: &RedisConnectOptions) -> AppResult<Conn> {
     let connect_timeout = Duration::from_millis(options.connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS));
+    let client = match backend {
+        Backend::Node { client } => client,
+        Backend::Cluster { client } => {
+            let conn = with_timeout(connect_timeout, client.get_async_connection()).await?;
+            return Ok(Conn::Cluster(conn));
+        }
+    };
     // The per-command timeout is applied by the callers (the console has its own), so the connection itself waits.
     let config = AsyncConnectionConfig::new()
         .set_connection_timeout(Some(connect_timeout))
@@ -377,7 +489,7 @@ async fn open_connection(client: &Client, options: &RedisConnectOptions) -> AppR
         // Older servers or restrictive ACLs may refuse this; the connection is still usable.
         let _ = redis::cmd("CLIENT").arg("SETNAME").arg(name).query_async::<Value>(&mut conn).await;
     }
-    Ok(conn)
+    Ok(Conn::Node(conn))
 }
 
 pub(crate) async fn with_timeout<T>(timeout: Duration, future: impl std::future::Future<Output = redis::RedisResult<T>>) -> AppResult<T> {

@@ -8,7 +8,8 @@
 //! Nested replies are shown as redis-cli text in their cell. A server error reply fails the run with `ENGINE_ERROR`, the
 //! server's error name (`WRONGTYPE`, `ERR`) as the vendor code and the failing line as position and statement; the lines
 //! before it keep their results. Stop cancels with `CLIENT UNBLOCK` (blocking commands), falling back to killing the
-//! session's connection, which the next run replaces.
+//! session's connection, which the next run replaces. Without a client id (a cluster console spans nodes) Stop makes the
+//! run stop waiting and replaces the connection the same way.
 
 use std::sync::{
     atomic::{AtomicBool, AtomicI64, Ordering},
@@ -16,8 +17,8 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use futures_util::future::BoxFuture;
-use tokio::sync::Mutex;
+use futures_util::{future::BoxFuture, FutureExt};
+use tokio::sync::{Mutex, Notify};
 
 use super::{
     classify::CommandClass,
@@ -41,6 +42,31 @@ struct Shared {
     killed: AtomicBool,
     /// A cancel was requested during the current run, so its failure reads as "cancelled".
     cancelled: AtomicBool,
+    /// Wakes the run when it cannot be stopped on the server (no `CLIENT ID`): the run drops what it waits for.
+    abort: Notify,
+}
+
+impl Shared {
+    /// The fallback cancel when the server cannot be told to stop: the run stops waiting and the next run opens a new
+    /// connection (the command may still finish on the server).
+    fn abort(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        self.killed.store(true, Ordering::SeqCst);
+        self.abort.notify_one();
+    }
+
+    /// Forgets an abort that arrived while no run was waiting.
+    fn clear_abort(&self) {
+        let _ = self.abort.notified().now_or_never();
+    }
+
+    /// Runs `work` until it finishes or [`Shared::abort`] is called; `None` when aborted.
+    async fn abortable<T>(&self, work: impl std::future::Future<Output = T>) -> Option<T> {
+        tokio::select! {
+            result = work => Some(result),
+            _ = self.abort.notified() => None,
+        }
+    }
 }
 
 /// The session's connection and the logical database it is on now (the database of the engine it was opened with, until a
@@ -112,9 +138,9 @@ impl Canceller for RedisCanceller {
         Box::pin(async move {
             let id = shared.client_id.load(Ordering::SeqCst);
             if id == 0 {
-                return Err(AppError::new(
-                    "This connection cannot be stopped: the server did not report its client id.",
-                ));
+                // No client id to unblock or kill (a cluster console spans nodes): stop waiting and replace the connection.
+                shared.abort();
+                return Ok(());
             }
             shared.cancelled.store(true, Ordering::SeqCst);
             let unblocked = control
@@ -210,6 +236,7 @@ impl Session for RedisSession {
             }
         }
         self.shared.cancelled.store(false, Ordering::SeqCst);
+        self.shared.clear_abort();
         if self.shared.killed.swap(false, Ordering::SeqCst) {
             *console = self.engine.open_console().await?;
             *db = self.initial_db;
@@ -243,7 +270,10 @@ impl Session for RedisSession {
                     .with_statement(index, line)
                     .with_position(ErrorPosition::line(line_number as u32))
             };
-            let reply = match console.exec_line(line).await {
+            let Some(outcome) = self.shared.abortable(console.exec_line(line)).await else {
+                return Err(failed(AppError::new("Cancelled."), true));
+            };
+            let reply = match outcome {
                 Ok((_, RedisReply::Error { code, message })) => {
                     let cancelled = code == "UNBLOCKED" && self.shared.cancelled.load(Ordering::SeqCst);
                     return Err(failed(reply_error(&code, message.as_deref()), cancelled));
@@ -351,6 +381,24 @@ mod tests {
         assert_eq!(detail["vendorCode"], "WRONGTYPE");
         assert_eq!(detail["engine"], "redis");
         assert_eq!(reply_error("ERR", None).message(), "The server returned an error (ERR)");
+    }
+
+    #[tokio::test]
+    async fn an_abort_stops_a_run_without_a_client_id() {
+        let shared = Arc::new(Shared::default());
+        let run = {
+            let shared = Arc::clone(&shared);
+            tokio::spawn(async move { shared.abortable(std::future::pending::<()>()).await })
+        };
+        tokio::task::yield_now().await;
+        shared.abort();
+        assert_eq!(run.await.unwrap(), None);
+        assert!(shared.cancelled.load(Ordering::SeqCst));
+        assert!(shared.killed.load(Ordering::SeqCst));
+        // An abort no run was waiting for does not stop the next one.
+        shared.abort();
+        shared.clear_abort();
+        assert_eq!(shared.abortable(async { 7 }).await, Some(7));
     }
 
     #[test]
