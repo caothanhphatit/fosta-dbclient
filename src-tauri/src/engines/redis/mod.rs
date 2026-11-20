@@ -1,8 +1,9 @@
 //! Redis engine (key-value capability in ADR 0001; also Valkey and other RESP servers).
 //!
 //! The core:
-//! - [`connection`]: options (standalone or Redis Cluster, TLS, ACL user, RESP2/RESP3), [`RedisEngine::connect`], server
+//! - [`connection`]: options (standalone, Redis Cluster or Sentinel, TLS, ACL user, RESP2/RESP3), [`RedisEngine::connect`], server
 //!   info.
+//! - [`sentinel`]: finding the master through Redis Sentinel and following a failover.
 //! - [`cluster`]: the Redis Cluster shard map, commands sent to one node, the composite SCAN cursor, the cluster overview.
 //! - [`scan`] and [`tree`]: SCAN-based key browsing (never `KEYS`) and an incremental prefix tree.
 //! - [`values`]: typed, paged reads for every data type; big collections are always read in windows.
@@ -19,9 +20,8 @@
 //! - [`session`]: console sessions with a `CLIENT UNBLOCK` canceller.
 //!
 //! A Redis Cluster connection has database 0 only, no vector search, and a console without MULTI/EXEC, WATCH or SCAN.
-//! Out of scope (connecting says so instead of guessing): the **Sentinel** topology (see [`connection::RedisTopology`]),
-//! Redis Cluster through SSH, and Pub/Sub and `MONITOR`, which the console refuses with a message instead of hanging a
-//! connection.
+//! Out of scope (connecting says so instead of guessing): Redis Cluster or Sentinel through SSH, and Pub/Sub and `MONITOR`,
+//! which the console refuses with a message instead of hanging a connection.
 
 pub mod adapter;
 pub mod catalog;
@@ -36,6 +36,7 @@ pub mod guard;
 pub mod ops;
 mod profile;
 pub mod scan;
+pub mod sentinel;
 pub mod session;
 pub mod tree;
 pub mod types;
@@ -48,6 +49,8 @@ mod cluster_contract_tests;
 mod contract_tests;
 #[cfg(test)]
 mod live_tests;
+#[cfg(test)]
+mod sentinel_contract_tests;
 
 pub use adapter::{RedisAdapter, REDIS};
 

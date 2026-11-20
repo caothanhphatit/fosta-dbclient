@@ -1,0 +1,57 @@
+# Redis Sentinel for the Redis engine's sentinel suite: a master, one replica and three sentinels in one container,
+# announced as 127.0.0.1 so the host reaches every process. Test-only credentials; never reuse them.
+# docker compose -f dev/compose/redis-sentinel.yml up -d --wait
+# Data nodes 127.0.0.1:6390 (master at start) and 6391 (replica), password studio-redis. Sentinels 127.0.0.1:26390-26392,
+# password studio-sentinel (different on purpose), master name fosta. REDIS_IMAGE picks the image, e.g. redis:8.2 or
+# valkey/valkey:8.1 (CI runs both). The suite fails over; which port is master afterwards is not fixed.
+
+name: fosta-dev-redis-sentinel
+
+services:
+  redis-sentinel:
+    image: ${REDIS_IMAGE:-redis:8.2}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        S=$$(command -v valkey-server || command -v redis-server); C=$$(command -v valkey-cli || command -v redis-cli)
+        mkdir -p /data
+        for p in 6390 6391; do
+          if [ $$p = 6391 ]; then R="--replicaof 127.0.0.1 6390"; else R=""; fi
+          $$S --port $$p $$R --requirepass studio-redis --masterauth studio-redis --replica-announce-ip 127.0.0.1 \
+              --save "" --appendonly no --maxmemory 64mb --dir /data --logfile /data/$$p.log --daemonize yes
+        done
+        until $$C -p 6391 -a studio-redis --no-auth-warning ping >/dev/null 2>&1; do sleep 0.2; done
+        for p in 26390 26391 26392; do
+          cat > /data/sentinel-$$p.conf <<EOF
+        port $$p
+        dir /data
+        logfile /data/sentinel-$$p.log
+        sentinel announce-ip 127.0.0.1
+        requirepass studio-sentinel
+        sentinel sentinel-pass studio-sentinel
+        sentinel monitor fosta 127.0.0.1 6390 2
+        sentinel auth-pass fosta studio-redis
+        sentinel down-after-milliseconds fosta 2000
+        sentinel failover-timeout fosta 10000
+        EOF
+          $$S /data/sentinel-$$p.conf --sentinel --daemonize yes
+        done
+        exec tail -F /data/sentinel-26390.log
+    ports:
+      - "127.0.0.1:6390-6391:6390-6391"
+      - "127.0.0.1:26390-26392:26390-26392"
+    mem_limit: 256m
+    # Healthy once every sentinel names the master, sees the replica and knows the two other sentinels.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          C="$$(command -v valkey-cli || command -v redis-cli) -a studio-sentinel --no-auth-warning";
+          for p in 26390 26391 26392; do
+          $$C -p $$p sentinel get-master-addr-by-name fosta | grep -q 127.0.0.1 || exit 1;
+          [ "$$($$C -p $$p sentinel replicas fosta | grep -c '^ip$$')" = 1 ] || exit 1;
+          [ "$$($$C -p $$p sentinel sentinels fosta | grep -c '^ip$$')" = 2 ] || exit 1;
+          done
+      interval: 3s
+      retries: 40

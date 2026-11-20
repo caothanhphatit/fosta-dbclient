@@ -4,8 +4,9 @@
 
 use std::fs;
 
-use super::connection::{
-    cluster_db_error, sentinel_not_yet, HostPort, RedisConnectOptions, RedisTls, RedisTopology, TlsVerify, DEFAULT_PORT,
+use super::{
+    connection::{cluster_db_error, HostPort, RedisConnectOptions, RedisTls, RedisTopology, TlsVerify, DEFAULT_PORT},
+    sentinel::{master_name_required, DEFAULT_SENTINEL_PORT},
 };
 use crate::{
     contract::{ConnectRequest, SecretSlot, TlsConfig, TlsMode},
@@ -86,26 +87,41 @@ pub fn options(request: &ConnectRequest) -> AppResult<RedisConnectOptions> {
             if spec.ssh.as_ref().is_some_and(|ssh| ssh.enabled) {
                 return Err(AppError::new(SSH_REFUSAL));
             }
-            if kind == "sentinel" {
-                return Err(sentinel_not_yet());
-            }
-            if db != 0 {
-                return Err(cluster_db_error());
-            }
-            let mut seeds = vec![HostPort::new(request.endpoint.host.clone(), request.endpoint.port)];
-            for node in HostPort::parse_list(spec.option("nodes").unwrap_or_default(), DEFAULT_PORT)? {
-                if !seeds.contains(&node) {
-                    seeds.push(node);
+            let mut nodes = vec![HostPort::new(request.endpoint.host.clone(), request.endpoint.port)];
+            let default_port = if kind == "sentinel" { DEFAULT_SENTINEL_PORT } else { DEFAULT_PORT };
+            for node in HostPort::parse_list(spec.option("nodes").unwrap_or_default(), default_port)? {
+                if !nodes.contains(&node) {
+                    nodes.push(node);
                 }
             }
-            RedisTopology::Cluster {
-                seeds,
-                read_from_replicas: matches!(spec.option("readFromReplicas"), Some("true" | "1")),
+            if kind == "sentinel" {
+                let master_name = spec.option("masterName").map(str::trim).filter(|name| !name.is_empty());
+                RedisTopology::Sentinel {
+                    master_name: master_name.ok_or_else(master_name_required)?.to_owned(),
+                    sentinels: nodes,
+                    sentinel_username: spec
+                        .option("sentinelUser")
+                        .map(|user| user.trim().to_owned())
+                        .filter(|user| !user.is_empty()),
+                    sentinel_password: request
+                        .secrets
+                        .get(SecretSlot::SecondaryPassword)
+                        .map(str::to_owned)
+                        .filter(|password| !password.is_empty()),
+                    read_replica: false,
+                }
+            } else if db != 0 {
+                return Err(cluster_db_error());
+            } else {
+                RedisTopology::Cluster {
+                    seeds: nodes,
+                    read_from_replicas: matches!(spec.option("readFromReplicas"), Some("true" | "1")),
+                }
             }
         }
         other => {
             return Err(AppError::new(format!(
-                "Unknown Redis topology `{other}`: use standalone or cluster."
+                "Unknown Redis topology `{other}`: use standalone, cluster or sentinel."
             )))
         }
     };
@@ -245,10 +261,64 @@ mod tests {
         assert!(options_of(cluster_spec(&[("topology", "sentinel")]))
             .unwrap_err()
             .to_string()
-            .contains("not supported yet"));
+            .contains("master name"));
         assert!(options_of(cluster_spec(&[("topology", "mesh")])).is_err());
         assert!(options_of(cluster_spec(&[("topology", "cluster"), ("nodes", "a:x")])).is_err());
         assert!(options_of(cluster_spec(&[("addressMap", "10.0.1.5:6379")])).is_err());
+    }
+
+    #[test]
+    fn the_sentinel_topology_reads_the_master_sentinels_and_the_secondary_password() {
+        let spec = cluster_spec(&[
+            ("topology", "sentinel"),
+            ("masterName", " fosta "),
+            ("nodes", "127.0.0.1:26391, sentinel-3"),
+            ("sentinelUser", "watcher"),
+            ("db", "3"),
+            ("addressMap", "10.0.1.5:6379=127.0.0.1:16390"),
+        ]);
+        let mut secrets = ConnectSecrets::password("data-pw");
+        secrets.values.insert(SecretSlot::SecondaryPassword, "sentinel-pw".into());
+        let options = options(&ConnectRequest {
+            secrets,
+            ..request(spec.clone(), "")
+        })
+        .unwrap();
+        let RedisTopology::Sentinel {
+            master_name,
+            sentinels,
+            sentinel_username,
+            sentinel_password,
+            read_replica,
+        } = &options.topology
+        else {
+            panic!("sentinel topology");
+        };
+        assert_eq!(master_name, "fosta");
+        // The endpoint first, then the other sentinels (default port 26379).
+        assert_eq!(
+            sentinels,
+            &vec![
+                HostPort::new("127.0.0.1", 16379),
+                HostPort::new("127.0.0.1", 26391),
+                HostPort::new("sentinel-3", 26379),
+            ]
+        );
+        assert_eq!(
+            (sentinel_username.as_deref(), sentinel_password.as_deref(), *read_replica),
+            (Some("watcher"), Some("sentinel-pw"), false)
+        );
+        // The data side keeps its own password and database; the address map applies to the master.
+        assert_eq!((options.password.as_deref(), options.db), (Some("data-pw"), 3));
+        assert_eq!(options.address_map.len(), 1);
+        // No sentinel password: none is sent (the resolver falls back to the data password on NOAUTH).
+        let options = options_of(spec).unwrap();
+        let RedisTopology::Sentinel { sentinel_password, .. } = &options.topology else {
+            panic!("sentinel topology");
+        };
+        assert!(sentinel_password.is_none());
+        let blank = cluster_spec(&[("topology", "sentinel"), ("masterName", "  ")]);
+        assert!(options_of(blank).unwrap_err().to_string().contains("master name"));
     }
 
     #[test]

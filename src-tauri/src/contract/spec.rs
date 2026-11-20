@@ -55,6 +55,8 @@ pub enum SecretSlot {
     TlsKeyPassphrase,
     ApiKey,
     Token,
+    /// A second password of the same connection, for an engine form field that needs one (the Redis Sentinel password).
+    SecondaryPassword,
 }
 
 /// Secrets for one connect call. Never serialised.

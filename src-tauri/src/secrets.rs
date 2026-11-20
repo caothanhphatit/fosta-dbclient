@@ -23,13 +23,14 @@ const LEGACY_AI_ACCOUNT: &str = "ai-api-key";
 pub const LEGACY_AI_CONNECTION: &str = "default";
 
 /// Every slot a connection can have a secret in.
-pub const CONNECTION_SLOTS: [SecretSlot; 6] = [
+pub const CONNECTION_SLOTS: [SecretSlot; 7] = [
     SecretSlot::Password,
     SecretSlot::SshPassword,
     SecretSlot::SshKeyPassphrase,
     SecretSlot::TlsKeyPassphrase,
     SecretSlot::ApiKey,
     SecretSlot::Token,
+    SecretSlot::SecondaryPassword,
 ];
 
 /// What a secret belongs to.
@@ -84,6 +85,7 @@ fn slot_name(slot: SecretSlot) -> &'static str {
         SecretSlot::TlsKeyPassphrase => "tlsKeyPassphrase",
         SecretSlot::ApiKey => "apiKey",
         SecretSlot::Token => "token",
+        SecretSlot::SecondaryPassword => "secondaryPassword",
     }
 }
 
@@ -361,6 +363,14 @@ mod tests {
         );
         assert_eq!(SecretKey::connection("c1", SecretSlot::ApiKey).account(), "conn:c1:apiKey");
         assert_eq!(SecretKey::connection("c1", SecretSlot::Token).account(), "conn:c1:token");
+        assert_eq!(
+            SecretKey::connection("c1", SecretSlot::SecondaryPassword).account(),
+            "conn:c1:secondaryPassword"
+        );
+        // The account suffix is the slot's JSON name, as the UI sends it.
+        for slot in CONNECTION_SLOTS {
+            assert_eq!(serde_json::to_value(slot).unwrap(), slot_name(slot));
+        }
         assert_eq!(SecretKey::AiKey("x".into()).account(), "ai:x");
         assert_eq!(SecretKey::Embedding.account(), "app:embedding");
         assert_eq!(

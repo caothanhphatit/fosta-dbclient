@@ -15,12 +15,13 @@ use tokio::sync::Mutex;
 
 use super::{
     cluster::{ClusterOverview, ClusterTopology},
+    sentinel::{Failover, SentinelLink, SentinelOverview, SentinelResolver, DEFAULT_SENTINEL_PORT},
     types::{as_items, as_pairs, as_string},
 };
 use crate::error::{AppError, AppResult};
 
 pub const DEFAULT_PORT: u16 = 6379;
-const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 10_000;
+pub(crate) const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 30_000;
 
 /// How to reach Redis. The password comes from the secret store and is passed in separately by the caller.
@@ -44,8 +45,8 @@ pub struct RedisConnectOptions {
     /// Sent as `CLIENT SETNAME` so the connection is recognisable in `CLIENT LIST`.
     pub client_name: Option<String>,
     pub topology: RedisTopology,
-    /// Addresses the cluster nodes announce, mapped to the addresses to dial instead (port forwards, NAT). Dial time only:
-    /// redirects still name the announced addresses.
+    /// Addresses the cluster nodes (or the master Sentinel names) announce, mapped to the addresses to dial instead (port
+    /// forwards, NAT). Dial time only: redirects still name the announced addresses.
     pub address_map: Vec<(HostPort, HostPort)>,
 }
 
@@ -74,13 +75,15 @@ pub enum TlsVerify {
     None,
 }
 
-/// Deployment shape. `Standalone` and `Cluster` connect; `Sentinel` is not supported yet.
+/// Deployment shape.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum RedisTopology {
     #[default]
     Standalone,
-    /// Ask the sentinels for the current master of `master_name`, then connect to it (or a replica when `read_replica`).
+    /// Ask the sentinels (the profile's host and port first) for the current master of `master_name`, then connect to it.
+    /// `read_replica` is not used yet. The sentinel password is the profile's secondary secret; `None` or empty means no
+    /// password, and a sentinel that asks for one gets the data password.
     #[serde(rename_all = "camelCase")]
     Sentinel {
         master_name: String,
@@ -171,7 +174,10 @@ impl RedisConnectOptions {
     /// `password` so the caller can move it to the secret store.
     ///
     /// A Redis Cluster URL lists its seed nodes: `redis+cluster://[user[:password]@]h1:7001,h2:7002[/0]` (also
-    /// `rediss+cluster`, `valkey+cluster`, `valkeys+cluster`).
+    /// `rediss+cluster`, `valkey+cluster`, `valkeys+cluster`). A Sentinel URL lists the sentinels and names the master:
+    /// `redis+sentinel://[user[:password]@]s1:26379,s2:26379/<master>[/<db>]` (also `rediss+sentinel`), or Lettuce's
+    /// `redis-sentinel://[[user:]password@]s1:26379,s2[/<db>]#<master>`. The user info is the data nodes' login; the
+    /// sentinel password never comes from a URL.
     pub fn from_url(url: &str) -> AppResult<Self> {
         let url = url.trim();
         let Some((scheme, rest)) = url.split_once("://") else {
@@ -180,8 +186,9 @@ impl RedisConnectOptions {
             ));
         };
         let scheme = scheme.to_ascii_lowercase();
-        if scheme == "redis-sentinel" {
-            return Err(sentinel_not_yet());
+        if let Some(base) = scheme.strip_suffix("-sentinel").filter(|base| matches!(*base, "redis" | "rediss")) {
+            let tls = (base == "rediss").then(RedisTls::default);
+            return Self::from_sentinel_url(rest, tls, true);
         }
         let (base, topology) = match scheme.split_once('+') {
             Some((base, topology)) => (base, Some(topology)),
@@ -199,17 +206,18 @@ impl RedisConnectOptions {
         match topology {
             None => {}
             Some("cluster") => return Self::from_cluster_url(rest, tls),
-            Some("sentinel") => return Err(sentinel_not_yet()),
+            Some("sentinel") => return Self::from_sentinel_url(rest, tls, false),
             Some(other) => {
                 return Err(AppError::new(format!(
-                    "Unknown Redis URL topology +{other}: use {base}+cluster:// for a Redis Cluster."
+                    "Unknown Redis URL topology +{other}: use {base}+cluster:// for a Redis Cluster or {base}+sentinel:// \
+                     for Sentinel."
                 )))
             }
         }
         if url_authority(rest).1.contains(',') {
             return Err(AppError::new(format!(
-                "This Redis URL names several hosts. For a Redis Cluster write {base}+cluster://h1:7001,h2:7002 (Sentinel is not \
-                 supported yet)."
+                "This Redis URL names several hosts. For a Redis Cluster write {base}+cluster://h1:7001,h2:7002; for Sentinel \
+                 write {base}+sentinel://s1:26379,s2:26379/mymaster."
             )));
         }
         let parsed = reqwest::Url::parse(url).map_err(|error| AppError::new(format!("This is not a valid Redis URL: {error}")))?;
@@ -236,13 +244,7 @@ impl RedisConnectOptions {
     /// The part of a `+cluster` URL after `://`: user info, comma-separated seeds, optional `/0`.
     fn from_cluster_url(rest: &str, tls: Option<RedisTls>) -> AppResult<Self> {
         let (userinfo, hosts, path) = url_authority(rest);
-        let (username, password) = match userinfo {
-            None => (None, None),
-            Some(info) => match info.split_once(':') {
-                Some((user, password)) => (Some(percent_decode(user)), Some(percent_decode(password))),
-                None => (Some(percent_decode(info)), None),
-            },
-        };
+        let (username, password) = credentials(userinfo, false);
         let seeds = hosts
             .split(',')
             .filter(|host| !host.trim().is_empty())
@@ -270,6 +272,70 @@ impl RedisConnectOptions {
             },
             ..Default::default()
         })
+    }
+
+    /// The part of a Sentinel URL after `://`: user info, comma-separated sentinels, then `/<master>[/<db>]`, or for
+    /// Lettuce (`lettuce`) `[/<db>]#<master>` (or `?sentinelMasterId=<master>`).
+    fn from_sentinel_url(rest: &str, tls: Option<RedisTls>, lettuce: bool) -> AppResult<Self> {
+        let (userinfo, hosts, path) = url_authority(rest);
+        let (username, password) = credentials(userinfo, lettuce);
+        let sentinels = hosts
+            .split(',')
+            .filter(|host| !host.trim().is_empty())
+            .map(|host| HostPort::parse(host, DEFAULT_SENTINEL_PORT))
+            .collect::<AppResult<Vec<_>>>()?;
+        let Some(first) = sentinels.first().cloned() else {
+            return Err(AppError::new(
+                "A Redis Sentinel URL names at least one sentinel: redis+sentinel://host:26379/mymaster.",
+            ));
+        };
+        let fragment = rest.split_once('#').map(|(_, fragment)| fragment);
+        let query_master = rest
+            .split_once('?')
+            .map(|(_, query)| query.split('#').next().unwrap_or_default())
+            .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("sentinelMasterId=")));
+        let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+        let master = if lettuce { None } else { segments.next() };
+        let master = master
+            .or(fragment)
+            .or(query_master)
+            .map(percent_decode)
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| AppError::new("A Redis Sentinel URL names the master: redis+sentinel://host:26379/mymaster."))?;
+        let db = match segments.next() {
+            None => 0,
+            Some(text) => text
+                .parse()
+                .map_err(|_| AppError::new(format!("The database in a Redis URL is a number, not `{text}`.")))?,
+        };
+        if let Some(extra) = segments.next() {
+            return Err(AppError::new(format!("Unexpected `/{extra}` in the Redis Sentinel URL.")));
+        }
+        Ok(Self {
+            host: first.host,
+            port: Some(first.port),
+            username: username.filter(|name| !name.is_empty()),
+            password,
+            db,
+            tls,
+            topology: RedisTopology::Sentinel {
+                master_name: master,
+                sentinels,
+                sentinel_username: None,
+                sentinel_password: None,
+                read_replica: false,
+            },
+            ..Default::default()
+        })
+    }
+
+    /// The address to dial for one a server announces: the address map's target, or the address itself.
+    pub(crate) fn mapped(&self, announced: &HostPort) -> HostPort {
+        self.address_map
+            .iter()
+            .find(|(from, _)| from == announced)
+            .map(|(_, to)| to.clone())
+            .unwrap_or_else(|| announced.clone())
     }
 
     pub fn is_cluster(&self) -> bool {
@@ -455,6 +521,8 @@ impl ConnectionLike for Conn {
 pub enum Backend {
     /// One server, reached through `client`.
     Node { client: Arc<Client> },
+    /// The master the sentinels name; the shared connection follows a failover (see [`SentinelLink`]).
+    Sentinel { link: Arc<SentinelLink> },
     /// A Redis Cluster, discovered from its seed nodes, with the shard map last read (see [`RedisEngine::shards`]).
     Cluster {
         client: Arc<ClusterClient>,
@@ -478,7 +546,21 @@ impl RedisEngine {
             RedisTopology::Standalone => Backend::Node {
                 client: Arc::new(options.client()?),
             },
-            RedisTopology::Sentinel { .. } => return Err(sentinel_not_yet()),
+            RedisTopology::Sentinel { .. } => {
+                let resolver = SentinelResolver::new(&options)?;
+                let resolved = resolver.resolve().await?;
+                let conn = Conn::Node(resolved.conn.clone());
+                let mut engine = Self {
+                    backend: Backend::Sentinel {
+                        link: Arc::new(SentinelLink::new(resolver, resolved)),
+                    },
+                    conn,
+                    options,
+                    modules: Vec::new(),
+                };
+                engine.modules = engine.load_modules().await;
+                return Ok(engine);
+            }
             RedisTopology::Cluster { .. } => Backend::Cluster {
                 client: Arc::new(options.cluster_client()?),
                 topology: Arc::default(),
@@ -495,9 +577,23 @@ impl RedisEngine {
         Ok(engine)
     }
 
-    /// A fresh connection of its own (consoles, guarded edits): a new node connection, or a new cluster connection.
+    /// A fresh connection of its own (consoles, guarded edits): a new node connection, a new cluster connection, or a
+    /// connection to the master the sentinels name now.
     pub(crate) async fn new_connection(&self) -> AppResult<Conn> {
         open_connection(&self.backend, &self.options).await
+    }
+
+    /// The engine reaches its master through Redis Sentinel.
+    pub fn is_sentinel(&self) -> bool {
+        matches!(self.backend, Backend::Sentinel { .. })
+    }
+
+    /// The master name behind Sentinel.
+    pub fn sentinel_master_name(&self) -> Option<&str> {
+        match &self.backend {
+            Backend::Sentinel { link } => Some(link.resolver.master_name()),
+            _ => None,
+        }
     }
 
     /// The engine talks to a Redis Cluster.
@@ -526,10 +622,28 @@ impl RedisEngine {
         self.options.command_timeout()
     }
 
-    /// Runs one command on the shared connection with the default timeout and returns the raw reply.
+    /// Runs one command on the shared connection with the default timeout and returns the raw reply. Behind Sentinel a
+    /// failure that means the master moved swaps the connection (see [`SentinelLink`]).
     pub(crate) async fn query(&self, cmd: &redis::Cmd) -> AppResult<Value> {
-        let mut conn = self.conn.clone();
-        with_timeout(self.command_timeout(), cmd.query_async::<Value>(&mut conn)).await
+        let Backend::Sentinel { link } = &self.backend else {
+            let mut conn = self.conn.clone();
+            return with_timeout(self.command_timeout(), cmd.query_async::<Value>(&mut conn)).await;
+        };
+        let timeout = self.command_timeout();
+        let (generation, mut conn) = link.current();
+        let error = match tokio::time::timeout(timeout, cmd.query_async::<Value>(&mut conn)).await {
+            Ok(Ok(reply)) => return Ok(reply),
+            Ok(Err(error)) => error,
+            Err(_) => return Err(timeout_error(timeout)),
+        };
+        let Some(failover) = Failover::of(&error) else {
+            return Err(error.into());
+        };
+        match link.recover(generation).await {
+            Some(mut conn) if failover.retry() => with_timeout(timeout, cmd.query_async::<Value>(&mut conn)).await,
+            Some(_) => Err(link.reconnected_error(&error)),
+            None => Err(error.into()),
+        }
     }
 
     /// Runs one command on every master: one `(address, reply)` per master, in the order of [`RedisEngine::shards`]. A
@@ -549,8 +663,11 @@ impl RedisEngine {
             .collect()
     }
 
-    /// `host:port` of the configured endpoint.
+    /// `host:port` of the configured endpoint; behind Sentinel, of the current master (as the sentinels announce it).
     pub(crate) fn address(&self) -> String {
+        if let Backend::Sentinel { link } = &self.backend {
+            return link.master().to_string();
+        }
         format!("{}:{}", self.options.host.trim(), self.options.port.unwrap_or(DEFAULT_PORT))
     }
 
@@ -571,10 +688,40 @@ impl RedisEngine {
                 let replies = with_timeout(self.command_timeout(), async { Ok(replies.await) }).await?;
                 replies.into_iter().map(server_error_value).collect()
             }
+            _ if self.is_sentinel() => self.sentinel_pipeline(pipe).await,
             conn => {
                 let mut conn = conn.clone();
                 with_timeout(self.command_timeout(), pipe.query_async::<Vec<Value>>(&mut conn)).await
             }
+        }
+    }
+
+    /// A pipeline on the master behind Sentinel: a refused connection, or replies saying the server is a replica now
+    /// (`READONLY`, `MASTERDOWN`: nothing was written), resolve the master again and run the pipeline once more there.
+    async fn sentinel_pipeline(&self, pipe: &redis::Pipeline) -> AppResult<Vec<Value>> {
+        let Backend::Sentinel { link } = &self.backend else {
+            return Err(AppError::new("This connection does not use Redis Sentinel."));
+        };
+        let timeout = self.command_timeout();
+        let (generation, mut conn) = link.current();
+        let (failover, error) = match tokio::time::timeout(timeout, pipe.query_async::<Vec<Value>>(&mut conn)).await {
+            Ok(Ok(replies)) if !replies.iter().any(demoted_reply) => return Ok(replies),
+            Ok(Ok(replies)) => {
+                return match link.recover(generation).await {
+                    Some(mut conn) => with_timeout(timeout, pipe.query_async::<Vec<Value>>(&mut conn)).await,
+                    None => Ok(replies),
+                }
+            }
+            Ok(Err(error)) => match Failover::of(&error) {
+                Some(failover) => (failover, error),
+                None => return Err(error.into()),
+            },
+            Err(_) => return Err(timeout_error(timeout)),
+        };
+        match link.recover(generation).await {
+            Some(mut conn) if failover.retry() => with_timeout(timeout, pipe.query_async::<Vec<Value>>(&mut conn)).await,
+            Some(_) => Err(link.reconnected_error(&error)),
+            None => Err(error.into()),
         }
     }
 
@@ -595,7 +742,16 @@ impl RedisEngine {
             .ok()
             .flatten()
             .and_then(|value| value.parse().ok());
-        Ok(self.server_info_from(&text, databases, self.address()))
+        let mut info = self.server_info_from(&text, databases, self.address());
+        if let Backend::Sentinel { link } = &self.backend {
+            // The figures come from the master; a sentinel that does not answer leaves only the name and address.
+            info.sentinel = Some(link.resolver.overview().await.unwrap_or_else(|_| SentinelOverview {
+                master_name: link.resolver.master_name().to_owned(),
+                master: link.master().to_string(),
+                ..Default::default()
+            }));
+        }
+        Ok(info)
     }
 
     /// `INFO everything` (plain `INFO` on servers without it) of one node, or of the shared connection.
@@ -622,6 +778,8 @@ impl RedisEngine {
         let number = |section: &str, key: &str| get(section, key).and_then(|value| value.parse::<u64>().ok());
         let topology = if self.is_cluster() {
             "cluster"
+        } else if self.is_sentinel() {
+            "sentinel"
         } else if get("cluster", "cluster_enabled").as_deref() == Some("1") {
             "clusterNode"
         } else {
@@ -641,6 +799,7 @@ impl RedisEngine {
             topology: topology.to_owned(),
             node,
             cluster: None,
+            sentinel: None,
             version: get("server", "valkey_version")
                 .or_else(|| get("server", "redis_version"))
                 .unwrap_or_default(),
@@ -707,8 +866,30 @@ fn url_authority(rest: &str) -> (Option<&str>, &str, &str) {
     }
 }
 
-pub(crate) fn sentinel_not_yet() -> AppError {
-    AppError::new("Redis Sentinel connections are not supported yet. Connect to the master directly.")
+/// User and password from URL user info: `user:password`, or `user` alone; Lettuce (`password_only`) reads a lone value
+/// as the password.
+fn credentials(userinfo: Option<&str>, password_only: bool) -> (Option<String>, Option<String>) {
+    match userinfo {
+        None => (None, None),
+        Some(info) => match info.split_once(':') {
+            Some((user, password)) => (Some(percent_decode(user)), Some(percent_decode(password))),
+            None if password_only => (None, Some(percent_decode(info))),
+            None => (Some(percent_decode(info)), None),
+        },
+    }
+}
+
+/// A reply (or a transaction's nested reply) saying the server is a replica now.
+fn demoted_reply(value: &Value) -> bool {
+    match value {
+        Value::ServerError(error) => matches!(error.code(), "READONLY" | "MASTERDOWN"),
+        Value::Array(items) => items.iter().any(demoted_reply),
+        _ => false,
+    }
+}
+
+fn timeout_error(timeout: Duration) -> AppError {
+    AppError::new(format!("Redis did not answer within {} ms.", timeout.as_millis()))
 }
 
 pub(crate) fn cluster_db_error() -> AppError {
@@ -752,13 +933,10 @@ fn server_error_value(reply: RedisResult<Value>) -> AppResult<Value> {
 
 async fn open_connection(backend: &Backend, options: &RedisConnectOptions) -> AppResult<Conn> {
     let connect_timeout = Duration::from_millis(options.connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS));
-    let client_name = options
-        .client_name
-        .as_deref()
-        .filter(|name| !name.is_empty())
-        .map(|name| name.chars().map(|c| if c.is_ascii_graphic() { c } else { '-' }).collect::<String>());
+    let client_name = client_name(options);
     let client = match backend {
         Backend::Node { client } => client,
+        Backend::Sentinel { link } => return Ok(Conn::Node(link.resolver.resolve().await?.conn)),
         Backend::Cluster { client, .. } => {
             let mut conn = with_timeout(connect_timeout, client.get_async_connection()).await?;
             if let Some(name) = client_name {
@@ -772,22 +950,37 @@ async fn open_connection(backend: &Backend, options: &RedisConnectOptions) -> Ap
             return Ok(Conn::Cluster(conn));
         }
     };
+    Ok(Conn::Node(open_node(client, options).await?))
+}
+
+/// A connection to one server with the options' connect timeout and client name.
+pub(crate) async fn open_node(client: &Client, options: &RedisConnectOptions) -> AppResult<MultiplexedConnection> {
+    let connect_timeout = Duration::from_millis(options.connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS));
     // The per-command timeout is applied by the callers (the console has its own), so the connection itself waits.
     let config = AsyncConnectionConfig::new()
         .set_connection_timeout(Some(connect_timeout))
         .set_response_timeout(None);
     let mut conn = client.get_multiplexed_async_connection_with_config(&config).await?;
-    if let Some(name) = client_name {
+    if let Some(name) = client_name(options) {
         // Older servers or restrictive ACLs may refuse this; the connection is still usable.
         let _ = redis::cmd("CLIENT").arg("SETNAME").arg(name).query_async::<Value>(&mut conn).await;
     }
-    Ok(Conn::Node(conn))
+    Ok(conn)
+}
+
+/// The `CLIENT SETNAME` value: printable ASCII only.
+fn client_name(options: &RedisConnectOptions) -> Option<String> {
+    options
+        .client_name
+        .as_deref()
+        .filter(|name| !name.is_empty())
+        .map(|name| name.chars().map(|c| if c.is_ascii_graphic() { c } else { '-' }).collect::<String>())
 }
 
 pub(crate) async fn with_timeout<T>(timeout: Duration, future: impl std::future::Future<Output = redis::RedisResult<T>>) -> AppResult<T> {
     match tokio::time::timeout(timeout, future).await {
         Ok(result) => Ok(result?),
-        Err(_) => Err(AppError::new(format!("Redis did not answer within {} ms.", timeout.as_millis()))),
+        Err(_) => Err(timeout_error(timeout)),
     }
 }
 
@@ -819,13 +1012,15 @@ pub struct DbKeyspace {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedisServerInfo {
-    /// How the connection reaches Redis: `standalone`, `cluster`, or `clusterNode` (a single node of a cluster, connected
-    /// as standalone: keys on other nodes answer MOVED).
+    /// How the connection reaches Redis: `standalone`, `cluster`, `sentinel` (the master the sentinels name), or
+    /// `clusterNode` (a single node of a cluster, connected as standalone: keys on other nodes answer MOVED).
     pub topology: String,
     /// `host:port` of the node whose `INFO` this is.
     pub node: String,
     /// Slot coverage and shards, on a cluster connection.
     pub cluster: Option<ClusterOverview>,
+    /// The monitored master, its replicas and sentinels, behind Sentinel.
+    pub sentinel: Option<SentinelOverview>,
     pub version: String,
     pub flavor: ServerFlavor,
     /// `standalone`, `sentinel` or `cluster`.
@@ -948,12 +1143,76 @@ mod tests {
         assert!(RedisConnectOptions::from_url("redis+mesh://h1").is_err());
         let several = RedisConnectOptions::from_url("redis://h1:7001,h2:7002").unwrap_err();
         assert!(several.to_string().contains("redis+cluster://"), "{several}");
-        for sentinel in ["redis+sentinel://s1:26379/fosta", "redis-sentinel://s1:26379#fosta"] {
-            assert!(RedisConnectOptions::from_url(sentinel)
-                .unwrap_err()
-                .to_string()
-                .contains("not supported yet"));
+        assert!(several.to_string().contains("redis+sentinel://"), "{several}");
+    }
+
+    fn sentinel_of(options: &RedisConnectOptions) -> (&str, &[HostPort]) {
+        let RedisTopology::Sentinel {
+            master_name, sentinels, ..
+        } = &options.topology
+        else {
+            panic!("sentinel topology");
+        };
+        (master_name, sentinels)
+    }
+
+    #[test]
+    fn parses_sentinel_urls() {
+        let options = RedisConnectOptions::from_url("rediss+sentinel://app:p%40ss@s1:26390,s2,[::1]:26392/my%20master/3").unwrap();
+        assert_eq!((options.host.as_str(), options.port), ("s1", Some(26390)));
+        assert_eq!(
+            (options.username.as_deref(), options.password.as_deref()),
+            (Some("app"), Some("p@ss"))
+        );
+        assert_eq!(options.db, 3);
+        assert!(options.tls.is_some() && !options.is_cluster());
+        let (master, sentinels) = sentinel_of(&options);
+        assert_eq!(master, "my master");
+        assert_eq!(
+            sentinels,
+            [HostPort::new("s1", 26390), HostPort::new("s2", 26379), HostPort::new("::1", 26392)]
+        );
+        let plain = RedisConnectOptions::from_url("redis+sentinel://:secret@10.0.0.1/fosta").unwrap();
+        assert_eq!(
+            (plain.username.as_deref(), plain.password.as_deref(), plain.db),
+            (None, Some("secret"), 0)
+        );
+        assert!(plain.tls.is_none());
+        assert_eq!(sentinel_of(&plain), ("fosta", &[HostPort::new("10.0.0.1", 26379)][..]));
+        // Lettuce: a lone user-info value is the password, the database is the path and the master the fragment.
+        let lettuce = RedisConnectOptions::from_url("redis-sentinel://secret@s1:26390,s2:26391/2#fosta").unwrap();
+        assert_eq!(
+            (lettuce.username.as_deref(), lettuce.password.as_deref(), lettuce.db),
+            (None, Some("secret"), 2)
+        );
+        assert_eq!(sentinel_of(&lettuce).0, "fosta");
+        assert_eq!(sentinel_of(&lettuce).1.len(), 2);
+        let query = RedisConnectOptions::from_url("rediss-sentinel://s1?timeout=10s&sentinelMasterId=orders").unwrap();
+        assert!(query.tls.is_some());
+        assert_eq!(sentinel_of(&query).0, "orders");
+        for bad in [
+            "redis+sentinel://s1:26379",
+            "redis+sentinel:///fosta",
+            "redis+sentinel://s1/fosta/x",
+            "redis+sentinel://s1/fosta/1/2",
+            "redis-sentinel://s1:26379",
+            "redis+sentinel://s1:port/fosta",
+        ] {
+            assert!(RedisConnectOptions::from_url(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_address_map_rewrites_announced_addresses() {
+        let options = RedisConnectOptions {
+            address_map: HostPort::parse_map("10.0.1.5:6379=127.0.0.1:17001").unwrap(),
+            ..Default::default()
+        };
+        assert_eq!(options.mapped(&HostPort::new("10.0.1.5", 6379)), HostPort::new("127.0.0.1", 17001));
+        assert_eq!(options.mapped(&HostPort::new("10.0.1.6", 6379)), HostPort::new("10.0.1.6", 6379));
+        let readonly = ServerError::try_from(::redis::make_extension_error("READONLY".into(), None)).unwrap();
+        assert!(demoted_reply(&Value::Array(vec![Value::Okay, Value::ServerError(readonly)])));
+        assert!(!demoted_reply(&Value::Okay));
     }
 
     #[test]

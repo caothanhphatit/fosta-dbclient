@@ -1,0 +1,18 @@
+{
+  "id": "redis-sentinel",
+  "compose": "dev/compose/redis-sentinel.yml",
+  "versions": ["redis:8.2", "valkey/valkey:8.1"],
+  "versionEnv": "REDIS_IMAGE",
+  "seed": null,
+  "paths": [
+    "src-tauri/src/engines/redis/**",
+    "src-tauri/src/contract/**",
+    "src-tauri/src/runtime/**",
+    "src-tauri/src/gateway/**",
+    "dev/compose/redis-sentinel.yml",
+    "ci/engines/redis-sentinel.json"
+  ],
+  "nightlyOnly": false,
+  "filter": "redis::sentinel_contract_tests::",
+  "note": "A master (6390), a replica (6391) and three sentinels (26390-26392) in one container on 127.0.0.1; data password studio-redis, sentinel password studio-sentinel, master name fosta. The suite seeds its own scontract:* keys in databases 13 and 14 and fails over once (last test), so either node may be the master."
+}

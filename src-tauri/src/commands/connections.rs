@@ -7,7 +7,7 @@ use crate::{
     commands::workspaces::require_relax_confirmation,
     config::{AppConfig, ConnectionProfile},
     connection_command,
-    contract::{spec::SshAuth, AuthMethodId, ConnectInfo, ConnectSecrets, SecretSlot},
+    contract::{spec::SshAuth, AuthMethodId, ConnectInfo, ConnectSecrets, FieldKind, SecretSlot},
     error::{AppError, AppResult, PASSWORD_REQUIRED},
     gateway::rules::{relaxations, Preset, PRODUCTION_ICON},
     net,
@@ -317,6 +317,16 @@ fn extra_slots(profile: &ConnectionProfile) -> Vec<SecretSlot> {
         Some(AuthMethodId::Bearer) => slots.push(SecretSlot::Token),
         _ => {}
     }
+    // Password fields of the engine's form (the Redis Sentinel password).
+    if let Ok(engine) = crate::runtime::registry::registry().get(&profile.engine) {
+        for field in &engine.descriptor().connection.fields {
+            if let FieldKind::Password { slot } = field.kind {
+                if slot != SecretSlot::Password && !slots.contains(&slot) {
+                    slots.push(slot);
+                }
+            }
+        }
+    }
     slots
 }
 
@@ -556,6 +566,17 @@ mod tests {
             extra_slots(&profile),
             [SecretSlot::SshPassword, SecretSlot::TlsKeyPassphrase, SecretSlot::Token]
         );
+    }
+
+    #[cfg(feature = "engine-redis")]
+    #[test]
+    fn password_fields_of_the_engine_form_are_extra_slots() {
+        let profile = ConnectionProfile {
+            engine: "redis".into(),
+            ..Default::default()
+        };
+        // The Sentinel password field.
+        assert_eq!(extra_slots(&profile), [SecretSlot::SecondaryPassword]);
     }
 
     use crate::connection_command::{testing, COMMAND_FAILED};

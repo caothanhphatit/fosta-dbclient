@@ -276,6 +276,10 @@ impl Session for RedisSession {
             let reply = match outcome {
                 Ok((_, RedisReply::Error { code, message })) => {
                     let cancelled = code == "UNBLOCKED" && self.shared.cancelled.load(Ordering::SeqCst);
+                    if matches!(code.as_str(), "READONLY" | "MASTERDOWN") {
+                        // The server is a replica now (a failover): the next run reconnects, behind Sentinel to the new master.
+                        self.shared.killed.store(true, Ordering::SeqCst);
+                    }
                     return Err(failed(reply_error(&code, message.as_deref()), cancelled));
                 }
                 Ok((classification, reply)) => {
@@ -288,6 +292,11 @@ impl Session for RedisSession {
                 }
                 Err(error) => {
                     let cancelled = self.shared.cancelled.load(Ordering::SeqCst);
+                    if error.code() == Some("CONNECTION_ERROR") {
+                        // The connection is gone (a Sentinel failover, a restart): the next run opens a new one, behind
+                        // Sentinel on the master the sentinels name then.
+                        self.shared.killed.store(true, Ordering::SeqCst);
+                    }
                     return Err(failed(error, cancelled));
                 }
             };

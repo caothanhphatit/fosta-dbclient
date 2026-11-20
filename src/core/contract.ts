@@ -418,7 +418,7 @@ export type EngineStatus = "ready" | "preview" | "planned";
 export type SqlDialectId = "mariaDb" | "mySql" | "msSql" | "postgres" | "sqlite" | "clickHouse" | "oracle" | "generic";
 export type AuthMethodId = "password" | "none" | "apiKey" | "bearer" | "aclUser";
 export type TlsModeId = "disable" | "prefer" | "require" | "verifyCa" | "verifyFull";
-export type SecretSlot = "password" | "sshPassword" | "sshKeyPassphrase" | "tlsKeyPassphrase" | "apiKey" | "token";
+export type SecretSlot = "password" | "sshPassword" | "sshKeyPassphrase" | "tlsKeyPassphrase" | "apiKey" | "token" | "secondaryPassword";
 export type FormSection = "general" | "auth" | "advanced";
 
 export type FieldKind =

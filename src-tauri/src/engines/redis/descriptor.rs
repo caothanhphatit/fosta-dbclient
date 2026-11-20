@@ -1,10 +1,11 @@
 //! The Redis descriptor (also Valkey and other RESP servers): connection form, capabilities, the redis-cli style console
-//! language. The form offers Standalone and Redis Cluster (`options.topology`, `options.nodes`, `options.readFromReplicas`,
-//! `options.addressMap`); Sentinel is not supported yet.
+//! language. The form offers Standalone, Redis Cluster and Sentinel (`options.topology`, `options.nodes`,
+//! `options.masterName`, `options.sentinelUser`, the sentinel password in the secondary secret slot,
+//! `options.readFromReplicas`, `options.addressMap`).
 
 use crate::contract::{
     AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind,
-    FieldSpec, FilterSupport, FormSection, LanguageSpec, TlsModeId, TlsSupport, UrlSpec,
+    FieldSpec, FilterSupport, FormSection, LanguageSpec, SecretSlot, TlsModeId, TlsSupport, UrlSpec,
 };
 
 use super::connection::DEFAULT_PORT;
@@ -54,6 +55,10 @@ pub fn descriptor() -> EngineDescriptor {
                     "rediss+cluster",
                     "valkey+cluster",
                     "valkeys+cluster",
+                    "redis+sentinel",
+                    "rediss+sentinel",
+                    "redis-sentinel",
+                    "rediss-sentinel",
                 ]
                 .map(String::from)
                 .to_vec(),
@@ -67,15 +72,31 @@ pub fn descriptor() -> EngineDescriptor {
                         options: vec![
                             ("standalone".into(), "Standalone".into()),
                             ("cluster".into(), "Redis Cluster".into()),
+                            ("sentinel".into(), "Sentinel".into()),
                         ],
                     },
                     "Topology",
                 )
                 .default_value("standalone")
-                .hint("Redis Cluster: Host and Port name one seed node; the others are discovered."),
+                .hint("Redis Cluster: Host and Port name one seed node; the others are discovered. Sentinel: Host and Port name one sentinel (port 26379 by default)."),
                 FieldSpec::new("options.nodes", FieldKind::Text, "More nodes")
                     .placeholder("10.0.0.2:6379, 10.0.0.3:6379")
-                    .hint("Redis Cluster: more seed nodes (host:port, separated by commas), tried when the first is down."),
+                    .hint("Redis Cluster: more seed nodes; Sentinel: more sentinels (host:port, separated by commas), tried when the first is down."),
+                FieldSpec::new("options.masterName", FieldKind::Text, "Master name")
+                    .placeholder("mymaster")
+                    .hint("Sentinel: the name the sentinels monitor (sentinel monitor <name> ...)."),
+                FieldSpec::new("options.sentinelUser", FieldKind::Text, "Sentinel user")
+                    .hint("Sentinel: the sentinels' ACL user, when they have one.")
+                    .section(FormSection::Auth),
+                FieldSpec::new(
+                    "options.sentinelPassword",
+                    FieldKind::Password {
+                        slot: SecretSlot::SecondaryPassword,
+                    },
+                    "Sentinel password",
+                )
+                .hint("Sentinel: the sentinels' own password. Empty: none, or the data password when the sentinels ask for one.")
+                .section(FormSection::Auth),
                 FieldSpec::new("options.db", FieldKind::Number, "Database index")
                     .default_value("0")
                     .hint("The logical database (SELECT); Redis Cluster has database 0 only."),
@@ -85,7 +106,7 @@ pub fn descriptor() -> EngineDescriptor {
                     .section(FormSection::Advanced),
                 FieldSpec::new("options.addressMap", FieldKind::Text, "Address map")
                     .placeholder("10.0.1.5:6379=127.0.0.1:17001")
-                    .hint("Redis Cluster: dial another address than the one a node announces (forwarded ports, NAT).")
+                    .hint("Redis Cluster and Sentinel: dial another address than the one a node or master announces (forwarded ports, NAT).")
                     .section(FormSection::Advanced),
                 FieldSpec::new("options.resp3", FieldKind::Checkbox, "Use RESP3")
                     .default_value("false")
