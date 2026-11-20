@@ -6,10 +6,25 @@ use redis::Value;
 use serde::{Deserialize, Serialize};
 
 use super::{
+    cluster::{cursor_text, parse_cursor, ClusterCursor},
     connection::RedisEngine,
-    types::{as_i64, as_string, scan_reply, server_error, Blob, RedisType},
+    types::{as_blob, as_i64, as_string, scan_reply, server_error, Blob, RedisType},
 };
 use crate::error::AppResult;
+
+/// `SCAN cursor [MATCH pattern] COUNT n [TYPE type]`.
+fn scan_command(request: &ScanRequest, cursor: &str, count: u32) -> redis::Cmd {
+    let mut cmd = redis::cmd("SCAN");
+    cmd.arg(cursor);
+    if let Some(pattern) = request.pattern.as_deref().filter(|pattern| !pattern.is_empty() && *pattern != "*") {
+        cmd.arg("MATCH").arg(pattern);
+    }
+    cmd.arg("COUNT").arg(count);
+    if let Some(kind) = &request.type_filter {
+        cmd.arg("TYPE").arg(kind.server_name());
+    }
+    cmd
+}
 
 const DEFAULT_COUNT: u32 = 500;
 const DEFAULT_PAGE: usize = 500;
@@ -76,37 +91,28 @@ impl RedisEngine {
     pub async fn scan_keys(&self, request: &ScanRequest) -> AppResult<ScanPage> {
         let page_size = request.page_size.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
         let count = request.count.unwrap_or(DEFAULT_COUNT).max(1);
-        let mut cursor = if request.cursor.is_empty() {
-            "0".to_string()
+        let (mut keys, cursor, calls) = if self.is_cluster() {
+            self.scan_cluster(request, page_size, count).await?
         } else {
-            request.cursor.clone()
+            let mut cursor = if request.cursor.is_empty() {
+                "0".to_string()
+            } else {
+                request.cursor.clone()
+            };
+            let mut keys: Vec<Blob> = Vec::new();
+            let mut calls = 0;
+            let started = Instant::now();
+            loop {
+                let (next, batch) = scan_reply(self.query(&scan_command(request, &cursor, count)).await?)?;
+                calls += 1;
+                keys.extend(batch.into_iter().map(as_blob));
+                cursor = next;
+                if cursor == "0" || keys.len() >= page_size || started.elapsed() > PAGE_TIME_BUDGET {
+                    break;
+                }
+            }
+            (keys, cursor, calls)
         };
-        let mut keys: Vec<Blob> = Vec::new();
-        let mut calls = 0;
-        let started = Instant::now();
-        loop {
-            let mut cmd = redis::cmd("SCAN");
-            cmd.arg(&cursor);
-            if let Some(pattern) = request.pattern.as_deref().filter(|pattern| !pattern.is_empty() && *pattern != "*") {
-                cmd.arg("MATCH").arg(pattern);
-            }
-            // Ask for no more than what is still missing, but never below a useful batch.
-            cmd.arg("COUNT").arg(count);
-            if let Some(kind) = &request.type_filter {
-                cmd.arg("TYPE").arg(kind.server_name());
-            }
-            let (next, batch) = scan_reply(self.query(&cmd).await?)?;
-            calls += 1;
-            keys.extend(
-                batch
-                    .into_iter()
-                    .map(|value| Blob(super::types::as_bytes(value).unwrap_or_default())),
-            );
-            cursor = next;
-            if cursor == "0" || keys.len() >= page_size || started.elapsed() > PAGE_TIME_BUDGET {
-                break;
-            }
-        }
         // SCAN may return a key twice across calls (rehashing); keep the first.
         let mut seen = std::collections::HashSet::new();
         keys.retain(|key| seen.insert(key.clone()));
@@ -127,6 +133,53 @@ impl RedisEngine {
             keys: summaries,
             calls,
         })
+    }
+
+    /// A Redis Cluster page: SCAN walks the masters in node-id order, each to its end, within one page's size and time
+    /// budget. The cursor is `<nodeId>@<nodeCursor>`; a node that left the cluster (failover, resharding) is skipped to the
+    /// next id, which may repeat or miss keys that moved meanwhile, as SCAN does across rehashing.
+    async fn scan_cluster(&self, request: &ScanRequest, page_size: usize, count: u32) -> AppResult<(Vec<Blob>, String, u32)> {
+        let masters = |shards: Vec<super::cluster::Shard>| shards.into_iter().map(|shard| shard.master).collect::<Vec<_>>();
+        let mut nodes = masters(self.shards(false).await?);
+        let (mut index, mut node_cursor) = match parse_cursor(&request.cursor)? {
+            ClusterCursor::Start => (0, "0".to_owned()),
+            ClusterCursor::At { node, cursor } => match nodes.iter().position(|master| master.id == node) {
+                Some(index) => (index, cursor),
+                None => {
+                    nodes = masters(self.shards(true).await?);
+                    match nodes.iter().position(|master| master.id == node) {
+                        Some(index) => (index, cursor),
+                        None => (
+                            nodes.iter().position(|master| master.id > node).unwrap_or(nodes.len()),
+                            "0".to_owned(),
+                        ),
+                    }
+                }
+            },
+        };
+        let mut keys = Vec::new();
+        let mut calls = 0;
+        let started = Instant::now();
+        while index < nodes.len() {
+            let reply = self.query_node(&scan_command(request, &node_cursor, count), &nodes[index]).await?;
+            let (next, batch) = scan_reply(reply)?;
+            calls += 1;
+            keys.extend(batch.into_iter().map(as_blob));
+            if next == "0" {
+                index += 1;
+                node_cursor = "0".to_owned();
+            } else {
+                node_cursor = next;
+            }
+            if keys.len() >= page_size || started.elapsed() > PAGE_TIME_BUDGET {
+                break;
+            }
+        }
+        let cursor = match nodes.get(index) {
+            Some(node) => cursor_text(&node.id, &node_cursor),
+            None => "0".to_owned(),
+        };
+        Ok((keys, cursor, calls))
     }
 
     /// `TYPE` and `PTTL` for many keys in one pipelined round trip.

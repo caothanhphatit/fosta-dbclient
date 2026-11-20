@@ -1,6 +1,8 @@
 //! The operations engine views call through `Connection::invoke` (`redis.scan`, `redis.keyInfo`, `redis.readValue`,
 //! `redis.edit`, `redis.info`, `redis.slowlog`). Each takes the engine of the database the arguments name (`db`), parses its
 //! own arguments and returns JSON the UI types mirror (`src/engines/redis/model.ts`). `redis.scan` only ever uses `SCAN`.
+//! On a Redis Cluster `redis.info` adds the cluster overview (or shows one node with `{ node: "host:port" }`) and
+//! `redis.slowlog` merges every node's log.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as Json};
@@ -232,9 +234,31 @@ pub async fn edit(engine: &RedisEngine, args: &Json) -> AppResult<Json> {
     Ok(serde_json::to_value(result)?)
 }
 
-/// Server information: `INFO` sections plus the headline figures.
-pub async fn info(engine: &RedisEngine) -> AppResult<Json> {
-    Ok(serde_json::to_value(engine.server_info().await?)?)
+#[derive(Default, Deserialize)]
+struct InfoArgs {
+    /// `host:port` of one cluster node; the whole cluster (or the single server) when absent.
+    #[serde(default)]
+    node: Option<String>,
+}
+
+/// Server information: `INFO` sections plus the headline figures; on a cluster also the cluster overview, or one node's
+/// own `INFO` with `{ node: "host:port" }`.
+pub async fn info(engine: &RedisEngine, args: &Json) -> AppResult<Json> {
+    let InfoArgs { node } = if args.is_null() {
+        InfoArgs::default()
+    } else {
+        parse(args, "redis.info")?
+    };
+    let info = match node.as_deref().map(str::trim).filter(|node| !node.is_empty()) {
+        Some(node) if engine.is_cluster() => engine.node_server_info(node).await?,
+        Some(node) if node != engine.address() => {
+            return Err(AppError::new(format!(
+                "{node} is not this server: only a Redis Cluster connection shows other nodes."
+            )))
+        }
+        _ => engine.server_info().await?,
+    };
+    Ok(serde_json::to_value(info)?)
 }
 
 #[derive(Deserialize)]
@@ -243,12 +267,9 @@ struct SlowlogArgs {
     count: Option<u32>,
 }
 
-/// The newest slow commands (`SLOWLOG GET`), the log length and the two settings that decide what is logged.
-pub async fn slowlog(engine: &RedisEngine, args: &Json) -> AppResult<Json> {
-    let SlowlogArgs { count } = parse(args, "redis.slowlog")?;
-    let count = count.unwrap_or(128).clamp(1, MAX_SLOWLOG);
-    let reply = engine.query(redis::cmd("SLOWLOG").arg("GET").arg(count)).await?;
-    let entries: Vec<Json> = as_items(reply)
+/// `SLOWLOG GET` entries; `node` names the cluster node they came from.
+fn slowlog_entries(reply: redis::Value, node: Option<&str>) -> Vec<Json> {
+    as_items(reply)
         .into_iter()
         .filter_map(|entry| {
             let mut parts = as_items(entry).into_iter();
@@ -261,17 +282,57 @@ pub async fn slowlog(engine: &RedisEngine, args: &Json) -> AppResult<Json> {
                 .collect();
             let client = parts.next().and_then(as_string).filter(|text| !text.is_empty());
             let name = parts.next().and_then(as_string).filter(|text| !text.is_empty());
-            Some(json!({
+            let mut entry = json!({
                 "id": id, "timestamp": timestamp, "durationUs": duration_us, "command": command,
                 "client": client, "clientName": name,
-            }))
+            });
+            if let Some(node) = node {
+                entry["node"] = json!(node);
+            }
+            Some(entry)
         })
-        .collect();
-    let length = engine
-        .query(redis::cmd("SLOWLOG").arg("LEN"))
-        .await
-        .ok()
-        .and_then(|reply| as_i64(&reply));
+        .collect()
+}
+
+/// The newest first: by timestamp, then by id (entries of one second on one node).
+fn merge_slowlogs(mut entries: Vec<Json>, count: usize) -> Vec<Json> {
+    let key = |entry: &Json| (entry["timestamp"].as_i64().unwrap_or(0), entry["id"].as_i64().unwrap_or(0));
+    entries.sort_by_key(|entry| std::cmp::Reverse(key(entry)));
+    entries.truncate(count);
+    entries
+}
+
+/// The newest slow commands (`SLOWLOG GET`), the log length and the two settings that decide what is logged. On a cluster
+/// every node's log is read and merged by time, each entry naming its `node`; a node that does not answer is left out.
+pub async fn slowlog(engine: &RedisEngine, args: &Json) -> AppResult<Json> {
+    let SlowlogArgs { count } = parse(args, "redis.slowlog")?;
+    let count = count.unwrap_or(128).clamp(1, MAX_SLOWLOG);
+    let get = redis::cmd("SLOWLOG").arg("GET").arg(count).clone();
+    let len = redis::cmd("SLOWLOG").arg("LEN").clone();
+    let (entries, length) = if engine.is_cluster() {
+        let nodes = engine.all_nodes().await?;
+        let logs = futures_util::future::join_all(nodes.iter().map(|node| async {
+            let entries = engine.query_node(&get, node).await;
+            let length = engine.query_node(&len, node).await;
+            (entries, length)
+        }))
+        .await;
+        let mut entries = Vec::new();
+        let mut length = None;
+        for (node, (log, size)) in nodes.iter().zip(logs) {
+            if let Ok(log) = log {
+                entries.extend(slowlog_entries(log, Some(&node.addr)));
+            }
+            if let Some(size) = size.ok().as_ref().and_then(as_i64) {
+                length = Some(length.unwrap_or(0) + size);
+            }
+        }
+        (merge_slowlogs(entries, count as usize), length)
+    } else {
+        let entries = slowlog_entries(engine.query(&get).await?, None);
+        let length = engine.query(&len).await.ok().and_then(|reply| as_i64(&reply));
+        (entries, length)
+    };
     let threshold = engine.config_get("slowlog-log-slower-than").await.ok().flatten();
     let max_len = engine.config_get("slowlog-max-len").await.ok().flatten();
     Ok(json!({ "length": length, "entries": entries, "slowerThanUs": threshold, "maxLen": max_len }))
@@ -315,6 +376,33 @@ mod tests {
         })
         .unwrap();
         assert_eq!(unsupported["data"]["typeName"], "TSDB-TYPE");
+    }
+
+    #[test]
+    fn cluster_slowlogs_merge_newest_first_with_their_node() {
+        let entry = |id: i64, timestamp: i64| {
+            redis::Value::Array(vec![
+                redis::Value::Int(id),
+                redis::Value::Int(timestamp),
+                redis::Value::Int(15_000),
+                redis::Value::Array(vec![redis::Value::BulkString(b"DEBUG".to_vec())]),
+            ])
+        };
+        let mut entries = slowlog_entries(redis::Value::Array(vec![entry(1, 100), entry(2, 300)]), Some("127.0.0.1:7001"));
+        entries.extend(slowlog_entries(redis::Value::Array(vec![entry(9, 200)]), Some("127.0.0.1:7002")));
+        let merged = merge_slowlogs(entries, 2);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(
+            (merged[0]["id"].as_i64(), merged[0]["node"].as_str()),
+            (Some(2), Some("127.0.0.1:7001"))
+        );
+        assert_eq!(
+            (merged[1]["id"].as_i64(), merged[1]["node"].as_str()),
+            (Some(9), Some("127.0.0.1:7002"))
+        );
+        let single = slowlog_entries(redis::Value::Array(vec![entry(1, 100)]), None);
+        assert!(single[0].get("node").is_none());
+        assert_eq!(single[0]["command"][0], "DEBUG");
     }
 
     #[test]

@@ -298,31 +298,60 @@ pub struct ConsoleResult {
     pub elapsed_ms: u64,
 }
 
+/// Why a Redis Cluster console refuses `command` (upper case), before sending it: transactions and WATCH need every
+/// command on one node's connection, and SCAN would iterate one random node only.
+pub fn cluster_refusal(command: &str) -> Option<&'static str> {
+    match command {
+        "MULTI" | "EXEC" | "DISCARD" => Some(
+            "MULTI/EXEC transactions are not available in a Redis Cluster console: the commands of a transaction may live on \
+             different nodes. Run the commands one by one, or use keys with a common {hashtag} from your application.",
+        ),
+        "WATCH" | "UNWATCH" => Some(
+            "WATCH is not available in a Redis Cluster console: it only makes sense with MULTI/EXEC on the node that owns the \
+             key. Edits in the key browser are already guarded against concurrent changes.",
+        ),
+        "SCAN" => Some(
+            "SCAN in a Redis Cluster console would iterate one random node only. Use the key browser, which scans every \
+             master.",
+        ),
+        _ => None,
+    }
+}
+
 /// A console session with its own connection, so `SELECT`, `MULTI` and client settings stay in this console.
 pub struct RedisConsole {
     conn: Conn,
     timeout: Duration,
     /// Commands queued since `MULTI`; `EXEC` is classified as the highest of them.
     queued: Option<Vec<CommandClass>>,
-    /// `CLIENT ID` of this connection, so another connection can `CLIENT UNBLOCK` or kill what it runs.
+    /// `CLIENT ID` of this connection, so another connection can `CLIENT UNBLOCK` or kill what it runs. `None` on a
+    /// cluster, where the console spans nodes.
     client_id: Option<i64>,
+    /// A Redis Cluster console: commands that need one node for the whole session are refused (see [`cluster_refusal`]).
+    cluster: bool,
 }
 
 impl RedisEngine {
     pub async fn open_console(&self) -> AppResult<RedisConsole> {
         let mut conn = self.new_connection().await?;
-        let client_id = redis::cmd("CLIENT")
-            .arg("ID")
-            .query_async::<Value>(&mut conn)
-            .await
-            .ok()
-            .as_ref()
-            .and_then(super::types::as_i64);
+        let cluster = matches!(conn, Conn::Cluster(_));
+        let client_id = if cluster {
+            None
+        } else {
+            redis::cmd("CLIENT")
+                .arg("ID")
+                .query_async::<Value>(&mut conn)
+                .await
+                .ok()
+                .as_ref()
+                .and_then(super::types::as_i64)
+        };
         Ok(RedisConsole {
             conn,
             timeout: self.command_timeout(),
             queued: None,
             client_id,
+            cluster,
         })
     }
 }
@@ -370,6 +399,17 @@ impl RedisConsole {
 
     fn classify_args(&self, args: &[Vec<u8>]) -> Classification {
         let mut classification = classify(args);
+        if self.cluster {
+            let name = args
+                .first()
+                .map(|name| String::from_utf8_lossy(name).to_ascii_uppercase())
+                .unwrap_or_default();
+            if let Some(reason) = cluster_refusal(&name) {
+                classification.class = CommandClass::Unsupported;
+                classification.reason = Some(reason.to_owned());
+                return classification;
+            }
+        }
         if classification.command == "EXEC" {
             if let Some(highest) = self.queued.as_ref().and_then(|queued| queued.iter().max().copied()) {
                 classification.class = classification.class.max(highest);
@@ -469,6 +509,16 @@ mod tests {
         assert!(tokenize(r#"set "a"b"#).is_err());
         assert!(tokenize("set 'a").is_err());
         assert!(tokenize("   ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn cluster_consoles_refuse_transactions_watch_and_scan() {
+        for command in ["MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH", "SCAN"] {
+            assert!(cluster_refusal(command).is_some(), "{command}");
+        }
+        for command in ["GET", "SET", "DBSIZE", "INFO", "BLPOP", "HSCAN"] {
+            assert!(cluster_refusal(command).is_none(), "{command}");
+        }
     }
 
     #[test]

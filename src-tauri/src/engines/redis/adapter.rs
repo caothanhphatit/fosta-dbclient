@@ -20,7 +20,7 @@ use super::{
     catalog,
     classify::{self, CommandClass},
     connect,
-    connection::{RedisConnectOptions, RedisEngine, ServerFlavor, DEFAULT_PORT},
+    connection::{cluster_db_error, RedisConnectOptions, RedisEngine, RedisTopology, ServerFlavor, DEFAULT_PORT},
     console::{split_lines, tokenize},
     descriptor,
     edit::RedisEdit,
@@ -137,12 +137,21 @@ impl Engine for RedisAdapter {
         }
     }
 
-    /// `redis://[user[:password]@]host[:port][/db]` or `rediss://…`, through [`RedisConnectOptions::from_url`].
+    /// `redis://[user[:password]@]host[:port][/db]` or `rediss://…`, through [`RedisConnectOptions::from_url`]; a
+    /// `redis+cluster://h1:7001,h2:7002` URL becomes the Cluster topology with the first seed as host and the others in
+    /// `options.nodes`.
     fn parse_connection_string(&self, text: &str) -> AppResult<ParsedConnection> {
         let parsed = RedisConnectOptions::from_url(text)?;
         let mut options = HashMap::new();
         if parsed.db != 0 {
             options.insert("db".to_owned(), parsed.db.to_string());
+        }
+        if let RedisTopology::Cluster { seeds, .. } = &parsed.topology {
+            options.insert("topology".to_owned(), "cluster".to_owned());
+            let more: Vec<String> = seeds.iter().skip(1).map(ToString::to_string).collect();
+            if !more.is_empty() {
+                options.insert("nodes".to_owned(), more.join(", "));
+            }
         }
         let auth = match (&parsed.username, &parsed.password) {
             (Some(_), _) => Some(AuthMethodId::AclUser),
@@ -185,20 +194,28 @@ impl Engine for RedisAdapter {
         } else {
             server.version.clone()
         };
+        let shards = server.cluster.as_ref().map(|cluster| cluster.shards.len());
         let info = ServerInfo {
             product: product.to_owned(),
-            label: format!("{product} {version}"),
+            label: server_label(product, &version, &server.topology, shards),
             version,
-            flavor: Some(server.mode.clone()),
+            flavor: Some(server.topology.clone()),
         };
-        // The Query Engine (Redis 8, or the search module): MODULE LIST, or FT._LIST where MODULE is not allowed.
-        let search = base.has_module(SEARCH_MODULE) || base.query(&redis::cmd("FT._LIST")).await.is_ok();
         let mut capabilities = self.descriptor().capabilities;
-        if !search {
-            capabilities = capabilities.without(Capability::Vector);
-        }
+        let databases = if base.is_cluster() {
+            // One database, and no vector search in v1 (FT.* on a cluster needs the search coordinator).
+            capabilities = capabilities.without(Capability::MultipleDatabases).without(Capability::Vector);
+            1
+        } else {
+            // The Query Engine (Redis 8, or the search module): MODULE LIST, or FT._LIST where MODULE is not allowed.
+            let search = base.has_module(SEARCH_MODULE) || base.query(&redis::cmd("FT._LIST")).await.is_ok();
+            if !search {
+                capabilities = capabilities.without(Capability::Vector);
+            }
+            server.databases.filter(|count| *count > 0).unwrap_or(catalog::DEFAULT_DATABASES)
+        };
         Ok(Arc::new(RedisConnection {
-            databases: server.databases.filter(|count| *count > 0).unwrap_or(catalog::DEFAULT_DATABASES),
+            databases,
             base,
             base_db,
             others: Mutex::new(HashMap::new()),
@@ -206,6 +223,17 @@ impl Engine for RedisAdapter {
             info,
             capabilities,
         }))
+    }
+}
+
+/// `Redis 8.2.1`, `Redis 8.2.1 · cluster (3 shards)`, `Valkey 8.1.4 · cluster node`.
+fn server_label(product: &str, version: &str, topology: &str, shards: Option<usize>) -> String {
+    match (topology, shards) {
+        ("cluster", Some(1)) => format!("{product} {version} · cluster (1 shard)"),
+        ("cluster", Some(count)) => format!("{product} {version} · cluster ({count} shards)"),
+        ("cluster", None) => format!("{product} {version} · cluster"),
+        ("clusterNode", _) => format!("{product} {version} · cluster node"),
+        _ => format!("{product} {version}"),
     }
 }
 
@@ -258,6 +286,9 @@ impl RedisConnection {
     async fn engine_for(&self, db: i64) -> AppResult<RedisEngine> {
         if db == self.base_db {
             return Ok(self.base.clone());
+        }
+        if self.base.is_cluster() {
+            return Err(cluster_db_error());
         }
         if db < 0 || db >= i64::from(self.databases) {
             return Err(AppError::new(format!(
@@ -355,7 +386,7 @@ impl Connection for RedisConnection {
 
     async fn invoke(&self, name: &str, args: serde_json::Value, _ctx: &CallContext) -> AppResult<serde_json::Value> {
         match name {
-            "redis.info" => ops::info(&self.base).await,
+            "redis.info" => ops::info(&self.base, &args).await,
             "redis.slowlog" => ops::slowlog(&self.base, &args).await,
             "redis.scan" | "redis.keyInfo" | "redis.readValue" | "redis.edit" => {
                 let engine = self.engine_for(ops::db_of(&args)).await?;
@@ -548,6 +579,34 @@ mod tests {
         assert_eq!(plain.spec.port, 6379);
         assert!(plain.spec.options.is_empty() && plain.spec.tls.is_none() && plain.password.is_none());
         assert!(REDIS.parse_connection_string("http://localhost").is_err());
+    }
+
+    #[test]
+    fn cluster_urls_become_the_cluster_topology() {
+        let parsed = REDIS
+            .parse_connection_string("rediss+cluster://app:s3cret@10.0.0.1:7001,10.0.0.2:7002,[::1]:7003/0")
+            .unwrap();
+        assert_eq!((parsed.spec.host.as_str(), parsed.spec.port), ("10.0.0.1", 7001));
+        assert_eq!(parsed.spec.option("topology"), Some("cluster"));
+        assert_eq!(parsed.spec.option("nodes"), Some("10.0.0.2:7002, [::1]:7003"));
+        assert_eq!(parsed.spec.option("db"), None);
+        assert_eq!(parsed.spec.user, "app");
+        assert_eq!(parsed.password.as_deref(), Some("s3cret"));
+        assert!(parsed.spec.tls.is_some());
+        let single = REDIS.parse_connection_string("valkey+cluster://seed").unwrap();
+        assert_eq!((single.spec.port, single.spec.option("nodes")), (6379, None));
+        assert!(REDIS.parse_connection_string("redis+cluster://a:7001/3").is_err());
+        assert!(REDIS.parse_connection_string("redis://a:7001,b:7002").is_err());
+    }
+
+    #[test]
+    fn labels_name_the_topology() {
+        assert_eq!(server_label("Redis", "8.2.1", "standalone", None), "Redis 8.2.1");
+        assert_eq!(
+            server_label("Redis", "8.2.1", "cluster", Some(3)),
+            "Redis 8.2.1 · cluster (3 shards)"
+        );
+        assert_eq!(server_label("Valkey", "8.1.4", "clusterNode", None), "Valkey 8.1.4 · cluster node");
     }
 
     #[tokio::test]

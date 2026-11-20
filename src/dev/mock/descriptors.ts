@@ -675,11 +675,39 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
       databaseLabel: "",
       databaseHint: "",
       url: {
-        schemes: ["redis", "rediss", "valkey", "valkeys"],
+        schemes: ["redis", "rediss", "valkey", "valkeys", "redis+cluster", "rediss+cluster", "valkey+cluster", "valkeys+cluster"],
         example: "rediss://default@localhost:6379/0",
       },
       auth: ["password", "aclUser", "none"],
       fields: [
+        {
+          key: "options.topology",
+          kind: {
+            type: "select",
+            options: [
+              ["standalone", "Standalone"],
+              ["cluster", "Redis Cluster"],
+            ],
+          },
+          label: "Topology",
+          placeholder: null,
+          hint: "Redis Cluster: Host and Port name one seed node; the others are discovered.",
+          section: "general",
+          default: "standalone",
+          required: false,
+        },
+        {
+          key: "options.nodes",
+          kind: {
+            type: "text",
+          },
+          label: "More nodes",
+          placeholder: "10.0.0.2:6379, 10.0.0.3:6379",
+          hint: "Redis Cluster: more seed nodes (host:port, separated by commas), tried when the first is down.",
+          section: "general",
+          default: null,
+          required: false,
+        },
         {
           key: "options.db",
           kind: {
@@ -687,9 +715,33 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
           },
           label: "Database index",
           placeholder: null,
-          hint: "The logical database (SELECT); ignored by Redis Cluster.",
+          hint: "The logical database (SELECT); Redis Cluster has database 0 only.",
           section: "general",
           default: "0",
+          required: false,
+        },
+        {
+          key: "options.readFromReplicas",
+          kind: {
+            type: "checkbox",
+          },
+          label: "Read from replicas",
+          placeholder: null,
+          hint: "Redis Cluster: send reads to replicas (they may lag behind their master).",
+          section: "advanced",
+          default: "false",
+          required: false,
+        },
+        {
+          key: "options.addressMap",
+          kind: {
+            type: "text",
+          },
+          label: "Address map",
+          placeholder: "10.0.1.5:6379=127.0.0.1:17001",
+          hint: "Redis Cluster: dial another address than the one a node announces (forwarded ports, NAT).",
+          section: "advanced",
+          default: null,
           required: false,
         },
         {

@@ -1,5 +1,6 @@
 //! The Redis descriptor (also Valkey and other RESP servers): connection form, capabilities, the redis-cli style console
-//! language. Cluster and Sentinel are out of scope: the form has no fields for them.
+//! language. The form offers Standalone and Redis Cluster (`options.topology`, `options.nodes`, `options.readFromReplicas`,
+//! `options.addressMap`); Sentinel is not supported yet.
 
 use crate::contract::{
     AssistantHints, AuthMethodId, Capability, CapabilitySet, ConnectionForm, EngineDescriptor, EngineFamily, EngineStatus, FieldKind,
@@ -44,14 +45,48 @@ pub fn descriptor() -> EngineDescriptor {
             database_label: String::new(),
             database_hint: String::new(),
             url: Some(UrlSpec {
-                schemes: vec!["redis".into(), "rediss".into(), "valkey".into(), "valkeys".into()],
+                schemes: [
+                    "redis",
+                    "rediss",
+                    "valkey",
+                    "valkeys",
+                    "redis+cluster",
+                    "rediss+cluster",
+                    "valkey+cluster",
+                    "valkeys+cluster",
+                ]
+                .map(String::from)
+                .to_vec(),
                 example: "rediss://default@localhost:6379/0".into(),
             }),
             auth: vec![AuthMethodId::Password, AuthMethodId::AclUser, AuthMethodId::None],
             fields: vec![
+                FieldSpec::new(
+                    "options.topology",
+                    FieldKind::Select {
+                        options: vec![
+                            ("standalone".into(), "Standalone".into()),
+                            ("cluster".into(), "Redis Cluster".into()),
+                        ],
+                    },
+                    "Topology",
+                )
+                .default_value("standalone")
+                .hint("Redis Cluster: Host and Port name one seed node; the others are discovered."),
+                FieldSpec::new("options.nodes", FieldKind::Text, "More nodes")
+                    .placeholder("10.0.0.2:6379, 10.0.0.3:6379")
+                    .hint("Redis Cluster: more seed nodes (host:port, separated by commas), tried when the first is down."),
                 FieldSpec::new("options.db", FieldKind::Number, "Database index")
                     .default_value("0")
-                    .hint("The logical database (SELECT); ignored by Redis Cluster."),
+                    .hint("The logical database (SELECT); Redis Cluster has database 0 only."),
+                FieldSpec::new("options.readFromReplicas", FieldKind::Checkbox, "Read from replicas")
+                    .default_value("false")
+                    .hint("Redis Cluster: send reads to replicas (they may lag behind their master).")
+                    .section(FormSection::Advanced),
+                FieldSpec::new("options.addressMap", FieldKind::Text, "Address map")
+                    .placeholder("10.0.1.5:6379=127.0.0.1:17001")
+                    .hint("Redis Cluster: dial another address than the one a node announces (forwarded ports, NAT).")
+                    .section(FormSection::Advanced),
                 FieldSpec::new("options.resp3", FieldKind::Checkbox, "Use RESP3")
                     .default_value("false")
                     .hint("Typed maps, sets and doubles in replies (Redis 6+).")

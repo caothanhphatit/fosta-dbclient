@@ -1,7 +1,7 @@
 //! The object tree and key descriptions.
 //!
-//! Top level: one node per logical database, `db0`..`db{N-1}` (N from `CONFIG GET databases`, 16 when the ACL forbids it),
-//! with the key count from `INFO keyspace`. A database's children are `SCAN` pages: the request's `cursor` is the SCAN
+//! Top level: one node per logical database, `db0`..`db{N-1}` (N from `CONFIG GET databases`, 16 when the ACL forbids it;
+//! `db0` alone on a Redis Cluster), with the key count from `INFO keyspace` (summed over a cluster's masters). A database's children are `SCAN` pages: the request's `cursor` is the SCAN
 //! cursor, `filter` the `MATCH` pattern, and `next_cursor` the cursor to continue with. `KEYS` is never used. Keys that are
 //! not valid UTF-8 get their base64 as `name` and `binary: true` on their [`ObjectRef`].
 
@@ -151,22 +151,23 @@ pub fn key_node(db: i64, summary: &KeySummary) -> ObjectNode {
     }
 }
 
-/// Key counts per database from `INFO keyspace` (a database with no keys is not listed by the server).
+/// Key counts per database from `INFO keyspace` (a database with no keys is not listed by the server), summed over the
+/// masters of a Redis Cluster.
 pub async fn keyspace_counts(engine: &RedisEngine) -> HashMap<i64, u64> {
-    let Ok(reply) = engine.query(redis::cmd("INFO").arg("keyspace")).await else {
+    let Ok(replies) = engine.query_masters(redis::cmd("INFO").arg("keyspace")).await else {
         return HashMap::new();
     };
-    let text = as_string(reply).unwrap_or_default();
-    parse_info(&text)
-        .get("keyspace")
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|(db, stats)| parse_keyspace(db, stats))
-                .map(|entry| (entry.db, entry.keys))
-                .collect()
-        })
-        .unwrap_or_default()
+    let mut counts = HashMap::new();
+    for (_, reply) in replies {
+        let text = as_string(reply).unwrap_or_default();
+        let Some(entries) = parse_info(&text).remove("keyspace") else {
+            continue;
+        };
+        for entry in entries.iter().filter_map(|(db, stats)| parse_keyspace(db, stats)) {
+            *counts.entry(entry.db).or_insert(0) += entry.keys;
+        }
+    }
+    counts
 }
 
 /// The configured number of databases.

@@ -1,0 +1,42 @@
+# Redis Cluster for the Redis engine's cluster suite: six nodes in one container (3 masters + 3 replicas), announced as
+# 127.0.0.1 so the host reaches every node. Test-only credentials; never reuse them.
+# docker compose -f dev/compose/redis-cluster.yml up -d --wait
+# 127.0.0.1:7001-7006, no ACL user, password studio-redis. REDIS_IMAGE picks the image, e.g. redis:8.2 or valkey/valkey:8.1
+# (CI runs redis:7.4, redis:8.2 and valkey/valkey:8.1).
+
+name: fosta-dev-redis-cluster
+
+services:
+  redis-cluster:
+    image: ${REDIS_IMAGE:-redis:8.2}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        S=$$(command -v valkey-server || command -v redis-server); C=$$(command -v valkey-cli || command -v redis-cli)
+        for p in 7001 7002 7003 7004 7005 7006; do
+          $$S --port $$p --cluster-enabled yes --cluster-config-file /data/nodes-$$p.conf --cluster-announce-ip 127.0.0.1 \
+              --requirepass studio-redis --masterauth studio-redis --save "" --appendonly no --maxmemory 64mb \
+              --dir /data --logfile /data/$$p.log --daemonize yes
+        done
+        until $$C -p 7006 -a studio-redis --no-auth-warning ping >/dev/null 2>&1; do sleep 0.2; done
+        $$C -a studio-redis --no-auth-warning --cluster create 127.0.0.1:7001 127.0.0.1:7002 127.0.0.1:7003 \
+            127.0.0.1:7004 127.0.0.1:7005 127.0.0.1:7006 --cluster-replicas 1 --cluster-yes
+        exec tail -F /data/7001.log
+    ports:
+      - "127.0.0.1:7001-7006:7001-7006"
+    mem_limit: 512m
+    # Healthy once every node sees the slots covered and all six nodes linked, three of them replicas: right after
+    # --cluster create the replicas still show up as empty masters for a moment.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          C="$$(command -v valkey-cli || command -v redis-cli) -a studio-redis --no-auth-warning";
+          for p in 7001 7002 7003 7004 7005 7006; do
+          $$C -p $$p cluster info | grep -q cluster_state:ok || exit 1;
+          [ "$$($$C -p $$p cluster nodes | grep -c ' connected')" = 6 ] || exit 1;
+          [ "$$($$C -p $$p cluster nodes | grep -c slave)" = 3 ] || exit 1;
+          done
+      interval: 3s
+      retries: 40

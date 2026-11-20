@@ -1,7 +1,9 @@
 //! Redis engine (key-value capability in ADR 0001; also Valkey and other RESP servers).
 //!
 //! The core:
-//! - [`connection`]: options (standalone, TLS, ACL user, RESP2/RESP3), [`RedisEngine::connect`], server info.
+//! - [`connection`]: options (standalone or Redis Cluster, TLS, ACL user, RESP2/RESP3), [`RedisEngine::connect`], server
+//!   info.
+//! - [`cluster`]: the Redis Cluster shard map, commands sent to one node, the composite SCAN cursor, the cluster overview.
 //! - [`scan`] and [`tree`]: SCAN-based key browsing (never `KEYS`) and an incremental prefix tree.
 //! - [`values`]: typed, paged reads for every data type; big collections are always read in windows.
 //! - [`edit`]: typed write operations, each with its classification.
@@ -16,13 +18,15 @@
 //! - [`guard`]: edits that fail with `CONFLICT` when the value changed since the user read it (WATCH/MULTI).
 //! - [`session`]: console sessions with a `CLIENT UNBLOCK` canceller.
 //!
-//! Out of scope (connecting says so instead of guessing): the **Cluster** and **Sentinel** topologies (see
-//! [`connection::RedisTopology`]), and Pub/Sub and `MONITOR`, which the console refuses with a message instead of
-//! hanging a connection.
+//! A Redis Cluster connection has database 0 only, no vector search, and a console without MULTI/EXEC, WATCH or SCAN.
+//! Out of scope (connecting says so instead of guessing): the **Sentinel** topology (see [`connection::RedisTopology`]),
+//! Redis Cluster through SSH, and Pub/Sub and `MONITOR`, which the console refuses with a message instead of hanging a
+//! connection.
 
 pub mod adapter;
 pub mod catalog;
 pub mod classify;
+pub mod cluster;
 pub mod connect;
 pub mod connection;
 pub mod console;
@@ -38,6 +42,8 @@ pub mod types;
 pub mod values;
 pub mod vector;
 
+#[cfg(test)]
+mod cluster_contract_tests;
 #[cfg(test)]
 mod contract_tests;
 #[cfg(test)]

@@ -4,7 +4,9 @@
 
 use std::fs;
 
-use super::connection::{RedisConnectOptions, RedisTls, RedisTopology, TlsVerify};
+use super::connection::{
+    cluster_db_error, sentinel_not_yet, HostPort, RedisConnectOptions, RedisTls, RedisTopology, TlsVerify, DEFAULT_PORT,
+};
 use crate::{
     contract::{ConnectRequest, SecretSlot, TlsConfig, TlsMode},
     error::{AppError, AppResult},
@@ -12,6 +14,11 @@ use crate::{
 
 /// The default `CLIENT SETNAME`.
 pub const CLIENT_NAME: &str = "Fosta Studio";
+
+/// Cluster and Sentinel connections reach several nodes, which one SSH tunnel cannot.
+pub const SSH_REFUSAL: &str = "Redis Cluster/Sentinel through an SSH tunnel is not supported yet: the nodes announce their own \
+                               addresses, which a single tunnel cannot reach. Connect to one node as Standalone, or forward \
+                               each node yourself and fill Address map.";
 
 fn read_pem(path: &Option<String>, what: &str) -> AppResult<Option<String>> {
     let Some(path) = path.as_deref().map(str::trim).filter(|path| !path.is_empty()) else {
@@ -73,6 +80,36 @@ pub fn options(request: &ConnectRequest) -> AppResult<RedisConnectOptions> {
             .ok_or_else(|| AppError::new(format!("The Redis database is a number such as 0 or 3, not `{text}`.")))?,
         None => 0,
     };
+    let topology = match spec.option("topology").map(str::trim).unwrap_or("standalone") {
+        "standalone" => RedisTopology::Standalone,
+        kind @ ("cluster" | "sentinel") => {
+            if spec.ssh.as_ref().is_some_and(|ssh| ssh.enabled) {
+                return Err(AppError::new(SSH_REFUSAL));
+            }
+            if kind == "sentinel" {
+                return Err(sentinel_not_yet());
+            }
+            if db != 0 {
+                return Err(cluster_db_error());
+            }
+            let mut seeds = vec![HostPort::new(request.endpoint.host.clone(), request.endpoint.port)];
+            for node in HostPort::parse_list(spec.option("nodes").unwrap_or_default(), DEFAULT_PORT)? {
+                if !seeds.contains(&node) {
+                    seeds.push(node);
+                }
+            }
+            RedisTopology::Cluster {
+                seeds,
+                read_from_replicas: matches!(spec.option("readFromReplicas"), Some("true" | "1")),
+            }
+        }
+        other => {
+            return Err(AppError::new(format!(
+                "Unknown Redis topology `{other}`: use standalone or cluster."
+            )))
+        }
+    };
+    let address_map = HostPort::parse_map(spec.option("addressMap").unwrap_or_default())?;
     Ok(RedisConnectOptions {
         host: request.endpoint.host.clone(),
         port: Some(request.endpoint.port),
@@ -88,7 +125,8 @@ pub fn options(request: &ConnectRequest) -> AppResult<RedisConnectOptions> {
         connect_timeout_ms: Some(request.connect_timeout.as_millis().min(u128::from(u64::MAX)) as u64).filter(|ms| *ms > 0),
         command_timeout_ms: number("commandTimeoutMs")?,
         client_name: Some(spec.option("clientName").unwrap_or(CLIENT_NAME).to_owned()),
-        topology: RedisTopology::Standalone,
+        topology,
+        address_map,
     })
 }
 
@@ -138,6 +176,79 @@ mod tests {
             ..Default::default()
         };
         assert!(super::options(&request(bad, "")).is_err());
+    }
+
+    fn cluster_spec(options: &[(&str, &str)]) -> ConnectionSpec {
+        ConnectionSpec {
+            engine: "redis".into(),
+            host: "127.0.0.1".into(),
+            port: 7001,
+            options: options
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_cluster_topology_collects_seeds_replicas_and_the_address_map() {
+        let spec = cluster_spec(&[
+            ("topology", "cluster"),
+            ("nodes", "127.0.0.1:7002, 10.0.0.3\n127.0.0.1:16379 [::1]:7004"),
+            ("readFromReplicas", "true"),
+            ("addressMap", "10.0.1.5:6379=127.0.0.1:17001, 10.0.1.6:6379=127.0.0.1:17002"),
+        ]);
+        let options = options(&request(spec, "pw")).unwrap();
+        let RedisTopology::Cluster { seeds, read_from_replicas } = &options.topology else {
+            panic!("cluster topology");
+        };
+        // The endpoint first, then the other nodes (default port 6379), without repeating the endpoint.
+        assert_eq!(
+            seeds,
+            &vec![
+                HostPort::new("127.0.0.1", 16379),
+                HostPort::new("127.0.0.1", 7002),
+                HostPort::new("10.0.0.3", 6379),
+                HostPort::new("::1", 7004),
+            ]
+        );
+        assert!(*read_from_replicas);
+        assert_eq!(
+            options.address_map[1],
+            (HostPort::new("10.0.1.6", 6379), HostPort::new("127.0.0.1", 17002))
+        );
+        // Saved profiles without the option stay standalone.
+        let plain = options_of(cluster_spec(&[])).unwrap();
+        assert!(matches!(plain.topology, RedisTopology::Standalone) && plain.address_map.is_empty());
+    }
+
+    fn options_of(spec: ConnectionSpec) -> AppResult<RedisConnectOptions> {
+        options(&request(spec, ""))
+    }
+
+    #[test]
+    fn cluster_refuses_other_databases_ssh_and_bad_addresses() {
+        let error = options_of(cluster_spec(&[("topology", "cluster"), ("db", "3")])).unwrap_err();
+        assert_eq!(error.to_string(), "Redis Cluster has only database 0.");
+        let mut spec = cluster_spec(&[("topology", "cluster")]);
+        spec.ssh = Some(
+            serde_json::from_value(serde_json::json!({ "enabled": true, "host": "bastion", "user": "me", "auth": { "method": "agent" } }))
+                .unwrap(),
+        );
+        assert_eq!(options_of(spec.clone()).unwrap_err().to_string(), SSH_REFUSAL);
+        spec.options.insert("topology".into(), "sentinel".into());
+        assert_eq!(options_of(spec.clone()).unwrap_err().to_string(), SSH_REFUSAL);
+        // SSH stays fine for a standalone server.
+        spec.options.insert("topology".into(), "standalone".into());
+        assert!(options_of(spec).is_ok());
+        assert!(options_of(cluster_spec(&[("topology", "sentinel")]))
+            .unwrap_err()
+            .to_string()
+            .contains("not supported yet"));
+        assert!(options_of(cluster_spec(&[("topology", "mesh")])).is_err());
+        assert!(options_of(cluster_spec(&[("topology", "cluster"), ("nodes", "a:x")])).is_err());
+        assert!(options_of(cluster_spec(&[("addressMap", "10.0.1.5:6379")])).is_err());
     }
 
     #[test]
