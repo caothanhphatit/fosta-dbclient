@@ -386,12 +386,25 @@ function tlsChecks(tls: TlsConfig | null | undefined): string {
   ]);
 }
 
+/** The values of the options `descriptor` marks `partOfTarget`, blanks as their defaults, as a comparable string. */
+function targetOptions(profile: ConnectionProfile, descriptor: EngineDescriptor | null): string {
+  const values: [string, string][] = [];
+  for (const field of descriptor?.connection.fields ?? []) {
+    const target = fieldTarget(field);
+    if (!field.partOfTarget || target.kind !== "option") continue;
+    const value = trimmed(profile.options[target.name]);
+    const fallback = field.default?.trim() ?? (field.kind.type === "select" ? (field.kind.options[0]?.[0] ?? "") : "");
+    values.push([target.name, value || fallback]);
+  }
+  return JSON.stringify(values);
+}
+
 /**
- * Whether `draft` still points at the `saved` profile's server, SSH route, command and TLS checks, like the
- * backend's `ConnectionProfile::same_target`. When it does not, saving without typing the password again forgets the
- * saved secrets.
+ * Whether `draft` still points at the `saved` profile's server, SSH route, command, TLS checks and the options
+ * `descriptor` (the profiles' engine) marks `partOfTarget`, like the backend's `ConnectionProfile::same_target`. When it
+ * does not, saving without typing the password again forgets the saved secrets.
  */
-export function sameTarget(saved: ConnectionProfile, draft: ConnectionProfile): boolean {
+export function sameTarget(saved: ConnectionProfile, draft: ConnectionProfile, descriptor: EngineDescriptor | null): boolean {
   return (
     saved.driver === draft.driver &&
     trimmed(saved.host) === trimmed(draft.host) &&
@@ -401,7 +414,8 @@ export function sameTarget(saved: ConnectionProfile, draft: ConnectionProfile): 
     trimmed(saved.file) === trimmed(draft.file) &&
     sshRoute(saved.ssh) === sshRoute(draft.ssh) &&
     tlsChecks(saved.tls) === tlsChecks(draft.tls) &&
-    trimmed(saved.commandId) === trimmed(draft.commandId)
+    trimmed(saved.commandId) === trimmed(draft.commandId) &&
+    targetOptions(saved, descriptor) === targetOptions(draft, descriptor)
   );
 }
 

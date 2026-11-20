@@ -449,7 +449,7 @@ export function connectionDialog(
         if (result === null) return false;
         saved = result;
         // The backend never keeps saved secrets for another server, command or TLS setting: they must be typed again.
-        if (existing?.savePassword && draft.profile.savePassword && !sameTarget(existing, draft.profile))
+        if (existing?.savePassword && draft.profile.savePassword && !sameTarget(existing, draft.profile, descriptor))
           toast("The server settings changed, so saved passwords you did not enter again were cleared. You will be asked for them.", "info");
       } catch (error) {
         showFeedback(errorHost, error, "Save connection");

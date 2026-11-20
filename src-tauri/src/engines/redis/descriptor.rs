@@ -78,8 +78,10 @@ pub fn descriptor() -> EngineDescriptor {
                     "Topology",
                 )
                 .default_value("standalone")
+                .part_of_target()
                 .hint("Redis Cluster: Host and Port name one seed node; the others are discovered. Sentinel: Host and Port name one sentinel (port 26379 by default)."),
                 FieldSpec::new("options.nodes", FieldKind::Text, "More nodes")
+                    .part_of_target()
                     .visible_when("options.topology", &["cluster", "sentinel"])
                     .placeholder("10.0.0.2:6379, 10.0.0.3:6379")
                     .hint("Redis Cluster: more seed nodes; Sentinel: more sentinels (host:port, separated by commas), tried when the first is down."),
@@ -88,10 +90,12 @@ pub fn descriptor() -> EngineDescriptor {
                     required: true,
                     ..FieldSpec::new("options.masterName", FieldKind::Text, "Master name")
                         .placeholder("mymaster")
+                        .part_of_target()
                         .hint("The name the sentinels monitor (sentinel monitor <name> ...).")
                         .visible_when("options.topology", &["sentinel"])
                 },
                 FieldSpec::new("options.sentinelUser", FieldKind::Text, "Sentinel user")
+                    .part_of_target()
                     .hint("The sentinels' ACL user, when they have one.")
                     .visible_when("options.topology", &["sentinel"])
                     .section(FormSection::Auth),
@@ -102,7 +106,7 @@ pub fn descriptor() -> EngineDescriptor {
                     },
                     "Sentinel password",
                 )
-                .hint("The sentinels' own password. Empty: none, or the data password when the sentinels ask for one.")
+                .hint("The sentinels' own password; left empty, the saved one stays. With none saved, sentinels that ask for a password get the data password.")
                 .visible_when("options.topology", &["sentinel"])
                 .section(FormSection::Auth),
                 FieldSpec::new("options.db", FieldKind::Number, "Database index")
@@ -115,6 +119,7 @@ pub fn descriptor() -> EngineDescriptor {
                     .visible_when("options.topology", &["cluster"])
                     .section(FormSection::Advanced),
                 FieldSpec::new("options.addressMap", FieldKind::Text, "Address map")
+                    .part_of_target()
                     .placeholder("10.0.1.5:6379=127.0.0.1:17001")
                     .hint("Redis Cluster and Sentinel: dial another address than the one a node or master announces (forwarded ports, NAT).")
                     .visible_when("options.topology", &["cluster", "sentinel"])
@@ -199,5 +204,27 @@ mod tests {
                 assert!(options.iter().any(|(option, _)| option == value), "{}: {value}", spec.key);
             }
         }
+    }
+
+    #[test]
+    fn options_that_pick_the_servers_are_part_of_the_target() {
+        let descriptor = descriptor();
+        let marked: Vec<&str> = descriptor
+            .connection
+            .fields
+            .iter()
+            .filter(|field| field.part_of_target)
+            .map(|field| field.key.as_str())
+            .collect();
+        assert_eq!(
+            marked,
+            [
+                "options.topology",
+                "options.nodes",
+                "options.masterName",
+                "options.sentinelUser",
+                "options.addressMap"
+            ]
+        );
     }
 }

@@ -346,6 +346,7 @@ const SHAPES: Record<string, Shape> = {
           default: nul("string"),
           required: "boolean",
           visibleWhen: opt(nul(obj<C.FieldCondition>({ key: "string", equals: arr("string") }))),
+          partOfTarget: opt("boolean"),
         }),
       ),
       ssh: "boolean",

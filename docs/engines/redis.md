@@ -23,7 +23,7 @@ refused by the console, because they need a stream that never ends.
 | Host, port | The server (default 6379); on a cluster one seed node, behind Sentinel one sentinel (port 26379 by default). Through an SSH tunnel (standalone only) the engine connects to the tunnel's local end. |
 | More nodes | Cluster and Sentinel: more seed nodes or sentinels (`host:port`, separated by commas), tried when the first is down. |
 | Master name | Sentinel: the name the sentinels monitor (`sentinel monitor <name> ...`). Required. |
-| Sentinel user, sentinel password | Sentinel: the sentinels' own login, when they have one. An empty sentinel password sends none, and the data password when a sentinel asks for one. |
+| Sentinel user, sentinel password | Sentinel: the sentinels' own login, when they have one. Leaving the sentinel password empty keeps the saved one; with none saved, a sentinel that asks for a password gets the data password. |
 | User, password | Empty user means the `default` ACL user. The password is kept in the secret store, never in the profile. |
 | Database index | Standalone and Sentinel: the logical database of the connection (`SELECT`). The tree lists every database whatever this says. Hidden on a cluster, which has database 0 only. |
 | Read from replicas | Cluster: send reads to replicas (they may lag behind their master). |

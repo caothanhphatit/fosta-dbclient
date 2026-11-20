@@ -178,6 +178,19 @@ describe("applySpec (URL tab)", () => {
     const form = applySpec(before, spec({ host: "cluster0.example.net", port: 27017, user: "app", url }), null, descriptor);
     expect(form).toMatchObject({ password: "typed", url, user: "app", host: "cluster0.example.net" });
   });
+
+  it("replaces the old topology with the pasted URL's (the parser sets every topology key)", () => {
+    const descriptor = engine("redis");
+    const before = newForm(descriptor, "127.0.0.1");
+    before.options = { ...before.options, topology: "sentinel", nodes: "s2:26379", masterName: "mymaster", db: "2", clientName: "kept" };
+    // What `parse_connection_string` returns for redis://cache.local.
+    const parsed = spec({ engine: "redis", host: "cache.local", port: 6379, options: { topology: "standalone", nodes: "", masterName: "", db: "0" } });
+    const form = applySpec(before, parsed, null, descriptor);
+    expect(form.options).toMatchObject({ topology: "standalone", nodes: "", masterName: "", db: "0", clientName: "kept" });
+    const profile = profileFromForm("n", form, descriptor, null, null);
+    expect(profile.options).not.toHaveProperty("nodes");
+    expect(profile.options).not.toHaveProperty("masterName");
+  });
 });
 
 describe("formSecrets", () => {
@@ -244,9 +257,11 @@ describe("sameTarget", () => {
   };
 
   it("ignores the name, database, keepalive and blanks", () => {
-    expect(sameTarget(saved, { ...saved, name: "Renamed", database: "other", ssh: { ...saved.ssh!, keepaliveSecs: 30, host: " bastion " } })).toBe(true);
+    expect(
+      sameTarget(saved, { ...saved, name: "Renamed", database: "other", ssh: { ...saved.ssh!, keepaliveSecs: 30, host: " bastion " } }, engine("postgres")),
+    ).toBe(true);
     const plain = { ...saved, tls: undefined, ssh: undefined };
-    expect(sameTarget(plain, { ...plain, ssh: { ...saved.ssh!, enabled: false } })).toBe(true);
+    expect(sameTarget(plain, { ...plain, ssh: { ...saved.ssh!, enabled: false } }, null)).toBe(true);
   });
 
   it("notices a new server, SSH route, command or TLS check", () => {
@@ -264,7 +279,35 @@ describe("sameTarget", () => {
       { tls: undefined },
       { commandId: "pf" },
     ];
-    for (const change of changed) expect(sameTarget(saved, { ...saved, ...change }), JSON.stringify(change)).toBe(false);
+    for (const change of changed) expect(sameTarget(saved, { ...saved, ...change }, engine("postgres")), JSON.stringify(change)).toBe(false);
+  });
+
+  it("notices new sentinels, nodes, master name or address map", () => {
+    const redis = engine("redis");
+    const sentinel: ConnectionProfile = {
+      ...saved,
+      driver: "redis",
+      host: "sentinel-1",
+      port: 26379,
+      user: "",
+      tls: undefined,
+      ssh: undefined,
+      options: { topology: "sentinel", nodes: "sentinel-2:26379", masterName: "mymaster", sentinelUser: "watcher", db: "1" },
+    };
+    const same = { ...sentinel, options: { ...sentinel.options, db: "4", readFromReplicas: "true", nodes: " sentinel-2:26379 " } };
+    expect(sameTarget(sentinel, same, redis)).toBe(true);
+    const changes: Record<string, string>[] = [
+      { topology: "cluster" },
+      { nodes: "evil:26379" },
+      { masterName: "other" },
+      { sentinelUser: "root" },
+      { addressMap: "10.0.0.5:6379=evil:6379" },
+    ];
+    for (const change of changes)
+      expect(sameTarget(sentinel, { ...sentinel, options: { ...sentinel.options, ...change } }, redis), JSON.stringify(change)).toBe(false);
+    // An absent option compares as its default.
+    const standalone = { ...sentinel, options: { topology: "standalone" } };
+    expect(sameTarget(standalone, { ...standalone, options: {} }, redis)).toBe(true);
   });
 });
 

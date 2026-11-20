@@ -442,6 +442,8 @@ export interface FieldSpec {
   required: boolean;
   /** Shown (and validated) only while the field `key` has one of `equals`; a hidden field keeps its value. Optional in mocks. */
   visibleWhen?: FieldCondition | null;
+  /** The option decides where the secrets go (Redis nodes, master name, address map): changing it forgets the saved secrets (`sameTarget`). Optional in mocks. */
+  partOfTarget?: boolean;
 }
 
 /** A condition on another field of the same form: its value (its default when unset) is one of `equals`. */

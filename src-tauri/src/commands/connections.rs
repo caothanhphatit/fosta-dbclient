@@ -424,6 +424,41 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "engine-redis")]
+    fn new_sentinels_or_nodes_forget_the_secrets() {
+        const SENTINEL_PASSWORD: &str = "conn:c:secondaryPassword";
+        let sentinel = |nodes: &str| {
+            let mut profile = profile("sentinel-1");
+            profile.engine = "redis".into();
+            profile.port = 26379;
+            profile.options = HashMap::from([
+                ("topology".to_owned(), "sentinel".to_owned()),
+                ("masterName".to_owned(), "mymaster".to_owned()),
+                ("nodes".to_owned(), nodes.to_owned()),
+            ]);
+            profile
+        };
+        let store = memory_store(&[(PASSWORD, "pw"), (SENTINEL_PASSWORD, "spw")]);
+        remember_secrets(Some(&sentinel("sentinel-2:26379")), &sentinel("evil:26379"), None, None).unwrap();
+        assert!(store.accounts().is_empty());
+        let error = saved_secrets(&sentinel("evil:26379")).unwrap_err();
+        assert_eq!(serde_json::to_value(&error).unwrap()["code"], PASSWORD_REQUIRED);
+
+        let store = memory_store(&[(PASSWORD, "pw")]);
+        let mut mapped = sentinel("sentinel-2:26379");
+        mapped.options.insert("addressMap".into(), "10.0.0.5:6379=evil:6379".into());
+        remember_secrets(Some(&sentinel("sentinel-2:26379")), &mapped, None, None).unwrap();
+        assert!(store.accounts().is_empty());
+
+        // Another database index is the same target.
+        let store = memory_store(&[(PASSWORD, "pw")]);
+        let mut other_db = sentinel("sentinel-2:26379");
+        other_db.options.insert("db".into(), "3".into());
+        remember_secrets(Some(&sentinel("sentinel-2:26379")), &other_db, None, None).unwrap();
+        assert_eq!(store.accounts(), [PASSWORD]);
+    }
+
+    #[test]
     fn a_new_connection_or_no_save_password() {
         let store = memory_store(&[]);
         remember_secrets(None, &profile("db"), Some("pw".into()), None).unwrap();

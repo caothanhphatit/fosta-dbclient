@@ -133,9 +133,10 @@ impl ConnectionProfile {
     }
 
     /// Whether `other` points at the same server, through the same SSH route, command and TLS checks, as this saved
-    /// profile, so this profile's saved secrets may be sent there. Name, database, options and safety rules do not
+    /// profile, so this profile's saved secrets may be sent there. Name, database, most options and safety rules do not
     /// matter; any change to the SSH or TLS settings does (a new bastion or a weaker certificate check could harvest
-    /// the saved passwords), and so does another command (a port-forward to `svc/b` keeps 127.0.0.1:13306).
+    /// the saved passwords), and so does another command (a port-forward to `svc/b` keeps 127.0.0.1:13306) or another
+    /// value of an option the engine's descriptor marks `part_of_target` (Redis nodes, master name, address map).
     pub fn same_target(&self, other: &ConnectionProfile) -> bool {
         let (mut saved, mut draft) = (self.clone(), other.clone());
         saved.normalize();
@@ -149,6 +150,7 @@ impl ConnectionProfile {
             && ssh_route(saved.ssh.as_ref()) == ssh_route(draft.ssh.as_ref())
             && tls_checks(saved.tls.as_ref()) == tls_checks(draft.tls.as_ref())
             && saved.command == draft.command
+            && target_options(&saved) == target_options(&draft)
     }
 }
 
@@ -156,6 +158,26 @@ fn forget_command(connections: &mut [ConnectionProfile], id: &str) {
     for profile in connections.iter_mut().filter(|profile| profile.command.as_deref() == Some(id)) {
         profile.command = None;
     }
+}
+
+/// The values of the options the engine's descriptor marks `part_of_target`, blanks as their defaults; empty for an
+/// engine this build does not know.
+fn target_options(profile: &ConnectionProfile) -> Vec<(String, String)> {
+    let Ok(engine) = crate::runtime::registry::registry().get(&profile.engine) else {
+        return Vec::new();
+    };
+    engine
+        .descriptor()
+        .connection
+        .fields
+        .iter()
+        .filter(|field| field.part_of_target)
+        .filter_map(|field| {
+            let name = field.key.strip_prefix("options.")?;
+            let value = field.effective_value(profile.options.get(name).map(String::as_str));
+            Some((name.to_owned(), value.to_owned()))
+        })
+        .collect()
 }
 
 /// A trimmed, non-empty string, else `None`.
@@ -1139,6 +1161,54 @@ mod tests {
             change(&mut moved);
             assert!(!saved.same_target(&moved), "{moved:?}");
         }
+    }
+
+    #[test]
+    #[cfg(feature = "engine-redis")]
+    fn options_that_pick_the_servers_are_part_of_the_target() {
+        let options = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect::<HashMap<_, _>>()
+        };
+        let saved = ConnectionProfile {
+            id: "r".into(),
+            engine: "redis".into(),
+            host: "sentinel-1".into(),
+            port: 26379,
+            options: options(&[
+                ("topology", "sentinel"),
+                ("nodes", "sentinel-2:26379"),
+                ("masterName", "mymaster"),
+                ("sentinelUser", "watcher"),
+                ("addressMap", "10.0.0.5:6379=127.0.0.1:16379"),
+                ("db", "1"),
+            ]),
+            ..Default::default()
+        };
+        let mut same = saved.clone();
+        same.options.insert("db".into(), "4".into());
+        same.options.insert("readFromReplicas".into(), "true".into());
+        same.options.insert("nodes".into(), " sentinel-2:26379 ".into());
+        assert!(saved.same_target(&same), "db, read routing and whitespace do not move the target");
+        for (key, value) in [
+            ("topology", "cluster"),
+            ("nodes", "evil:26379"),
+            ("masterName", "other"),
+            ("sentinelUser", "root"),
+            ("addressMap", "10.0.0.5:6379=evil:6379"),
+        ] {
+            let mut moved = saved.clone();
+            moved.options.insert(key.into(), value.into());
+            assert!(!saved.same_target(&moved), "{key}");
+        }
+        // An absent option compares as its default.
+        let mut standalone = saved.clone();
+        standalone.options = options(&[("topology", "standalone")]);
+        let mut implicit = standalone.clone();
+        implicit.options.clear();
+        assert!(standalone.same_target(&implicit));
     }
 
     fn tunnelled() -> ConnectionProfile {

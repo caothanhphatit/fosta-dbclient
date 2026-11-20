@@ -41,7 +41,8 @@
         "section": "general",
         "default": null,
         "required": false,
-        "visibleWhen": null
+        "visibleWhen": null,
+        "partOfTarget": false
       },
       {
         "key": "options.sslMode",
@@ -64,7 +65,8 @@
         "section": "advanced",
         "default": null,
         "required": false,
-        "visibleWhen": null
+        "visibleWhen": null,
+        "partOfTarget": false
       },
       {
         "key": "options.compress",
@@ -82,7 +84,8 @@
           "equals": [
             "require"
           ]
-        }
+        },
+        "partOfTarget": false
       }
     ],
     "ssh": true,

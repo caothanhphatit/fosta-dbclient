@@ -78,8 +78,8 @@ describe("command form", () => {
     expect(using.commandId).toBe("pf");
     expect("commandId" in withCommand(using, null)).toBe(false);
     expect(commandUsers("pf", [using, profile, withCommand({ ...profile, id: "j" }, "other")])).toEqual([using]);
-    expect(sameTarget(using, { ...using, name: "Renamed" })).toBe(true);
-    expect(sameTarget(using, withCommand(profile, "other"))).toBe(false);
-    expect(sameTarget(using, profile)).toBe(false);
+    expect(sameTarget(using, { ...using, name: "Renamed" }, null)).toBe(true);
+    expect(sameTarget(using, withCommand(profile, "other"), null)).toBe(false);
+    expect(sameTarget(using, profile, null)).toBe(false);
   });
 });

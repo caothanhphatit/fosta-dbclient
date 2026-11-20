@@ -9,6 +9,7 @@ import type { ConnectionSpec, EngineDescriptor, SecretSlot, TlsConfig, TlsMode }
 import type { AppConfig, ConnectionProfile } from "../../core/types";
 import { sameTarget } from "../../features/connections/connectionForm";
 import { PRODUCTION_ICON, relaxations, safetyOf } from "../../features/safety/safety";
+import { DESCRIPTORS } from "./descriptors";
 import { mockError } from "./errors";
 import { state } from "./state";
 
@@ -35,7 +36,7 @@ export function saveConnection(
 ): AppConfig {
   checkConnectionRelax(profile, workspaceId, relaxConfirmation);
   const saved = profiles().find((item) => item.id === profile.id);
-  if (saved && !sameTarget(saved, profile)) savedPasswords.delete(profile.id);
+  if (saved && !sameTarget(saved, profile, DESCRIPTORS[profile.driver] ?? null)) savedPasswords.delete(profile.id);
   if (!profile.savePassword) savedPasswords.delete(profile.id);
   else if (password !== null || secrets?.password !== undefined) savedPasswords.add(profile.id);
   const target = workspaceId ?? state.config.workspaces.find((workspace) => workspace.connections.some((item) => item.id === profile.id))?.id;
@@ -104,7 +105,8 @@ export function checkTestPassword(profile: ConnectionProfile, password: string |
     });
   if (password !== null) return;
   const saved = profiles().find((item) => item.id === profile.id);
-  if (!saved || !sameTarget(saved, profile) || !savedPasswords.has(profile.id)) throw mockError("PASSWORD_REQUIRED", "A password is required");
+  if (!saved || !sameTarget(saved, profile, DESCRIPTORS[profile.driver] ?? null) || !savedPasswords.has(profile.id))
+    throw mockError("PASSWORD_REQUIRED", "A password is required");
 }
 
 // --- Connection strings ---------------------------------------------------------------------------------------------------

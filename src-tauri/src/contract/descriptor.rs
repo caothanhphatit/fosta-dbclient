@@ -116,6 +116,11 @@ pub struct FieldSpec {
     /// keeps its saved value.
     #[serde(default)]
     pub visible_when: Option<FieldCondition>,
+    /// The option decides where the connection's secrets are sent (another node list, master name or address map
+    /// reaches other servers), so changing it forgets the saved secrets like a new host does
+    /// (`ConnectionProfile::same_target`, the UI's `sameTarget`). Only `options.<name>` fields use it.
+    #[serde(default)]
+    pub part_of_target: bool,
 }
 
 /// A condition on another field of the same form: its value (its default when unset) is one of `equals`.
@@ -138,6 +143,26 @@ impl FieldSpec {
             default: None,
             required: false,
             visible_when: None,
+            part_of_target: false,
+        }
+    }
+
+    /// Marks the option as part of the connection's target (see `part_of_target`).
+    pub fn part_of_target(mut self) -> Self {
+        self.part_of_target = true;
+        self
+    }
+
+    /// The value the option compares by: trimmed, and blank or absent counts as the default (a select's first option
+    /// when it has none).
+    pub fn effective_value<'a>(&'a self, value: Option<&'a str>) -> &'a str {
+        match value.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(value) => value,
+            None => match (&self.default, &self.kind) {
+                (Some(default), _) => default.trim(),
+                (None, FieldKind::Select { options }) => options.first().map(|(value, _)| value.as_str()).unwrap_or_default(),
+                _ => "",
+            },
         }
     }
 

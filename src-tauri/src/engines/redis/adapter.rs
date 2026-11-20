@@ -140,31 +140,24 @@ impl Engine for RedisAdapter {
     /// `redis://[user[:password]@]host[:port][/db]` or `rediss://…`, through [`RedisConnectOptions::from_url`]; a
     /// `redis+cluster://h1:7001,h2:7002` URL becomes the Cluster topology with the first seed as host and the others in
     /// `options.nodes`, a `redis+sentinel://s1:26379,s2:26379/mymaster` URL the Sentinel topology (sentinels the same way,
-    /// `options.masterName`). The URL's user and password are the data nodes' login.
+    /// `options.masterName`). The URL's user and password are the data nodes' login. `topology`, `nodes`, `masterName`
+    /// and `db` are always set (empty or default when the URL has none), so a pasted URL replaces the form's old ones.
     fn parse_connection_string(&self, text: &str) -> AppResult<ParsedConnection> {
         let parsed = RedisConnectOptions::from_url(text)?;
-        let mut options = HashMap::new();
-        if parsed.db != 0 {
-            options.insert("db".to_owned(), parsed.db.to_string());
-        }
-        let nodes = match &parsed.topology {
-            RedisTopology::Standalone => None,
-            RedisTopology::Cluster { seeds, .. } => {
-                options.insert("topology".to_owned(), "cluster".to_owned());
-                Some(seeds)
-            }
+        let (topology, master_name, nodes) = match &parsed.topology {
+            RedisTopology::Standalone => ("standalone", String::new(), None),
+            RedisTopology::Cluster { seeds, .. } => ("cluster", String::new(), Some(seeds)),
             RedisTopology::Sentinel {
                 master_name, sentinels, ..
-            } => {
-                options.insert("topology".to_owned(), "sentinel".to_owned());
-                options.insert("masterName".to_owned(), master_name.clone());
-                Some(sentinels)
-            }
+            } => ("sentinel", master_name.clone(), Some(sentinels)),
         };
         let more: Vec<String> = nodes.into_iter().flatten().skip(1).map(ToString::to_string).collect();
-        if !more.is_empty() {
-            options.insert("nodes".to_owned(), more.join(", "));
-        }
+        let options = HashMap::from([
+            ("topology".to_owned(), topology.to_owned()),
+            ("nodes".to_owned(), more.join(", ")),
+            ("masterName".to_owned(), master_name),
+            ("db".to_owned(), parsed.db.to_string()),
+        ]);
         let auth = match (&parsed.username, &parsed.password) {
             (Some(_), _) => Some(AuthMethodId::AclUser),
             (None, Some(_)) => Some(AuthMethodId::Password),
@@ -597,7 +590,13 @@ mod tests {
         assert!(parsed.spec.url.is_none());
         let plain = REDIS.parse_connection_string("redis://localhost").unwrap();
         assert_eq!(plain.spec.port, 6379);
-        assert!(plain.spec.options.is_empty() && plain.spec.tls.is_none() && plain.password.is_none());
+        assert!(plain.spec.tls.is_none() && plain.password.is_none());
+        // Every topology key is set, so pasting this URL over a Sentinel form leaves no sentinel behind.
+        let reset = |key: &str| plain.spec.options.get(key).map(String::as_str);
+        assert_eq!(
+            [reset("topology"), reset("nodes"), reset("masterName"), reset("db")],
+            [Some("standalone"), Some(""), Some(""), Some("0")]
+        );
         assert!(REDIS.parse_connection_string("http://localhost").is_err());
     }
 
@@ -609,7 +608,8 @@ mod tests {
         assert_eq!((parsed.spec.host.as_str(), parsed.spec.port), ("10.0.0.1", 7001));
         assert_eq!(parsed.spec.option("topology"), Some("cluster"));
         assert_eq!(parsed.spec.option("nodes"), Some("10.0.0.2:7002, [::1]:7003"));
-        assert_eq!(parsed.spec.option("db"), None);
+        assert_eq!(parsed.spec.option("db"), Some("0"));
+        assert_eq!(parsed.spec.option("masterName"), None);
         assert_eq!(parsed.spec.user, "app");
         assert_eq!(parsed.password.as_deref(), Some("s3cret"));
         assert!(parsed.spec.tls.is_some());

@@ -709,6 +709,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
           section: "general",
           default: "standalone",
           required: false,
+          partOfTarget: true,
         },
         {
           key: "options.nodes",
@@ -721,6 +722,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
           section: "general",
           default: null,
           required: false,
+          partOfTarget: true,
           visibleWhen: { key: "options.topology", equals: ["cluster", "sentinel"] },
         },
         {
@@ -734,6 +736,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
           section: "general",
           default: null,
           required: true,
+          partOfTarget: true,
           visibleWhen: { key: "options.topology", equals: ["sentinel"] },
         },
         {
@@ -747,6 +750,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
           section: "auth",
           default: null,
           required: false,
+          partOfTarget: true,
           visibleWhen: { key: "options.topology", equals: ["sentinel"] },
         },
         {
@@ -757,7 +761,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
           },
           label: "Sentinel password",
           placeholder: null,
-          hint: "The sentinels' own password. Empty: none, or the data password when the sentinels ask for one.",
+          hint: "The sentinels' own password; left empty, the saved one stays. With none saved, sentinels that ask for a password get the data password.",
           section: "auth",
           default: null,
           required: false,
@@ -800,6 +804,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
           section: "advanced",
           default: null,
           required: false,
+          partOfTarget: true,
           visibleWhen: { key: "options.topology", equals: ["cluster", "sentinel"] },
         },
         {
