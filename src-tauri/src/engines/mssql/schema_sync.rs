@@ -830,6 +830,7 @@ impl SchemaDialect for MssqlSchemaDialect {
             batch_separator: Some(SEPARATOR),
             inline_comments: false,
             columns_held_by_dependents: true,
+            inline_foreign_keys: false,
         }
     }
 

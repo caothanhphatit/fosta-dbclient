@@ -7,6 +7,7 @@
   "paths": [
     "src-tauri/src/engines/sqlite/**",
     "src-tauri/src/engines/common/**",
+    "src-tauri/src/compare/**",
     "src-tauri/src/contract/**",
     "src-tauri/src/runtime/**",
     "src-tauri/src/gateway/**",

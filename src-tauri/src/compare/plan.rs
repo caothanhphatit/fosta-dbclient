@@ -14,7 +14,8 @@
 //! 12. comments and table options.
 //!
 //! Selecting an item pulls in what it needs (dependent views are recreated even when identical, foreign keys are added
-//! back); what the planner cannot satisfy becomes a warning, never a silent omission.
+//! back); what the planner cannot satisfy becomes a warning, never a silent omission. Where foreign keys live in the
+//! table (SQLite), they go with `CREATE TABLE` or the rebuild instead of phases 1 and 11.
 
 use std::collections::{HashMap, HashSet};
 
@@ -227,7 +228,7 @@ impl<'a> Planner<'a> {
                 let (Some(source), Some(target)) = (self.source_table(&item.name), self.target_table(&item.name)) else {
                     return;
                 };
-                if self.dialect.needs_rebuild(item) {
+                if self.dialect.needs_rebuild(item, source, target) {
                     self.rebuild(item, source, target);
                 } else {
                     for change in &item.changes {
@@ -241,11 +242,16 @@ impl<'a> Planner<'a> {
 
     fn create_table(&mut self, id: &str, table: &TableDef) {
         self.created_tables.insert(self.fold(&table.name));
-        let inline = self.dialect.features().inline_comments;
+        let features = self.dialect.features();
+        let inline = features.inline_comments;
         let keep = |comment: &Option<String>| comment.clone().filter(|_| inline && self.comments());
         let bare = TableDef {
             indexes: Vec::new(),
-            foreign_keys: Vec::new(),
+            foreign_keys: if features.inline_foreign_keys {
+                table.foreign_keys.clone()
+            } else {
+                Vec::new()
+            },
             comment: keep(&table.comment),
             columns: table
                 .columns
@@ -687,6 +693,10 @@ impl<'a> Planner<'a> {
                 );
             }
         }
+        if self.dialect.features().inline_foreign_keys {
+            // Part of the table's CREATE TABLE (or rebuild).
+            return;
+        }
         self.push(
             Phase::AddForeignKeys,
             id,
@@ -699,6 +709,11 @@ impl<'a> Planner<'a> {
 
     /// Foreign keys of the target in the way of the planned drops and type changes: dropped first, added back after.
     fn foreign_key_dependencies(&mut self) {
+        if self.dialect.features().inline_foreign_keys {
+            // Keys refer to tables by name, so they survive a rebuild; a dropped parent leaves them dangling, as the
+            // source has them.
+            return;
+        }
         let target = self.target;
         let target_schema = target.scope.schema.clone();
         for table in &target.tables {

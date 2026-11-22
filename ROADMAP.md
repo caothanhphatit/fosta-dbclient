@@ -22,6 +22,8 @@ Where Fosta Studio is heading. Plans change; open an issue to discuss an item or
 - The assistant can learn a database once (structure, and sampled values only where it may read data) and answers
   questions about Fosta Studio itself from the built-in help.
 - Vector search tools for MariaDB and PostgreSQL (pgvector).
+- Schema compare and sync for PostgreSQL, MySQL, MariaDB, SQL Server and SQLite: diff two schemas on any connections and
+  generate a sync script with data-loss warnings, opened in a query tab under the target's safety rules (never run by itself).
 - Redis Cluster and Redis Sentinel connections (Valkey too): key browsing across every shard, a console, guarded edits, a
   cluster overview with shards and per-node INFO, and failover that follows the new master.
 - A web edition: one Docker image to use Fosta Studio in a browser.
@@ -33,7 +35,9 @@ Where Fosta Studio is heading. Plans change; open an issue to discuss an item or
 
 ## Later
 
-- **Schema compare and sync** between environments, with migration scripts.
+- **Schema compare for more objects and engines**: sequences, enums, triggers and routines; Oracle and ClickHouse; rename
+  detection you can confirm; migration-tool file naming (Flyway, Liquibase).
+- **Data compare for config tables**: diff the rows of chosen tables by key and sync them with INSERT/UPDATE/DELETE.
 - **Visual execution plans** for every engine, with index suggestions.
 - **Activity monitor**: running queries, locks and blocking sessions.
 - **Table designer**, data transfer between engines, data profiling and test-data generation, backup and restore.

@@ -390,6 +390,10 @@ pub struct DialectFeatures {
     /// dropping it while it has a default constraint (SQL Server): the planner drops those first and recreates the ones
     /// that stay.
     pub columns_held_by_dependents: bool,
+    /// Foreign keys are part of the table definition (SQLite): `CREATE TABLE` carries them, changing one rebuilds the
+    /// table, and the foreign keys of other tables keep pointing at a rebuilt table by name, so the planner neither adds
+    /// them as separate steps nor drops and re-adds them around drops, rebuilds and type changes.
+    pub inline_foreign_keys: bool,
 }
 
 /// Pure, per engine (no connection): normalizes catalog text for comparison, rates type changes and renders
@@ -403,8 +407,9 @@ pub trait SchemaDialect: Send + Sync {
     /// The risk of changing a target column `from` into the source's `to`.
     fn type_change_risk(&self, from: &ColumnDef, to: &ColumnDef) -> Risk;
     fn features(&self) -> DialectFeatures;
-    /// Whether applying this item's changes needs a table rebuild (SQLite, beyond a plain ADD COLUMN).
-    fn needs_rebuild(&self, _item: &DiffItem) -> bool {
+    /// Whether applying this item's changes needs a table rebuild (SQLite, beyond a plain ADD or DROP COLUMN and index
+    /// changes). `source` and `target` are the item's two table definitions.
+    fn needs_rebuild(&self, _item: &DiffItem, _source: &TableDef, _target: &TableDef) -> bool {
         false
     }
     fn quote_ident(&self, name: &str) -> String;

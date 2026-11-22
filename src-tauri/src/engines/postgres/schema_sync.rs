@@ -676,6 +676,7 @@ impl SchemaDialect for PgSchemaDialect {
             batch_separator: None,
             inline_comments: false,
             columns_held_by_dependents: false,
+            inline_foreign_keys: false,
         }
     }
 

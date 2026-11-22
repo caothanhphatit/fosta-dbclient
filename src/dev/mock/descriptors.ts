@@ -401,6 +401,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
       "streamingResults",
       "schemaGraph",
       "explain",
+      "schemaCompare",
     ],
     objectsLabel: "tables",
     connection: {

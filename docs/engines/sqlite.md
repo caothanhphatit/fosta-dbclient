@@ -28,6 +28,15 @@ The driver is `rusqlite` with the bundled SQLite (3.50). It is synchronous, so e
   runs the statement, and the gateway treats it as a read.
 - **Relations**: foreign keys in both directions and the ER diagram of a database.
 - **Object actions**: design, copy name, explain a select, analyze, delete all rows (danger), reindex, drop trigger (danger).
+- **Schema compare** ("Compare schema with…" on a database; `schema_snapshot.rs`, `schema_sync.rs`): an attached database per
+  side. The snapshot reads the `pragma_*` functions per table, and CHECKs, collations, generated expressions, `AUTOINCREMENT` and
+  constraint names from the stored CREATE text; triggers and virtual tables are listed as not compared. ALTER TABLE only adds
+  and drops columns, so any other change of a table is a rebuild (`_fosta_new_<table>` created as the source defines it, common
+  columns copied, old table dropped, new one renamed, its indexes and the old triggers created again). Views that read a rebuilt
+  table are dropped first and created again after. A script that drops or rebuilds tables starts with `PRAGMA foreign_keys = OFF`
+  (outside the transaction, where SQLite honours it; the safety rules treat it as administrative), checks
+  `pragma_foreign_key_check` before `COMMIT` (a violation stops the script with an "integer overflow" error: run `ROLLBACK`) and
+  ends with `PRAGMA foreign_keys = ON`.
 
 ## Not done
 
@@ -36,7 +45,8 @@ SQLite's shared cache, so a long write in one tab can make another connection wa
 
 ## Running the contract tests
 
-No container is needed; the suites write a file in the temp folder (`fosta-contract-sqlite.db`, or `FOSTA_CONTRACT_SQLITE_FILE`):
+No container is needed; the suites write a file in the temp folder (`fosta-contract-sqlite.db`, or `FOSTA_CONTRACT_SQLITE_FILE`),
+and the schema compare round trip two more next to it (`-compare-a.db`, `-compare-b.db`, attached as `compare_a` and `compare_b`):
 
 ```sh
 cd src-tauri && cargo test contract_sqlite -- --ignored --test-threads=1

@@ -9,19 +9,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Schema compare for PostgreSQL: "Compare schema with…" on a database or schema (and Compare in the toolbar) picks a target on
-  any connection of any workspace, lists the tables and views that differ, exist on one side only or are identical, shows each
-  object's changes and a side-by-side DDL diff, and generates a sync script with data-loss and review warnings. Drops start
-  unchecked; options re-diff without reading again. The compare never runs the script: open it in a query tab on the target
-  (its safety rules apply), copy it or save it as `.sql`. Compare tabs come back after a restart and read nothing until
-  Compare again.
-- Schema compare for MySQL and MariaDB (a database per side; MySQL may be compared with MariaDB, and the script uses the
-  target's dialect). Their DDL commits implicitly, so the script is never wrapped in a transaction and its header says it is
-  not atomic; table comments and storage engine or collation changes are manual steps with the statement to run.
-- Schema compare for SQL Server (a schema per side, picked from the schemas of the database's tables). Server-named keys,
-  checks and defaults match by definition; the script runs in one transaction with `SET XACT_ABORT ON`, drops and recreates the
-  keys and indexes that hold a column it changes, and puts each view in a `GO` batch of its own. IDENTITY changes are manual
-  steps.
+- Schema compare for PostgreSQL, MySQL, MariaDB, SQL Server and SQLite: "Compare schema with…" on a database or schema (and
+  Compare in the toolbar) picks a target of the same engine (MySQL with MariaDB too) on any connection of any workspace, lists
+  the tables and views that differ, exist on one side only or are identical, shows each object's changes and a side-by-side
+  DDL diff, and generates a sync script with data-loss and review warnings. Drops start unchecked, options re-diff without
+  reading again, and what an engine cannot express is a commented manual step. The compare never runs the script: open it in
+  a query tab on the target (its safety rules apply), copy it or save it as `.sql`. Compare tabs come back after a restart and
+  read nothing until Compare again. Per engine: PostgreSQL and SQL Server scripts run in one transaction (SQL Server with
+  `SET XACT_ABORT ON`, `GO` batches and server-named keys matched by definition); MySQL and MariaDB DDL commits implicitly, so
+  their scripts are not wrapped in a transaction and say they are not atomic; SQLite rebuilds a table for changes ALTER TABLE
+  cannot make (copying the rows and recreating indexes and triggers), with foreign keys switched off around the rebuild and
+  checked before `COMMIT`.
 - SQL Server query tabs run scripts with `GO` lines as separate batches on the tab's connection (`GO 3` repeats a batch), stop
   at the first failing batch and name the failing statement and line of the whole script. The safety rules classify each batch
   on its own, and recognize `ALTER COLUMN`, `ADD … DEFAULT … FOR` and clustered indexes as DDL.

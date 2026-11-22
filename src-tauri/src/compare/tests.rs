@@ -11,11 +11,14 @@ struct FakeDialect {
     restrict_equals_no_action: bool,
     /// Columns held by their dependents (SQL Server).
     held: bool,
+    /// Foreign keys inside the table, and tables rebuilt for anything but an added column (SQLite).
+    inline: bool,
 }
 
 const FAKE: FakeDialect = FakeDialect {
     restrict_equals_no_action: false,
     held: false,
+    inline: false,
 };
 
 fn normalize(raw: &str, schema: Option<&str>) -> String {
@@ -54,7 +57,11 @@ impl SchemaDialect for FakeDialect {
             batch_separator: None,
             inline_comments: false,
             columns_held_by_dependents: self.held,
+            inline_foreign_keys: self.inline,
         }
+    }
+    fn needs_rebuild(&self, item: &DiffItem, _source: &TableDef, _target: &TableDef) -> bool {
+        self.inline && item.changes.iter().any(|c| !(c.part == "column" && c.what == ChangeKind::Added))
     }
     fn quote_ident(&self, name: &str) -> String {
         format!("\"{}\"", name.replace('"', "\"\""))
@@ -469,6 +476,7 @@ fn foreign_keys_map_the_scope_schema_and_treat_missing_actions_as_no_action() {
     let mysql = FakeDialect {
         restrict_equals_no_action: true,
         held: false,
+        inline: false,
     };
     let diff = super::diff(
         &snapshot("a", vec![source], Vec::new()),
@@ -1074,6 +1082,7 @@ fn columns_held_by_dependents_free_them_first_and_recreate_the_dependents() {
     let held = FakeDialect {
         restrict_equals_no_action: false,
         held: true,
+        inline: false,
     };
     let (steps, _) = planned_with(&held, &source, &target, None);
     assert_eq!(
@@ -1129,4 +1138,53 @@ fn the_script_has_a_header_warnings_and_the_wrapper() {
     assert!(empty.sql.contains("Nothing to do"));
     assert!(!empty.transactional);
     assert_eq!(empty.statements, 0);
+}
+
+#[test]
+fn inline_foreign_keys_go_with_the_table_and_rebuilds_replace_alters() {
+    let inline = FakeDialect {
+        restrict_equals_no_action: false,
+        held: false,
+        inline: true,
+    };
+    // Created tables carry their foreign keys; no separate steps, and no warning for a table created in the same plan.
+    let source = snapshot("a", vec![customers(), with_fk(orders())], Vec::new());
+    let empty = snapshot("b", Vec::new(), Vec::new());
+    let options = CompareOptions::default();
+    let diff = super::diff(&source, &empty, &options, &inline);
+    let include: Vec<String> = diff.items.iter().map(|item| item.id.clone()).collect();
+    let plan = plan(&diff, &include, &source, &empty, &options, &inline);
+    let created: Vec<&TableDef> = plan
+        .steps
+        .iter()
+        .filter_map(|p| match &p.step {
+            MigrationStep::CreateTable { table } => Some(table),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(created.len(), 2);
+    assert_eq!(created[1].foreign_keys.len(), 1);
+    assert_eq!(plan.steps.len(), 2, "{:?}", plan.steps);
+    assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+    // Dropping the parent leaves the child's key alone; a changed child is rebuilt, and its views go around it.
+    let (steps, _) = planned_with(
+        &inline,
+        &snapshot("a", vec![with_fk(orders())], Vec::new()),
+        &snapshot("b", vec![customers(), with_fk(orders())], Vec::new()),
+        None,
+    );
+    assert_eq!(steps, ["drop table customers"]);
+    let mut changed = orders();
+    changed.columns[2].nullable = !changed.columns[2].nullable;
+    let reader = ViewDef {
+        depends_on: vec!["orders".into()],
+        ..view("v", "SELECT id FROM orders")
+    };
+    let source = snapshot("a", vec![customers(), changed], vec![reader.clone()]);
+    let target = snapshot("b", vec![customers(), with_fk(orders())], vec![reader]);
+    let (steps, _) = planned_with(&inline, &source, &target, None);
+    assert_eq!(steps.len(), 3, "{steps:?}");
+    assert_eq!(steps[0], "drop view v");
+    assert!(steps[1].starts_with("RebuildTable"), "{steps:?}");
+    assert_eq!(steps[2], "create view v");
 }
