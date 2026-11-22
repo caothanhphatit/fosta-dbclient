@@ -47,10 +47,22 @@ pub fn normalise_executable_comments(engine: SqlDialectId, text: &str) -> String
 /// Parses `text` in the engine's dialect, falling back to the generic one.
 pub fn parse(engine: SqlDialectId, text: &str) -> Result<Vec<Statement>, String> {
     let text = normalise_executable_comments(engine, text);
-    match Parser::parse_sql(dialect_for(engine).as_ref(), &text) {
+    match parse_all(dialect_for(engine).as_ref(), &text) {
         Ok(statements) => Ok(statements),
-        Err(error) => Parser::parse_sql(&GenericDialect {}, &text).map_err(|_| error.to_string()),
+        Err(error) => parse_all(&GenericDialect {}, &text).map_err(|_| error),
     }
+}
+
+/// Every statement of `text`, or an error when the parser stops before the end: it ends its statement list at an `END`
+/// that follows a statement (`SELECT 1 END CONVERSATION @h DROP TABLE t`) without reading what comes after.
+fn parse_all(dialect: &dyn Dialect, text: &str) -> Result<Vec<Statement>, String> {
+    let mut parser = Parser::new(dialect).try_with_sql(text).map_err(|error| error.to_string())?;
+    let statements = parser.parse_statements().map_err(|error| error.to_string())?;
+    let next = parser.peek_token();
+    if next.token != Token::EOF {
+        return Err(format!("Expected the end of the text, found {} at {}", next.token, next.span.start));
+    }
+    Ok(statements)
 }
 
 /// Classifies SQL typed in a query tab (or built by the app).
@@ -70,7 +82,21 @@ pub fn classify_sql(engine: SqlDialectId, text: &str) -> Classification {
             return Classification {
                 statements: batches
                     .iter()
-                    .flat_map(|batch| classify_text(engine, &text[batch.start..batch.end]).statements)
+                    .flat_map(|batch| {
+                        let mut statements = classify_text(engine, &text[batch.start..batch.end]).statements;
+                        if batch.repeat != 1 {
+                            // `GO 30`: the confirmation must say that the batch runs 30 times.
+                            for statement in &mut statements {
+                                let repeated = format!("GO {0} runs this batch {0} times", batch.repeat);
+                                statement.reason = Some(match statement.reason.take() {
+                                    Some(reason) => format!("{repeated}; {reason}"),
+                                    None => repeated,
+                                });
+                                statement.repeat = Some(batch.repeat);
+                            }
+                        }
+                        statements
+                    })
                     .collect(),
             };
         }
@@ -96,7 +122,7 @@ fn classify_text(engine: SqlDialectId, text: &str) -> Classification {
             statements: statements.iter().map(|statement| classify_statement(engine, statement)).collect(),
         },
         Err(error) => {
-            if let Some(info) = tsql_ddl(engine, text) {
+            if let Some(info) = tsql_ddl(engine, text).or_else(|| create_view_ddl(engine, text)) {
                 return Classification::single(info);
             }
             let (category, why) = unparsed_category(engine, text);
@@ -114,6 +140,7 @@ fn classify_text(engine: SqlDialectId, text: &str) -> Classification {
                 excerpt: excerpt(text),
                 reason: Some(reason),
                 refused: None,
+                repeat: None,
             })
         }
     }
@@ -185,7 +212,7 @@ fn unparsed_category(engine: SqlDialectId, text: &str) -> (Category, Option<Stri
 }
 
 /// Words that start a T-SQL statement (which needs no `;` before it).
-const STATEMENT_WORDS: [&str; 41] = [
+const STATEMENT_WORDS: [&str; 47] = [
     "SELECT",
     "INSERT",
     "UPDATE",
@@ -227,7 +254,100 @@ const STATEMENT_WORDS: [&str; 41] = [
     "RECONFIGURE",
     "SHUTDOWN",
     "CHECKPOINT",
+    "WRITETEXT",
+    "UPDATETEXT",
+    "READTEXT",
+    "SETUSER",
+    "REVERT",
+    "RECEIVE",
 ];
+
+/// Words that start a T-SQL statement only before these words (elsewhere they are a clause or a name:
+/// `ALTER TABLE t ADD c`, `CASE ... END`): `ADD [COUNTER] SIGNATURE`, `ENABLE|DISABLE TRIGGER`, `SEND ON CONVERSATION`,
+/// `END|MOVE CONVERSATION`, `GET CONVERSATION GROUP`.
+fn statement_pair(word: &str, next: Option<&str>, after: Option<&str>) -> bool {
+    match (word, next) {
+        ("ADD", Some("SIGNATURE")) => true,
+        ("ADD", Some("COUNTER")) => after == Some("SIGNATURE"),
+        ("ENABLE" | "DISABLE", Some("TRIGGER")) => true,
+        ("SEND", Some("ON")) => after == Some("CONVERSATION"),
+        ("END" | "MOVE" | "GET", Some("CONVERSATION")) => true,
+        _ => false,
+    }
+}
+
+/// `CREATE [OR REPLACE | OR ALTER] [ALGORITHM = a] [DEFINER = d] [SQL SECURITY s] VIEW name ...` that the parser does not
+/// read (SQL Server `WITH SCHEMABINDING`, MySQL `WITH LOCAL CHECK OPTION`): DDL on the view, raised further (never
+/// lowered) by the rules on unparsed SQL. Recognized only as one statement, with no `;` but a trailing one (SQL Server
+/// runs `CREATE VIEW` alone in its batch, so nothing can follow it there either).
+fn create_view_ddl(engine: SqlDialectId, text: &str) -> Option<StatementInfo> {
+    let dialect = dialect_for(engine);
+    let tokens = Tokenizer::new(dialect.as_ref(), text).tokenize().ok()?;
+    let mut significant: Vec<&Token> = tokens.iter().filter(|token| !matches!(token, Token::Whitespace(_))).collect();
+    while matches!(significant.last(), Some(Token::SemiColon)) {
+        significant.pop();
+    }
+    if significant.iter().any(|token| matches!(token, Token::SemiColon)) {
+        return None;
+    }
+    let word = |at: usize| match significant.get(at) {
+        Some(Token::Word(word)) if word.quote_style.is_none() => Some(word.value.to_ascii_uppercase()),
+        _ => None,
+    };
+    if word(0).as_deref() != Some("CREATE") {
+        return None;
+    }
+    let mut at = 1;
+    if word(at).as_deref() == Some("OR") && matches!(word(at + 1).as_deref(), Some("REPLACE" | "ALTER")) {
+        at += 2;
+    }
+    loop {
+        match word(at).as_deref() {
+            Some("ALGORITHM" | "DEFINER") => {
+                // `= value`, where a definer is `user`@`host` or CURRENT_USER[()]: skip to the next clause.
+                at += 1;
+                while at < significant.len() && !matches!(word(at).as_deref(), Some("SQL" | "VIEW")) {
+                    at += 1;
+                }
+            }
+            Some("SQL") if word(at + 1).as_deref() == Some("SECURITY") => at += 3,
+            Some("VIEW") => break,
+            _ => return None,
+        }
+    }
+    let mut parts = Vec::new();
+    at += 1;
+    loop {
+        match significant.get(at) {
+            Some(token @ Token::Word(_)) => parts.push(token.to_string()),
+            _ => return None,
+        }
+        at += 1;
+        if matches!(significant.get(at), Some(Token::Period)) {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    let (raised, why) = unparsed_category(engine, text);
+    let (category, reason) = if raised > Category::Ddl {
+        (raised, why)
+    } else {
+        (
+            Category::Ddl,
+            Some("CREATE VIEW syntax the parser does not read, recognized as DDL".to_owned()),
+        )
+    };
+    Some(StatementInfo {
+        category,
+        kind: "CREATE VIEW".to_owned(),
+        tables: vec![parts.join(".")],
+        excerpt: excerpt(text),
+        reason,
+        refused: None,
+        repeat: None,
+    })
+}
 
 /// SQL Server DDL the parser does not read: `ALTER TABLE t ALTER COLUMN c <type> NULL`, `ALTER TABLE t ADD …` (a
 /// computed column, `CONSTRAINT df DEFAULT … FOR c`), `CREATE [UNIQUE] CLUSTERED|NONCLUSTERED INDEX … ON t` and
@@ -301,7 +421,9 @@ fn tsql_ddl(engine: SqlDialectId, text: &str) -> Option<StatementInfo> {
     let another = (1..significant.len()).any(|at| {
         let Some(current) = word(at) else { return false };
         let after = |words: &[&str]| word(at - 1).is_some_and(|previous| words.contains(&previous.as_str()));
-        STATEMENT_WORDS.contains(&current.as_str())
+        let starts =
+            STATEMENT_WORDS.contains(&current.as_str()) || statement_pair(&current, word(at + 1).as_deref(), word(at + 2).as_deref());
+        starts
             && !(kind == "ALTER TABLE" && current == "ALTER" && alter_column == Some(at + 1))
             && !(matches!(current.as_str(), "DELETE" | "UPDATE") && after(&["ON"]))
             && !(current == "SET" && after(&["DELETE", "UPDATE"]))
@@ -325,6 +447,7 @@ fn tsql_ddl(engine: SqlDialectId, text: &str) -> Option<StatementInfo> {
         excerpt: excerpt(text),
         reason,
         refused: None,
+        repeat: None,
     })
 }
 
@@ -393,6 +516,7 @@ fn classify_statement(engine: SqlDialectId, statement: &Statement) -> StatementI
         excerpt: excerpt(&statement.to_string()),
         reason,
         refused: None,
+        repeat: None,
     }
 }
 
@@ -1057,6 +1181,50 @@ mod tests {
     }
 
     #[test]
+    fn text_after_a_statement_ending_end_is_never_dropped() {
+        // The parser ends its statement list at an `END` after a statement; what follows must still count.
+        for engine in [
+            SqlDialectId::MsSql,
+            SqlDialectId::Postgres,
+            SqlDialectId::MySql,
+            SqlDialectId::Sqlite,
+        ] {
+            for sql in ["SELECT 1\nEND\nDROP TABLE t", "SELECT 1\nEND CONVERSATION @h\nDROP TABLE t"] {
+                assert_eq!(worst(engine, sql), Some(Destructive), "{engine:?}: {sql}");
+            }
+        }
+    }
+
+    #[test]
+    fn create_view_syntax_the_parser_does_not_read_is_ddl() {
+        check(
+            SqlDialectId::MySql,
+            &[
+                (
+                    "CREATE SQL SECURITY INVOKER VIEW `d`.`v` AS\nSELECT 1\nWITH LOCAL CHECK OPTION",
+                    Ddl,
+                ),
+                (
+                    "CREATE OR REPLACE ALGORITHM = MERGE DEFINER = `a`@`%` VIEW v AS SELECT 1 WITH CHECK OPTION",
+                    Ddl,
+                ),
+                ("CREATE VIEW v AS SELECT 1 WITH LOCAL CHECK OPTION; DROP TABLE t", Destructive),
+                ("CREATE VIEW v AS SELECT 1 WITH LOCAL CHECK OPTION; SELECT 2", Unknown),
+            ],
+        );
+        check(
+            SqlDialectId::MsSql,
+            &[
+                (
+                    "CREATE VIEW [s].[v] (a) WITH SCHEMABINDING, VIEW_METADATA AS\nSELECT x AS a FROM s.t",
+                    Ddl,
+                ),
+                ("CREATE VIEW v WITH SCHEMABINDING AS SELECT x FROM s.t\nDROP TABLE t", Destructive),
+            ],
+        );
+    }
+
+    #[test]
     fn tsql_ddl_the_parser_does_not_read_is_ddl() {
         let one = |sql: &str| {
             let classification = classify_sql(SqlDialectId::MsSql, sql);
@@ -1086,8 +1254,55 @@ mod tests {
                 // T-SQL needs no `;`: a second statement makes it unparsed text again.
                 ("ALTER TABLE t ALTER COLUMN c int\nEXEC sp_configure 'x', 1", Unknown),
                 ("ALTER TABLE t ADD c int NULL REFERENCES p (id) ON DELETE SET NULL, d AS (c*2)", Ddl),
+                ("ALTER TABLE t ADD d AS (CASE WHEN c > 0 THEN 1 END)", Ddl),
             ],
         );
+        // Every other T-SQL statement starter ends the one DDL statement too.
+        for second in [
+            "DISABLE TRIGGER ALL ON ALL SERVER",
+            "ENABLE TRIGGER tr ON DATABASE",
+            "WRITETEXT t.c @ptr 'x'",
+            "UPDATETEXT t.c @ptr 0 NULL 'x'",
+            "READTEXT t.c @ptr 0 10",
+            "SETUSER 'dbo'",
+            "REVERT",
+            "ADD SIGNATURE TO p BY CERTIFICATE c",
+            "ADD COUNTER SIGNATURE TO p BY CERTIFICATE c",
+            "RECEIVE * FROM q",
+            "SEND ON CONVERSATION @h (N'x')",
+            "END CONVERSATION @h",
+            "MOVE CONVERSATION @h TO @g",
+            "GET CONVERSATION GROUP @g FROM q",
+            "BULK INSERT t FROM 'f'",
+            "DBCC CHECKDB",
+            "KILL 52",
+            "SHUTDOWN",
+            "RECONFIGURE",
+            "BACKUP DATABASE d TO DISK = 'f'",
+            "RESTORE DATABASE d FROM DISK = 'f'",
+            "GRANT SELECT ON t TO u",
+            "DENY SELECT ON t TO u",
+            "REVOKE SELECT ON t FROM u",
+            "OPEN c",
+            "CLOSE c",
+            "FETCH NEXT FROM c",
+            "DEALLOCATE c",
+            "WAITFOR DELAY '00:00:01'",
+            "THROW 50000, 'x', 1",
+            "RAISERROR ('x', 16, 1)",
+            "PRINT 'x'",
+            "SET XACT_ABORT ON",
+            "DECLARE @x int",
+            "USE master",
+            "EXECUTE p",
+        ] {
+            let sql = format!("ALTER TABLE t ADD c int\n{second}");
+            let classification = classify_sql(SqlDialectId::MsSql, &sql);
+            assert!(
+                !(classification.statements.len() == 1 && classification.statements[0].category == Ddl),
+                "{sql}: {classification:?}"
+            );
+        }
         assert_eq!(worst(SqlDialectId::MySql, "ALTER TABLE t ALTER COLUMN c int NULL"), Some(Unknown));
     }
 
