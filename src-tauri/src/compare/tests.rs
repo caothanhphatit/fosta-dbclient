@@ -793,3 +793,251 @@ fn the_fake_dialect_wraps_in_a_transaction() {
     assert_eq!(wrapped.first().unwrap().sql, "BEGIN;");
     assert_eq!(wrapped.len(), 3);
 }
+
+// --- Planner ------------------------------------------------------------------------------------------------------------
+
+/// The steps of a plan over every item of the diff (or `include`) as short labels, and the plan's warnings.
+fn planned(source: &SchemaSnapshot, target: &SchemaSnapshot, include: Option<&[&str]>) -> (Vec<String>, Vec<String>) {
+    let options = CompareOptions::default();
+    let diff = run(source, target, &options);
+    let include: Vec<String> = match include {
+        Some(ids) => ids.iter().map(|id| (*id).to_owned()).collect(),
+        None => diff.items.iter().map(|item| item.id.clone()).collect(),
+    };
+    let plan = plan(&diff, &include, source, target, &options, &FAKE);
+    let steps = plan
+        .steps
+        .iter()
+        .map(|planned| match &planned.step {
+            MigrationStep::DropForeignKey { table, name } => format!("drop fk {table}.{name}"),
+            MigrationStep::DropView { name, .. } => format!("drop view {name}"),
+            MigrationStep::DropIndex { name, .. } => format!("drop index {name}"),
+            MigrationStep::DropConstraint { table, name, .. } => {
+                format!("drop constraint {table}.{}", name.clone().unwrap_or_default())
+            }
+            MigrationStep::DropTable { name } => format!("drop table {name}"),
+            MigrationStep::CreateTable { table } => format!("create table {}", table.name),
+            MigrationStep::AddColumn { table, column } => format!("add column {table}.{}", column.name),
+            MigrationStep::AlterColumn { table, to, .. } => format!("alter column {table}.{}", to.name),
+            MigrationStep::DropColumn { table, column } => format!("drop column {table}.{column}"),
+            MigrationStep::AddPrimaryKey { table, .. } => format!("add pk {table}"),
+            MigrationStep::AddConstraint { table, .. } => format!("add constraint {table}"),
+            MigrationStep::CreateIndex { index, .. } => format!("create index {}", index.name),
+            MigrationStep::CreateView { view, .. } => format!("create view {}", view.name),
+            MigrationStep::AddForeignKey { table, key } => format!("add fk {table}.{}", key.name.clone().unwrap_or_default()),
+            MigrationStep::SetComment { target, .. } => format!("comment {}", target.name),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    (steps, plan.warnings.into_iter().map(|w| w.message).collect())
+}
+
+fn customers() -> TableDef {
+    TableDef {
+        primary_key: Some(KeyDef {
+            name: Some("customers_pkey".into()),
+            columns: vec!["id".into()],
+            system_named: false,
+        }),
+        ..table("customers", vec![not_null("id", "integer")])
+    }
+}
+
+fn with_fk(mut table: TableDef) -> TableDef {
+    table.foreign_keys.push(fk(Some("orders_customer_fkey"), None, Some("CASCADE")));
+    table
+}
+
+#[test]
+fn foreign_keys_are_dropped_before_their_table_and_added_after_both_tables() {
+    // The target has customers referenced by orders; the source has neither: drop the FK, then the tables.
+    let target = snapshot("b", vec![customers(), with_fk(orders())], Vec::new());
+    let source = snapshot("a", Vec::new(), Vec::new());
+    let (steps, _) = planned(&source, &target, None);
+    assert_eq!(
+        steps,
+        ["drop fk orders.orders_customer_fkey", "drop table customers", "drop table orders"]
+    );
+
+    // The reverse: both tables are created first, the FK comes last.
+    let (steps, warnings) = planned(&target, &source, None);
+    assert_eq!(
+        steps,
+        [
+            "create table customers",
+            "create table orders",
+            "add fk orders.orders_customer_fkey"
+        ]
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn only_in_target_items_are_dropped_only_when_selected() {
+    let source = snapshot("a", vec![orders()], Vec::new());
+    let target = snapshot("b", vec![orders(), table("old", vec![col("x", "int")])], Vec::new());
+    let (steps, _) = planned(&source, &target, Some(&[]));
+    assert!(steps.is_empty(), "{steps:?}");
+    let (steps, _) = planned(&source, &target, Some(&["table:old"]));
+    assert_eq!(steps, ["drop table old"]);
+}
+
+#[test]
+fn a_deselected_dependency_is_a_warning() {
+    let source = snapshot("a", vec![customers(), with_fk(orders())], Vec::new());
+    let target = snapshot("b", Vec::new(), Vec::new());
+    let (steps, warnings) = planned(&source, &target, Some(&["table:orders"]));
+    assert_eq!(steps, ["create table orders", "add fk orders.orders_customer_fkey"]);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("needs table customers, which is not selected"), "{warnings:?}");
+}
+
+#[test]
+fn dependent_views_and_foreign_keys_go_around_a_column_type_change() {
+    let mut source_orders = with_fk(orders());
+    source_orders.columns[1].type_name = "bigint".into();
+    let mut source_customers = customers();
+    source_customers.columns[0].type_name = "bigint".into();
+    let totals = || ViewDef {
+        depends_on: vec!["orders".into()],
+        ..view("v_totals", "SELECT customer_id FROM orders")
+    };
+    let top = || ViewDef {
+        depends_on: vec!["v_totals".into()],
+        ..view("v_top", "SELECT * FROM v_totals")
+    };
+    let unrelated = view("v_other", "SELECT 1");
+    let source = snapshot("a", vec![source_customers, source_orders], vec![top(), totals(), unrelated.clone()]);
+    let target = snapshot("b", vec![customers(), with_fk(orders())], vec![top(), totals(), unrelated]);
+    let (steps, _) = planned(&source, &target, None);
+    assert_eq!(
+        steps,
+        [
+            "drop fk orders.orders_customer_fkey",
+            "drop view v_top",
+            "drop view v_totals",
+            "alter column customers.id",
+            "alter column orders.customer_id",
+            "create view v_totals",
+            "create view v_top",
+            "add fk orders.orders_customer_fkey",
+        ]
+    );
+}
+
+#[test]
+fn changed_views_are_recreated_in_dependency_order_with_a_cycle_guard() {
+    let dependent = |name: &str, body: &str, on: &[&str]| ViewDef {
+        depends_on: on.iter().map(|d| (*d).to_owned()).collect(),
+        ..view(name, body)
+    };
+    let source = snapshot(
+        "a",
+        Vec::new(),
+        vec![
+            dependent("v_c", "SELECT * FROM v_b", &["v_b"]),
+            dependent("v_b", "SELECT * FROM v_a", &["v_a"]),
+            dependent("v_a", "SELECT 2", &[]),
+        ],
+    );
+    let target = snapshot(
+        "b",
+        Vec::new(),
+        vec![
+            dependent("v_a", "SELECT 1", &[]),
+            dependent("v_b", "SELECT * FROM v_a", &["v_a"]),
+            dependent("v_c", "SELECT * FROM v_b", &["v_b"]),
+        ],
+    );
+    let (steps, warnings) = planned(&source, &target, None);
+    assert_eq!(
+        steps,
+        [
+            "drop view v_c",
+            "drop view v_b",
+            "drop view v_a",
+            "create view v_a",
+            "create view v_b",
+            "create view v_c",
+        ]
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    let cyclic = snapshot(
+        "a",
+        Vec::new(),
+        vec![
+            dependent("v_x", "SELECT * FROM v_y", &["v_y"]),
+            dependent("v_y", "SELECT * FROM v_x", &["v_x"]),
+        ],
+    );
+    let (steps, warnings) = planned(&cyclic, &snapshot("b", Vec::new(), Vec::new()), None);
+    assert_eq!(steps.len(), 2);
+    assert!(warnings.iter().any(|w| w.contains("depend on each other")), "{warnings:?}");
+}
+
+#[test]
+fn sub_object_changes_drop_before_and_create_after_column_changes() {
+    let mut source = orders();
+    source.indexes.push(IndexDef {
+        name: "orders_status_idx".into(),
+        parts: vec![IndexPart::column("status")],
+        ..IndexDef::default()
+    });
+    source.checks.push(CheckDef {
+        name: Some("orders_status_check".into()),
+        expression: "status <> 'a'".into(),
+        system_named: false,
+    });
+    source.columns.push(col("added", "int"));
+    let mut target = orders();
+    target.indexes.push(IndexDef {
+        name: "orders_status_idx".into(),
+        parts: vec![IndexPart::column("note")],
+        ..IndexDef::default()
+    });
+    target.checks.push(CheckDef {
+        name: Some("orders_status_check".into()),
+        expression: "status <> 'x'".into(),
+        system_named: false,
+    });
+    target.comment = Some("old".into());
+    let (steps, _) = planned(
+        &snapshot("a", vec![source], Vec::new()),
+        &snapshot("b", vec![target], Vec::new()),
+        None,
+    );
+    assert_eq!(
+        steps,
+        [
+            "drop constraint orders.orders_status_check",
+            "drop index orders_status_idx",
+            "add column orders.added",
+            "add constraint orders",
+            "create index orders_status_idx",
+            "comment orders",
+        ]
+    );
+}
+
+#[test]
+fn the_script_has_a_header_warnings_and_the_wrapper() {
+    let source = snapshot("a", vec![orders()], Vec::new());
+    let target = snapshot("b", vec![orders(), table("old", vec![col("x", "int")])], Vec::new());
+    let options = CompareOptions::default();
+    let script = sync_script(&source, &target, &options, &["table:old".to_owned()], &FAKE, "now");
+    assert!(script.sql.contains("at now."));
+    assert!(script
+        .sql
+        .contains("-- Source: shop.a (postgres 17.2)\n-- Target: shop.b (postgres 17.2)"));
+    assert!(script.sql.contains("\nBEGIN;\n"), "{}", script.sql);
+    assert!(script.transactional);
+    // The fake dialect renders steps as comments, which are not counted as statements.
+    assert_eq!(script.statements, 0);
+    assert_eq!(script.dialect, "postgres");
+
+    let empty = sync_script(&source, &target, &options, &[], &FAKE, "now");
+    assert!(empty.sql.contains("Nothing to do"));
+    assert!(!empty.transactional);
+    assert_eq!(empty.statements, 0);
+}

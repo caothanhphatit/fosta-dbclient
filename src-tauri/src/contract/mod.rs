@@ -50,9 +50,9 @@ pub use engine::{
 pub use errors::{not_wired, unsupported_capability, EngineError, EngineResult, ErrorKind};
 pub use limits::{cancelled, CallContext, CancellationToken, Limits, CANCELLED};
 pub use migration::{
-    strip_schema_qualifier, Change, ChangeKind, ColumnChanges, CommentTarget, CompareOptions, ConstraintDef, ConstraintKind,
-    DialectFeatures, DiffItem, DiffStatus, FieldChange, MigrationStep, RenderContext, RenderedStatement, Risk, SchemaDialect, SchemaDiff,
-    ScopeSummary, ScriptWarning, SyncScript,
+    replace_schema_qualifier, strip_schema_qualifier, Change, ChangeKind, ColumnChanges, CommentTarget, CompareOptions, ConstraintDef,
+    ConstraintKind, DialectFeatures, DiffItem, DiffStatus, FieldChange, MigrationStep, RenderContext, RenderedStatement, Risk,
+    SchemaDialect, SchemaDiff, ScopeSummary, ScriptWarning, SyncScript,
 };
 pub use object::{
     ActionTarget, Badge, BuiltinAction, NodeAction, NodeKey, NodeKind, ObjectNode, ObjectRef, Tone, TreeChildren, TreeRequest,

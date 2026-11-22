@@ -7,6 +7,7 @@
 
 pub mod ai;
 pub mod capability;
+pub mod compare;
 pub mod connections;
 pub mod diagnostics;
 pub mod engines;
@@ -96,6 +97,13 @@ macro_rules! for_each_command {
                 -> $crate::error::AppResult<$crate::contract::ApplyResult> = $crate::commands::objects::apply_edits;
             [async] schema_graph(connection_id: String, database: String)
                 -> $crate::error::AppResult<$crate::contract::SchemaGraph> = $crate::commands::objects::schema_graph;
+            [async] schema_snapshot(connection_id: String, scope: $crate::contract::SnapshotScope, request_id: Option<String>)
+                -> $crate::error::AppResult<$crate::contract::SchemaSnapshot> = $crate::commands::compare::schema_snapshot;
+            [sync] schema_diff(source: $crate::contract::SchemaSnapshot, target: $crate::contract::SchemaSnapshot, options: $crate::contract::CompareOptions)
+                -> $crate::error::AppResult<$crate::contract::SchemaDiff> = $crate::commands::compare::schema_diff;
+            [sync] schema_sync_script(source: $crate::contract::SchemaSnapshot, target: $crate::contract::SchemaSnapshot,
+                options: $crate::contract::CompareOptions, include: Vec<String>)
+                -> $crate::error::AppResult<$crate::contract::SyncScript> = $crate::commands::compare::schema_sync_script;
             [async] create_database(connection_id: String, name: String, first_collection: Option<String>,
                 confirmation: Option<$crate::gateway::Confirmation>)
                 -> $crate::error::AppResult<()> = $crate::commands::objects::create_database;

@@ -16,6 +16,10 @@ mod nodes;
 #[cfg(test)]
 mod perf_tests;
 mod run;
+mod schema_snapshot;
+pub mod schema_sync;
+#[cfg(test)]
+mod schema_sync_tests;
 pub mod session;
 mod tabular;
 #[cfg(test)]

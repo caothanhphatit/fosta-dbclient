@@ -20,13 +20,7 @@ use crate::contract::{
 
 /// Diffs `source` against `target`. The dialect is the target's.
 pub fn diff(source: &SchemaSnapshot, target: &SchemaSnapshot, options: &CompareOptions, dialect: &dyn SchemaDialect) -> SchemaDiff {
-    let cx = Cx {
-        options: ResolvedOptions::new(options, source, target),
-        dialect,
-        features: dialect.features(),
-        source_schema: source.scope.schema.as_deref(),
-        target_schema: target.scope.schema.as_deref(),
-    };
+    let cx = Cx::new(source, target, options, dialect);
     let mut skipped = Skipped::default();
     for object in source.skipped.iter().chain(&target.skipped) {
         skipped.push(object.clone());
@@ -131,6 +125,39 @@ struct Cx<'a> {
     features: DialectFeatures,
     source_schema: Option<&'a str>,
     target_schema: Option<&'a str>,
+}
+
+/// The names [`Change`]s give the sub-objects of a table (`Change::name`), so the planner can find the definitions a
+/// change is about: the user name, or the normalized definition in parentheses for unnamed ones.
+pub(super) struct Labels<'a>(Cx<'a>);
+
+impl<'a> Labels<'a> {
+    pub(super) fn new(
+        source: &'a SchemaSnapshot,
+        target: &'a SchemaSnapshot,
+        options: &'a CompareOptions,
+        dialect: &'a dyn SchemaDialect,
+    ) -> Self {
+        Self(Cx::new(source, target, options, dialect))
+    }
+
+    /// The label of each sub-object of `part` in `table` (of the source side when `source`), in the table's order.
+    pub(super) fn of(&self, part: &str, table: &TableDef, source: bool) -> Vec<String> {
+        let side = if source { Side::Source } else { Side::Target };
+        self.0.subs(part, table, side).iter().map(Sub::label).collect()
+    }
+}
+
+impl<'a> Cx<'a> {
+    fn new(source: &'a SchemaSnapshot, target: &'a SchemaSnapshot, options: &'a CompareOptions, dialect: &'a dyn SchemaDialect) -> Self {
+        Cx {
+            options: ResolvedOptions::new(options, source, target),
+            dialect,
+            features: dialect.features(),
+            source_schema: source.scope.schema.as_deref(),
+            target_schema: target.scope.schema.as_deref(),
+        }
+    }
 }
 
 impl Cx<'_> {
@@ -272,51 +299,18 @@ impl Cx<'_> {
             changes.extend(self.column_order_change(source, target));
         }
         let ignore_names = options.ignore_constraint_names;
-        let key_sub = |key: &KeyDef| Sub {
-            name: key.name.clone(),
-            user_named: key.name.is_some() && !key.system_named,
-            fields: vec![("columns", self.columns_text(&key.columns))],
-        };
-        let pk = |table: &TableDef| -> Vec<Sub> { table.primary_key.iter().map(key_sub).collect() };
-        changes.extend(self.primary_key_change(pk(source), pk(target), ignore_names));
-        let uniques = |table: &TableDef| -> Vec<Sub> { table.uniques.iter().map(key_sub).collect() };
-        changes.extend(self.match_subs("unique", ignore_names, uniques(source), uniques(target), CONSTRAINT_RISKS));
-        let checks = |table: &TableDef, side: Side| -> Vec<Sub> {
-            table
-                .checks
-                .iter()
-                .map(|check| Sub {
-                    name: check.name.clone(),
-                    user_named: check.name.is_some() && !check.system_named,
-                    fields: vec![("expression", self.expr(&check.expression, side))],
-                })
-                .collect()
-        };
-        changes.extend(self.match_subs(
-            "check",
-            ignore_names,
-            checks(source, Side::Source),
-            checks(target, Side::Target),
-            CONSTRAINT_RISKS,
-        ));
-        let indexes =
-            |table: &TableDef, side: Side| -> Vec<Sub> { table.indexes.iter().map(|index| self.index_sub(index, side)).collect() };
-        changes.extend(self.match_subs(
-            "index",
-            options.ignore_index_names,
-            indexes(source, Side::Source),
-            indexes(target, Side::Target),
-            INDEX_RISKS,
-        ));
-        let foreign_keys =
-            |table: &TableDef, side: Side| -> Vec<Sub> { table.foreign_keys.iter().map(|key| self.foreign_key_sub(key, side)).collect() };
-        changes.extend(self.match_subs(
-            "foreignKey",
-            ignore_names,
-            foreign_keys(source, Side::Source),
-            foreign_keys(target, Side::Target),
-            CONSTRAINT_RISKS,
-        ));
+        let subs = |part: &str| (self.subs(part, source, Side::Source), self.subs(part, target, Side::Target));
+        let (pk_source, pk_target) = subs("primaryKey");
+        changes.extend(self.primary_key_change(pk_source, pk_target, ignore_names));
+        for (part, ignore, risks) in [
+            ("unique", ignore_names, CONSTRAINT_RISKS),
+            ("check", ignore_names, CONSTRAINT_RISKS),
+            ("index", options.ignore_index_names, INDEX_RISKS),
+            ("foreignKey", ignore_names, CONSTRAINT_RISKS),
+        ] {
+            let (s, t) = subs(part);
+            changes.extend(self.match_subs(part, ignore, s, t, risks));
+        }
         if !options.ignore_comments {
             changes.extend(comment_change(&source.name, source.comment.as_deref(), target.comment.as_deref()));
         }
@@ -492,6 +486,31 @@ impl Cx<'_> {
                 .match_subs("primaryKey", ignore_names, source, target, PRIMARY_KEY_RISKS)
                 .into_iter()
                 .next(),
+        }
+    }
+
+    /// The sub-objects of one `part` (`primaryKey`, `unique`, `check`, `index`, `foreignKey`) of a table, in its order.
+    fn subs(&self, part: &str, table: &TableDef, side: Side) -> Vec<Sub> {
+        let key_sub = |key: &KeyDef| Sub {
+            name: key.name.clone(),
+            user_named: key.name.is_some() && !key.system_named,
+            fields: vec![("columns", self.columns_text(&key.columns))],
+        };
+        match part {
+            "primaryKey" => table.primary_key.iter().map(key_sub).collect(),
+            "unique" => table.uniques.iter().map(key_sub).collect(),
+            "check" => table
+                .checks
+                .iter()
+                .map(|check| Sub {
+                    name: check.name.clone(),
+                    user_named: check.name.is_some() && !check.system_named,
+                    fields: vec![("expression", self.expr(&check.expression, side))],
+                })
+                .collect(),
+            "index" => table.indexes.iter().map(|index| self.index_sub(index, side)).collect(),
+            "foreignKey" => table.foreign_keys.iter().map(|key| self.foreign_key_sub(key, side)).collect(),
+            _ => Vec::new(),
         }
     }
 

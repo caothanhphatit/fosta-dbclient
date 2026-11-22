@@ -1030,12 +1030,135 @@ pub async fn suite_values(f: &Fixture) {
     manager.disconnect(CONNECTION).await;
 }
 
+// --- Schema compare -----------------------------------------------------------------------------------------------------
+
+/// Two scopes seeded to differ (`dev/seed/<engine>/compare.sql`) and the statuses the default compare of `a` against
+/// `b` gives (item id and status, in diff order).
+pub struct CompareFixture {
+    /// Chunks that (re)create both scopes, run in the profile's database.
+    pub seed: Vec<String>,
+    pub a: crate::contract::SnapshotScope,
+    pub b: crate::contract::SnapshotScope,
+    pub expected: &'static [(&'static str, crate::contract::DiffStatus)],
+}
+
+async fn schema_snapshot(handle: &Handle, scope: &crate::contract::SnapshotScope) -> crate::contract::SchemaSnapshot {
+    let scope = scope.clone();
+    handle
+        .call("read the schema for compare", |conn| async move {
+            let source = conn
+                .schema_snapshot()
+                .ok_or_else(|| crate::contract::unsupported_capability("schema compare"))?;
+            source.snapshot(&scope, &ctx()).await
+        })
+        .await
+        .unwrap_or_else(|error| panic!("schema snapshot failed: {error}"))
+}
+
+/// Schema compare round trip, both ways: seed, snapshot both scopes, check the diff, apply the generated script (every
+/// item selected, drops included) to the target, snapshot it again and expect nothing left to sync; the objects the
+/// compare skips stay as they were.
+pub async fn suite_schema_compare(f: &Fixture, c: &CompareFixture) {
+    use crate::contract::{CompareOptions, DiffStatus};
+
+    let (manager, handle) = connect(f).await;
+    assert!(
+        handle.conn.capabilities().contains(Capability::SchemaCompare),
+        "{}: schema compare is not advertised",
+        f.engine
+    );
+    let dialect = registry()
+        .get(f.engine)
+        .unwrap()
+        .schema_dialect()
+        .unwrap_or_else(|| panic!("{}: no schema dialect", f.engine));
+    let options = CompareOptions::default();
+    let flip = |status: DiffStatus| match status {
+        DiffStatus::OnlyInSource => DiffStatus::OnlyInTarget,
+        DiffStatus::OnlyInTarget => DiffStatus::OnlyInSource,
+        other => other,
+    };
+    for (forward, (from, to)) in [(true, (&c.a, &c.b)), (false, (&c.b, &c.a))] {
+        let session = open_session(&handle).await;
+        for chunk in &c.seed {
+            run_text(&handle, &session, chunk, f.seed_database)
+                .await
+                .unwrap_or_else(|error| panic!("{}: compare seed failed: {error}\n{chunk}", f.engine));
+        }
+        let source = schema_snapshot(&handle, from).await;
+        let target = schema_snapshot(&handle, to).await;
+        let diff = crate::compare::diff(&source, &target, &options, dialect);
+        let mut statuses: Vec<(String, DiffStatus)> = diff.items.iter().map(|item| (item.id.clone(), item.status)).collect();
+        let mut expected: Vec<(String, DiffStatus)> = c
+            .expected
+            .iter()
+            .map(|(id, status)| ((*id).to_owned(), if forward { *status } else { flip(*status) }))
+            .collect();
+        statuses.sort_by(|a, b| a.0.cmp(&b.0));
+        expected.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(statuses, expected, "{}: diff {forward}", f.engine);
+        assert!(
+            diff.skipped.iter().any(|s| s.name == "flyway_schema_history"),
+            "{}: excluded table not listed: {:?}",
+            f.engine,
+            diff.skipped
+        );
+
+        let include: Vec<String> = diff.items.iter().map(|item| item.id.clone()).collect();
+        let script = crate::compare::sync_script(&source, &target, &options, &include, dialect, "test");
+        assert!(script.statements > 0, "{}: empty script", f.engine);
+        run_text(&handle, &session, &script.sql, f.seed_database)
+            .await
+            .unwrap_or_else(|error| panic!("{}: the sync script failed: {error}\n{}", f.engine, script.sql));
+        session.close().await;
+
+        let synced = schema_snapshot(&handle, to).await;
+        let again = crate::compare::diff(&source, &synced, &options, dialect);
+        let left: Vec<_> = again
+            .items
+            .iter()
+            .filter(|item| item.status != DiffStatus::Identical)
+            .map(|item| (item.id.clone(), item.status, item.changes.clone()))
+            .collect();
+        assert!(
+            left.is_empty(),
+            "{}: differences left after the script ({forward}): {left:#?}\n{}",
+            f.engine,
+            script.sql
+        );
+        assert_eq!(synced.skipped, target.skipped, "{}: skipped objects changed", f.engine);
+    }
+    manager.disconnect(CONNECTION).await;
+}
+
 /// Generates the tests of one engine as a module named `contract_<engine>`, so `cargo test contract_<engine>` selects
 /// them. The classification test always runs; the live suites are ignored by default: start the engine's compose file,
-/// then `cargo test contract_<engine> -- --ignored --test-threads=1`.
+/// then `cargo test contract_<engine> -- --ignored --test-threads=1`. With `compare: <CompareFixture>`, the module also
+/// gets the schema compare round trip (`suite_schema_compare`).
 #[macro_export]
 macro_rules! contract_tests {
+    (@live $fixture:expr; $($suite:ident)*) => {
+        $(
+            #[tokio::test(flavor = "multi_thread")]
+            #[ignore = "needs the engine's container (dev/compose)"]
+            async fn $suite() {
+                suites::$suite(&$fixture).await;
+            }
+        )*
+    };
+    ($name:ident, $fixture:expr, compare: $compare:expr) => {
+        $crate::contract_tests!($name, $fixture;
+            #[tokio::test(flavor = "multi_thread")]
+            #[ignore = "needs the engine's container (dev/compose)"]
+            async fn suite_schema_compare() {
+                suites::suite_schema_compare(&$fixture, &$compare).await;
+            }
+        );
+    };
     ($name:ident, $fixture:expr) => {
+        $crate::contract_tests!($name, $fixture;);
+    };
+    ($name:ident, $fixture:expr; $($extra:item)*) => {
         mod $name {
             #[allow(unused_imports)]
             use super::*;
@@ -1054,15 +1177,8 @@ macro_rules! contract_tests {
             $crate::contract_tests!(@live $fixture;
                 suite_connect suite_tree suite_describe suite_browse suite_edit suite_query suite_cancel suite_transactions
                 suite_assistant suite_profile suite_values);
+
+            $($extra)*
         }
-    };
-    (@live $fixture:expr; $($suite:ident)*) => {
-        $(
-            #[tokio::test(flavor = "multi_thread")]
-            #[ignore = "needs the engine's container (dev/compose)"]
-            async fn $suite() {
-                suites::$suite(&$fixture).await;
-            }
-        )*
     };
 }

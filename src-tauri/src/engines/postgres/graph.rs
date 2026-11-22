@@ -21,9 +21,9 @@ fn diagram_name(schema: &str, table: &str) -> String {
     }
 }
 
-const KEY_COLUMNS: &str = "ARRAY(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(n, o) \
+pub(super) const KEY_COLUMNS: &str = "ARRAY(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(n, o) \
                            JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.n ORDER BY k.o)";
-const REFERENCED_COLUMNS: &str = "ARRAY(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY k(n, o) \
+pub(super) const REFERENCED_COLUMNS: &str = "ARRAY(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY k(n, o) \
                                   JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.n ORDER BY k.o)";
 
 impl PgEngine {

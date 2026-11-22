@@ -199,7 +199,7 @@ pub struct ColumnChanges {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommentTarget {
-    /// `table` or `view`.
+    /// `table`, `view` or `materializedView`.
     pub kind: String,
     pub name: String,
     pub column: Option<String>,
@@ -380,9 +380,22 @@ pub trait SchemaDialect: Send + Sync {
 /// string literals and other quoted identifiers. Bare names match case-insensitively, quoted ones exactly. A qualifier
 /// that follows a `.` (`db.schema.t`) is kept.
 pub fn strip_schema_qualifier(text: &str, schema: &str) -> String {
+    replace_schema_qualifier(text, schema, None)
+}
+
+/// `text` with the `schema.` qualifier replaced by `replacement.` (an already quoted identifier), or dropped when
+/// `replacement` is `None`; the same rules as [`strip_schema_qualifier`]. Renderers use it to point references to the
+/// source scope at the target scope.
+pub fn replace_schema_qualifier(text: &str, schema: &str, replacement: Option<&str>) -> String {
     if schema.is_empty() {
         return text.to_owned();
     }
+    let replace = |out: &mut String| {
+        if let Some(replacement) = replacement {
+            out.push_str(replacement);
+            out.push('.');
+        }
+    };
     let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
     let quoted = [format!("\"{schema}\"."), format!("`{schema}`."), format!("[{schema}].")];
     let mut out = String::with_capacity(text.len());
@@ -393,12 +406,14 @@ pub fn strip_schema_qualifier(text: &str, schema: &str) -> String {
         if !after_dot_or_ident {
             if let Some(pattern) = quoted.iter().find(|pattern| rest.starts_with(pattern.as_str())) {
                 rest = &rest[pattern.len()..];
+                replace(&mut out);
                 previous = Some('.');
                 continue;
             }
             let bare = rest.get(..schema.len()).is_some_and(|head| head.eq_ignore_ascii_case(schema));
             if bare && rest[schema.len()..].starts_with('.') {
                 rest = &rest[schema.len() + 1..];
+                replace(&mut out);
                 previous = Some('.');
                 continue;
             }
@@ -460,6 +475,16 @@ mod tests {
         );
         assert_eq!(strip("'it''s shop.x' || shop.f()"), "'it''s shop.x' || f()");
         assert_eq!(strip_schema_qualifier("a.b", ""), "a.b");
+    }
+
+    #[test]
+    fn qualifiers_of_the_scope_are_replaced_outside_literals() {
+        let map = |text: &str| replace_schema_qualifier(text, "compare_a", Some("compare_b"));
+        assert_eq!(
+            map("SELECT o.id FROM compare_a.orders o JOIN \"compare_a\".items i ON 'compare_a.x' = i.y"),
+            "SELECT o.id FROM compare_b.orders o JOIN compare_b.items i ON 'compare_a.x' = i.y"
+        );
+        assert_eq!(map("compare_ab.t, x.compare_a.t"), "compare_ab.t, x.compare_a.t");
     }
 
     #[test]
