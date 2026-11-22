@@ -814,6 +814,7 @@ impl SchemaDialect for MySqlSchemaDialect {
             restrict_equals_no_action: true,
             batch_separator: None,
             inline_comments: true,
+            columns_held_by_dependents: false,
         }
     }
 

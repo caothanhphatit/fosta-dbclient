@@ -54,6 +54,11 @@ pub fn sync_script(
     let transactional = !body.is_empty() && features.transactional_ddl && options.transactional.unwrap_or(true);
     let statements = body.iter().filter(|s| !is_comment(&s.sql)).count();
     let wrapped = if body.is_empty() { body } else { dialect.wrap(body, transactional) };
+    let is_separator = |text: &str| {
+        features
+            .batch_separator
+            .is_some_and(|separator| text.eq_ignore_ascii_case(separator))
+    };
 
     let mut sql = header(source, target, options, &warnings, &plan_warnings, generated_at);
     if !features.transactional_ddl && !wrapped.is_empty() {
@@ -75,10 +80,7 @@ pub fn sync_script(
         }
         let text = statement.sql.trim_end();
         sql.push_str(text);
-        let separator = features
-            .batch_separator
-            .is_some_and(|separator| text.eq_ignore_ascii_case(separator));
-        if !is_comment(text) && !separator && !text.ends_with(';') {
+        if !is_comment(text) && !is_separator(text) && !text.ends_with(';') {
             sql.push(';');
         }
         sql.push('\n');

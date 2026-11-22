@@ -84,6 +84,8 @@ pub fn plan(
         type_changed: HashSet::new(),
         key_dropped: HashSet::new(),
         dropped_fks: HashSet::new(),
+        dropped_subs: HashSet::new(),
+        held: HashMap::new(),
         view_drops: Vec::new(),
         view_creates: Vec::new(),
     };
@@ -96,6 +98,7 @@ pub fn plan(
             }
         }
     }
+    planner.held_dependents();
     planner.foreign_key_dependencies();
     planner.view_dependencies();
     planner.order_views();
@@ -127,6 +130,11 @@ struct Planner<'a> {
     key_dropped: HashSet<String>,
     /// (table, foreign key label), folded.
     dropped_fks: HashSet<(String, String)>,
+    /// (table, part, name) of the keys, checks and indexes the plan drops, folded.
+    dropped_subs: HashSet<(String, &'static str, String)>,
+    /// Where columns are held by their dependents (SQL Server): per folded table, the folded columns the plan alters
+    /// and the ones it drops.
+    held: HashMap<String, (HashSet<String>, HashSet<String>)>,
     view_drops: Vec<(String, ViewDef, Option<String>)>,
     view_creates: Vec<(String, ViewDef, Option<String>)>,
 }
@@ -141,6 +149,18 @@ impl<'a> Planner<'a> {
     }
 
     fn push_noted(&mut self, phase: Phase, item_id: &str, step: MigrationStep, note: Option<String>) {
+        let dropped = match &step {
+            MigrationStep::DropConstraint {
+                table,
+                kind,
+                name: Some(name),
+            } => Some((table, constraint_part(*kind), name)),
+            MigrationStep::DropIndex { table, name } => Some((table, "index", name)),
+            _ => None,
+        };
+        if let Some((table, part, name)) = dropped {
+            self.dropped_subs.insert((self.fold(table), part, self.fold(name)));
+        }
         self.phases[phase as usize].push(PlannedStep {
             item_id: item_id.to_owned(),
             step,
@@ -343,6 +363,30 @@ impl<'a> Planner<'a> {
             ("column", ChangeKind::Removed) => {
                 let Some(def) = column(target, &change.name) else { return };
                 self.altered_tables.insert(self.fold(&table));
+                if self.dialect.features().columns_held_by_dependents {
+                    self.hold(&table, &def.name, true);
+                    if def.default.is_some() && def.default_name.is_some() {
+                        // The column's default constraint goes first.
+                        let bare = crate::contract::ColumnDef {
+                            default: None,
+                            default_name: None,
+                            ..def.clone()
+                        };
+                        self.push(
+                            Phase::AlterColumns,
+                            id,
+                            MigrationStep::AlterColumn {
+                                table: table.clone(),
+                                from: def.clone(),
+                                to: bare,
+                                changes: ColumnChanges {
+                                    default: true,
+                                    ..ColumnChanges::default()
+                                },
+                            },
+                        );
+                    }
+                }
                 self.push(
                     Phase::DropColumns,
                     id,
@@ -368,6 +412,11 @@ impl<'a> Planner<'a> {
                 if changes.type_name || changes.collation || changes.generated {
                     self.altered_tables.insert(self.fold(&table));
                     self.type_changed.insert((self.fold(&table), self.fold(&from.name)));
+                }
+                let held = changes.type_name || changes.collation || changes.generated || changes.nullability;
+                if held && self.dialect.features().columns_held_by_dependents {
+                    self.type_changed.insert((self.fold(&table), self.fold(&from.name)));
+                    self.hold(&table, &from.name, false);
                 }
                 if changes != ColumnChanges::default() {
                     self.push(
@@ -710,6 +759,117 @@ impl<'a> Planner<'a> {
         }
     }
 
+    /// Notes a column the plan alters (or drops) where dependents hold columns.
+    fn hold(&mut self, table: &str, column: &str, dropped: bool) {
+        let (table, column) = (self.fold(table), self.fold(column));
+        let (altered, gone) = self.held.entry(table).or_default();
+        altered.insert(column.clone());
+        if dropped {
+            gone.insert(column);
+        }
+    }
+
+    /// Where dependents hold columns (SQL Server): the target's keys, checks and indexes over a column the plan alters
+    /// or drops are dropped first, and the ones over altered columns are created again afterwards (unless a change
+    /// already drops them). Dropping a key also drops and re-adds the foreign keys that may reference it.
+    fn held_dependents(&mut self) {
+        let held = std::mem::take(&mut self.held);
+        let mut tables: Vec<_> = held.into_iter().collect();
+        tables.sort_by(|a, b| a.0.cmp(&b.0));
+        for (folded, (altered, gone)) in tables {
+            let Some(table) = self.target_table(&folded) else { continue };
+            let id = self.item_id("table", &table.name);
+            let name = table.name.clone();
+            let note = Some(format!("Dropped and created again because a column it uses changes ({name})"));
+            let fold_all = |planner: &Self, columns: &[String]| columns.iter().map(|c| planner.fold(c)).collect::<Vec<_>>();
+            let uses = |columns: &[String]| columns.iter().any(|c| altered.contains(c));
+            let keeps = |columns: &[String]| !columns.iter().any(|c| gone.contains(c));
+            let free = |planner: &Self, part: &'static str, sub: &Option<String>| {
+                sub.as_ref()
+                    .is_none_or(|n| !planner.dropped_subs.contains(&(folded.clone(), part, planner.fold(n))))
+            };
+            if let Some(key) = &table.primary_key {
+                let columns = fold_all(self, &key.columns);
+                if uses(&columns) && key.name.is_some() && free(self, "primaryKey", &key.name) {
+                    self.key_dropped.insert(folded.clone());
+                    let drop = MigrationStep::DropConstraint {
+                        table: name.clone(),
+                        kind: ConstraintKind::PrimaryKey,
+                        name: key.name.clone(),
+                    };
+                    self.push_noted(Phase::DropConstraints, &id, drop, note.clone());
+                    if keeps(&columns) {
+                        let add = MigrationStep::AddPrimaryKey {
+                            table: name.clone(),
+                            key: key.clone(),
+                        };
+                        self.push_noted(Phase::CreateConstraints, &id, add, note.clone());
+                    }
+                }
+            }
+            for key in &table.uniques {
+                let columns = fold_all(self, &key.columns);
+                if uses(&columns) && key.name.is_some() && free(self, "unique", &key.name) {
+                    self.key_dropped.insert(folded.clone());
+                    let drop = MigrationStep::DropConstraint {
+                        table: name.clone(),
+                        kind: ConstraintKind::Unique,
+                        name: key.name.clone(),
+                    };
+                    self.push_noted(Phase::DropConstraints, &id, drop, note.clone());
+                    if keeps(&columns) {
+                        let add = MigrationStep::AddConstraint {
+                            table: name.clone(),
+                            constraint: ConstraintDef::Unique { key: key.clone() },
+                        };
+                        self.push_noted(Phase::CreateConstraints, &id, add, note.clone());
+                    }
+                }
+            }
+            for check in &table.checks {
+                let columns: Vec<String> = mentioned(&check.expression).into_iter().map(|c| self.fold(&c)).collect();
+                if uses(&columns) && check.name.is_some() && free(self, "check", &check.name) {
+                    let drop = MigrationStep::DropConstraint {
+                        table: name.clone(),
+                        kind: ConstraintKind::Check,
+                        name: check.name.clone(),
+                    };
+                    self.push_noted(Phase::DropConstraints, &id, drop, note.clone());
+                    if keeps(&columns) {
+                        let add = MigrationStep::AddConstraint {
+                            table: name.clone(),
+                            constraint: ConstraintDef::Check { check: check.clone() },
+                        };
+                        self.push_noted(Phase::CreateConstraints, &id, add, note.clone());
+                    }
+                }
+            }
+            for index in &table.indexes {
+                let mut columns: Vec<String> = index.include.clone();
+                for part in &index.parts {
+                    columns.extend(part.column.clone());
+                    columns.extend(part.expression.as_deref().map(mentioned).unwrap_or_default());
+                }
+                columns.extend(index.predicate.as_deref().map(mentioned).unwrap_or_default());
+                let columns = fold_all(self, &columns);
+                if uses(&columns) && free(self, "index", &Some(index.name.clone())) {
+                    let drop = MigrationStep::DropIndex {
+                        table: name.clone(),
+                        name: index.name.clone(),
+                    };
+                    self.push_noted(Phase::DropConstraints, &id, drop, note.clone());
+                    if keeps(&columns) {
+                        let add = MigrationStep::CreateIndex {
+                            table: name.clone(),
+                            index: index.clone(),
+                        };
+                        self.push_noted(Phase::CreateConstraints, &id, add, note.clone());
+                    }
+                }
+            }
+        }
+    }
+
     // --- Views --------------------------------------------------------------------------------------------------------
 
     fn item_id(&self, kind: &str, name: &str) -> String {
@@ -895,6 +1055,56 @@ impl<'a> Planner<'a> {
         state[at] = 2;
         order.push(at);
     }
+}
+
+/// The diff's part name of a constraint kind.
+fn constraint_part(kind: ConstraintKind) -> &'static str {
+    match kind {
+        ConstraintKind::PrimaryKey => "primaryKey",
+        ConstraintKind::Unique => "unique",
+        ConstraintKind::Check => "check",
+    }
+}
+
+/// The identifiers an expression mentions (bare, `[bracketed]`, `"quoted"` or `` `quoted` ``), outside string
+/// literals: the columns a check or an index expression may use.
+pub(super) fn mentioned(expression: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut chars = expression.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        let close = match c {
+            '\'' => {
+                // A literal; a doubled quote is an escape.
+                while let Some((_, c)) = chars.next() {
+                    if c == '\'' && chars.next_if(|(_, next)| *next == '\'').is_none() {
+                        break;
+                    }
+                }
+                continue;
+            }
+            '[' => ']',
+            '"' | '`' => c,
+            c if c.is_alphabetic() || c == '_' => {
+                let mut end = at + c.len_utf8();
+                while let Some((next_at, next)) = chars.next_if(|(_, n)| n.is_alphanumeric() || matches!(n, '_' | '$' | '#' | '@')) {
+                    end = next_at + next.len_utf8();
+                }
+                names.push(expression[at..end].to_owned());
+                continue;
+            }
+            _ => continue,
+        };
+        let mut name = String::new();
+        while let Some((_, c)) = chars.next() {
+            // A doubled closing quote is an escaped one.
+            if c == close && chars.next_if(|(_, next)| *next == close).is_none() {
+                break;
+            }
+            name.push(c);
+        }
+        names.push(name);
+    }
+    names
 }
 
 /// What a comment on a view is on (`COMMENT ON MATERIALIZED VIEW` differs).

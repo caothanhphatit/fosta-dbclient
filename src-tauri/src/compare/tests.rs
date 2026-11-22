@@ -9,10 +9,13 @@ use crate::contract::{
 
 struct FakeDialect {
     restrict_equals_no_action: bool,
+    /// Columns held by their dependents (SQL Server).
+    held: bool,
 }
 
 const FAKE: FakeDialect = FakeDialect {
     restrict_equals_no_action: false,
+    held: false,
 };
 
 fn normalize(raw: &str, schema: Option<&str>) -> String {
@@ -50,6 +53,7 @@ impl SchemaDialect for FakeDialect {
             restrict_equals_no_action: self.restrict_equals_no_action,
             batch_separator: None,
             inline_comments: false,
+            columns_held_by_dependents: self.held,
         }
     }
     fn quote_ident(&self, name: &str) -> String {
@@ -464,6 +468,7 @@ fn foreign_keys_map_the_scope_schema_and_treat_missing_actions_as_no_action() {
     assert_eq!(item(&diff, "table:orders").changes[0].fields[0].field, "onDelete");
     let mysql = FakeDialect {
         restrict_equals_no_action: true,
+        held: false,
     };
     let diff = super::diff(
         &snapshot("a", vec![source], Vec::new()),
@@ -799,13 +804,22 @@ fn the_fake_dialect_wraps_in_a_transaction() {
 
 /// The steps of a plan over every item of the diff (or `include`) as short labels, and the plan's warnings.
 fn planned(source: &SchemaSnapshot, target: &SchemaSnapshot, include: Option<&[&str]>) -> (Vec<String>, Vec<String>) {
+    planned_with(&FAKE, source, target, include)
+}
+
+fn planned_with(
+    dialect: &FakeDialect,
+    source: &SchemaSnapshot,
+    target: &SchemaSnapshot,
+    include: Option<&[&str]>,
+) -> (Vec<String>, Vec<String>) {
     let options = CompareOptions::default();
-    let diff = run(source, target, &options);
+    let diff = super::diff(source, target, &options, dialect);
     let include: Vec<String> = match include {
         Some(ids) => ids.iter().map(|id| (*id).to_owned()).collect(),
         None => diff.items.iter().map(|item| item.id.clone()).collect(),
     };
-    let plan = plan(&diff, &include, source, target, &options, &FAKE);
+    let plan = plan(&diff, &include, source, target, &options, dialect);
     let steps = plan
         .steps
         .iter()
@@ -1018,6 +1032,80 @@ fn sub_object_changes_drop_before_and_create_after_column_changes() {
             "create index orders_status_idx",
             "comment orders",
         ]
+    );
+}
+
+#[test]
+fn columns_held_by_dependents_free_them_first_and_recreate_the_dependents() {
+    let with = |pk: &str, id_type: &str, status_null: bool, note: bool| {
+        let mut table = orders();
+        table.primary_key = Some(KeyDef {
+            name: Some(pk.into()),
+            columns: vec!["id".into()],
+            system_named: true,
+        });
+        table.columns[0].type_name = id_type.into();
+        table.columns[2].nullable = status_null;
+        table.indexes.push(IndexDef {
+            name: "orders_status_idx".into(),
+            parts: vec![IndexPart::column("status")],
+            ..IndexDef::default()
+        });
+        table.checks.push(CheckDef {
+            name: Some("orders_status_check".into()),
+            expression: "[status] <> 'customer_id'".into(),
+            system_named: false,
+        });
+        if note {
+            table.columns[3].default = Some("('n')".into());
+            table.columns[3].default_name = Some("DF__orders__note__1".into());
+            table.uniques.push(KeyDef {
+                name: Some("orders_note_key".into()),
+                columns: vec!["note".into()],
+                system_named: false,
+            });
+        } else {
+            table.columns.remove(3);
+        }
+        table
+    };
+    let source = snapshot("a", vec![with("PK__orders__2", "bigint", false, false)], Vec::new());
+    let target = snapshot("b", vec![with("PK__orders__1", "integer", true, true)], Vec::new());
+    let held = FakeDialect {
+        restrict_equals_no_action: false,
+        held: true,
+    };
+    let (steps, _) = planned_with(&held, &source, &target, None);
+    assert_eq!(
+        steps,
+        [
+            "drop constraint orders.orders_note_key",
+            "drop constraint orders.PK__orders__1",
+            "drop constraint orders.orders_status_check",
+            "drop index orders_status_idx",
+            "alter column orders.id",
+            "alter column orders.status",
+            "alter column orders.note",
+            "drop column orders.note",
+            "add pk orders",
+            "add constraint orders",
+            "create index orders_status_idx",
+        ]
+    );
+    // Elsewhere the dependents stay where they are.
+    let (steps, _) = planned(&source, &target, None);
+    assert_eq!(
+        steps,
+        [
+            "drop constraint orders.orders_note_key",
+            "alter column orders.id",
+            "alter column orders.status",
+            "drop column orders.note",
+        ]
+    );
+    assert_eq!(
+        super::plan::mentioned("[a] + \"b c\" > 'd''e' AND f(g_1)"),
+        ["a", "b c", "AND", "f", "g_1"]
     );
 }
 

@@ -3,7 +3,7 @@
  * items are grouped, filtered and selected, the rows of the changes table, the target's safety notice and the file name
  * of a saved script. No DOM, so it is unit-tested.
  */
-import type { Change, CompareOptions, DiffItem, DiffStatus, Risk, ScopeSummary, ScriptWarning } from "../../core/contract";
+import type { Change, CompareOptions, DiffItem, DiffStatus, ObjectNode, Risk, ScopeSummary, ScriptWarning } from "../../core/contract";
 import type { SafetySettings } from "../../core/types";
 import { effectiveRules } from "../safety/safety";
 
@@ -105,6 +105,17 @@ const COMPATIBLE_PAIRS: [string, string][] = [["mysql", "mariadb"]];
 /** Two connections can be compared when their engines are the same, or MySQL and MariaDB. */
 export function comparableEngines(source: string, target: string): boolean {
   return source === target || COMPATIBLE_PAIRS.some(([a, b]) => (source === a && target === b) || (source === b && target === a));
+}
+
+/**
+ * The schemas of a database from its tree children: its schema nodes, else (engines that list tables right under a
+ * database, like SQL Server) the schemas of its tables and views, `dbo` first.
+ */
+export function schemaNames(nodes: readonly ObjectNode[]): string[] {
+  const schemas = nodes.filter((node) => node.kind === "schema").map((node) => node.object?.schema ?? node.object?.name ?? node.label);
+  if (schemas.length > 0) return schemas;
+  const found = [...new Set(nodes.map((node) => node.object?.schema).filter((schema): schema is string => Boolean(schema)))];
+  return found.sort((a, b) => Number(b === "dbo") - Number(a === "dbo") || a.localeCompare(b));
 }
 
 /** Engines whose DDL commits implicitly: their scripts are never wrapped in a transaction. */

@@ -7,8 +7,8 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
   tunnel and TLS settings except SQLite (a file). Per-engine notes are in [docs/engines](engines).
   - **MariaDB and MySQL** (`mysql_async`): typed grid, design view, ER diagrams, Stop with `KILL QUERY`, transactions across runs;
     vector tools on MariaDB 11.7+.
-  - **SQL Server** (`tiberius`, TLS on by default): `schema.table` names (`dbo` is hidden), `OFFSET/FETCH` paging, batches that
-    return every result set.
+  - **SQL Server** (`tiberius`, TLS on by default): `schema.table` names (`dbo` is hidden), `OFFSET/FETCH` paging, scripts split
+    into batches at `GO` lines (`GO 3` repeats one), batches that return every result set.
   - **MongoDB** (`mongodb`): double-click a collection to open its workspace (Documents, Aggregations, Schema, Indexes, Explain,
     Validation; views too), with a query bar in mongosh syntax and List, JSON and read-only Table views of BSON-typed documents.
     Edits stay pending until Save (nested edits by dotted path, with a conflict check), plus bulk update and delete previews, saved
@@ -67,7 +67,7 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     search; Insert or open an entry in a new tab. History stays on this machine, in `fosta-studio-history.jsonl` next to the `.exe` (newest
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
-- **Schema compare** (PostgreSQL, MySQL, MariaDB): compare a schema (a database on MySQL and MariaDB, which may be compared
+- **Schema compare** (PostgreSQL, MySQL, MariaDB, SQL Server): compare a schema (a database on MySQL and MariaDB, which may be compared
   with each other) with another one on any connection of any workspace ("Compare schema with…" on a database or schema in
   the tree, or Compare in the toolbar). Tables and views are grouped as different, only in the source, only in the target and
   identical, with the changes of each object and a side-by-side DDL diff. Options (column order, comments,

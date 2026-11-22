@@ -192,6 +192,7 @@ pub fn database_node(name: &str) -> ObjectNode {
         actions: vec![
             NodeAction::builtin("newQuery", "New query", BuiltinAction::NewQuery),
             NodeAction::builtin("diagram", "ER diagram", BuiltinAction::Diagram),
+            NodeAction::builtin("compareSchema", "Compare schema with…", BuiltinAction::CompareSchema),
             NodeAction::builtin("copyName", "Copy name", BuiltinAction::CopyName),
             NodeAction::builtin("refresh", "Refresh", BuiltinAction::Refresh).separated(),
         ],

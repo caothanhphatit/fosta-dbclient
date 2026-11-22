@@ -59,7 +59,22 @@ pub fn parse(engine: SqlDialectId, text: &str) -> Result<Vec<Statement>, String>
 /// `SELECT 'a\'; DROP TABLE t; -- '` is one string by default but two statements on a server in that mode. Text with a
 /// backslash is therefore also classified with every backslash taken literally (doubling each one gives that reading under
 /// the default rules), and the stricter result wins.
+///
+/// SQL Server scripts are classified batch by batch (split at `GO` lines, which the parser does not know), so one batch
+/// the parser cannot read does not hide the statements of the others.
 pub fn classify_sql(engine: SqlDialectId, text: &str) -> Classification {
+    if engine == SqlDialectId::MsSql {
+        let batches = crate::lang::split::batches(text);
+        let whole = matches!(batches.as_slice(), [only] if only.start == 0 && only.end == text.len());
+        if !whole {
+            return Classification {
+                statements: batches
+                    .iter()
+                    .flat_map(|batch| classify_text(engine, &text[batch.start..batch.end]).statements)
+                    .collect(),
+            };
+        }
+    }
     let classification = classify_text(engine, text);
     if matches!(engine, SqlDialectId::MariaDb | SqlDialectId::MySql) && text.contains('\\') {
         let literal = classify_text(engine, &text.replace('\\', "\\\\"));
@@ -81,6 +96,9 @@ fn classify_text(engine: SqlDialectId, text: &str) -> Classification {
             statements: statements.iter().map(|statement| classify_statement(engine, statement)).collect(),
         },
         Err(error) => {
+            if let Some(info) = tsql_ddl(engine, text) {
+                return Classification::single(info);
+            }
             let (category, why) = unparsed_category(engine, text);
             let reason = match why {
                 None => format!("The statement could not be parsed, so it is treated like a write ({error})"),
@@ -164,6 +182,150 @@ fn unparsed_category(engine: SqlDialectId, text: &str) -> (Category, Option<Stri
         }
     }
     (category, why)
+}
+
+/// Words that start a T-SQL statement (which needs no `;` before it).
+const STATEMENT_WORDS: [&str; 41] = [
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "MERGE",
+    "EXEC",
+    "EXECUTE",
+    "SET",
+    "DECLARE",
+    "GRANT",
+    "REVOKE",
+    "DENY",
+    "BEGIN",
+    "COMMIT",
+    "ROLLBACK",
+    "SAVE",
+    "IF",
+    "WHILE",
+    "WAITFOR",
+    "USE",
+    "TRUNCATE",
+    "CREATE",
+    "ALTER",
+    "DROP",
+    "PRINT",
+    "RAISERROR",
+    "THROW",
+    "KILL",
+    "BACKUP",
+    "RESTORE",
+    "DBCC",
+    "GOTO",
+    "RETURN",
+    "OPEN",
+    "FETCH",
+    "CLOSE",
+    "DEALLOCATE",
+    "BULK",
+    "RECONFIGURE",
+    "SHUTDOWN",
+    "CHECKPOINT",
+];
+
+/// SQL Server DDL the parser does not read: `ALTER TABLE t ALTER COLUMN c <type> NULL`, `ALTER TABLE t ADD …` (a
+/// computed column, `CONSTRAINT df DEFAULT … FOR c`), `CREATE [UNIQUE] CLUSTERED|NONCLUSTERED INDEX … ON t` and
+/// `CREATE TABLE t (…)` with computed columns. Recognized only when the text is exactly that one statement: it is DDL on
+/// the table it names, raised further (never lowered) by the rules on unparsed SQL (DROP anywhere, side-effect
+/// functions, dynamic SQL).
+fn tsql_ddl(engine: SqlDialectId, text: &str) -> Option<StatementInfo> {
+    if engine != SqlDialectId::MsSql {
+        return None;
+    }
+    let dialect = MsSqlDialect {};
+    let tokens = Tokenizer::new(&dialect, text).tokenize().ok()?;
+    let mut significant: Vec<&Token> = tokens.iter().filter(|token| !matches!(token, Token::Whitespace(_))).collect();
+    while matches!(significant.last(), Some(Token::SemiColon)) {
+        significant.pop();
+    }
+    if significant.iter().any(|token| matches!(token, Token::SemiColon)) {
+        return None;
+    }
+    let word = |at: usize| match significant.get(at) {
+        Some(Token::Word(word)) if word.quote_style.is_none() => Some(word.value.to_ascii_uppercase()),
+        _ => None,
+    };
+    let is = |at: usize, keyword: &str| word(at).as_deref() == Some(keyword);
+    // A (possibly qualified) name starting at `at`, and the index after it.
+    let name = |mut at: usize| -> Option<(String, usize)> {
+        let mut parts = Vec::new();
+        loop {
+            match significant.get(at) {
+                Some(token @ Token::Word(_)) => parts.push(token.to_string()),
+                _ => return None,
+            }
+            at += 1;
+            if matches!(significant.get(at), Some(Token::Period)) {
+                at += 1;
+            } else {
+                return Some((parts.join("."), at));
+            }
+        }
+    };
+    let (kind, table) = if is(0, "ALTER") && is(1, "TABLE") {
+        let (table, next) = name(2)?;
+        if !(is(next, "ADD") || (is(next, "ALTER") && is(next + 1, "COLUMN"))) {
+            return None;
+        }
+        ("ALTER TABLE", table)
+    } else if is(0, "CREATE") && is(1, "TABLE") {
+        let (table, next) = name(2)?;
+        if !matches!(significant.get(next), Some(Token::LParen)) {
+            return None;
+        }
+        ("CREATE TABLE", table)
+    } else if is(0, "CREATE") {
+        let mut at = 1 + usize::from(is(1, "UNIQUE"));
+        at += usize::from(is(at, "CLUSTERED") || is(at, "NONCLUSTERED"));
+        if !is(at, "INDEX") {
+            return None;
+        }
+        let (_, next) = name(at + 1)?;
+        if !is(next, "ON") {
+            return None;
+        }
+        ("CREATE INDEX", name(next + 1)?.0)
+    } else {
+        return None;
+    };
+    // T-SQL needs no `;` between statements: a word that starts another statement means this is not one DDL statement.
+    let alter_column = significant
+        .iter()
+        .position(|token| matches!(token, Token::Word(w) if w.value.eq_ignore_ascii_case("COLUMN")));
+    let another = (1..significant.len()).any(|at| {
+        let Some(current) = word(at) else { return false };
+        let after = |words: &[&str]| word(at - 1).is_some_and(|previous| words.contains(&previous.as_str()));
+        STATEMENT_WORDS.contains(&current.as_str())
+            && !(kind == "ALTER TABLE" && current == "ALTER" && alter_column == Some(at + 1))
+            && !(matches!(current.as_str(), "DELETE" | "UPDATE") && after(&["ON"]))
+            && !(current == "SET" && after(&["DELETE", "UPDATE"]))
+    });
+    if another {
+        return None;
+    }
+    let (raised, why) = unparsed_category(engine, text);
+    let (category, reason) = if raised > Category::Ddl {
+        (raised, why)
+    } else {
+        (
+            Category::Ddl,
+            Some(format!("SQL Server {kind} syntax the parser does not read, recognized as DDL")),
+        )
+    };
+    Some(StatementInfo {
+        category,
+        kind: kind.to_owned(),
+        tables: vec![table],
+        excerpt: excerpt(text),
+        reason,
+        refused: None,
+    })
 }
 
 /// The unquoted words of `text` outside strings and comments, each with the token after it (`(`, `.`, `@x`, a word, or
@@ -873,6 +1035,60 @@ mod tests {
                 ("FROBNICATE OPENQUERY(x, 'y')", Admin),
             ],
         );
+    }
+
+    #[test]
+    fn tsql_batches_are_classified_one_by_one() {
+        // GO is not SQL: each batch is parsed on its own, so the DROP keeps its table.
+        let classification = classify_sql(
+            SqlDialectId::MsSql,
+            "CREATE TABLE t (id int)\nGO\nCREATE VIEW v AS SELECT id FROM t\nGO\nDROP TABLE old_t;\ngo 2\n",
+        );
+        let kinds: Vec<(Category, &str)> = classification.statements.iter().map(|s| (s.category, s.kind.as_str())).collect();
+        assert_eq!(kinds, [(Ddl, "CREATE TABLE"), (Ddl, "CREATE VIEW"), (Destructive, "DROP TABLE")]);
+        assert_eq!(classification.statements[2].tables, ["old_t"]);
+        // Without GO the text is one batch, as before; GO inside a string is not a separator.
+        assert_eq!(classify_sql(SqlDialectId::MsSql, "SELECT 'x\nGO\ny'").statements.len(), 1);
+        // A batch the parser cannot read stays Unknown without hiding the others.
+        check(
+            SqlDialectId::MsSql,
+            &[("FROBNICATE\nGO\nSELECT 1", Unknown), ("SELECT 1\nGO\nDROP TABLE t", Destructive)],
+        );
+    }
+
+    #[test]
+    fn tsql_ddl_the_parser_does_not_read_is_ddl() {
+        let one = |sql: &str| {
+            let classification = classify_sql(SqlDialectId::MsSql, sql);
+            assert_eq!(classification.statements.len(), 1, "{sql}");
+            let info = classification.statements[0].clone();
+            (info.category, info.kind, info.tables)
+        };
+        assert_eq!(
+            one("ALTER TABLE [s].[t] ALTER COLUMN [c] bigint NOT NULL;"),
+            (Ddl, "ALTER TABLE".to_owned(), vec!["[s].[t]".to_owned()])
+        );
+        assert_eq!(one("ALTER TABLE s.t ADD CONSTRAINT [DF_t_c] DEFAULT ('x') FOR [c]").0, Ddl);
+        assert_eq!(one("ALTER TABLE [t] ADD [c] AS ([a]*(2)) PERSISTED").0, Ddl);
+        assert_eq!(
+            one("CREATE UNIQUE CLUSTERED INDEX [ix] ON [s].[t] ([a] DESC)"),
+            (Ddl, "CREATE INDEX".to_owned(), vec!["[s].[t]".to_owned()])
+        );
+        assert_eq!(one("CREATE TABLE [s].[t] ([a] int, [b] AS ([a]*(2)))").0, Ddl);
+        // Raised by what it holds, never lowered; anything else, or more than one statement, stays unparsed.
+        assert_eq!(one("ALTER TABLE t ADD c AS (x) PERSISTED -- \nDROP TABLE u").0, Destructive);
+        check(
+            SqlDialectId::MsSql,
+            &[
+                ("ALTER TABLE t ALTER COLUMN c int; FROBNICATE", Unknown),
+                ("ALTER TABLE t FROBNICATE c int", Unknown),
+                ("ALTER TABLE t ALTER COLUMN c int; DROP TABLE u", Destructive),
+                // T-SQL needs no `;`: a second statement makes it unparsed text again.
+                ("ALTER TABLE t ALTER COLUMN c int\nEXEC sp_configure 'x', 1", Unknown),
+                ("ALTER TABLE t ADD c int NULL REFERENCES p (id) ON DELETE SET NULL, d AS (c*2)", Ddl),
+            ],
+        );
+        assert_eq!(worst(SqlDialectId::MySql, "ALTER TABLE t ALTER COLUMN c int NULL"), Some(Unknown));
     }
 
     #[test]

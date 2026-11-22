@@ -18,6 +18,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Schema compare for MySQL and MariaDB (a database per side; MySQL may be compared with MariaDB, and the script uses the
   target's dialect). Their DDL commits implicitly, so the script is never wrapped in a transaction and its header says it is
   not atomic; table comments and storage engine or collation changes are manual steps with the statement to run.
+- Schema compare for SQL Server (a schema per side, picked from the schemas of the database's tables). Server-named keys,
+  checks and defaults match by definition; the script runs in one transaction with `SET XACT_ABORT ON`, drops and recreates the
+  keys and indexes that hold a column it changes, and puts each view in a `GO` batch of its own. IDENTITY changes are manual
+  steps.
+- SQL Server query tabs run scripts with `GO` lines as separate batches on the tab's connection (`GO 3` repeats a batch), stop
+  at the first failing batch and name the failing statement and line of the whole script. The safety rules classify each batch
+  on its own, and recognize `ALTER COLUMN`, `ADD … DEFAULT … FOR` and clustered indexes as DDL.
 - Redis Cluster and Redis Sentinel connections (Redis 7.4+, Valkey 8.1). The connection form has a Topology choice and shows
   only that topology's fields: more seed nodes or sentinels, the master name, the sentinels' own user and password (kept in
   the credential store), read from replicas and an address map. `redis+cluster://`, `redis+sentinel://` (and the `rediss`,

@@ -1,6 +1,7 @@
-//! Query-tab sessions: one dedicated client each, so `BEGIN TRANSACTION … COMMIT` spans runs. A run sends the text as
-//! one batch (with row-count queries after data changes, see `batch`) and streams every result set as `Statement` /
-//! `Columns` / `Rows` / `Done` events, row counts as `Done { affected }`.
+//! Query-tab sessions: one dedicated client each, so `BEGIN TRANSACTION … COMMIT` spans runs. A run sends the text's
+//! batches (split at `GO` lines, as SSMS and sqlcmd do) one after the other on that client, each with row-count queries
+//! after data changes (see `batch`), stops at the first error, and streams every result set as `Statement` / `Columns` /
+//! `Rows` / `Done` events, row counts as `Done { affected }`.
 //!
 //! tiberius has no TDS attention (cancel) request, so Stop and the statement timeout end the run on the client side:
 //! `KILL <spid>` from a pooled client stops the server's work (when the login may kill sessions), then the session's
@@ -22,7 +23,7 @@ use tiberius::{Config, QueryItem};
 use tokio::sync::{Mutex, Notify};
 
 use super::{
-    batch::{result_labels, statement_at_line, with_row_counts, ROWCOUNT_COLUMN},
+    batch::{result_labels, statement_at_line, statement_count, with_row_counts, ROWCOUNT_COLUMN},
     catalog::{bracket, text_rows},
     connect::{connect, is_statement_error, ClientPool, TdsClient, OPEN_TIMEOUT},
     values::{result_column, to_value},
@@ -147,15 +148,26 @@ impl ReadOnlyGuard {
     }
 }
 
-/// A server error with the failing statement of the batch (from the error's line).
-fn map_error(error: tiberius::error::Error, text: &str) -> AppError {
+/// Where a batch sits in the script: the statements of the earlier batches and the lines before it.
+#[derive(Clone, Copy, Default)]
+struct BatchPlace {
+    statements: usize,
+    lines: u32,
+}
+
+/// A server error with the failing statement of the batch (from the error's line, which the server counts from the start
+/// of the batch). The statement index and the position are the script's.
+fn map_error(error: tiberius::error::Error, text: &str, place: BatchPlace) -> AppError {
     let line = match &error {
         tiberius::error::Error::Server(token) => Some(token.line()),
         _ => None,
     };
-    let mapped = AppError::from(error);
+    let mut mapped = AppError::from(error);
+    if let Some(line) = line.filter(|line| *line > 0 && place.lines > 0) {
+        mapped = mapped.with_position(crate::error::ErrorPosition::line(line + place.lines));
+    }
     match line.filter(|line| *line > 0).and_then(|line| statement_at_line(text, line)) {
-        Some((index, statement)) => mapped.with_statement(index, &statement),
+        Some((index, statement)) => mapped.with_statement(place.statements + index, &statement),
         None => mapped,
     }
 }
@@ -206,15 +218,70 @@ impl Current {
     }
 }
 
-/// Streams every result set of the batch. A batch without results (DDL, SET …) reports one statement with 0 rows.
-async fn stream_batch(client: &mut TdsClient, text: &str, options: &RunOptions, sink: &mut dyn ResultSink) -> AppResult<()> {
-    let labels = result_labels(text);
-    let label = |index: usize| labels.get(index).cloned().unwrap_or_default();
-    let batch = with_row_counts(text);
+/// How many times a `GO <count>` line may repeat its batch.
+const MAX_BATCH_REPEAT: u32 = 10_000;
+
+/// Runs a script: its batches (split at `GO` lines, `GO 3` repeating one) one after the other on the session's client,
+/// stopping at the first error. Result sets are numbered across the batches, and an error names its statement by its
+/// index in the whole script. A script without results (DDL, SET …) reports one statement with 0 rows.
+async fn stream_script(client: &mut TdsClient, text: &str, options: &RunOptions, sink: &mut dyn ResultSink) -> AppResult<()> {
+    let batches = crate::lang::split::batches(text);
+    if let Some(batch) = batches.iter().find(|batch| batch.repeat == 0 || batch.repeat > MAX_BATCH_REPEAT) {
+        let count = text[batch.end..].lines().next().unwrap_or_default().trim().to_owned();
+        return Err(AppError::new(format!(
+            "'{count}' is out of range: GO repeats a batch 1 to {MAX_BATCH_REPEAT} times."
+        )));
+    }
     let started = Instant::now();
-    let mut stream = client.simple_query(batch).await.map_err(|error| map_error(error, text))?;
-    let mut current: Option<Current> = None;
     let mut next_index = 0;
+    let mut statements = 0;
+    for batch in &batches {
+        let sql = &text[batch.start..batch.end];
+        let place = BatchPlace {
+            statements,
+            lines: text[..batch.start].bytes().filter(|b| *b == b'\n').count() as u32,
+        };
+        for _ in 0..batch.repeat {
+            match stream_batch(client, sql, options, sink, next_index, place).await? {
+                Some(next) => next_index = next,
+                None => return Ok(()),
+            }
+        }
+        statements += statement_count(sql);
+    }
+    if next_index == 0
+        && sink.event(StreamEvent::Statement {
+            index: 0,
+            sql: text.trim().to_owned(),
+        }) == Flow::Continue
+    {
+        sink.event(StreamEvent::Done {
+            index: 0,
+            affected: Some(0),
+            rows: 0,
+            truncated: false,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        });
+    }
+    Ok(())
+}
+
+/// Streams every result set of one batch, numbered from `first`. Returns the next result set's number, or `None` when
+/// the sink asked to stop.
+async fn stream_batch(
+    client: &mut TdsClient,
+    text: &str,
+    options: &RunOptions,
+    sink: &mut dyn ResultSink,
+    first: usize,
+    place: BatchPlace,
+) -> AppResult<Option<usize>> {
+    let labels = result_labels(text);
+    let label = |index: usize| labels.get(index - first).cloned().unwrap_or_default();
+    let batch = with_row_counts(text);
+    let mut stream = client.simple_query(batch).await.map_err(|error| map_error(error, text, place))?;
+    let mut current: Option<Current> = None;
+    let mut next_index = first;
     loop {
         let item = match stream.try_next().await {
             Ok(Some(item)) => item,
@@ -223,7 +290,7 @@ async fn stream_batch(client: &mut TdsClient, text: &str, options: &RunOptions, 
                 if let Some(open) = current.take() {
                     open.finish(sink);
                 }
-                return Err(map_error(error, text));
+                return Err(map_error(error, text, place));
             }
         };
         let columns = match &item {
@@ -234,13 +301,13 @@ async fn stream_batch(client: &mut TdsClient, text: &str, options: &RunOptions, 
         if let Some(columns) = columns {
             if let Some(open) = current.take() {
                 if open.finish(sink) == Flow::Stop {
-                    return Ok(());
+                    return Ok(None);
                 }
             }
             let index = next_index;
             next_index += 1;
             if sink.event(StreamEvent::Statement { index, sql: label(index) }) == Flow::Stop {
-                return Ok(());
+                return Ok(None);
             }
             let now = Instant::now();
             current = Some(if matches!(columns.as_slice(), [column] if column.name() == ROWCOUNT_COLUMN) {
@@ -297,27 +364,12 @@ async fn stream_batch(client: &mut TdsClient, text: &str, options: &RunOptions, 
             }
         }
     }
-    match current {
-        Some(open) => {
-            open.finish(sink);
-        }
-        None => {
-            if sink.event(StreamEvent::Statement {
-                index: 0,
-                sql: text.trim().to_owned(),
-            }) == Flow::Continue
-            {
-                sink.event(StreamEvent::Done {
-                    index: 0,
-                    affected: Some(0),
-                    rows: 0,
-                    truncated: false,
-                    elapsed_ms: started.elapsed().as_millis() as u64,
-                });
-            }
+    if let Some(open) = current {
+        if open.finish(sink) == Flow::Stop {
+            return Ok(None);
         }
     }
-    Ok(())
+    Ok(Some(next_index))
 }
 
 impl MssqlSession {
@@ -405,7 +457,7 @@ impl MssqlSession {
                     ),
                 ))
             }
-            result = stream_batch(client, &request.text, options, sink) => result,
+            result = stream_script(client, &request.text, options, sink) => result,
         };
         let keeps_client = match &outcome {
             Ok(()) => true,

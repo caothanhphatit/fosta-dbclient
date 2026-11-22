@@ -11,7 +11,7 @@ import { h, icon, iconButton, iconOrDefault } from "../../core/dom";
 import { connectInfo, engineOf, hasCapability } from "../../core/engines";
 import type { ConnectionProfile, Workspace } from "../../core/types";
 import { connectionSafety, safetyLabel, safetyOf, PRODUCTION_ICON } from "../safety/safety";
-import { comparableEngines, defaultOptions, OPTION_TOGGLES, sideName, type CompareRequest, type CompareSide } from "./compareModel";
+import { comparableEngines, defaultOptions, OPTION_TOGGLES, schemaNames, sideName, type CompareRequest, type CompareSide } from "./compareModel";
 
 export interface CompareDialogHost {
   workspaces(): Workspace[];
@@ -306,7 +306,7 @@ class SidePicker {
       const node = root.nodes.find((item) => item.kind === "database" && (item.object?.name ?? item.label) === database);
       const children = node ? await api.treeChildren(profile.id, { parent: node.key, cursor: null, limit: null, filter: null }) : { nodes: [] };
       if (ticket !== this.loading) return;
-      const names = children.nodes.filter((item) => item.kind === "schema").map((item) => item.object?.schema ?? item.object?.name ?? item.label);
+      const names = schemaNames(children.nodes);
       const fallback = names.find((name) => name !== this.avoidSchema) ?? names[0];
       const chosen = wanted && names.includes(wanted) ? wanted : (fallback ?? "");
       this.avoidSchema = null;

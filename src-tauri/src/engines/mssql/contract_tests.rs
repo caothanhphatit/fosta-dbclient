@@ -87,7 +87,34 @@ pub fn fixture() -> Fixture {
     }
 }
 
-crate::contract_tests!(contract_mssql, fixture());
+/// The schema compare round trip on schemas `compare_a` and `compare_b` of `fosta_contract` (`dev/seed/mssql/compare.sql`):
+/// server-named keys and defaults, columns held by keys and indexes, filtered and covering indexes, a computed column
+/// and views that need batches of their own.
+fn compare_fixture() -> CompareFixture {
+    use crate::contract::{DiffStatus::*, SnapshotScope};
+    CompareFixture {
+        seed: include_str!("../../../../dev/seed/mssql/compare.sql")
+            .replace("\r\n", "\n")
+            .split("\nGO\n")
+            .map(|chunk| chunk.trim().to_owned())
+            .filter(|chunk| !chunk.is_empty())
+            .collect(),
+        a: SnapshotScope::new("fosta_contract", Some("compare_a")),
+        b: SnapshotScope::new("fosta_contract", Some("compare_b")),
+        expected: &[
+            ("table:a_only", OnlyInSource),
+            ("table:b_only", OnlyInTarget),
+            ("table:customers", Different),
+            ("table:items", Different),
+            ("table:orders", Different),
+            ("table:tags", Identical),
+            ("view:v_big_orders", Identical),
+            ("view:v_customer_orders", Different),
+        ],
+    }
+}
+
+crate::contract_tests!(contract_mssql, fixture(), compare: compare_fixture());
 
 // --- SQL Server checks (ported from live_tests.rs) ---------------------------------------------------------------------
 
@@ -374,6 +401,27 @@ async fn contract_mssql_batches() {
     assert_eq!(failed.field("position").and_then(|p| p["line"].as_u64()), Some(3), "{failed:?}");
     // The tab still works after errors.
     assert_eq!(go("SELECT 2 AS n").await.unwrap().sets[0].rows[0][0], Value::Int(2));
+
+    // GO lines split batches (CREATE VIEW must start one), `GO 2` repeats one, and an error names the statement and line
+    // of the whole script.
+    let batches = go("SELECT 1 AS a;\nGO\nSELECT 2 AS b\ngo 2\n-- GO\nSELECT 'GO' AS c")
+        .await
+        .expect("batches");
+    let firsts: Vec<Value> = batches.sets.iter().map(|s| s.rows[0][0].clone()).collect();
+    assert_eq!(firsts, [Value::Int(1), Value::Int(2), Value::Int(2), Value::Text("GO".into())]);
+    let view = go("IF OBJECT_ID('dbo.fosta_go_probe') IS NOT NULL DROP VIEW dbo.fosta_go_probe;\nGO\nCREATE VIEW dbo.fosta_go_probe AS SELECT 1 AS n\nGO\nSELECT n FROM dbo.fosta_go_probe;\nDROP VIEW dbo.fosta_go_probe")
+        .await
+        .expect("view in its own batch");
+    assert_eq!(
+        view.sets.iter().find(|s| !s.rows.is_empty()).map(|s| s.rows[0][0].clone()),
+        Some(Value::Int(1))
+    );
+    let failed = go("SELECT 1;\nGO\nSELECT 2;\nSELECT * FROM sales.Missing\nGO\nSELECT 3")
+        .await
+        .expect_err("the second batch fails");
+    assert_eq!(failed.field("statement").and_then(|s| s["index"].as_u64()), Some(2), "{failed:?}");
+    assert_eq!(failed.field("position").and_then(|p| p["line"].as_u64()), Some(4), "{failed:?}");
+    assert!(go("SELECT 1\nGO 0").await.is_err());
     tab.close().await;
 }
 

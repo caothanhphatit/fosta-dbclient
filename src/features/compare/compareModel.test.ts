@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DiffItem, DiffStatus, Risk, ScopeSummary } from "../../core/contract";
+import type { DiffItem, DiffStatus, ObjectNode, Risk, ScopeSummary } from "../../core/contract";
 import { presetSettings } from "../safety/safety";
 import {
   carrySelection,
@@ -17,6 +17,7 @@ import {
   includedIds,
   parseOptions,
   safetyNotice,
+  schemaNames,
   scriptFileName,
   setGroup,
   summary,
@@ -173,6 +174,28 @@ describe("requests", () => {
   it("keys a pair by both sides, so a swap is another tab", () => {
     expect(compareKeyParts(request)).not.toEqual(compareKeyParts(swapped(request)));
     expect(swapped(swapped(request))).toEqual(request);
+  });
+
+  it("lists schemas from schema nodes, else from the tables of the database", () => {
+    const node = (kind: string, label: string, schema: string | null): ObjectNode => ({
+      key: { id: label, kind, object: null },
+      label,
+      kind,
+      icon: kind,
+      object: { database: "db", schema, name: label, kind },
+      detail: null,
+      badges: [],
+      expandable: false,
+      defaultView: null,
+      actions: [],
+    });
+    expect(schemaNames([node("schema", "public", "public"), node("schema", "audit", "audit")])).toEqual(["public", "audit"]);
+    expect(schemaNames([node("table", "a.t", "compare_a"), node("view", "v", "dbo"), node("table", "a.u", "compare_a"), node("table", "x", "app")])).toEqual([
+      "dbo",
+      "app",
+      "compare_a",
+    ]);
+    expect(schemaNames([])).toEqual([]);
   });
 
   it("compares the same engine only, except MySQL with MariaDB", () => {

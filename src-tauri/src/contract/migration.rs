@@ -386,6 +386,10 @@ pub struct DialectFeatures {
     /// `CREATE TABLE` and `ADD COLUMN` carry the table's and the columns' comments (MySQL), so no separate comment steps
     /// follow them.
     pub inline_comments: bool,
+    /// Changing a column's type, nullability or collation, or dropping it, fails while a key, index or check uses it, and
+    /// dropping it while it has a default constraint (SQL Server): the planner drops those first and recreates the ones
+    /// that stay.
+    pub columns_held_by_dependents: bool,
 }
 
 /// Pure, per engine (no connection): normalizes catalog text for comparison, rates type changes and renders
