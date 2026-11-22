@@ -6,7 +6,8 @@ import { connectInfo, engineOf, hasCapability, type EngineInfo } from "../core/e
 import { showError } from "../core/errorPanel";
 import type { Navigator } from "../core/navigator";
 import type { TabContent, TabManager } from "../core/tabs";
-import type { ConnectionProfile, KeyCell, TableTarget, TaskDef } from "../core/types";
+import type { ConnectionProfile, KeyCell, SafetySettings, TableTarget, TaskDef } from "../core/types";
+import { compareKeyParts, compareTitle, sideName, type CompareRequest } from "../features/compare/compareModel";
 import { defaultRole, loadEngineUi, nodeIcon, resolveView, type ViewContext, type ViewRegistration, type ViewRole } from "../core/views";
 import type { QueryHost, QueryView } from "../features/query/queryView";
 import { createLogView, type TasksPanel } from "../features/tasks/tasksPanel";
@@ -54,6 +55,24 @@ export interface NavigationHost {
   schemaMayHaveChanged(connectionId: string): void;
   /** Opens the assistant panel and sends a prepared question (see `Navigator.askAssistant`). */
   askAssistant(prompt: string, extra?: string, samples?: string, shown?: string): void;
+  /** Connects a connection of any workspace (schema compare); true once it is connected. */
+  connectAny(connectionId: string): Promise<boolean>;
+  /** The rules a connection runs under, and whether its workspace is marked Production. */
+  safetyOf(connectionId: string): { settings: SafetySettings | null; production: boolean };
+  /** The compare picker, started from `request` ("Change…" on a compare tab). */
+  pickCompare(request: CompareRequest): void;
+}
+
+/** The compare chunk. */
+function loadCompareView(): Promise<typeof import("../features/compare/compareView")> {
+  return import("../features/compare/compareView");
+}
+
+/** Duck-typed so the compare chunk stays out of the main bundle. */
+function asCompareView(content: TabContent | undefined): { compareRequest(): CompareRequest } | null {
+  return content && typeof (content as { compareRequest?: unknown }).compareRequest === "function"
+    ? (content as unknown as { compareRequest(): CompareRequest })
+    : null;
 }
 
 /** What `openObject` opens: a tree node, an object reference, or nothing (the connection itself: a console). */
@@ -324,6 +343,62 @@ export class AppNavigation implements Navigator {
     void this.openQueryTab(connectionId, database, initialSql);
   }
 
+  /**
+   * Opens a schema compare tab (the same pair again selects its tab). A new one reads both sides at once; a restored one
+   * (`restore`: the restored tab it replaces) waits for "Compare again".
+   */
+  async openCompare(request: CompareRequest, restore?: { replaceKey: string; scope: string }): Promise<void> {
+    const scope = restore?.scope ?? this.host.workspaceId();
+    const key = this.keyIn(scope, request.source.connectionId, "compare", ...compareKeyParts(request));
+    if (this.tabs.contentOf(key)) {
+      if (restore && restore.replaceKey !== key) await this.tabs.close(restore.replaceKey);
+      this.tabs.open({ key, title: "", icon: "compare", create: () => this.tabs.contentOf(key) as TabContent });
+      return;
+    }
+    let module: Awaited<ReturnType<typeof loadCompareView>>;
+    try {
+      module = await loadCompareView();
+    } catch (error) {
+      showError(error, "Load the schema compare");
+      return;
+    }
+    if (restore && !this.tabs.contentOf(restore.replaceKey)) return;
+    const name = (id: string) => this.host.connectionName(id);
+    const describe = (current: CompareRequest) => ({
+      title: compareTitle(current, name),
+      subtitle: `${name(current.source.connectionId)} · ${sideName(current.source)} → ${name(current.target.connectionId)} · ${sideName(current.target)}`,
+    });
+    const record = (current: CompareRequest) => {
+      const { title } = describe(current);
+      this.records.set(key, { kind: "compare", title, source: current.source, target: current.target, options: current.options });
+    };
+    const host = {
+      connectionName: name,
+      connect: (id: string) => this.host.connectAny(id),
+      safety: (id: string) => this.host.safetyOf(id),
+      openQuery: (id: string, database: string | null, sql: string) => this.openQuery(id, database, sql),
+      pick: (current: CompareRequest) => this.host.pickCompare(current),
+      changed: (current: CompareRequest) => {
+        record(current);
+        this.tabs.describe(key, describe(current));
+        this.onTabEdited?.();
+      },
+    };
+    const spec = {
+      key,
+      scope,
+      ...describe(request),
+      icon: "compare" as const,
+      connection: name(request.source.connectionId),
+      create: () => new module.CompareView(request, host, !restore),
+    };
+    if (restore && restore.replaceKey !== key) {
+      if (!this.tabs.replace(restore.replaceKey, spec)) return;
+      this.keepId(restore.replaceKey, key);
+    } else this.tabs.open(spec);
+    record(request);
+  }
+
   openVectorSearch(target: TableTarget, column: string, seed?: KeyCell[]): void {
     const key = this.tabKey(target.connectionId, "vector-search", target.database, target.table);
     const existing = this.tabs.contentOf(key);
@@ -389,6 +464,11 @@ export class AppNavigation implements Navigator {
     if (!record) return null;
     const id = this.idOf(key);
     if (record.kind === "object" && isWorkspaceTab(content)) return { ...record, id, view: content.viewState() };
+    const compare = asCompareView(content);
+    if (record.kind === "compare" && compare) {
+      const current = compare.compareRequest();
+      return { ...record, id, source: current.source, target: current.target, options: current.options };
+    }
     const view = asQueryView(content);
     if (record.kind !== "query" || !view) return { ...record, id };
     return { ...record, id, database: view.currentDatabase(), language: view.languageId(), text: view.editorText(), saved: view.savedText() };
@@ -422,14 +502,24 @@ export class AppNavigation implements Navigator {
    * Returns its tab key.
    */
   addRestored(scope: string, saved: SavedTab): string {
-    const connectionId = saved.kind === "logs" ? "task" : saved.connectionId;
+    const connectionId = saved.kind === "logs" ? "task" : saved.kind === "compare" ? saved.source.connectionId : saved.connectionId;
     const key = [scope, connectionId, saved.kind === "query" ? "console" : "restored", crypto.randomUUID()].join("|");
     this.ids.set(key, saved.id);
     if (saved.kind === "query") this.queryCounter = Math.max(this.queryCounter, queryNumber(saved.title));
-    const profile = saved.kind === "logs" ? undefined : this.host.profileOf(saved.connectionId);
+    const profile = saved.kind === "logs" ? undefined : this.host.profileOf(saved.kind === "compare" ? saved.source.connectionId : saved.connectionId);
     const database = saved.kind === "query" ? saved.database : saved.kind === "object" ? (saved.object.database ?? saved.database ?? null) : null;
     const icon: IconName =
-      saved.kind === "query" ? "query" : saved.kind === "logs" ? "logs" : saved.role === "diagram" ? "diagram" : saved.role === "design" ? "design" : "table";
+      saved.kind === "query"
+        ? "query"
+        : saved.kind === "logs"
+          ? "logs"
+          : saved.kind === "compare"
+            ? "compare"
+            : saved.role === "diagram"
+              ? "diagram"
+              : saved.role === "design"
+                ? "design"
+                : "table";
     const restored: RestoredTab = new RestoredTab(saved, (): Promise<RestoreResult> => this.materialize(key, scope, restored));
     this.tabs.open(
       { key, scope, title: saved.title, subtitle: database ?? undefined, icon, connection: profile?.name, database, create: () => restored },
@@ -453,6 +543,12 @@ export class AppNavigation implements Navigator {
         return "opened";
       }
       this.openLogs(task, { replaceKey: key, scope });
+      return "opened";
+    }
+    if (saved.kind === "compare") {
+      // Nothing is read until "Compare again", so nothing connects either.
+      if (this.host.workspaceId() !== scope) return "deferred";
+      await this.openCompare({ source: saved.source, target: saved.target, options: saved.options }, { replaceKey: key, scope });
       return "opened";
     }
     const profile = this.host.profileOf(saved.connectionId);

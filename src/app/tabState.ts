@@ -3,7 +3,8 @@
  * order, the active one, and the text of query tabs. Pure (no DOM), so serialisation, merging and the size bounds are
  * unit-tested.
  */
-import type { ObjectRef } from "../core/contract";
+import type { CompareOptions, ObjectRef } from "../core/contract";
+import { parseOptions, type CompareSide } from "../features/compare/compareModel";
 import { boundViewState, parseViewState, type WorkspaceViewState } from "../features/objectWorkspace/workspaceState";
 
 /** One open tab, enough to open it again (without its id). */
@@ -33,7 +34,9 @@ export type SavedTabBody =
       /** An engine workspace tab's section and section states (`features/objectWorkspace`), at most `MAX_VIEW_BYTES`. */
       view?: WorkspaceViewState;
     }
-  | { kind: "logs"; taskId: string; title: string };
+  | { kind: "logs"; taskId: string; title: string }
+  /** A schema compare tab: it comes back with "Compare again" and reads nothing until then. */
+  | { kind: "compare"; title: string; source: CompareSide; target: CompareSide; options: CompareOptions };
 
 /** One open tab; `id` stays the same across saves and restarts, so another window's save can be merged tab by tab. */
 export type SavedTab = SavedTabBody & { id: string };
@@ -152,6 +155,11 @@ function parseObject(value: unknown): ObjectRef | null {
   return { database: optional(value.database), schema: optional(value.schema), name: value.name, kind: value.kind, ...(path ? { path } : {}) };
 }
 
+function parseSide(value: unknown): CompareSide | null {
+  if (!isRecord(value) || !isString(value.connectionId) || !isString(value.database)) return null;
+  return { connectionId: value.connectionId, database: value.database, schema: isString(value.schema) ? value.schema : null };
+}
+
 function parseBody(value: Record<string, unknown>): SavedTabBody | null {
   if (!isString(value.title)) return null;
   if (value.kind === "query" && isString(value.connectionId) && isString(value.text)) {
@@ -186,6 +194,11 @@ function parseBody(value: Record<string, unknown>): SavedTabBody | null {
     };
   }
   if (value.kind === "logs" && isString(value.taskId)) return { kind: "logs", taskId: value.taskId, title: value.title };
+  if (value.kind === "compare") {
+    const source = parseSide(value.source);
+    const target = parseSide(value.target);
+    if (source && target) return { kind: "compare", title: value.title, source, target, options: parseOptions(value.options) };
+  }
   return null;
 }
 
@@ -226,7 +239,12 @@ export function restorableTabs(
   const tabs: SavedTab[] = [];
   let active: number | null = null;
   saved.tabs.forEach((tab, index) => {
-    const keep = tab.kind === "logs" ? taskExists(tab.taskId) : connectionExists(tab.connectionId);
+    const keep =
+      tab.kind === "logs"
+        ? taskExists(tab.taskId)
+        : tab.kind === "compare"
+          ? connectionExists(tab.source.connectionId) && connectionExists(tab.target.connectionId)
+          : connectionExists(tab.connectionId);
     if (keep) tabs.push(tab);
     if (index === saved.active) active = tabs.length > 0 ? (keep ? tabs.length - 1 : Math.max(0, tabs.length - 1)) : null;
   });

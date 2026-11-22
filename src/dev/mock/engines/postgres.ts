@@ -45,6 +45,7 @@ const style: CatalogStyle = {
   databaseActions: [
     builtin("newQuery", "New query", "newQuery"),
     builtin("diagram", "ER diagram", "diagram"),
+    builtin("compareSchema", "Compare schema with…", "compareSchema"),
     builtin("copyName", "Copy name", "copyName"),
     builtin("refresh", "Refresh", "refresh", true),
   ],
@@ -308,7 +309,15 @@ function containerNode(id: string, kind: "schema" | "folder", label: string, dat
     badges: [],
     expandable: true,
     defaultView: null,
-    actions: kind === "schema" ? [builtin("newQuery", "New query", "newQuery"), copyName, builtin("refresh", "Refresh", "refresh", true)] : [],
+    actions:
+      kind === "schema"
+        ? [
+            builtin("newQuery", "New query", "newQuery"),
+            builtin("compareSchema", "Compare schema with…", "compareSchema"),
+            copyName,
+            builtin("refresh", "Refresh", "refresh", true),
+          ]
+        : [],
   };
 }
 

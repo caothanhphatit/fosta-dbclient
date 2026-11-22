@@ -11,6 +11,7 @@ import {
   type SavedTab,
   type SavedWorkspaceTabs,
 } from "./tabState";
+import { defaultOptions } from "../features/compare/compareModel";
 
 const query = (text: string, connectionId = "c1", title = "Query 1", id = `q-${title}`): Extract<SavedTab, { kind: "query" }> => ({
   id,
@@ -242,5 +243,45 @@ describe("workspace tabs (saved view)", () => {
     expect(fitted.tabs[1]).toMatchObject({ text: "", textOmitted: true });
     expect(fitted.tabs[2]).toMatchObject({ view: { section: "documents", state: {} } });
     expect(fitted.tabs[0]).toMatchObject({ view: { state: { documents: "d".repeat(20_000) } } });
+  });
+});
+
+describe("compare tabs", () => {
+  const compare: SavedTab = {
+    id: "cmp-1",
+    kind: "compare",
+    title: "public → sales",
+    source: { connectionId: "c1", database: "shop", schema: "public" },
+    target: { connectionId: "c2", database: "shop", schema: "sales" },
+    options: { ...defaultOptions(), ignoreComments: true, exclude: ["tmp_*"] },
+  };
+
+  it("round-trips both sides and the options", () => {
+    const parsed = parseSavedTabs(JSON.parse(JSON.stringify(serializeTabs([compare], 0, 10_000))));
+    expect(parsed).toEqual({ version: 1, tabs: [compare], active: 0 });
+  });
+
+  it("drops a compare tab with a broken side, and fills missing options with the defaults", () => {
+    const broken = { ...compare, target: { database: "shop" } };
+    expect(parseSavedTabs({ tabs: [broken] })?.tabs).toEqual([]);
+    const old = { id: "cmp-2", kind: "compare", title: "x", source: compare.source, target: compare.target };
+    expect(parseSavedTabs({ tabs: [old] })?.tabs).toEqual([{ ...old, options: defaultOptions() }]);
+  });
+
+  it("is restorable only while both connections exist", () => {
+    expect(
+      restorableTabs(
+        workspace([compare]),
+        (id) => id === "c1",
+        () => true,
+      ).tabs,
+    ).toEqual([]);
+    expect(
+      restorableTabs(
+        workspace([compare]),
+        () => true,
+        () => true,
+      ).tabs,
+    ).toEqual([compare]);
   });
 });

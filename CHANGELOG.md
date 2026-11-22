@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Schema compare for PostgreSQL: "Compare schema with…" on a database or schema (and Compare in the toolbar) picks a target on
+  any connection of any workspace, lists the tables and views that differ, exist on one side only or are identical, shows each
+  object's changes and a side-by-side DDL diff, and generates a sync script with data-loss and review warnings. Drops start
+  unchecked; options re-diff without reading again. The compare never runs the script: open it in a query tab on the target
+  (its safety rules apply), copy it or save it as `.sql`. Compare tabs come back after a restart and read nothing until
+  Compare again.
 - Redis Cluster and Redis Sentinel connections (Redis 7.4+, Valkey 8.1). The connection form has a Topology choice and shows
   only that topology's fields: more seed nodes or sentinels, the master name, the sentinels' own user and password (kept in
   the credential store), read from replicas and an address map. `redis+cluster://`, `redis+sentinel://` (and the `rediss`,

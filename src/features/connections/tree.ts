@@ -85,6 +85,8 @@ export interface TreeHost {
   openObject(profile: ConnectionProfile, node: ObjectNode | null, role: ViewRole, params?: Record<string, unknown>): Promise<TabContent | null>;
   openQuery(connectionId: string, database: string | null, initialSql?: string): void;
   openDiagram(profile: ConnectionProfile, database: string): void;
+  /** "Compare schema with…": the picker, with `database` (and `schema`) of the connection as the source. */
+  openCompare?(profile: ConnectionProfile, database: string, schema: string | null): void;
   editConnection(profile: ConnectionProfile): void;
   deleteConnection(profile: ConnectionProfile): void;
   /** Opens the new-connection dialog (the empty tree's button). */
@@ -167,6 +169,16 @@ export class ConnectionTree {
     return connected ? { connectionId: connected.profile.id, database: connected.profile.database } : null;
   }
 
+  /** The selected database or schema (or the connection's default database) of a connected connection. */
+  selectedScope(): { profile: ConnectionProfile; database: string | null; schema: string | null } | null {
+    const selected = this.selectedKey ? parseKey(this.selectedKey) : null;
+    const conn = selected ? this.nodeOf(selected.connectionId) : undefined;
+    if (!conn || !selected) return null;
+    const object = selected.nodeId ? (conn.model.node(selected.nodeId)?.object ?? null) : null;
+    const schema = object?.kind === "schema" ? (object.schema ?? object.name) : (object?.schema ?? null);
+    return { profile: conn.profile, database: object?.database ?? conn.profile.database ?? null, schema };
+  }
+
   hasConnections(): boolean {
     return this.nodes.length > 0;
   }
@@ -217,8 +229,13 @@ export class ConnectionTree {
    * Connects `connectionId` unless it is connected already (a restored tab shown for the first time, a query tab whose
    * connection the backend lost); concurrent callers share one attempt. True once it is connected.
    */
-  async ensureConnected(connectionId: string): Promise<boolean> {
-    const conn = this.cache.get(connectionId);
+  async ensureConnected(connectionId: string, profile?: ConnectionProfile): Promise<boolean> {
+    let conn = this.cache.get(connectionId);
+    if (!conn && profile) {
+      // A connection of a workspace not shown yet (schema compare across workspaces): it is kept for when it is shown.
+      conn = { profile, state: "idle", expanded: false, message: null, version: null, model: new TreeModel(), generation: 0 };
+      this.cache.set(connectionId, conn);
+    }
     if (!conn) return false;
     if (conn.state === "connected") return true;
     let pending = this.connecting.get(connectionId);
@@ -482,6 +499,13 @@ export class ConnectionTree {
       case "createDatabase":
         await this.createDatabase(conn);
         return;
+      case "compareSchema": {
+        const object = node?.object ?? null;
+        const schema = object?.kind === "schema" ? (object.schema ?? object.name) : null;
+        if (database && this.host.openCompare) this.host.openCompare(profile, database, schema);
+        else toast("Select a database or schema in the tree, then compare it");
+        return;
+      }
       case "design":
         await this.host.openObject(profile, node, "design");
         return;
@@ -908,7 +932,7 @@ const BUILTIN_ICONS: Record<BuiltinAction, IconName> = {
   import: "upload",
   export: "download",
   design: "design",
-  compareSchema: "columns",
+  compareSchema: "compare",
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

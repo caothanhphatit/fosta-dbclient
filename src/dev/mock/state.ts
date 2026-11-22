@@ -180,6 +180,18 @@ const workspaces: Workspace[] = [
         },
       },
       {
+        // Schema compare target: its snapshot is an older copy of Local PostgreSQL's `shop.public`.
+        id: "c-a-pg",
+        name: "Staging PostgreSQL",
+        driver: "postgres",
+        host: "pg.staging.client-a.local",
+        port: 5432,
+        user: "app",
+        database: "shop",
+        savePassword: true,
+        options: {},
+      },
+      {
         id: "c-a-5",
         name: "Reporting replica (offline)",
         driver: "mariadb",

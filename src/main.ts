@@ -21,7 +21,7 @@ import { TabPersistence } from "./app/tabPersistence";
 import { confirmQuit, guardPageUnload, guardWindowClose, installShortcuts, revealWindowAfterFirstPaint, suppressBrowserContextMenu } from "./app/windowShell";
 import { api, onConnectionLost } from "./core/api";
 import { hideUnsupported, loadCapabilities } from "./core/capabilities";
-import { loadEngines } from "./core/engines";
+import { connectInfo, engineOf, hasCapability, loadEngines } from "./core/engines";
 import { initDensity } from "./core/density";
 // Shared view registrations and the lazy engine UI modules (`src/engines/`).
 import "./engines";
@@ -39,6 +39,7 @@ import { AssistantPanel, type AssistantContext } from "./features/assistant/assi
 import { learnDialog, type LearnTarget } from "./features/assistant/learnDialog";
 import { learningAllowed } from "./features/assistant/profileLogic";
 import { knowledgeTabKey, ProfileView } from "./features/assistant/profileView";
+import { compareDialog, type CompareDialogStart } from "./features/compare/compareDialog";
 import { connectionDialog } from "./features/connections/connectionDialog";
 import { ConnectionTree } from "./features/connections/tree";
 import { TasksPanel } from "./features/tasks/tasksPanel";
@@ -113,6 +114,13 @@ const navigation = new AppNavigation(tabs, {
   },
   taskOf: (taskId) => currentConfig?.workspaces.flatMap((item) => item.tasks).find((task) => task.id === taskId),
   writesBlocked: (connectionId) => writesBlocked(connectionSafety(currentConfig?.workspaces ?? [], connectionId)),
+  connectAny,
+  safetyOf: (connectionId) => {
+    const workspaces = currentConfig?.workspaces ?? [];
+    const owner = workspaces.find((item) => item.connections.some((profile) => profile.id === connectionId));
+    return { settings: connectionSafety(workspaces, connectionId), production: owner?.icon === PRODUCTION_ICON };
+  },
+  pickCompare: (request) => void openCompareDialog({ source: request.source, target: request.target, options: request.options }),
 });
 
 const assistant = new AssistantPanel({
@@ -153,6 +161,7 @@ const tree = new ConnectionTree({
   openObject: (profile, node, role, params) => navigation.openObject(profile, node, role, params),
   openQuery: (connectionId, database, initialSql) => navigation.openQuery(connectionId, database, initialSql),
   openDiagram: (profile, database) => navigation.openDiagram(profile, database),
+  openCompare: (profile, database, schema) => void openCompareDialog({ source: { connectionId: profile.id, database, schema } }),
   editConnection: (profile) => void editConnection(profile),
   deleteConnection: (profile) => void deleteConnection(profile),
   newConnection: () => void editConnection(null),
@@ -426,6 +435,36 @@ function diagramFromSelection(): void {
   navigation.openDiagram(profile, context.database);
 }
 
+/** Connects a saved connection of any workspace (schema compare picks connections across workspaces). */
+function connectAny(connectionId: string): Promise<boolean> {
+  const profile = currentConfig?.workspaces.flatMap((item) => item.connections).find((item) => item.id === connectionId);
+  return profile ? tree.ensureConnected(connectionId, profile) : Promise.resolve(false);
+}
+
+/** The schema compare picker; the compare opens in a new tab. */
+async function openCompareDialog(start: CompareDialogStart): Promise<void> {
+  const request = await compareDialog(start, {
+    workspaces: () => currentConfig?.workspaces ?? [],
+    currentWorkspace: workspaceId,
+    connect: connectAny,
+  });
+  if (request) await navigation.openCompare(request);
+}
+
+/** The toolbar's Compare: the picker, with the selected database or schema as the source (empty without a selection). */
+function compareFromSelection(): void {
+  const scope = tree.selectedScope();
+  if (scope) {
+    const engine = engineOf(scope.profile);
+    if (!hasCapability(connectInfo(scope.profile.id) ?? engine, "schemaCompare")) {
+      toast(`${engine.label} has no schema compare yet`);
+      return;
+    }
+  }
+  const source = scope?.database ? { connectionId: scope.profile.id, database: scope.database, schema: scope.schema } : null;
+  void openCompareDialog({ source });
+}
+
 /** Opens a query tab on the selected connection, connecting it first when needed. */
 function newQueryFromSelection(): void {
   void tree.connectedContext().then((context) => {
@@ -559,6 +598,7 @@ async function bootstrap(): Promise<void> {
     newConnection: () => void editConnection(null),
     newQuery: newQueryFromSelection,
     newDiagram: diagramFromSelection,
+    newCompare: compareFromSelection,
     configureEmbedding: () => void configureEmbedding(),
     toggleAssistant: () => toggleAssistant(),
     toggleSidebar: hideOrShowSidebar,

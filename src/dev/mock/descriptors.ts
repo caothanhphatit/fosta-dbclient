@@ -309,6 +309,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
       "createDatabase",
       "explain",
       "vector",
+      "schemaCompare",
     ],
     objectsLabel: "tables",
     connection: {

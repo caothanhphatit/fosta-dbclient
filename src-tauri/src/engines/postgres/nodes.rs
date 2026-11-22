@@ -46,6 +46,7 @@ pub fn database_node(name: &str, system: bool) -> ObjectNode {
         actions: vec![
             NodeAction::builtin("newQuery", "New query", BuiltinAction::NewQuery),
             NodeAction::builtin("diagram", "ER diagram", BuiltinAction::Diagram),
+            NodeAction::builtin("compareSchema", "Compare schema with…", BuiltinAction::CompareSchema),
             NodeAction::builtin("copyName", "Copy name", BuiltinAction::CopyName),
             NodeAction::builtin("refresh", "Refresh", BuiltinAction::Refresh).separated(),
         ],
@@ -67,6 +68,7 @@ fn actions(node: &CatalogNode) -> Vec<NodeAction> {
     match node.kind {
         CoreKind::Schema => vec![
             NodeAction::builtin("newQuery", "New query", BuiltinAction::NewQuery),
+            NodeAction::builtin("compareSchema", "Compare schema with…", BuiltinAction::CompareSchema),
             copy,
             NodeAction::builtin("refresh", "Refresh", BuiltinAction::Refresh).separated(),
         ],
