@@ -105,8 +105,10 @@ pub async fn snapshot(conn: &mut Conn, server: &Server, engine: &str, scope: &Sn
                     ..TableDef::new(&name)
                 });
             }
+            // Unreadable until `VIEWS` shows its definition.
             "VIEW" => views.push(ViewDef {
                 name,
+                unreadable: true,
                 ..ViewDef::default()
             }),
             "SEQUENCE" => skip(&mut skipped, "sequence", name, NOT_COMPARED),
@@ -260,7 +262,8 @@ pub async fn snapshot(conn: &mut Conn, server: &Server, engine: &str, scope: &Sn
 
     let definitions = text_rows(
         conn,
-        "SELECT TABLE_NAME, VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
+        "SELECT TABLE_NAME, VIEW_DEFINITION, SECURITY_TYPE, CHECK_OPTION, DEFINER FROM information_schema.VIEWS \
+         WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
         param(),
     )
     .await?;
@@ -269,7 +272,14 @@ pub async fn snapshot(conn: &mut Conn, server: &Server, engine: &str, scope: &Sn
     for row in &definitions {
         let name = row.text(0);
         if let Some(view) = views.iter_mut().find(|v| v.name == name) {
-            view.definition = row.text(1);
+            view.options = view_options(row.opt(2), row.opt(3), row.opt(4));
+            // Empty without the SHOW VIEW privilege (unless the session's user is the definer).
+            let definition = row.text(1);
+            if definition.trim().is_empty() {
+                continue;
+            }
+            view.unreadable = false;
+            view.definition = definition;
             view.depends_on = view_dependencies(&view.definition, &database, &names, &name);
         }
     }
@@ -459,6 +469,25 @@ fn index_part(row: &TextRow) -> IndexPart {
             descending,
         },
     }
+}
+
+/// A view's options from its `VIEWS` row: `sqlSecurity` (`DEFINER`, the default, or `INVOKER`), `checkOption`
+/// (`CASCADED` or `LOCAL`; `NONE` is left out) and `definer` (`user@host`, shown but never compared or scripted).
+pub(super) fn view_options(security: Option<String>, check: Option<String>, definer: Option<String>) -> Vec<(String, String)> {
+    let mut options = Vec::new();
+    if let Some(security) = security.map(|s| s.trim().to_ascii_uppercase()).filter(|s| !s.is_empty()) {
+        options.push(("sqlSecurity".to_owned(), security));
+    }
+    if let Some(check) = check
+        .map(|c| c.trim().to_ascii_uppercase())
+        .filter(|c| !c.is_empty() && c != "NONE")
+    {
+        options.push(("checkOption".to_owned(), check));
+    }
+    if let Some(definer) = definer.filter(|d| !d.trim().is_empty()) {
+        options.push(("definer".to_owned(), definer));
+    }
+    options
 }
 
 /// The tables and views of the database a view body names (bodies are stored fully qualified).

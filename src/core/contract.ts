@@ -436,6 +436,10 @@ export interface ViewDef {
   materialized: boolean;
   dependsOn: string[];
   comment: string | null;
+  /** Options the body does not say (PostgreSQL `security_invoker`, MySQL `sqlSecurity`, SQL Server `schemabinding`, ...). */
+  options: [string, string][];
+  /** The catalog did not return the definition (no permission, an encrypted view): compare skips it. */
+  unreadable: boolean;
 }
 
 /** An object of the scope that is not compared in this version (or excluded by the options). */

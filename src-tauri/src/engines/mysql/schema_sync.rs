@@ -424,6 +424,26 @@ fn type_risk(from: &ParsedType, to: &ParsedType) -> Risk {
 
 // --- Rendering ----------------------------------------------------------------------------------------------------------
 
+/// `CREATE [OR REPLACE] [SQL SECURITY ...] VIEW name AS body [WITH ... CHECK OPTION]`. The definer is left out on
+/// purpose: setting another account as definer needs SUPER (or SET_USER_ID), so the view's definer becomes the account
+/// that runs the script.
+fn view_sql(view: &ViewDef, name: &str, body: &str, replace: bool) -> String {
+    let create = if replace { "CREATE OR REPLACE" } else { "CREATE" };
+    let security = view
+        .option("sqlSecurity")
+        .map(str::to_ascii_uppercase)
+        .filter(|s| s == "DEFINER" || s == "INVOKER")
+        .map(|s| format!(" SQL SECURITY {s}"))
+        .unwrap_or_default();
+    let check = view
+        .option("checkOption")
+        .map(str::to_ascii_uppercase)
+        .filter(|c| c == "CASCADED" || c == "LOCAL")
+        .map(|c| format!("\nWITH {c} CHECK OPTION"))
+        .unwrap_or_default();
+    format!("{create}{security} VIEW {name} AS\n{body}{check}")
+}
+
 fn statement(sql: String) -> RenderedStatement {
     RenderedStatement::new(sql)
 }
@@ -437,9 +457,9 @@ fn warned(sql: String, risk: Risk, warning: impl Into<String>) -> RenderedStatem
 }
 
 fn manual(reason: &str, hint: Option<&str>) -> RenderedStatement {
-    let mut sql = format!("-- MANUAL STEP: {}", reason.split_whitespace().collect::<Vec<_>>().join(" "));
+    let mut sql = format!("-- MANUAL STEP: {}", crate::contract::one_line(reason));
     if let Some(hint) = hint {
-        for line in hint.lines() {
+        for line in hint.lines().map(crate::contract::comment_safe) {
             sql.push_str(&format!("\n--   {line}"));
         }
     }
@@ -727,15 +747,15 @@ impl MySqlSchemaDialect {
             }
         }
         if changes.nullability && !column.nullable {
-            sql = format!(
-                "-- UPDATE {table_name} SET {} = ... WHERE {} IS NULL;\n{sql}",
-                ident(&column.name),
-                ident(&column.name)
-            );
+            let stub = crate::contract::null_fill_stub(&table_name, &ident(&column.name));
+            if let Some(stub) = &stub {
+                sql = format!("{stub}\n{sql}");
+            }
             risk = risk.max(Risk::Review);
             warnings.push(format!(
-                "Fails if {table}.{} has NULLs; fill them first (see the UPDATE stub)",
-                column.name
+                "Fails if {table}.{} has NULLs; fill them first{}",
+                column.name,
+                if stub.is_some() { " (see the UPDATE stub)" } else { "" }
             ));
         }
         if changes.generated && from.generated.is_some() {
@@ -836,7 +856,7 @@ impl SchemaDialect for MySqlSchemaDialect {
 
     fn view_ddl(&self, schema: Option<&str>, view: &ViewDef) -> String {
         let body = view.definition.trim().trim_end_matches(';').trim_end();
-        format!("CREATE VIEW {} AS\n{body};", qualified(schema, &view.name))
+        format!("{};", view_sql(view, &qualified(schema, &view.name), body, false))
     }
 
     fn render(&self, step: &MigrationStep, ctx: &RenderContext) -> Vec<RenderedStatement> {
@@ -935,12 +955,25 @@ impl SchemaDialect for MySqlSchemaDialect {
                 let body = view.definition.trim().trim_end_matches(';').trim_end();
                 let mapped = map_text(body, ctx);
                 let name = table_name(&view.name);
-                let sql = if *replace {
-                    format!("CREATE OR REPLACE VIEW {name} AS\n{mapped}")
-                } else {
-                    format!("CREATE VIEW {name} AS\n{mapped}")
-                };
-                let mut rendered = statement(sql);
+                let mut rendered = statement(view_sql(view, &name, &mapped, *replace));
+                if let Some(definer) = view.option("definer") {
+                    let invoker = view.option("sqlSecurity").is_some_and(|s| s.eq_ignore_ascii_case("INVOKER"));
+                    rendered.risk = Risk::Review;
+                    rendered.warnings.push(if invoker {
+                        format!(
+                            "{} is created without its DEFINER clause (was {definer}); the account running the script \
+                             becomes its definer",
+                            view.name
+                        )
+                    } else {
+                        format!(
+                            "{} is created without its DEFINER clause (was {definer}), so with SQL SECURITY DEFINER it \
+                             reads with the privileges of the account running the script; recreate it with the right \
+                             definer if that matters",
+                            view.name
+                        )
+                    });
+                }
                 if mapped != body {
                     rendered.risk = Risk::Review;
                     rendered.warnings.push(format!(

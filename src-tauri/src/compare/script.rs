@@ -7,7 +7,8 @@ use super::{
     plan::{plan, Plan},
 };
 use crate::contract::{
-    CompareOptions, RenderContext, RenderedStatement, Risk, SchemaDialect, SchemaSnapshot, ScopeSummary, ScriptWarning, SyncScript,
+    one_line, CompareOptions, RenderContext, RenderedStatement, Risk, SchemaDialect, SchemaSnapshot, ScopeSummary, ScriptWarning,
+    SyncScript,
 };
 
 /// The sync script that makes `target` match `source` for the items in `include`. `generated_at` goes in the header.
@@ -67,7 +68,7 @@ pub fn sync_script(
             "-- WARNING: Not atomic: {} commits every DDL statement implicitly, so a failure leaves the target partly migrated.\n\
              -- The statements are ordered so that an early failure leaves less to undo; try the script on a backup or a \
              staging copy first.\n",
-            target.engine
+            one_line(&target.engine)
         ));
     }
     if wrapped.is_empty() {
@@ -100,10 +101,6 @@ fn is_comment(sql: &str) -> bool {
         let line = line.trim();
         line.is_empty() || line.starts_with("--")
     })
-}
-
-fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn scope(summary: &ScopeSummary) -> String {
@@ -174,7 +171,8 @@ fn header(
         lines.push(format!("-- WARNING: {}", one_line(&warning.message)));
     }
     lines.push("-- Review before running. Nothing has been run.".to_owned());
-    let mut text = lines.join("\n");
+    // The values above (names, server versions, patterns, messages) come from servers and users: none may end its line.
+    let mut text = lines.iter().map(|line| one_line(line)).collect::<Vec<_>>().join("\n");
     text.push('\n');
     text
 }

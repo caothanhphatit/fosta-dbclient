@@ -5,7 +5,7 @@
  */
 import type { DiffItem, DiffStatus, SkippedObject } from "../../core/contract";
 import { h, icon } from "../../core/dom";
-import { changeSummary, displayRisk, groupCheckState, groupItems, riskLabel, selectable, setGroup, type ItemGroup } from "./compareModel";
+import { changeSummary, displayRisk, dropsWarning, groupCheckState, groupItems, riskLabel, selectable, setGroup, type ItemGroup } from "./compareModel";
 
 export interface CompareListHost {
   /** The checked items changed. */
@@ -136,7 +136,7 @@ export class CompareList {
     const risk = displayRisk(item);
     const row = h(
       "div",
-      { class: `compare-item${item.id === this.active ? " active" : ""}`, role: "treeitem", title: item.id },
+      { class: `compare-item${item.id === this.active ? " active" : ""}`, role: "treeitem", title: dropsWarning(item) ?? item.id },
       checkbox,
       icon(item.kind === "view" ? "view" : "table", "compare-kind"),
       h("span", { class: "compare-name" }, item.name),

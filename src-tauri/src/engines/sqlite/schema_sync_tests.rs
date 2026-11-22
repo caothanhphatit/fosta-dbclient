@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use super::{
     adapter::SQLITE,
     schema_snapshot,
-    schema_sync::{REBUILD_PREFIX, SQLITE_SCHEMA_DIALECT as LITE},
+    schema_sync::{FOREIGN_KEYS_OFF_GUARD, REBUILD_PREFIX, SQLITE_SCHEMA_DIALECT as LITE},
 };
 use crate::{
     contract::{
@@ -471,6 +471,7 @@ fn the_wrapper_switches_foreign_keys_off_around_drops_and_checks_them_before_com
         sql,
         [
             "PRAGMA foreign_keys = OFF",
+            FOREIGN_KEYS_OFF_GUARD,
             "BEGIN",
             "DROP TABLE \"compare_b\".\"legacy\"",
             "CREATE INDEX \"compare_b\".\"ix\" ON \"t\" (\"a\")",
@@ -621,4 +622,38 @@ fn a_rebuild_that_breaks_a_foreign_key_stops_before_commit() {
         .query_row("SELECT sql FROM b.sqlite_schema WHERE name = 'orders'", [], |r| r.get(0))
         .unwrap();
     assert!(still.contains("legacy"), "the old table is back: {still}");
+}
+
+#[test]
+fn a_script_run_inside_an_open_transaction_stops_before_the_first_drop() {
+    let c = two_databases();
+    let (source, target) = (snap(&c, "a"), snap(&c, "b"));
+    let options = CompareOptions::default();
+    let script = crate::compare::sync_script(&source, &target, &options, &["table:orders".to_owned()], &LITE, "now");
+    let sql = &script.sql;
+    let guard = sql.find(FOREIGN_KEYS_OFF_GUARD).expect("the guard");
+    assert!(sql.find("PRAGMA foreign_keys = OFF").unwrap() < guard && guard < sql.find("BEGIN;").unwrap());
+    let count = |c: &Connection| -> i64 { c.query_row("SELECT count(*) FROM b.orders", [], |r| r.get(0)).unwrap() };
+    let orders = count(&c);
+    // A transaction the user opened before running the script: the PRAGMA does nothing and keys stay on.
+    c.execute_batch("BEGIN; SELECT 1;").unwrap();
+    let error = c.execute_batch(sql).unwrap_err();
+    assert!(error.to_string().contains("integer overflow"), "{error}");
+    c.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(count(&c), orders, "nothing was dropped");
+    let source_ddl: String = c
+        .query_row("SELECT sql FROM b.sqlite_schema WHERE name = 'orders'", [], |r| r.get(0))
+        .unwrap();
+    assert!(source_ddl.contains("legacy"), "the target table is untouched: {source_ddl}");
+    // Outside a transaction the guard passes (NULL) once keys are off.
+    c.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+    let passed: Option<i64> = c.query_row(FOREIGN_KEYS_OFF_GUARD, [], |r| r.get(0)).unwrap();
+    assert_eq!(passed, None);
+    c.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+    // It is a read: it adds no confirmation of its own.
+    let category = SQLITE.classify(&ClassifyInput::Statement {
+        language: "sql",
+        text: FOREIGN_KEYS_OFF_GUARD,
+    });
+    assert_eq!(category.worst(), Some(Category::Read));
 }

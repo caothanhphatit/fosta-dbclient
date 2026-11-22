@@ -155,6 +155,29 @@ fn literal(text: &str) -> String {
     format!("'{}'", text.replace('\'', "''"))
 }
 
+/// The ` WITH (...)` of a view's options (`security_invoker`, `security_barrier`, `check_option`, storage parameters),
+/// or nothing. Names that are not plain words are left out; values that are not plain words are quoted.
+fn view_with(view: &ViewDef) -> String {
+    let plain = |text: &str| !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'));
+    let options: Vec<String> = view
+        .options
+        .iter()
+        .filter(|(name, _)| plain(name))
+        .map(|(name, value)| {
+            if plain(value) {
+                format!("{name}={value}")
+            } else {
+                format!("{name}={}", literal(value))
+            }
+        })
+        .collect();
+    if options.is_empty() {
+        String::new()
+    } else {
+        format!(" WITH ({})", options.join(", "))
+    }
+}
+
 fn qualified(schema: Option<&str>, name: &str) -> String {
     match schema {
         Some(schema) => format!("{}.{}", ident(schema), ident(name)),
@@ -322,9 +345,9 @@ fn warned(sql: String, risk: Risk, warning: impl Into<String>) -> RenderedStatem
 }
 
 fn manual(reason: &str, hint: Option<&str>) -> RenderedStatement {
-    let mut sql = format!("-- MANUAL STEP: {}", reason.split_whitespace().collect::<Vec<_>>().join(" "));
+    let mut sql = format!("-- MANUAL STEP: {}", crate::contract::one_line(reason));
     if let Some(hint) = hint {
-        for line in hint.lines() {
+        for line in hint.lines().map(crate::contract::comment_safe) {
             sql.push_str(&format!("\n--   {line}"));
         }
     }
@@ -617,15 +640,16 @@ impl PgSchemaDialect {
             if to.nullable {
                 out.push(statement(format!("{alter} DROP NOT NULL")));
             } else {
+                let stub = crate::contract::null_fill_stub(&self.table_name(ctx, table), &ident(&to.name));
+                let sql = match &stub {
+                    Some(stub) => format!("{stub}\n{alter} SET NOT NULL"),
+                    None => format!("{alter} SET NOT NULL"),
+                };
+                let see = if stub.is_some() { " (see the UPDATE stub)" } else { "" };
                 out.push(warned(
-                    format!(
-                        "-- UPDATE {} SET {} = ... WHERE {} IS NULL;\n{alter} SET NOT NULL",
-                        self.table_name(ctx, table),
-                        ident(&to.name),
-                        ident(&to.name)
-                    ),
+                    sql,
                     Risk::Review,
-                    format!("Fails if {}.{} has NULLs; fill them first (see the UPDATE stub)", table, to.name),
+                    format!("Fails if {}.{} has NULLs; fill them first{see}", table, to.name),
                 ));
             }
         }
@@ -711,9 +735,9 @@ impl SchemaDialect for PgSchemaDialect {
         let name = qualified(schema, &view.name);
         let body = view.definition.trim().trim_end_matches(';').trim_end();
         let mut text = if view.materialized {
-            format!("CREATE MATERIALIZED VIEW {name} AS\n{body};")
+            format!("CREATE MATERIALIZED VIEW {name}{} AS\n{body};", view_with(view))
         } else {
-            format!("CREATE VIEW {name} AS\n{body};")
+            format!("CREATE VIEW {name}{} AS\n{body};", view_with(view))
         };
         if let Some(comment) = view.comment.as_deref().filter(|c| !c.is_empty()) {
             let what = if view.materialized { "MATERIALIZED VIEW" } else { "VIEW" };
@@ -810,9 +834,9 @@ impl SchemaDialect for PgSchemaDialect {
                 let mapped = map_text(body, ctx);
                 let name = table_name(&view.name);
                 let sql = match (view.materialized, replace) {
-                    (true, _) => format!("CREATE MATERIALIZED VIEW {name} AS\n{mapped}"),
-                    (false, true) => format!("CREATE OR REPLACE VIEW {name} AS\n{mapped}"),
-                    (false, false) => format!("CREATE VIEW {name} AS\n{mapped}"),
+                    (true, _) => format!("CREATE MATERIALIZED VIEW {name}{} AS\n{mapped}", view_with(view)),
+                    (false, true) => format!("CREATE OR REPLACE VIEW {name}{} AS\n{mapped}", view_with(view)),
+                    (false, false) => format!("CREATE VIEW {name}{} AS\n{mapped}", view_with(view)),
                 };
                 let mut rendered = statement(sql);
                 if mapped != body {

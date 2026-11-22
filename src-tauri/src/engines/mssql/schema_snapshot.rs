@@ -5,7 +5,8 @@
 //! Names the server chose (`PK__orders__3213E83F`, `CK__orders__qty__…`) are flagged system-named, so the compare
 //! matches those constraints by definition. Defaults are named constraints: the snapshot keeps each default's name so a
 //! script can drop it. Filtered indexes keep their predicate and included columns; computed columns keep their
-//! expression. A view's body is its `sys.sql_modules` text after `CREATE VIEW name AS`.
+//! expression. A view's body is its `sys.sql_modules` text after `CREATE VIEW name [(columns)] [WITH ...] AS`; the column
+//! list and the `WITH` attributes are its options. Without readable text (encrypted, no permission) it is unreadable.
 
 use std::collections::HashMap;
 
@@ -74,7 +75,7 @@ fn sql(sys: &str) -> String {
          JOIN {sys}.columns cr ON cr.object_id = fkc.referenced_object_id AND cr.column_id = fkc.referenced_column_id \
          ORDER BY o.name, fk.name, fkc.constraint_column_id; \
          SELECT o.name, m.definition, CAST(ep.value AS NVARCHAR(4000)) \
-         FROM {sys}.objects o {in_scope} JOIN {sys}.sql_modules m ON m.object_id = o.object_id {} \
+         FROM {sys}.objects o {in_scope} LEFT JOIN {sys}.sql_modules m ON m.object_id = o.object_id {} \
          WHERE o.type = 'V' AND o.is_ms_shipped = 0 ORDER BY o.name; \
          SELECT DISTINCT o.name, ro.name \
          FROM {sys}.sql_expression_dependencies d \
@@ -182,12 +183,22 @@ pub async fn snapshot(client: &mut TdsClient, scope: &SnapshotScope) -> AppResul
     }
     for row in set(6) {
         let name = row.text(0);
+        // NULL for an encrypted view, or without VIEW DEFINITION permission.
+        let (definition, options, unreadable) = match row.opt(1).filter(|d| !d.trim().is_empty()) {
+            Some(text) => {
+                let (body, options) = view_parts(&text);
+                (body, options, false)
+            }
+            None => (String::new(), Vec::new(), true),
+        };
         views.push(ViewDef {
-            definition: view_body(&row.text(1)),
+            definition,
             materialized: false,
             depends_on: dependencies.remove(&name).unwrap_or_default(),
             comment: row.opt(2).filter(|c| !c.is_empty()),
             name,
+            options,
+            unreadable,
         });
     }
 
@@ -349,22 +360,57 @@ fn group_foreign_keys(rows: &[TextRow], schema: &str) -> Vec<(String, ForeignKey
 
 /// The body of a view from its `sys.sql_modules` text: what follows the `AS` that ends `CREATE [OR ALTER] VIEW name
 /// [(columns)] [WITH options]`, outside comments and brackets. The whole text when it does not read like that.
+#[cfg(test)]
 pub(super) fn view_body(definition: &str) -> String {
+    view_parts(definition).0
+}
+
+/// The body of a view and the options of its header: the column list (`columns`, the text inside the parentheses) and
+/// the `WITH` attributes (`schemabinding`, `viewMetadata`, `encryption`), which a recreated view must keep.
+pub(super) fn view_parts(definition: &str) -> (String, Vec<(String, String)>) {
     let tokens = tokenize(Dialect::MsSql, definition);
     let mut seen_view = false;
+    let mut seen_with = false;
     let mut depth = 0i32;
+    let mut columns_from: Option<usize> = None;
+    let mut options: Vec<(String, String)> = Vec::new();
     for token in tokens.iter().filter(|token| !token.is_trivia()) {
         match token.kind {
-            TokenKind::Punct if token.is_punct(definition, '(') => depth += 1,
-            TokenKind::Punct if token.is_punct(definition, ')') => depth -= 1,
-            TokenKind::Word if token.is_word(definition, "VIEW") => seen_view = true,
+            TokenKind::Punct if token.is_punct(definition, '(') => {
+                if seen_view && depth == 0 && !seen_with && options.is_empty() {
+                    columns_from = Some(token.end);
+                }
+                depth += 1;
+            }
+            TokenKind::Punct if token.is_punct(definition, ')') => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(from) = columns_from.take() {
+                        options.push(("columns".into(), definition[from..token.start].trim().to_owned()));
+                    }
+                }
+            }
+            TokenKind::Word if !seen_view && token.is_word(definition, "VIEW") => seen_view = true,
             TokenKind::Word if seen_view && depth == 0 && token.is_word(definition, "AS") => {
-                return definition[token.end..].trim().trim_end_matches(';').trim_end().to_owned();
+                let body = definition[token.end..].trim().trim_end_matches(';').trim_end().to_owned();
+                return (body, options);
+            }
+            TokenKind::Word if seen_view && depth == 0 && token.is_word(definition, "WITH") => seen_with = true,
+            TokenKind::Word if seen_with && depth == 0 => {
+                let option = match token.text(definition).to_ascii_uppercase().as_str() {
+                    "SCHEMABINDING" => Some("schemabinding"),
+                    "VIEW_METADATA" => Some("viewMetadata"),
+                    "ENCRYPTION" => Some("encryption"),
+                    _ => None,
+                };
+                if let Some(option) = option {
+                    options.push((option.into(), "on".into()));
+                }
             }
             _ => {}
         }
     }
-    definition.trim().to_owned()
+    (definition.trim().to_owned(), Vec::new())
 }
 
 #[cfg(test)]

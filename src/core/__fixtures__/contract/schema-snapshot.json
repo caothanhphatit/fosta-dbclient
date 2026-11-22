@@ -144,7 +144,14 @@
       "dependsOn": [
         "orders"
       ],
-      "comment": null
+      "comment": null,
+      "options": [
+        [
+          "security_barrier",
+          "true"
+        ]
+      ],
+      "unreadable": false
     }
   ],
   "skipped": [

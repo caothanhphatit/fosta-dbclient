@@ -839,3 +839,35 @@ fn a_script_from_two_snapshots_runs_in_batches_the_gateway_reads() {
     assert_eq!(drop.tables, ["[compare_b].[v_orders]"]);
     assert_eq!(whole.worst(), Some(Category::Destructive));
 }
+
+#[test]
+fn views_keep_their_column_list_and_with_attributes() {
+    let (body, options) = super::schema_snapshot::view_parts(
+        "/* AS */ CREATE VIEW [s].[v] (a, [b c]) WITH SCHEMABINDING, VIEW_METADATA AS SELECT x AS a, y AS [b c] FROM s.t WITH CHECK OPTION",
+    );
+    assert_eq!(body, "SELECT x AS a, y AS [b c] FROM s.t WITH CHECK OPTION");
+    assert_eq!(
+        options,
+        [
+            ("columns".to_owned(), "a, [b c]".to_owned()),
+            ("schemabinding".to_owned(), "on".to_owned()),
+            ("viewMetadata".to_owned(), "on".to_owned()),
+        ]
+    );
+    let (_, plain) = super::schema_snapshot::view_parts("CREATE VIEW v AS SELECT (1) AS x");
+    assert!(plain.is_empty(), "{plain:?}");
+    let rendered = render(MigrationStep::CreateView {
+        view: ViewDef {
+            name: "v".into(),
+            definition: body,
+            options,
+            ..ViewDef::default()
+        },
+        replace: false,
+    });
+    assert_eq!(
+        rendered[0].sql,
+        "CREATE VIEW [compare_b].[v] (a, [b c]) WITH SCHEMABINDING, VIEW_METADATA AS\nSELECT x AS a, y AS [b c] FROM s.t WITH CHECK OPTION"
+    );
+    assert_ddl(&rendered[0].sql);
+}

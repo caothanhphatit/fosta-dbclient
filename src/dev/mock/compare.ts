@@ -65,7 +65,7 @@ function fk(name: string, columns: string[], refTable: string, refColumns: strin
 }
 
 function view(name: string, definition: string, dependsOn: string[]): ViewDef {
-  return { name, definition, materialized: false, dependsOn, comment: null };
+  return { name, definition, materialized: false, dependsOn, comment: null, options: [], unreadable: false };
 }
 
 const ACTIVE_PRODUCTS = "SELECT p.id, p.sku, p.name, p.price FROM products p WHERE p.is_active AND p.stock > 0";

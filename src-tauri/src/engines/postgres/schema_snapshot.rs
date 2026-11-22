@@ -65,7 +65,8 @@ impl PgEngine {
             .query(
                 &format!(
                     "SELECT c.relname::text, c.relkind::text, c.relispartition, obj_description(c.oid, 'pg_class'), \
-                            CASE WHEN c.relkind IN ('v','m') THEN pg_get_viewdef(c.oid, true) END \
+                            CASE WHEN c.relkind IN ('v','m') THEN pg_get_viewdef(c.oid, true) END, \
+                            CASE WHEN c.relkind IN ('v','m') THEN c.reloptions::text[] END \
                      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
                      WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f') AND {NOT_EXTENSION} ORDER BY c.relname"
                 ),
@@ -90,6 +91,8 @@ impl PgEngine {
                     materialized: kind == "m",
                     depends_on: Vec::new(),
                     comment,
+                    options: view_options(row.get::<_, Option<Vec<String>>>(5).unwrap_or_default()),
+                    unreadable: false,
                 }),
             }
         }
@@ -338,6 +341,29 @@ impl PgEngine {
             read_at: chrono::Utc::now().to_rfc3339(),
         })
     }
+}
+
+/// A view's `reloptions` (`security_invoker=true`, `security_barrier=on`, `check_option=cascaded`, storage parameters of a
+/// materialized view) as (name, value) pairs, sorted by name so their catalog order never shows as a difference.
+pub(super) fn view_options(reloptions: Vec<String>) -> Vec<(String, String)> {
+    let mut options: Vec<(String, String)> = reloptions
+        .into_iter()
+        .map(|option| match option.split_once('=') {
+            Some((name, value)) => {
+                let value = value.trim();
+                // Boolean spellings (`on`, `yes`, `true`) are one value to the server.
+                let value = match value.to_ascii_lowercase().as_str() {
+                    "on" | "yes" | "true" => "true".to_owned(),
+                    "off" | "no" | "false" => "false".to_owned(),
+                    _ => value.to_owned(),
+                };
+                (name.trim().to_ascii_lowercase(), value)
+            }
+            None => (option.trim().to_ascii_lowercase(), "true".to_owned()),
+        })
+        .collect();
+    options.sort();
+    options
 }
 
 /// `CHECK ((qty > 0)) NOT VALID` → `(qty > 0)`: the expression the dialect renders back inside `CHECK (...)`.

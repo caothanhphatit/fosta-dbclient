@@ -205,7 +205,29 @@ pub struct ViewDef {
     /// Tables and views of the scope the view reads, where the catalog knows.
     pub depends_on: Vec<String>,
     pub comment: Option<String>,
+    /// What the body does not say but changes how the view behaves, as (name, value) pairs in the engine's spelling:
+    /// PostgreSQL `security_invoker`, `security_barrier`, `check_option`; MySQL `sqlSecurity`, `checkOption`,
+    /// `definer`; SQL Server `columns`, `schemabinding`, `viewMetadata`. Compared, and rendered when the view is created.
+    #[serde(default)]
+    pub options: Vec<(String, String)>,
+    /// The catalog did not return the definition (no permission to read it, an encrypted module). Compare skips the
+    /// view and the planner never drops it.
+    #[serde(default)]
+    pub unreadable: bool,
 }
+
+impl ViewDef {
+    /// The value of option `name` (case-insensitive).
+    pub fn option(&self, name: &str) -> Option<&str> {
+        self.options
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// Why a view is skipped when its definition cannot be read.
+pub const VIEW_NOT_READABLE: &str = "Definition not readable (missing permission or an encrypted view); compare it by hand";
 
 /// An object of the scope that is not compared in this version.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

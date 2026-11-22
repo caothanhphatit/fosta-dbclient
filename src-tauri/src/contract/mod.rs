@@ -50,9 +50,9 @@ pub use engine::{
 pub use errors::{not_wired, unsupported_capability, EngineError, EngineResult, ErrorKind};
 pub use limits::{cancelled, CallContext, CancellationToken, Limits, CANCELLED};
 pub use migration::{
-    replace_schema_qualifier, strip_schema_qualifier, Change, ChangeKind, ColumnChanges, CommentTarget, CompareOptions, ConstraintDef,
-    ConstraintKind, DialectFeatures, DiffItem, DiffStatus, FieldChange, MigrationStep, RenderContext, RenderedStatement, Risk,
-    SchemaDialect, SchemaDiff, ScopeSummary, ScriptWarning, SyncScript,
+    comment_safe, is_line_break, null_fill_stub, one_line, replace_schema_qualifier, strip_schema_qualifier, Change, ChangeKind,
+    ColumnChanges, CommentTarget, CompareOptions, ConstraintDef, ConstraintKind, DialectFeatures, DiffItem, DiffStatus, FieldChange,
+    MigrationStep, RenderContext, RenderedStatement, Risk, SchemaDialect, SchemaDiff, ScopeSummary, ScriptWarning, SyncScript,
 };
 pub use object::{
     ActionTarget, Badge, BuiltinAction, NodeAction, NodeKey, NodeKind, ObjectNode, ObjectRef, Tone, TreeChildren, TreeRequest,
@@ -64,7 +64,7 @@ pub use session::{
 };
 pub use snapshot::{
     CheckDef, ColumnDef, ForeignKeyDef, GeneratedDef, IdentityDef, IdentityKind, IndexDef, IndexPart, KeyDef, SchemaSnapshot,
-    SkippedObject, SnapshotScope, TableDef, ViewDef,
+    SkippedObject, SnapshotScope, TableDef, ViewDef, VIEW_NOT_READABLE,
 };
 pub use spec::{
     ConnectInfo, ConnectRequest, ConnectSecrets, ConnectionSpec, Endpoint, SecretSlot, ServerInfo, SshConfig, TlsConfig, TlsMode,

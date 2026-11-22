@@ -181,6 +181,34 @@ export function riskLabel(risk: Risk): string {
   return risk === "dataLoss" ? "Data loss" : risk === "review" ? "Review" : "";
 }
 
+const DROPPED_PARTS: Record<string, string> = {
+  column: "column",
+  primaryKey: "primary key",
+  unique: "unique constraint",
+  check: "check constraint",
+  index: "index",
+  foreignKey: "foreign key",
+};
+
+/**
+ * What checking a "different" item also drops on the target: its target-only columns, keys, checks, indexes and foreign
+ * keys. Selection is per object, so these drops go with the object's other changes (drops are otherwise opt-in, D4);
+ * the details pane lists them and the item keeps its risk badge.
+ */
+export function dropsIn(item: DiffItem): string[] {
+  if (item.status !== "different") return [];
+  return item.changes
+    .filter((change) => change.what === "removed" && change.part in DROPPED_PARTS)
+    .map((change) => `${DROPPED_PARTS[change.part]} ${change.name}`);
+}
+
+/** The warning for an item whose selection includes drops, or null. */
+export function dropsWarning(item: DiffItem): string | null {
+  const drops = dropsIn(item);
+  if (drops.length === 0) return null;
+  return `Including ${item.name} also drops on the target: ${drops.join(", ")}. Uncheck ${item.name} to keep them (none of its changes are scripted then).`;
+}
+
 /** Items that change something on the target (identical ones have nothing to script). */
 export function selectable(item: DiffItem): boolean {
   return item.status !== "identical";

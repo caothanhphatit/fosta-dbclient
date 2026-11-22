@@ -1188,3 +1188,220 @@ fn inline_foreign_keys_go_with_the_table_and_rebuilds_replace_alters() {
     assert!(steps[1].starts_with("RebuildTable"), "{steps:?}");
     assert_eq!(steps[2], "create view v");
 }
+
+// --- Review fixes -------------------------------------------------------------------------------------------------------
+
+#[test]
+fn view_options_are_compared_and_recreated_views_warn_about_what_they_lose() {
+    let secured = |invoker: &str| ViewDef {
+        options: vec![("security_invoker".into(), invoker.into()), ("definer".into(), "x@%".into())],
+        depends_on: vec!["orders".into()],
+        ..view("v_orders", "SELECT id FROM orders")
+    };
+    let source = snapshot("a", vec![orders()], vec![secured("true")]);
+    let target = snapshot("b", vec![orders()], vec![secured("false")]);
+    let diff = run(&source, &target, &CompareOptions::default());
+    let changed = item(&diff, "view:v_orders");
+    assert_eq!(changed.status, DiffStatus::Different);
+    let fields: Vec<&str> = changed.changes[0].fields.iter().map(|f| f.field.as_str()).collect();
+    assert_eq!(fields, ["security_invoker"], "the definer is never compared");
+    // Only the definer differs: identical.
+    let mut other_definer = secured("true");
+    other_definer.options[1].1 = "y@localhost".into();
+    let same = run(
+        &source,
+        &snapshot("b", vec![orders()], vec![other_definer]),
+        &CompareOptions::default(),
+    );
+    assert_eq!(item(&same, "view:v_orders").status, DiffStatus::Identical);
+
+    // A redefined view says what the drop loses, and the options go with it.
+    let plan = plan(
+        &diff,
+        &["view:v_orders".to_owned()],
+        &source,
+        &target,
+        &CompareOptions::default(),
+        &FAKE,
+    );
+    let create = plan
+        .steps
+        .iter()
+        .find(|s| matches!(s.step, MigrationStep::CreateView { .. }))
+        .unwrap();
+    assert!(
+        create
+            .note
+            .as_deref()
+            .is_some_and(|n| n.contains("grants") && n.contains("INSTEAD OF")),
+        "{create:?}"
+    );
+    let MigrationStep::CreateView { view: created, .. } = &create.step else {
+        unreachable!()
+    };
+    assert_eq!(created.option("security_invoker"), Some("true"));
+
+    // So does a view recreated because a table it reads changes.
+    let mut wider = orders();
+    wider.columns[2].type_name = "varchar(40)".into();
+    let source = snapshot("a", vec![wider], vec![secured("false")]);
+    let diff = run(&source, &target, &CompareOptions::default());
+    let plan = super::plan(
+        &diff,
+        &["table:orders".to_owned()],
+        &source,
+        &target,
+        &CompareOptions::default(),
+        &FAKE,
+    );
+    let notes: Vec<&str> = plan.steps.iter().filter_map(|s| s.note.as_deref()).collect();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("Recreated because it depends on orders") && n.contains("grants")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn unreadable_views_are_skipped_never_identical_and_never_dropped() {
+    let hidden = |name: &str| ViewDef {
+        unreadable: true,
+        depends_on: vec!["orders".into()],
+        ..view(name, "")
+    };
+    let readable = ViewDef {
+        depends_on: vec!["orders".into()],
+        ..view("v_open", "SELECT id FROM orders")
+    };
+    // Unreadable on the target only, on both sides, and a target-only unreadable view.
+    let source = snapshot("a", vec![orders()], vec![readable.clone(), hidden("v_both")]);
+    let target = snapshot("b", vec![orders()], vec![hidden("v_open"), hidden("v_both"), hidden("v_gone")]);
+    let diff = run(&source, &target, &CompareOptions::default());
+    assert!(diff.items.iter().all(|i| i.kind != "view"), "{:?}", ids(&diff));
+    for name in ["v_open", "v_both", "v_gone"] {
+        assert!(
+            diff.skipped
+                .iter()
+                .any(|s| s.name == name && s.kind == "view" && s.reason.contains("not readable")),
+            "{name}: {:?}",
+            diff.skipped
+        );
+    }
+    // A column type change under them: a manual step each, never a DROP VIEW.
+    let mut wider = orders();
+    wider.columns[2].type_name = "varchar(40)".into();
+    let source = snapshot("a", vec![wider], vec![readable]);
+    let (steps, warnings) = planned(&source, &target, None);
+    assert!(!steps.iter().any(|s| s.starts_with("drop view")), "{steps:?}");
+    let manual = steps.iter().filter(|s| s.contains("not readable")).count();
+    assert_eq!(manual, 3, "{steps:?}");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    // Without known dependencies there is a warning instead.
+    let blind = ViewDef {
+        depends_on: Vec::new(),
+        ..hidden("v_blind")
+    };
+    let target = snapshot("b", vec![orders()], vec![blind]);
+    let (steps, warnings) = planned(&source, &target, Some(&["table:orders"]));
+    assert!(!steps.iter().any(|s| s.contains("v_blind")), "{steps:?}");
+    assert!(
+        warnings.iter().any(|w| w.contains("v_blind") && w.contains("not readable")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn header_values_never_end_their_comment_line() {
+    let mut source = snapshot("a", vec![orders()], Vec::new());
+    source.server_version = "17.2\nDROP TABLE orders; --".into();
+    source.scope.database = "shop\u{2028}DELETE FROM orders;".into();
+    let mut target = snapshot("b", vec![orders(), table("old", vec![col("x", "int")])], Vec::new());
+    target.server_version = "17.2\r\u{85}TRUNCATE orders;".into();
+    let options = CompareOptions {
+        exclude: vec!["x\ny".into()],
+        ..CompareOptions::default()
+    };
+    let script = sync_script(
+        &source,
+        &target,
+        &options,
+        &["table:old".to_owned()],
+        &FAKE,
+        "now\u{2029}DROP DATABASE shop;",
+    );
+    for line in script.sql.split(crate::contract::is_line_break) {
+        let line = line.trim();
+        assert!(
+            line.is_empty() || line.starts_with("--") || line == "BEGIN;" || line == "COMMIT;",
+            "a live line: {line:?}\n{}",
+            script.sql
+        );
+    }
+    assert!(script.sql.contains("17.2 DROP TABLE orders; --"), "{}", script.sql);
+    assert_eq!(crate::contract::null_fill_stub("\"t\"", "\"a\nb\""), None);
+    assert_eq!(
+        crate::contract::null_fill_stub("\"t\"", "\"a\"").as_deref(),
+        Some("-- UPDATE \"t\" SET \"a\" = ... WHERE \"a\" IS NULL;")
+    );
+}
+
+#[test]
+fn computed_columns_over_a_held_column_are_dropped_and_added_back() {
+    let with = |status: &str| {
+        let mut table = orders();
+        table.columns[2].type_name = status.into();
+        let mut upper = col("status_upper", "");
+        upper.generated = Some(crate::contract::GeneratedDef {
+            expression: "(upper([status]))".into(),
+            stored: true,
+        });
+        table.columns.push(upper);
+        table.indexes.push(IndexDef {
+            name: "ix_status_upper".into(),
+            parts: vec![IndexPart::column("status_upper")],
+            ..IndexDef::default()
+        });
+        table
+    };
+    let source = snapshot("a", vec![with("varchar(40)")], Vec::new());
+    let target = snapshot("b", vec![with("varchar(20)")], Vec::new());
+    let held = FakeDialect {
+        restrict_equals_no_action: false,
+        held: true,
+        inline: false,
+    };
+    let (steps, warnings) = planned_with(&held, &source, &target, None);
+    assert_eq!(
+        steps,
+        [
+            "drop index ix_status_upper",
+            "drop column orders.status_upper",
+            "alter column orders.status",
+            "add column orders.status_upper",
+            "create index ix_status_upper",
+        ]
+    );
+    assert!(warnings.iter().any(|w| w.contains("WITH SCHEMABINDING")), "{warnings:?}");
+    // A computed column the plan changes itself is a manual step.
+    let mut changed = with("varchar(40)");
+    changed.columns[4].generated.as_mut().unwrap().expression = "(lower([status]))".into();
+    let source_changed = snapshot("a", vec![changed], Vec::new());
+    let (steps, _) = planned_with(&held, &source_changed, &target, None);
+    assert!(steps.iter().any(|s| s.contains("Computed column orders.status_upper")), "{steps:?}");
+    // A schema-bound view of the scope over the table is recreated around a nullability change.
+    let bound = ViewDef {
+        options: vec![("schemabinding".into(), "on".into())],
+        depends_on: vec!["orders".into()],
+        ..view("v_bound", "SELECT id FROM dbo.orders")
+    };
+    let mut nullable = with("varchar(20)");
+    nullable.columns[1].nullable = true;
+    let source = snapshot("a", vec![nullable], vec![bound.clone()]);
+    let target = snapshot("b", vec![with("varchar(20)")], vec![bound]);
+    let (steps, _) = planned_with(&held, &source, &target, None);
+    assert!(
+        steps.contains(&"drop view v_bound".to_owned()) && steps.contains(&"create view v_bound".to_owned()),
+        "{steps:?}"
+    );
+}

@@ -928,3 +928,68 @@ fn created_tables_and_added_columns_carry_their_comments() {
     let script = crate::compare::sync_script(&source, &target, &ignoring, &include, &MY, "now");
     assert!(!script.sql.contains("COMMENT"), "{}", script.sql);
 }
+
+#[test]
+fn views_keep_sql_security_and_check_option_but_not_the_definer() {
+    let options = super::schema_snapshot::view_options(Some("INVOKER".into()), Some("LOCAL".into()), Some("app@%".into()));
+    assert_eq!(
+        options,
+        [
+            ("sqlSecurity".to_owned(), "INVOKER".to_owned()),
+            ("checkOption".to_owned(), "LOCAL".to_owned()),
+            ("definer".to_owned(), "app@%".to_owned()),
+        ]
+    );
+    assert_eq!(
+        super::schema_snapshot::view_options(Some("DEFINER".into()), Some("NONE".into()), None),
+        [("sqlSecurity".to_owned(), "DEFINER".to_owned())]
+    );
+    let view = ViewDef {
+        name: "v_mine".into(),
+        definition: "select `compare_a`.`orders`.`id` AS `id` from `compare_a`.`orders`".into(),
+        options,
+        ..ViewDef::default()
+    };
+    let rendered = render(MigrationStep::CreateView {
+        view: view.clone(),
+        replace: false,
+    });
+    assert_eq!(
+        rendered[0].sql,
+        "CREATE SQL SECURITY INVOKER VIEW `compare_b`.`v_mine` AS\n\
+         select `compare_b`.`orders`.`id` AS `id` from `compare_b`.`orders`\nWITH LOCAL CHECK OPTION"
+    );
+    assert!(!rendered[0].sql.contains("DEFINER"));
+    assert!(
+        rendered[0]
+            .warnings
+            .iter()
+            .any(|w| w.contains("without its DEFINER clause (was app@%)")),
+        "{rendered:?}"
+    );
+    assert_classified(&rendered[0].sql);
+    // SQL SECURITY DEFINER: the account running the script becomes the one whose privileges the view reads with.
+    let definer = ViewDef {
+        options: vec![
+            ("sqlSecurity".into(), "DEFINER".into()),
+            ("definer".into(), "root@localhost".into()),
+        ],
+        ..view.clone()
+    };
+    let rendered = render(MigrationStep::CreateView {
+        view: definer,
+        replace: false,
+    });
+    assert!(rendered[0].sql.starts_with("CREATE SQL SECURITY DEFINER VIEW"));
+    assert!(rendered[0]
+        .warnings
+        .iter()
+        .any(|w| w.contains("privileges of the account running the script")));
+    assert_eq!(
+        MY.view_ddl(Some("compare_a"), &view),
+        format!(
+            "CREATE SQL SECURITY INVOKER VIEW `compare_a`.`v_mine` AS\n{}\nWITH LOCAL CHECK OPTION;",
+            view.definition
+        )
+    );
+}

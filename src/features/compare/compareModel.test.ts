@@ -12,6 +12,8 @@ import {
   defaultSelection,
   dialectNotice,
   displayRisk,
+  dropsIn,
+  dropsWarning,
   groupCheckState,
   groupItems,
   includedIds,
@@ -55,6 +57,43 @@ const ITEMS = [
   item("order_items", "identical"),
   item("v_totals", "different", "view", "none", 1),
 ];
+
+describe("drops inside a different object", () => {
+  const change = (part: string, name: string, what: "added" | "removed" | "modified") => ({
+    part,
+    name,
+    what,
+    fields: [],
+    risk: what === "removed" ? ("dataLoss" as const) : ("none" as const),
+    note: null,
+    possibleRename: null,
+  });
+  const orders: DiffItem = {
+    ...item("orders", "different", "table", "dataLoss"),
+    changes: [
+      change("column", "legacy", "removed"),
+      change("column", "note", "added"),
+      change("column", "qty", "modified"),
+      change("index", "ix_old", "removed"),
+      change("foreignKey", "fk_old", "removed"),
+      change("comment", "orders", "modified"),
+    ],
+  };
+
+  it("lists the target-only columns, keys and indexes a checked object drops, and keeps its data loss badge", () => {
+    expect(dropsIn(orders)).toEqual(["column legacy", "index ix_old", "foreign key fk_old"]);
+    expect(dropsWarning(orders)).toContain("also drops on the target: column legacy, index ix_old, foreign key fk_old");
+    expect(displayRisk(orders)).toBe("dataLoss");
+    // Selection is per object: the object starts checked, so the warning is what tells the user.
+    expect(defaultSelection([orders]).has("table:orders")).toBe(true);
+  });
+
+  it("says nothing for objects without drops", () => {
+    expect(dropsWarning({ ...orders, changes: [change("column", "note", "added")] })).toBeNull();
+    expect(dropsIn(item("audit_log", "onlyInTarget"))).toEqual([]);
+    expect(dropsIn(item("v_totals", "different", "view", "none", 1))).toEqual([]);
+  });
+});
 
 describe("selection", () => {
   it("checks differences and source-only objects, never drops or identical ones", () => {

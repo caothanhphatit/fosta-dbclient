@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use super::options::ResolvedOptions;
 use crate::contract::{
     Change, ChangeKind, ColumnDef, CompareOptions, DialectFeatures, DiffItem, DiffStatus, FieldChange, ForeignKeyDef, IdentityKind,
-    IndexDef, KeyDef, Risk, SchemaDialect, SchemaDiff, SchemaSnapshot, ScopeSummary, SkippedObject, TableDef, ViewDef,
+    IndexDef, KeyDef, Risk, SchemaDialect, SchemaDiff, SchemaSnapshot, ScopeSummary, SkippedObject, TableDef, ViewDef, VIEW_NOT_READABLE,
 };
 
 /// Diffs `source` against `target`. The dialect is the target's.
@@ -31,7 +31,32 @@ pub fn diff(source: &SchemaSnapshot, target: &SchemaSnapshot, options: &CompareO
         items.extend(pairs.into_iter().map(|(s, t)| cx.table_item(s, t)));
     }
     if cx.options.includes("view") {
-        let pairs = cx.pair_objects("view", &source.views, &target.views, |v| &v.name, &mut skipped);
+        // A view whose definition one side cannot read is never compared (nor called identical): skipped on both sides.
+        let unreadable: HashSet<String> = source
+            .views
+            .iter()
+            .chain(&target.views)
+            .filter(|v| v.unreadable)
+            .map(|v| cx.options.fold(&v.name))
+            .collect();
+        for view in source.views.iter().chain(&target.views).filter(|v| v.unreadable) {
+            if !cx.options.excluded(&view.name) {
+                skipped.push(SkippedObject {
+                    kind: "view".into(),
+                    name: view.name.clone(),
+                    reason: VIEW_NOT_READABLE.into(),
+                });
+            }
+        }
+        let readable = |views: &[ViewDef]| -> Vec<ViewDef> {
+            views
+                .iter()
+                .filter(|v| !unreadable.contains(&cx.options.fold(&v.name)))
+                .cloned()
+                .collect()
+        };
+        let (source_views, target_views) = (readable(&source.views), readable(&target.views));
+        let pairs = cx.pair_objects("view", &source_views, &target_views, |v| &v.name, &mut skipped);
         items.extend(pairs.into_iter().map(|(s, t)| cx.view_item(s, t)));
     }
     items.sort_by_cached_key(|item| (u8::from(item.kind != "table"), cx.options.fold(&item.name), item.name.clone()));
@@ -766,7 +791,8 @@ impl Cx<'_> {
             ]
         };
         let mut changes = Vec::new();
-        let definition = field_changes(fields(source, Side::Source), fields(target, Side::Target));
+        let mut definition = field_changes(fields(source, Side::Source), fields(target, Side::Target));
+        definition.extend(view_option_changes(source, target));
         if !definition.is_empty() {
             let materialized = source.materialized || target.materialized;
             let (risk, note) = if materialized {
@@ -784,6 +810,32 @@ impl Cx<'_> {
         }
         changes
     }
+}
+
+/// View options that differ (security, check option, schema binding, ...), compared case-insensitively. The MySQL
+/// definer is left out: it names an account of the server the view was read from, so it differs between servers that
+/// are otherwise in sync, and the script never sets it.
+fn view_option_changes(source: &ViewDef, target: &ViewDef) -> Vec<FieldChange> {
+    let mut keys: Vec<&String> = Vec::new();
+    for (key, _) in source.options.iter().chain(&target.options) {
+        if !key.eq_ignore_ascii_case("definer") && !keys.iter().any(|k| k.eq_ignore_ascii_case(key)) {
+            keys.push(key);
+        }
+    }
+    keys.into_iter()
+        .filter_map(|key| {
+            let (s, t) = (source.option(key), target.option(key));
+            let same = match (s, t) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                _ => s == t,
+            };
+            (!same).then(|| FieldChange {
+                field: key.clone(),
+                source: s.map(str::to_owned),
+                target: t.map(str::to_owned),
+            })
+        })
+        .collect()
 }
 
 fn change(part: &str, name: &str, what: ChangeKind, fields: Vec<FieldChange>, risk: Risk, note: Option<String>) -> Change {

@@ -393,6 +393,27 @@ fn type_risk(from: &ParsedType, to: &ParsedType) -> Risk {
 
 // --- Rendering ----------------------------------------------------------------------------------------------------------
 
+/// What goes between a view's name and `AS`: its column list and `WITH` attributes.
+fn view_header(view: &ViewDef) -> String {
+    let mut header = String::new();
+    if let Some(columns) = view.option("columns").filter(|c| !c.trim().is_empty()) {
+        header.push_str(&format!(" ({columns})"));
+    }
+    let with: Vec<&str> = [
+        ("encryption", "ENCRYPTION"),
+        ("schemabinding", "SCHEMABINDING"),
+        ("viewMetadata", "VIEW_METADATA"),
+    ]
+    .into_iter()
+    .filter(|(key, _)| view.option(key).is_some_and(|v| v.eq_ignore_ascii_case("on")))
+    .map(|(_, word)| word)
+    .collect();
+    if !with.is_empty() {
+        header.push_str(&format!(" WITH {}", with.join(", ")));
+    }
+    header
+}
+
 fn statement(sql: String) -> RenderedStatement {
     RenderedStatement::new(sql)
 }
@@ -406,9 +427,9 @@ fn warned(sql: String, risk: Risk, warning: impl Into<String>) -> RenderedStatem
 }
 
 fn manual(reason: &str, hint: Option<&str>) -> RenderedStatement {
-    let mut sql = format!("-- MANUAL STEP: {}", reason.split_whitespace().collect::<Vec<_>>().join(" "));
+    let mut sql = format!("-- MANUAL STEP: {}", crate::contract::one_line(reason));
     if let Some(hint) = hint {
-        for line in hint.lines() {
+        for line in hint.lines().map(crate::contract::comment_safe) {
             sql.push_str(&format!("\n--   {line}"));
         }
     }
@@ -754,15 +775,15 @@ impl MssqlSchemaDialect {
                 }
             }
             if changes.nullability && !column.nullable {
-                sql = format!(
-                    "-- UPDATE {name} SET {} = ... WHERE {} IS NULL;\n{sql}",
-                    ident(&column.name),
-                    ident(&column.name)
-                );
+                let stub = crate::contract::null_fill_stub(&name, &ident(&column.name));
+                if let Some(stub) = &stub {
+                    sql = format!("{stub}\n{sql}");
+                }
                 risk = risk.max(Risk::Review);
                 warnings.push(format!(
-                    "Fails if {table}.{} has NULLs; fill them first (see the UPDATE stub)",
-                    column.name
+                    "Fails if {table}.{} has NULLs; fill them first{}",
+                    column.name,
+                    if stub.is_some() { " (see the UPDATE stub)" } else { "" }
                 ));
             }
             out.push(RenderedStatement { sql, risk, warnings });
@@ -860,7 +881,7 @@ impl SchemaDialect for MssqlSchemaDialect {
 
     fn view_ddl(&self, schema: Option<&str>, view: &ViewDef) -> String {
         let body = view.definition.trim().trim_end_matches(';').trim_end();
-        let mut text = format!("CREATE VIEW {} AS\n{body};", qualified(schema, &view.name));
+        let mut text = format!("CREATE VIEW {}{} AS\n{body};", qualified(schema, &view.name), view_header(view));
         if let Some(comment) = view.comment.as_deref().filter(|c| !c.is_empty()) {
             let scope = schema.unwrap_or(super::catalog::DEFAULT_SCHEMA);
             text.push_str(&format!("\n\n{}", add_comment_sql(scope, "VIEW", &view.name, None, comment)));
@@ -967,7 +988,7 @@ impl SchemaDialect for MssqlSchemaDialect {
                 let mapped = map_text(body, ctx);
                 let name = table_name(&view.name);
                 let create = if *replace { "CREATE OR ALTER VIEW" } else { "CREATE VIEW" };
-                let mut rendered = statement(format!("{create} {name} AS\n{mapped}"));
+                let mut rendered = statement(format!("{create} {name}{} AS\n{mapped}", view_header(view)));
                 if mapped != body {
                     rendered.risk = Risk::Review;
                     rendered.warnings.push(format!(

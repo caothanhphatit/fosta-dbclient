@@ -462,7 +462,17 @@ const SHAPES: Record<string, Shape> = {
         nativeDdl: nul("string"),
       }),
     ),
-    views: arr(obj<C.ViewDef>({ name: "string", definition: "string", materialized: "boolean", dependsOn: arr("string"), comment: nul("string") })),
+    views: arr(
+      obj<C.ViewDef>({
+        name: "string",
+        definition: "string",
+        materialized: "boolean",
+        dependsOn: arr("string"),
+        comment: nul("string"),
+        options: arr({ tuple: ["string", "string"] }),
+        unreadable: "boolean",
+      }),
+    ),
     skipped: arr(skippedObject),
     readAt: "string",
   }),

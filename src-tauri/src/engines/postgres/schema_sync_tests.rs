@@ -486,6 +486,7 @@ fn views_map_the_scope_schema_and_warn() {
         materialized: false,
         depends_on: vec!["orders".into()],
         comment: None,
+        ..ViewDef::default()
     };
     let rendered = PG.render(
         &MigrationStep::CreateView {
@@ -710,6 +711,7 @@ fn a_script_from_two_snapshots_is_ordered_and_classified() {
         materialized: false,
         depends_on: vec!["orders".into()],
         comment: None,
+        ..ViewDef::default()
     };
     let source = snapshot("compare_a", vec![customers.clone(), source_orders], vec![view("compare_a")]);
     let target = snapshot(
@@ -769,4 +771,40 @@ fn a_script_from_two_snapshots_is_ordered_and_classified() {
     assert!(script.sql.contains("-- Source: shop.compare_a (postgres 17.2)"));
     assert!(script.sql.contains("-- Warnings: 2 data loss,"), "{}", script.sql);
     assert!(script.sql.contains("-- WARNING: Drops table only_b and all its rows\nDROP TABLE"));
+}
+
+#[test]
+fn view_options_are_read_and_rendered() {
+    let options = super::schema_snapshot::view_options(vec![
+        "security_invoker=on".into(),
+        "check_option=cascaded".into(),
+        "Security_Barrier=TRUE".into(),
+    ]);
+    assert_eq!(
+        options,
+        [
+            ("check_option".to_owned(), "cascaded".to_owned()),
+            ("security_barrier".to_owned(), "true".to_owned()),
+            ("security_invoker".to_owned(), "true".to_owned()),
+        ]
+    );
+    let view = ViewDef {
+        name: "v_secure".into(),
+        definition: "SELECT id FROM compare_a.orders".into(),
+        options: [options, vec![("odd name".into(), "x".into()), ("x".into(), "a'b c".into())]].concat(),
+        ..ViewDef::default()
+    };
+    let sql = one(MigrationStep::CreateView {
+        view: view.clone(),
+        replace: false,
+    });
+    assert_eq!(
+        sql,
+        "CREATE VIEW compare_b.v_secure WITH (check_option=cascaded, security_barrier=true, security_invoker=true, x='a''b c') AS\n\
+         SELECT id FROM compare_b.orders"
+    );
+    assert_classified(&sql);
+    assert!(PG
+        .view_ddl(Some("compare_a"), &view)
+        .starts_with("CREATE VIEW compare_a.v_secure WITH (check_option=cascaded,"));
 }

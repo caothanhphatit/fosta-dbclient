@@ -318,3 +318,38 @@ async fn contract_sqlite_error_positions_and_auto_commit() {
     assert!(!on.open && on.auto_commit);
     tab.close().await;
 }
+
+/// A sync script that drops or rebuilds tables switches foreign keys off first; in a session whose transaction is
+/// already open (auto-commit off) that PRAGMA does nothing, so the guard after it must stop the script there.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "writes the contract database file; run with --ignored --test-threads=1"]
+async fn contract_sqlite_sync_script_stops_inside_an_open_transaction() {
+    use crate::contract::{RenderedStatement, SchemaDialect};
+    let f = fixture();
+    let (_manager, handle) = connect(&f).await;
+    let tab = session(&handle).await;
+    let wrapped = super::schema_sync::SQLITE_SCHEMA_DIALECT.wrap(vec![RenderedStatement::new("DROP TABLE \"main\".\"t\"")], true);
+    assert_eq!(wrapped[0].sql, "PRAGMA foreign_keys = OFF");
+    let prologue = format!("{};\n{};", wrapped[0].sql, wrapped[1].sql);
+
+    let options = RunOptions::default();
+    let off = tab
+        .transaction(TransactionOp::AutoCommitOff, &options)
+        .await
+        .expect("auto-commit off");
+    assert!(!off.auto_commit);
+    run(&handle, &tab, "SELECT count(*) FROM contract_items")
+        .await
+        .expect("a read opens the transaction");
+    let error = run(&handle, &tab, &prologue).await.expect_err("keys are still on");
+    assert!(error.to_string().contains("integer overflow"), "{error}");
+    tab.transaction(TransactionOp::Rollback, &options).await.expect("rollback");
+    tab.transaction(TransactionOp::AutoCommitOn, &options)
+        .await
+        .expect("auto-commit on");
+
+    // Outside a transaction the PRAGMA works and the guard lets the script go on.
+    run(&handle, &tab, &prologue).await.expect("keys are off");
+    run(&handle, &tab, "PRAGMA foreign_keys = ON").await.expect("keys back on");
+    tab.close().await;
+}

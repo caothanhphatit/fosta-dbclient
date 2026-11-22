@@ -6,7 +6,7 @@ import type { DiffItem, ScriptWarning } from "../../core/contract";
 import { h, icon } from "../../core/dom";
 import { DataGrid, gridSetup } from "../grid/grid";
 import { textColumn, textRows } from "../grid/textColumns";
-import { changeRows, displayRisk, riskLabel } from "./compareModel";
+import { changeRows, displayRisk, dropsWarning, riskLabel } from "./compareModel";
 import { DdlDiff } from "./ddlDiff";
 
 const CHANGE_HEADERS = ["Part", "Name", "Change", "Field", "Source", "Target", "Note"].map(textColumn);
@@ -65,7 +65,11 @@ export class CompareDetails {
       ].filter((node): node is HTMLElement => node !== null),
     );
     this.status.textContent = STATUS_TEXT[item.status];
-    this.warnings.replaceChildren(...warnings.map((warning) => h("li", { class: `risk-${warning.risk}` }, warning.message)));
+    const drops = dropsWarning(item);
+    this.warnings.replaceChildren(
+      ...(drops ? [h("li", { class: "risk-dataLoss" }, drops)] : []),
+      ...warnings.map((warning) => h("li", { class: `risk-${warning.risk}` }, warning.message)),
+    );
     const rows = changeRows(item);
     this.changesBox.hidden = rows.length === 0;
     this.changesTitle.hidden = rows.length === 0;

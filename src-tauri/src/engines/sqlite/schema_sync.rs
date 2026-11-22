@@ -5,7 +5,8 @@
 //! type, nullability, default or collation, keys, checks, foreign keys, `STRICT` / `WITHOUT ROWID`, column order) is a
 //! rebuild, the procedure the SQLite documentation gives for it:
 //!
-//! 1. `PRAGMA foreign_keys = OFF` (outside the transaction: SQLite ignores it inside one),
+//! 1. `PRAGMA foreign_keys = OFF` (outside the transaction: SQLite ignores it inside one), then a guard that stops the
+//!    script (integer overflow) when keys are still on because a transaction was already open,
 //! 2. `BEGIN`, then per table: create `_fosta_new_<table>` as the source defines it, copy the common columns, drop the
 //!    old table (with its indexes and triggers), rename the new one, create its indexes and the old triggers again,
 //! 3. a foreign key check that stops the script (integer overflow) before `COMMIT` when a row breaks a key,
@@ -36,6 +37,11 @@ pub const REBUILD_PREFIX: &str = "_fosta_new_";
 /// Stops the script with "integer overflow" when a row of the scope breaks a foreign key (`{schema}` is a literal).
 const FOREIGN_KEY_GUARD: &str =
     "SELECT CASE WHEN EXISTS (SELECT 1 FROM pragma_foreign_key_check(NULL, {schema})) THEN abs(-9223372036854775808) END";
+
+/// Stops the script with "integer overflow" when foreign keys are still enforced after `PRAGMA foreign_keys = OFF`:
+/// inside an open transaction the PRAGMA does nothing, and a dropped parent table would then cascade or fail.
+pub(super) const FOREIGN_KEYS_OFF_GUARD: &str =
+    "SELECT CASE WHEN (SELECT foreign_keys FROM pragma_foreign_keys) THEN abs(-9223372036854775808) END";
 
 // --- Text helpers -------------------------------------------------------------------------------------------------------
 
@@ -170,9 +176,9 @@ fn warned(sql: String, risk: Risk, warning: impl Into<String>) -> RenderedStatem
 }
 
 fn manual(reason: &str, hint: Option<&str>) -> RenderedStatement {
-    let mut sql = format!("-- MANUAL STEP: {}", reason.split_whitespace().collect::<Vec<_>>().join(" "));
+    let mut sql = format!("-- MANUAL STEP: {}", crate::contract::one_line(reason));
     if let Some(hint) = hint {
-        for line in hint.lines() {
+        for line in hint.lines().map(crate::contract::comment_safe) {
             sql.push_str(&format!("\n--   {line}"));
         }
     }
@@ -774,6 +780,12 @@ impl SchemaDialect for SqliteSchemaDialect {
                 Risk::Review,
                 "Foreign keys are not enforced while tables are dropped and rebuilt (the gateway asks for an admin \
                  confirmation for PRAGMA); SQLite ignores this PRAGMA inside a transaction, so run the script outside one",
+            ));
+            out.push(warned(
+                FOREIGN_KEYS_OFF_GUARD.to_owned(),
+                Risk::Review,
+                "Stops the script with an \"integer overflow\" error when foreign keys are still on (a transaction was \
+                 already open); then run ROLLBACK and run the script again outside a transaction",
             ));
         }
         if transactional {

@@ -422,8 +422,9 @@ pub trait SchemaDialect: Send + Sync {
 }
 
 /// `text` without the `schema.` qualifier on identifiers (bare, `"schema".`, `` `schema`. `` or `[schema].`), outside
-/// string literals and other quoted identifiers. Bare names match case-insensitively, quoted ones exactly. A qualifier
-/// that follows a `.` (`db.schema.t`) is kept.
+/// string literals, comments (`--`, `/* */`) and other quoted identifiers. Bare and quoted names both match
+/// case-insensitively (a quoted one with its quote character doubled inside, as the dialects escape it). A qualifier that
+/// follows a `.` (`db.schema.t`) is kept.
 pub fn strip_schema_qualifier(text: &str, schema: &str) -> String {
     replace_schema_qualifier(text, schema, None)
 }
@@ -442,59 +443,89 @@ pub fn replace_schema_qualifier(text: &str, schema: &str, replacement: Option<&s
         }
     };
     let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
-    let quoted = [format!("\"{schema}\"."), format!("`{schema}`."), format!("[{schema}].")];
+    // The quoted spellings of the schema, with its closing quote doubled as the dialects escape it.
+    let quoted = [
+        format!("\"{}\".", schema.replace('"', "\"\"")),
+        format!("`{}`.", schema.replace('`', "``")),
+        format!("[{}].", schema.replace(']', "]]")),
+    ];
+    let starts_with_ci = |text: &str, prefix: &str| text.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix));
     let mut out = String::with_capacity(text.len());
     let mut previous: Option<char> = None;
     let mut rest = text;
     while let Some(c) = rest.chars().next() {
         let after_dot_or_ident = previous.is_some_and(|p| p == '.' || is_ident(p));
         if !after_dot_or_ident {
-            if let Some(pattern) = quoted.iter().find(|pattern| rest.starts_with(pattern.as_str())) {
+            if let Some(pattern) = quoted.iter().find(|pattern| starts_with_ci(rest, pattern)) {
                 rest = &rest[pattern.len()..];
                 replace(&mut out);
                 previous = Some('.');
                 continue;
             }
-            let bare = rest.get(..schema.len()).is_some_and(|head| head.eq_ignore_ascii_case(schema));
-            if bare && rest[schema.len()..].starts_with('.') {
+            if starts_with_ci(rest, schema) && rest[schema.len()..].starts_with('.') {
                 rest = &rest[schema.len() + 1..];
                 replace(&mut out);
                 previous = Some('.');
                 continue;
             }
         }
-        let close = match c {
-            '\'' => Some('\''),
-            '"' => Some('"'),
-            '`' => Some('`'),
-            '[' => Some(']'),
-            _ => None,
-        };
-        let end = match close {
-            // Copy a literal or quoted identifier whole; a doubled closing quote is an escape.
-            Some(close) => {
-                let mut end = c.len_utf8();
-                loop {
-                    match rest[end..].find(close) {
-                        Some(at) => {
-                            end += at + close.len_utf8();
-                            if close != ']' && rest[end..].starts_with(close) {
-                                end += close.len_utf8();
-                                continue;
+        let end = if rest.starts_with("--") {
+            // A line comment, copied whole.
+            rest.find(['\n', '\r']).unwrap_or(rest.len())
+        } else if let Some(inside) = rest.strip_prefix("/*") {
+            inside.find("*/").map_or(rest.len(), |at| at + 4)
+        } else {
+            match c {
+                // Copy a literal or quoted identifier whole; a doubled closing quote is an escape.
+                '\'' | '"' | '`' | '[' => {
+                    let close = if c == '[' { ']' } else { c };
+                    let mut end = c.len_utf8();
+                    loop {
+                        match rest[end..].find(close) {
+                            Some(at) => {
+                                end += at + close.len_utf8();
+                                if rest[end..].starts_with(close) {
+                                    end += close.len_utf8();
+                                    continue;
+                                }
+                                break end;
                             }
-                            break end;
+                            None => break rest.len(),
                         }
-                        None => break rest.len(),
                     }
                 }
+                _ => c.len_utf8(),
             }
-            None => c.len_utf8(),
         };
         out.push_str(&rest[..end]);
         previous = rest[..end].chars().last();
         rest = &rest[end..];
     }
     out
+}
+
+/// Whether `c` ends a line for some server or client, and so ends a `--` comment: LF, CR, VT, FF, NEL, and the Unicode
+/// line and paragraph separators.
+pub fn is_line_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}')
+}
+
+/// `text` safe to put in a `--` comment line: every line break becomes a space, so a value from a catalog or a server
+/// (a name, a version string) can never end the comment and smuggle in a statement.
+pub fn comment_safe(text: &str) -> String {
+    text.chars().map(|c| if is_line_break(c) { ' ' } else { c }).collect()
+}
+
+/// The commented-out `UPDATE` that fills the NULLs of a column before it becomes NOT NULL, from the already quoted table
+/// and column. `None` when either holds a line break, which would end the comment and turn the rest into live SQL.
+pub fn null_fill_stub(table: &str, column: &str) -> Option<String> {
+    (!table.chars().chain(column.chars()).any(is_line_break))
+        .then(|| format!("-- UPDATE {table} SET {column} = ... WHERE {column} IS NULL;"))
+}
+
+/// `text` on one line with its whitespace runs (line breaks included) collapsed to single spaces.
+pub fn one_line(text: &str) -> String {
+    comment_safe(text).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
@@ -530,6 +561,36 @@ mod tests {
             "SELECT o.id FROM compare_b.orders o JOIN compare_b.items i ON 'compare_a.x' = i.y"
         );
         assert_eq!(map("compare_ab.t, x.compare_a.t"), "compare_ab.t, x.compare_a.t");
+    }
+
+    #[test]
+    fn qualifiers_in_comments_are_kept_and_quoted_ones_match_like_bare_ones() {
+        let map = |text: &str| replace_schema_qualifier(text, "compare_a", Some("compare_b"));
+        assert_eq!(
+            map("SELECT 1 -- from compare_a.t\nFROM compare_a.t /* compare_a.u */ JOIN compare_a.u"),
+            "SELECT 1 -- from compare_a.t\nFROM compare_b.t /* compare_a.u */ JOIN compare_b.u"
+        );
+        assert_eq!(map("-- compare_a.t"), "-- compare_a.t");
+        assert_eq!(map("/* unterminated compare_a.t"), "/* unterminated compare_a.t");
+        // Case: quoted spellings match like the bare one.
+        assert_eq!(
+            map("\"COMPARE_A\".t, `Compare_A`.t, [compare_A].t, COMPARE_A.t"),
+            "compare_b.t, compare_b.t, compare_b.t, compare_b.t"
+        );
+        // A quote inside the schema name is doubled in its quoted spelling.
+        let odd = |text: &str| replace_schema_qualifier(text, "a\"b]c`d", Some("x"));
+        assert_eq!(odd("\"a\"\"b]c`d\".t, [a\"b]]c`d].t, `a\"b]c``d`.t"), "x.t, x.t, x.t");
+        // `]]` inside brackets is an escape, not the end of the identifier.
+        assert_eq!(map("[x]]compare_a.t] , compare_a.t"), "[x]]compare_a.t] , compare_b.t");
+    }
+
+    #[test]
+    fn comment_text_never_breaks_the_line() {
+        for breaker in ['\n', '\r', '\u{0B}', '\u{0C}', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let text = format!("16.4{breaker}DROP TABLE t;");
+            assert!(!comment_safe(&text).chars().any(is_line_break));
+            assert_eq!(one_line(&text), "16.4 DROP TABLE t;");
+        }
     }
 
     #[test]

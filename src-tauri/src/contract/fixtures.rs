@@ -211,6 +211,8 @@ fn schema_snapshot() -> SchemaSnapshot {
             materialized: false,
             depends_on: vec!["orders".into()],
             comment: None,
+            options: vec![("security_barrier".into(), "true".into())],
+            unreadable: false,
         }],
         skipped: vec![SkippedObject {
             kind: "trigger".into(),

@@ -791,11 +791,30 @@ impl<'a> Planner<'a> {
         let held = std::mem::take(&mut self.held);
         let mut tables: Vec<_> = held.into_iter().collect();
         tables.sort_by(|a, b| a.0.cmp(&b.0));
-        for (folded, (altered, gone)) in tables {
+        for (folded, (mut altered, gone)) in tables {
             let Some(table) = self.target_table(&folded) else { continue };
             let id = self.item_id("table", &table.name);
             let name = table.name.clone();
             let note = Some(format!("Dropped and created again because a column it uses changes ({name})"));
+            let computed_drops = self.held_computed_columns(&id, table, &mut altered, &gone);
+            // Schema-bound views of the scope over the table hold its columns too: they are dropped and recreated.
+            let schema_bound = self
+                .target
+                .views
+                .iter()
+                .any(|view| view.option("schemabinding").is_some() && view.depends_on.iter().any(|dep| self.fold(dep) == folded));
+            if schema_bound {
+                self.altered_tables.insert(folded.clone());
+            }
+            self.warn(
+                &id,
+                Risk::Review,
+                format!(
+                    "Objects WITH SCHEMABINDING outside the compared schema (views, functions) that use {name} block \
+                     changing its columns, and the compare does not see them; check sys.sql_expression_dependencies \
+                     before running"
+                ),
+            );
             let fold_all = |planner: &Self, columns: &[String]| columns.iter().map(|c| planner.fold(c)).collect::<Vec<_>>();
             let uses = |columns: &[String]| columns.iter().any(|c| altered.contains(c));
             let keeps = |columns: &[String]| !columns.iter().any(|c| gone.contains(c));
@@ -882,7 +901,68 @@ impl<'a> Planner<'a> {
                     }
                 }
             }
+            // After the keys, checks and indexes over them.
+            for (drop, note) in computed_drops {
+                self.push_noted(Phase::DropConstraints, &id, drop, note);
+            }
         }
+    }
+
+    /// Computed columns of `table` over a column the plan alters or drops hold it (SQL Server): one the plan leaves alone
+    /// is dropped (the returned steps, after its indexes) and added again afterwards (at the end of the column order), and counts as altered so its own
+    /// keys and indexes are held too; one the plan changes itself, or that reads a dropped column, is a manual step.
+    fn held_computed_columns(
+        &mut self,
+        id: &str,
+        table: &TableDef,
+        altered: &mut HashSet<String>,
+        gone: &HashSet<String>,
+    ) -> Vec<(MigrationStep, Option<String>)> {
+        let name = table.name.clone();
+        let mut found = Vec::new();
+        let mut drops = Vec::new();
+        for column in &table.columns {
+            let Some(generated) = &column.generated else { continue };
+            let folded = self.fold(&column.name);
+            let reads: Vec<String> = mentioned(&generated.expression)
+                .into_iter()
+                .map(|c| self.fold(&c))
+                .filter(|c| *c != folded && altered.contains(c))
+                .collect();
+            if !reads.is_empty() {
+                found.push((column, folded, reads));
+            }
+        }
+        for (column, folded, reads) in found {
+            let touched = altered.contains(&folded);
+            if touched || reads.iter().any(|c| gone.contains(c)) {
+                self.manual(
+                    Phase::DropConstraints,
+                    id,
+                    format!(
+                        "Computed column {name}.{} uses a column this script changes or drops; drop it before running the \
+                         script and add it again afterwards as the source defines it",
+                        column.name
+                    ),
+                );
+                continue;
+            }
+            altered.insert(folded);
+            let note = Some(format!(
+                "Dropped and added again because a column it uses changes ({name}); it moves to the end of the column order"
+            ));
+            let drop = MigrationStep::DropColumn {
+                table: name.clone(),
+                column: column.name.clone(),
+            };
+            drops.push((drop, note.clone()));
+            let add = MigrationStep::AddColumn {
+                table: name.clone(),
+                column: column.clone(),
+            };
+            self.push_noted(Phase::CreateConstraints, id, add, note);
+        }
+        drops
     }
 
     // --- Views --------------------------------------------------------------------------------------------------------
@@ -918,7 +998,8 @@ impl<'a> Planner<'a> {
                 let redefined = item.changes.iter().any(|c| c.part == "definition");
                 if redefined {
                     self.view_drops.push((id.clone(), target.clone(), None));
-                    self.view_creates.push((id.clone(), source.clone(), None));
+                    self.view_creates
+                        .push((id.clone(), source.clone(), Some(RECREATED_VIEW_LOSES.to_owned())));
                 }
                 let commented = item.changes.iter().any(|c| c.part == "comment");
                 if self.comments() && (commented || (redefined && source.comment.as_deref().is_some_and(|c| !c.is_empty()))) {
@@ -934,11 +1015,14 @@ impl<'a> Planner<'a> {
     /// a dropped table are reported.
     fn view_dependencies(&mut self) {
         let target = self.target;
+        // Views whose definition the target does not show are never dropped (the script could not recreate them).
+        let mut unreadable: HashSet<String> = HashSet::new();
         loop {
             let dropped: HashSet<String> = self.view_drops.iter().map(|(_, v, _)| self.fold(&v.name)).collect();
             let mut found = Vec::new();
             for view in &target.views {
-                if dropped.contains(&self.fold(&view.name)) {
+                let folded = self.fold(&view.name);
+                if dropped.contains(&folded) || unreadable.contains(&folded) {
                     continue;
                 }
                 let cause = view.depends_on.iter().find(|dep| {
@@ -954,8 +1038,22 @@ impl<'a> Planner<'a> {
             }
             for (view, cause) in found {
                 let id = self.item_id("view", &view.name);
+                if view.unreadable {
+                    unreadable.insert(self.fold(&view.name));
+                    self.manual(
+                        Phase::DropViews,
+                        &id,
+                        format!(
+                            "View {} depends on {cause}, which changes, but its definition is not readable, so the script \
+                             neither drops nor recreates it; drop it before this script and recreate it afterwards by hand",
+                            view.name
+                        ),
+                    );
+                    continue;
+                }
                 let note = format!("Recreated because it depends on {cause}, which changes");
                 self.view_drops.push((id.clone(), view.clone(), Some(note.clone())));
+                let note = format!("{note}. {RECREATED_VIEW_LOSES}");
                 let created = self
                     .view_creates
                     .iter()
@@ -979,6 +1077,18 @@ impl<'a> Planner<'a> {
         }
         let dropped_views: HashSet<String> = self.view_drops.iter().map(|(_, v, _)| self.fold(&v.name)).collect();
         let mut messages = Vec::new();
+        if !self.altered_tables.is_empty() || !self.dropped_tables.is_empty() {
+            for view in target.views.iter().filter(|v| v.unreadable && v.depends_on.is_empty()) {
+                messages.push((
+                    self.item_id("view", &view.name),
+                    format!(
+                        "The definition of view {} is not readable, so whether it reads a table this script changes is \
+                         unknown; check it by hand",
+                        view.name
+                    ),
+                ));
+            }
+        }
         for view in &target.views {
             if dropped_views.contains(&self.fold(&view.name)) {
                 continue;
@@ -1071,6 +1181,10 @@ impl<'a> Planner<'a> {
         order.push(at);
     }
 }
+
+/// What a script that drops and recreates a view must tell the user.
+const RECREATED_VIEW_LOSES: &str = "Dropping the view also drops its grants, its indexes (materialized or indexed views) and its \
+                                    INSTEAD OF triggers; re-apply them after the script";
 
 /// The diff's part name of a constraint kind.
 fn constraint_part(kind: ConstraintKind) -> &'static str {
