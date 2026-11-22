@@ -50,11 +50,21 @@ pub fn sync_script(
         body.extend(rendered);
     }
     let features = dialect.features();
-    let transactional = !body.is_empty() && options.transactional.unwrap_or(features.transactional_ddl);
+    // Wrapping DDL that commits implicitly (MySQL) in a transaction would only pretend to be atomic.
+    let transactional = !body.is_empty() && features.transactional_ddl && options.transactional.unwrap_or(true);
     let statements = body.iter().filter(|s| !is_comment(&s.sql)).count();
     let wrapped = if body.is_empty() { body } else { dialect.wrap(body, transactional) };
 
     let mut sql = header(source, target, options, &warnings, &plan_warnings, generated_at);
+    if !features.transactional_ddl && !wrapped.is_empty() {
+        // After the header's last line ("Review before running ..."), still part of the leading comment block.
+        sql.push_str(&format!(
+            "-- WARNING: Not atomic: {} commits every DDL statement implicitly, so a failure leaves the target partly migrated.\n\
+             -- The statements are ordered so that an early failure leaves less to undo; try the script on a backup or a \
+             staging copy first.\n",
+            target.engine
+        ));
+    }
     if wrapped.is_empty() {
         sql.push_str("\n-- Nothing to do: the selected objects of the target already match the source.\n");
     }
@@ -96,8 +106,9 @@ fn one_line(text: &str) -> String {
 
 fn scope(summary: &ScopeSummary) -> String {
     let name = match &summary.schema {
-        Some(schema) => format!("{}.{schema}", summary.database),
-        None => summary.database.clone(),
+        // MySQL scopes are databases: the schema is the database itself.
+        Some(schema) if *schema != summary.database => format!("{}.{schema}", summary.database),
+        _ => summary.database.clone(),
     };
     format!("{name} ({} {})", summary.engine, summary.server_version)
 }

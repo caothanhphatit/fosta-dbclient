@@ -67,9 +67,10 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     search; Insert or open an entry in a new tab. History stays on this machine, in `fosta-studio-history.jsonl` next to the `.exe` (newest
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
-- **Schema compare** (PostgreSQL): compare a schema with another one on any connection of any workspace ("Compare schema with…"
-  on a database or schema in the tree, or Compare in the toolbar). Tables and views are grouped as different, only in the source,
-  only in the target and identical, with the changes of each object and a side-by-side DDL diff. Options (column order, comments,
+- **Schema compare** (PostgreSQL, MySQL, MariaDB): compare a schema (a database on MySQL and MariaDB, which may be compared
+  with each other) with another one on any connection of any workspace ("Compare schema with…" on a database or schema in
+  the tree, or Compare in the toolbar). Tables and views are grouped as different, only in the source, only in the target and
+  identical, with the changes of each object and a side-by-side DDL diff. Options (column order, comments,
   defaults, collations, constraint and index names, excluded tables) re-diff without reading the databases again. Generate script
   writes the SQL that makes the target match the source, with data-loss and review warnings; objects only in the target (drops) are
   unchecked by default. Nothing runs from the compare: open the script in a query tab on the target, where its workspace rules

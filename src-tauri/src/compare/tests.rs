@@ -49,6 +49,7 @@ impl SchemaDialect for FakeDialect {
             drop_column: true,
             restrict_equals_no_action: self.restrict_equals_no_action,
             batch_separator: None,
+            inline_comments: false,
         }
     }
     fn quote_ident(&self, name: &str) -> String {

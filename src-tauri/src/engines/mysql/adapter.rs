@@ -17,8 +17,8 @@ use crate::{
     contract::{
         classify_common, require, CallContext, Canceller, Capability, CapabilitySet, Category, Classification, ClassifyInput,
         ConnectRequest, Connection, ConnectionSpec, DatabaseAdmin, Engine, EngineDescriptor, NodeKind, ObjectDescription, ObjectRef,
-        OpenedSession, ParsedConnection, SchemaGraph, SchemaGraphSource, ServerInfo, SessionOptions, StatementInfo, TabularData,
-        TreeChildren, TreeRequest,
+        OpenedSession, ParsedConnection, SchemaDialect, SchemaGraph, SchemaGraphSource, SchemaSnapshot, SchemaSnapshotSource, ServerInfo,
+        SessionOptions, SnapshotScope, StatementInfo, TabularData, TreeChildren, TreeRequest,
     },
     engines::common::sqlclassify::classify_sql,
     error::{AppError, AppResult},
@@ -71,6 +71,13 @@ impl Engine for MySqlAdapter {
             ClassifyInput::Capability { name, .. } => classify_operation(name),
             _ => Classification::default(),
         }
+    }
+
+    fn schema_dialect(&self) -> Option<&'static dyn SchemaDialect> {
+        Some(match self.flavor {
+            Flavor::MariaDb => &super::schema_sync::MARIADB_SCHEMA_DIALECT,
+            Flavor::MySql => &super::schema_sync::MYSQL_SCHEMA_DIALECT,
+        })
     }
 
     fn parse_connection_string(&self, text: &str) -> AppResult<ParsedConnection> {
@@ -231,6 +238,10 @@ impl Connection for MySqlConnection {
         Some(self)
     }
 
+    fn schema_snapshot(&self) -> Option<&dyn SchemaSnapshotSource> {
+        Some(self)
+    }
+
     fn admin(&self) -> Option<&dyn DatabaseAdmin> {
         Some(self)
     }
@@ -252,6 +263,14 @@ impl SchemaGraphSource for MySqlConnection {
     async fn schema_graph(&self, database: &str, _ctx: &CallContext) -> AppResult<SchemaGraph> {
         let mut conn = self.pooled().await?;
         catalog::schema_graph(&mut conn, database).await
+    }
+}
+
+#[async_trait]
+impl SchemaSnapshotSource for MySqlConnection {
+    async fn snapshot(&self, scope: &SnapshotScope, _ctx: &CallContext) -> AppResult<SchemaSnapshot> {
+        let mut conn = self.pooled().await?;
+        super::schema_snapshot::snapshot(&mut conn, &self.server, self.engine_id, scope).await
     }
 }
 

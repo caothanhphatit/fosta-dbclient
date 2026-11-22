@@ -55,6 +55,7 @@ pub const CAPABILITIES: CapabilitySet = CapabilitySet::of(&[
     Capability::SchemaGraph,
     Capability::CreateDatabase,
     Capability::Explain,
+    Capability::SchemaCompare,
     Capability::Vector,
 ]);
 

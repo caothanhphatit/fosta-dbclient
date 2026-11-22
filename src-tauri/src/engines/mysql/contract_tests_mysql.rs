@@ -7,7 +7,7 @@ use super::contract_tests::{
     check_gateway_rejects_injected_filters, check_gateway_rules_and_confirmation, check_read_only_is_reasserted_every_run,
     check_schema_graph, check_shop_catalog_and_edits, check_transactions_and_backstops, check_typed_values, key_filter,
 };
-use super::contract_tests::{shared_checks, Target};
+use super::contract_tests::{compare_fixture, shared_checks, Target};
 use crate::contract::{testing::suites::Fixture, Category, ConnectSecrets, ConnectionSpec, NodeKind, ObjectRef};
 
 fn env(name: &str, default: &str) -> String {
@@ -68,7 +68,7 @@ fn fixture() -> Fixture {
     }
 }
 
-crate::contract_tests!(contract_mysql, fixture());
+crate::contract_tests!(contract_mysql, fixture(), compare: compare_fixture(include_str!("../../../../dev/seed/mysql/compare.sql")));
 
 const MYSQL: Target = Target {
     fixture,

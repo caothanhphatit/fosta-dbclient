@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DiffItem, DiffStatus, Risk } from "../../core/contract";
+import type { DiffItem, DiffStatus, Risk, ScopeSummary } from "../../core/contract";
 import { presetSettings } from "../safety/safety";
 import {
   carrySelection,
@@ -10,6 +10,7 @@ import {
   compareTitle,
   defaultOptions,
   defaultSelection,
+  dialectNotice,
   displayRisk,
   groupCheckState,
   groupItems,
@@ -20,6 +21,7 @@ import {
   setGroup,
   summary,
   swapped,
+  transactionalDdl,
   type CompareRequest,
 } from "./compareModel";
 
@@ -173,9 +175,28 @@ describe("requests", () => {
     expect(swapped(swapped(request))).toEqual(request);
   });
 
-  it("compares the same engine only", () => {
+  it("compares the same engine only, except MySQL with MariaDB", () => {
     expect(comparableEngines("postgres", "postgres")).toBe(true);
     expect(comparableEngines("postgres", "mssql")).toBe(false);
+    expect(comparableEngines("mysql", "mariadb")).toBe(true);
+    expect(comparableEngines("mariadb", "mysql")).toBe(true);
+    expect(comparableEngines("mysql", "postgres")).toBe(false);
+  });
+
+  it("says when the script is written for another server", () => {
+    const scope = (engine: string, serverVersion: string): ScopeSummary => ({ engine, serverVersion, database: "shop", schema: null });
+    const cross = dialectNotice(scope("mysql", "8.4.3"), scope("mariadb", "11.4.5"));
+    expect(cross?.tone).toBe("warning");
+    expect(cross?.text).toContain("the script uses the target's dialect (MariaDB 11.4)");
+    expect(cross?.text).toContain("review JSON columns and default expressions");
+    expect(dialectNotice(scope("postgres", "13.16"), scope("postgres", "17.2"))?.text).toContain("The source runs 13.16");
+    expect(dialectNotice(scope("mysql", "8.4.3"), scope("mysql", "8.4.0"))).toBeNull();
+  });
+
+  it("never wraps MySQL and MariaDB scripts in a transaction", () => {
+    expect(transactionalDdl("postgres")).toBe(true);
+    expect(transactionalDdl("mysql")).toBe(false);
+    expect(transactionalDdl("mariadb")).toBe(false);
   });
 
   it("reads saved options leniently", () => {

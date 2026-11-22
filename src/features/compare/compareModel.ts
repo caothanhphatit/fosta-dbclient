@@ -3,7 +3,7 @@
  * items are grouped, filtered and selected, the rows of the changes table, the target's safety notice and the file name
  * of a saved script. No DOM, so it is unit-tested.
  */
-import type { Change, CompareOptions, DiffItem, DiffStatus, Risk, ScriptWarning } from "../../core/contract";
+import type { Change, CompareOptions, DiffItem, DiffStatus, Risk, ScopeSummary, ScriptWarning } from "../../core/contract";
 import type { SafetySettings } from "../../core/types";
 import { effectiveRules } from "../safety/safety";
 
@@ -99,9 +99,47 @@ export function swapped(request: CompareRequest): CompareRequest {
   return { ...request, source: request.target, target: request.source };
 }
 
-/** Two connections can be compared when their engines are the same. */
+/** MySQL and MariaDB share one catalog module, so they may be compared (mirrors `compare::engines_compatible`). */
+const COMPATIBLE_PAIRS: [string, string][] = [["mysql", "mariadb"]];
+
+/** Two connections can be compared when their engines are the same, or MySQL and MariaDB. */
 export function comparableEngines(source: string, target: string): boolean {
-  return source === target;
+  return source === target || COMPATIBLE_PAIRS.some(([a, b]) => (source === a && target === b) || (source === b && target === a));
+}
+
+/** Engines whose DDL commits implicitly: their scripts are never wrapped in a transaction. */
+const NON_TRANSACTIONAL_DDL = new Set(["mysql", "mariadb"]);
+
+export function transactionalDdl(engine: string): boolean {
+  return !NON_TRANSACTIONAL_DDL.has(engine);
+}
+
+const ENGINE_LABELS: Record<string, string> = { mysql: "MySQL", mariadb: "MariaDB" };
+
+/**
+ * What the compare tab says about the two servers: MySQL against MariaDB (the script uses the target's dialect), or
+ * two major versions of one engine.
+ */
+export function dialectNotice(source: ScopeSummary, target: ScopeSummary): SafetyNotice | null {
+  if (source.engine !== target.engine) {
+    const label = (engine: string) => ENGINE_LABELS[engine] ?? engine;
+    const version = target.serverVersion
+      .split(/[.\s-]/)
+      .slice(0, 2)
+      .join(".");
+    return {
+      tone: "warning",
+      text: `${label(source.engine)} compared with ${label(target.engine)}: the script uses the target's dialect (${label(target.engine)} ${version}); review JSON columns and default expressions.`,
+    };
+  }
+  const major = (version: string) => version.split(/[.\s]/)[0];
+  if (source.serverVersion && target.serverVersion && major(source.serverVersion) !== major(target.serverVersion)) {
+    return {
+      tone: "info",
+      text: `The source runs ${source.serverVersion} and the target ${target.serverVersion}; the script uses the target's dialect.`,
+    };
+  }
+  return null;
 }
 
 // --- The list ------------------------------------------------------------------------------------------------------------

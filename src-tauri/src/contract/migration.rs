@@ -195,6 +195,35 @@ pub struct ColumnChanges {
     pub collation: bool,
 }
 
+impl ColumnChanges {
+    /// The target column `from` once these changes of the source column `to` are applied: what a dialect that restates
+    /// whole columns (MySQL `MODIFY COLUMN`) writes, so the attributes that do not change (ignored ones included) and the
+    /// comment stay as the target has them.
+    pub fn apply(&self, from: &ColumnDef, to: &ColumnDef) -> ColumnDef {
+        let mut column = from.clone();
+        if self.type_name {
+            column.type_name = to.type_name.clone();
+        }
+        if self.nullability {
+            column.nullable = to.nullable;
+        }
+        if self.default {
+            column.default = to.default.clone();
+            column.default_name = to.default_name.clone();
+        }
+        if self.identity {
+            column.identity = to.identity.clone();
+        }
+        if self.generated {
+            column.generated = to.generated.clone();
+        }
+        if self.collation {
+            column.collation = to.collation.clone();
+        }
+        column
+    }
+}
+
 /// What a comment is on.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -203,6 +232,10 @@ pub struct CommentTarget {
     pub kind: String,
     pub name: String,
     pub column: Option<String>,
+    /// For a column: the column as it stands after the script's earlier steps, with the new comment, for dialects that
+    /// restate a whole column to comment it (MySQL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<ColumnDef>,
 }
 
 /// One engine-neutral step of a sync script, in the order the planner puts them. Table names are the target's.
@@ -350,6 +383,9 @@ pub struct DialectFeatures {
     pub restrict_equals_no_action: bool,
     /// A line that ends a batch (`GO` on SQL Server).
     pub batch_separator: Option<&'static str>,
+    /// `CREATE TABLE` and `ADD COLUMN` carry the table's and the columns' comments (MySQL), so no separate comment steps
+    /// follow them.
+    pub inline_comments: bool,
 }
 
 /// Pure, per engine (no connection): normalizes catalog text for comparison, rates type changes and renders

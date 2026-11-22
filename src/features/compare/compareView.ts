@@ -18,6 +18,7 @@ import { safetyLabel } from "../safety/safety";
 import {
   carrySelection,
   defaultSelection,
+  dialectNotice,
   includedIds,
   OPTION_TOGGLES,
   safetyNotice,
@@ -25,6 +26,7 @@ import {
   sideName,
   summary,
   swapped,
+  transactionalDdl,
   warningsOf,
   type CompareRequest,
   type CompareSide,
@@ -304,6 +306,10 @@ export class CompareView implements TabContent {
       script.transactional ? "in a transaction" : "not in a transaction",
     ].join(" · ");
     this.transactional.input.checked = script.transactional;
+    // MySQL and MariaDB commit every DDL statement: a transaction around the script would only pretend to be atomic.
+    const atomic = transactionalDdl(script.dialect);
+    this.transactional.input.disabled = !atomic;
+    this.transactional.element.title = atomic ? "" : "MySQL and MariaDB commit each DDL statement on its own; the script cannot run in a transaction.";
     this.scriptText.replaceChildren(highlightSql(script.sql));
     const names = new Map((this.diff?.items ?? []).map((item) => [item.id, item.name]));
     this.scriptWarnings.hidden = warnings === 0;
@@ -382,13 +388,8 @@ export class CompareView implements TabContent {
     const notices = safetyNotice(safety.settings, safety.production);
     const diff = this.diff;
     if (diff) {
-      const major = (version: string) => version.split(/[.\s]/)[0];
-      if (diff.source.serverVersion && diff.target.serverVersion && major(diff.source.serverVersion) !== major(diff.target.serverVersion)) {
-        notices.push({
-          tone: "info",
-          text: `The source runs ${diff.source.serverVersion} and the target ${diff.target.serverVersion}; the script uses the target's dialect.`,
-        });
-      }
+      const notice = dialectNotice(diff.source, diff.target);
+      if (notice) notices.push(notice);
     }
     this.notices.hidden = notices.length === 0;
     this.notices.replaceChildren(

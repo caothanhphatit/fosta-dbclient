@@ -13,6 +13,10 @@ mod contract_tests_mysql;
 pub mod descriptor;
 #[cfg(test)]
 mod perf_tests;
+mod schema_snapshot;
+pub mod schema_sync;
+#[cfg(test)]
+mod schema_sync_tests;
 mod session;
 mod tabular;
 mod url;

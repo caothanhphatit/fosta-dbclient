@@ -221,15 +221,17 @@ impl<'a> Planner<'a> {
 
     fn create_table(&mut self, id: &str, table: &TableDef) {
         self.created_tables.insert(self.fold(&table.name));
+        let inline = self.dialect.features().inline_comments;
+        let keep = |comment: &Option<String>| comment.clone().filter(|_| inline && self.comments());
         let bare = TableDef {
             indexes: Vec::new(),
             foreign_keys: Vec::new(),
-            comment: None,
+            comment: keep(&table.comment),
             columns: table
                 .columns
                 .iter()
                 .map(|column| crate::contract::ColumnDef {
-                    comment: None,
+                    comment: keep(&column.comment),
                     ..column.clone()
                 })
                 .collect(),
@@ -249,13 +251,13 @@ impl<'a> Planner<'a> {
         for key in &table.foreign_keys {
             self.add_foreign_key(id, &table.name, key);
         }
-        if self.comments() {
+        if self.comments() && !inline {
             if let Some(comment) = table.comment.clone().filter(|c| !c.is_empty()) {
                 self.set_comment(id, "table", &table.name, None, Some(comment));
             }
             for column in &table.columns {
                 if let Some(comment) = column.comment.clone().filter(|c| !c.is_empty()) {
-                    self.set_comment(id, "table", &table.name, Some(&column.name), Some(comment));
+                    self.set_comment(id, "table", &table.name, Some(column), Some(comment));
                 }
             }
         }
@@ -295,7 +297,8 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn set_comment(&mut self, id: &str, kind: &str, name: &str, column: Option<&str>, comment: Option<String>) {
+    /// `column` is the column as it stands when the comment is set (after the script's earlier steps).
+    fn set_comment(&mut self, id: &str, kind: &str, name: &str, column: Option<&crate::contract::ColumnDef>, comment: Option<String>) {
         self.push(
             Phase::Comments,
             id,
@@ -303,7 +306,11 @@ impl<'a> Planner<'a> {
                 target: CommentTarget {
                     kind: kind.to_owned(),
                     name: name.to_owned(),
-                    column: column.map(str::to_owned),
+                    column: column.map(|c| c.name.clone()),
+                    definition: column.map(|c| crate::contract::ColumnDef {
+                        comment: comment.clone(),
+                        ..c.clone()
+                    }),
                 },
                 comment,
             },
@@ -317,17 +324,20 @@ impl<'a> Planner<'a> {
             ("column", ChangeKind::Added) => {
                 let Some(def) = column(source, &change.name) else { return };
                 let mut def = def.clone();
-                let comment = def.comment.take().filter(|c| !c.is_empty() && self.comments());
+                let mut comment = def.comment.take().filter(|c| !c.is_empty() && self.comments());
+                if self.dialect.features().inline_comments {
+                    def.comment = comment.take();
+                }
                 self.push(
                     Phase::AddColumns,
                     id,
                     MigrationStep::AddColumn {
                         table: table.clone(),
-                        column: def,
+                        column: def.clone(),
                     },
                 );
                 if let Some(comment) = comment {
-                    self.set_comment(id, "table", &table, Some(&change.name), Some(comment));
+                    self.set_comment(id, "table", &table, Some(&def), Some(comment));
                 }
             }
             ("column", ChangeKind::Removed) => {
@@ -373,7 +383,8 @@ impl<'a> Planner<'a> {
                 }
                 if has("comment") {
                     let comment = to.comment.clone().filter(|c| !c.is_empty());
-                    self.set_comment(id, "table", &table, Some(&from.name), comment);
+                    let current = changes.apply(from, to);
+                    self.set_comment(id, "table", &table, Some(&current), comment);
                 }
             }
             ("columnOrder", _) => self.manual(
