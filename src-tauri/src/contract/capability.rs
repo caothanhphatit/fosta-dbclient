@@ -39,10 +39,12 @@ pub enum Capability {
     Console,
     ServerOverview,
     Vector,
+    /// `schema_snapshot()` plus the engine's `schema_dialect()`: schema compare and sync scripts.
+    SchemaCompare,
 }
 
 impl Capability {
-    pub const ALL: [Capability; 25] = [
+    pub const ALL: [Capability; 26] = [
         Capability::Tree,
         Capability::Describe,
         Capability::MultipleDatabases,
@@ -68,6 +70,7 @@ impl Capability {
         Capability::Console,
         Capability::ServerOverview,
         Capability::Vector,
+        Capability::SchemaCompare,
     ];
 
     const fn bit(self) -> u64 {
@@ -165,6 +168,6 @@ mod tests {
         assert!(set.with(Capability::Vector).contains(Capability::Vector));
         assert!(!set.without(Capability::Tree).contains(Capability::Tree));
         assert!(set.is_subset_of(set.with(Capability::Query)));
-        assert_eq!(Capability::ALL.len(), Capability::Vector as usize + 1);
+        assert_eq!(Capability::ALL.len(), Capability::SchemaCompare as usize + 1);
     }
 }

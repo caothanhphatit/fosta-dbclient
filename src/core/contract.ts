@@ -71,7 +71,7 @@ export interface Badge {
   tone: Tone;
 }
 
-export type BuiltinAction = "refresh" | "copyName" | "newQuery" | "diagram" | "createDatabase" | "import" | "export" | "design";
+export type BuiltinAction = "refresh" | "copyName" | "newQuery" | "diagram" | "createDatabase" | "import" | "export" | "design" | "compareSchema";
 
 export type ActionTarget =
   | { kind: "view"; role: string }
@@ -341,6 +341,208 @@ export interface SchemaGraph {
   totalTables: number;
 }
 
+// --- Schema compare (`contract/snapshot.rs`, `contract/migration.rs`) ----------------------------------------------------
+
+/** One side of a compare: a database, and a schema inside it for engines with schemas. */
+export interface SnapshotScope {
+  database: string;
+  schema: string | null;
+}
+
+export type IdentityKind = "always" | "byDefault" | "serial" | "autoIncrement";
+
+export interface IdentityDef {
+  kind: IdentityKind;
+  start: number | null;
+  increment: number | null;
+}
+
+export interface GeneratedDef {
+  expression: string;
+  stored: boolean;
+}
+
+/** Raw catalog text: types, defaults and expressions as the server spells them (normalized at diff time). */
+export interface ColumnDef {
+  name: string;
+  typeName: string;
+  nullable: boolean;
+  default: string | null;
+  /** The default's constraint name where defaults are constraints (SQL Server). */
+  defaultName: string | null;
+  identity: IdentityDef | null;
+  generated: GeneratedDef | null;
+  collation: string | null;
+  comment: string | null;
+}
+
+export interface KeyDef {
+  name: string | null;
+  columns: string[];
+  /** The server chose the name; matched by definition. */
+  systemNamed: boolean;
+}
+
+export interface CheckDef {
+  name: string | null;
+  expression: string;
+  systemNamed: boolean;
+}
+
+export interface IndexPart {
+  column: string | null;
+  expression: string | null;
+  descending: boolean;
+}
+
+export interface IndexDef {
+  name: string;
+  parts: IndexPart[];
+  unique: boolean;
+  method: string | null;
+  predicate: string | null;
+  include: string[];
+  systemNamed: boolean;
+}
+
+export interface ForeignKeyDef {
+  name: string | null;
+  columns: string[];
+  /** `null` = the scope's own schema. */
+  refSchema: string | null;
+  refTable: string;
+  refColumns: string[];
+  onUpdate: string | null;
+  onDelete: string | null;
+  systemNamed: boolean;
+}
+
+export interface TableDef {
+  name: string;
+  columns: ColumnDef[];
+  primaryKey: KeyDef | null;
+  uniques: KeyDef[];
+  checks: CheckDef[];
+  indexes: IndexDef[];
+  foreignKeys: ForeignKeyDef[];
+  comment: string | null;
+  options: [string, string][];
+  nativeDdl: string | null;
+}
+
+export interface ViewDef {
+  name: string;
+  definition: string;
+  materialized: boolean;
+  dependsOn: string[];
+  comment: string | null;
+}
+
+/** An object of the scope that is not compared in this version (or excluded by the options). */
+export interface SkippedObject {
+  kind: string;
+  name: string;
+  reason: string;
+}
+
+/** What `schema_snapshot` reads for one scope; sent back unchanged to `schema_diff` and `schema_sync_script`. */
+export interface SchemaSnapshot {
+  engine: string;
+  serverVersion: string;
+  scope: SnapshotScope;
+  caseInsensitiveNames: boolean;
+  tables: TableDef[];
+  views: ViewDef[];
+  skipped: SkippedObject[];
+  readAt: string;
+}
+
+/** Missing fields take their defaults on the backend. */
+export interface CompareOptions {
+  ignoreColumnOrder: boolean;
+  ignoreComments: boolean;
+  ignoreCollation: boolean;
+  ignoreDefaults: boolean;
+  /** Off = auto: names matter only when both sides are user-named. */
+  ignoreConstraintNames: boolean;
+  ignoreIndexNames: boolean;
+  /** `null` = from the snapshots. */
+  caseInsensitiveNames: boolean | null;
+  includeKinds: string[];
+  /** Case-insensitive glob patterns (`*`, `?`). */
+  exclude: string[];
+  /** `null` = where the target's DDL is transactional. */
+  transactional: boolean | null;
+  detectRenames: boolean;
+}
+
+export type Risk = "none" | "review" | "dataLoss";
+export type DiffStatus = "onlyInSource" | "onlyInTarget" | "different" | "identical";
+export type ChangeKind = "added" | "removed" | "modified";
+
+export interface FieldChange {
+  field: string;
+  source: string | null;
+  target: string | null;
+}
+
+export interface Change {
+  /** `column`, `columnOrder`, `primaryKey`, `unique`, `check`, `index`, `foreignKey`, `comment`, `option`, `definition`. */
+  part: string;
+  name: string;
+  what: ChangeKind;
+  fields: FieldChange[];
+  risk: Risk;
+  note: string | null;
+  /** A column this one may be a rename of (a hint; the script drops and adds). */
+  possibleRename: string | null;
+}
+
+export interface DiffItem {
+  /** `table:orders`, `view:v_totals`: stable across runs. */
+  id: string;
+  kind: "table" | "view" | (string & {});
+  name: string;
+  status: DiffStatus;
+  changes: Change[];
+  risk: Risk;
+  /** Canonical DDL from the target dialect, ignored attributes left out. */
+  sourceDdl: string | null;
+  targetDdl: string | null;
+}
+
+export interface ScopeSummary {
+  engine: string;
+  serverVersion: string;
+  database: string;
+  schema: string | null;
+}
+
+/** What makes the target match the source. */
+export interface SchemaDiff {
+  source: ScopeSummary;
+  target: ScopeSummary;
+  options: CompareOptions;
+  items: DiffItem[];
+  skipped: SkippedObject[];
+}
+
+export interface ScriptWarning {
+  itemId: string;
+  risk: Risk;
+  message: string;
+}
+
+/** A generated sync script: text only, never run by the backend. */
+export interface SyncScript {
+  sql: string;
+  warnings: ScriptWarning[];
+  statements: number;
+  transactional: boolean;
+  /** The engine id whose dialect wrote it (the target's). */
+  dialect: string;
+}
+
 // --- Sessions and streaming ---------------------------------------------------------------------------------------------
 
 export interface TransactionState {
@@ -411,7 +613,8 @@ export type CapabilityName =
   | "search"
   | "console"
   | "serverOverview"
-  | "vector";
+  | "vector"
+  | "schemaCompare";
 
 export type EngineFamily = "sql" | "document" | "keyValue" | "search";
 export type EngineStatus = "ready" | "preview" | "planned";

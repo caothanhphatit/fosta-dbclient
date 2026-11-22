@@ -1,0 +1,158 @@
+{
+  "engine": "postgres",
+  "serverVersion": "17.2",
+  "scope": {
+    "database": "shop",
+    "schema": "compare_a"
+  },
+  "caseInsensitiveNames": false,
+  "tables": [
+    {
+      "name": "orders",
+      "columns": [
+        {
+          "name": "id",
+          "typeName": "integer",
+          "nullable": false,
+          "default": null,
+          "defaultName": null,
+          "identity": {
+            "kind": "byDefault",
+            "start": 1,
+            "increment": 1
+          },
+          "generated": null,
+          "collation": null,
+          "comment": null
+        },
+        {
+          "name": "customer_id",
+          "typeName": "integer",
+          "nullable": false,
+          "default": null,
+          "defaultName": null,
+          "identity": null,
+          "generated": null,
+          "collation": null,
+          "comment": null
+        },
+        {
+          "name": "status",
+          "typeName": "character varying(20)",
+          "nullable": true,
+          "default": "'NEW'::character varying",
+          "defaultName": "DF_orders_status",
+          "identity": null,
+          "generated": null,
+          "collation": "C",
+          "comment": "Order state"
+        },
+        {
+          "name": "total_cents",
+          "typeName": "bigint",
+          "nullable": true,
+          "default": null,
+          "defaultName": null,
+          "identity": null,
+          "generated": {
+            "expression": "(total * 100)",
+            "stored": true
+          },
+          "collation": null,
+          "comment": null
+        }
+      ],
+      "primaryKey": {
+        "name": "orders_pkey",
+        "columns": [
+          "id"
+        ],
+        "systemNamed": false
+      },
+      "uniques": [
+        {
+          "name": "UQ__orders__3213E83F",
+          "columns": [
+            "status",
+            "customer_id"
+          ],
+          "systemNamed": true
+        }
+      ],
+      "checks": [
+        {
+          "name": "ck_status",
+          "expression": "(status IN ('NEW', 'PAID'))",
+          "systemNamed": false
+        }
+      ],
+      "indexes": [
+        {
+          "name": "ix_orders_open",
+          "parts": [
+            {
+              "column": "customer_id",
+              "expression": null,
+              "descending": false
+            },
+            {
+              "column": null,
+              "expression": "lower(status)",
+              "descending": true
+            }
+          ],
+          "unique": false,
+          "method": "btree",
+          "predicate": "(status <> 'DONE')",
+          "include": [
+            "total_cents"
+          ],
+          "systemNamed": false
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_customer",
+          "columns": [
+            "customer_id"
+          ],
+          "refSchema": "compare_a",
+          "refTable": "customers",
+          "refColumns": [
+            "id"
+          ],
+          "onUpdate": null,
+          "onDelete": "CASCADE",
+          "systemNamed": false
+        }
+      ],
+      "comment": "Customer orders",
+      "options": [
+        [
+          "fillfactor",
+          "90"
+        ]
+      ],
+      "nativeDdl": null
+    }
+  ],
+  "views": [
+    {
+      "name": "v_totals",
+      "definition": "SELECT customer_id, count(*) AS n FROM compare_a.orders GROUP BY customer_id",
+      "materialized": false,
+      "dependsOn": [
+        "orders"
+      ],
+      "comment": null
+    }
+  ],
+  "skipped": [
+    {
+      "kind": "trigger",
+      "name": "orders_audit",
+      "reason": "Triggers are not compared in this version"
+    }
+  ],
+  "readAt": "2026-11-22T10:00:00Z"
+}

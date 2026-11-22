@@ -13,6 +13,7 @@ pub mod ai;
 mod architecture_tests;
 pub mod audit;
 pub mod commands;
+pub mod compare;
 pub mod config;
 pub mod connection_command;
 pub mod contract;

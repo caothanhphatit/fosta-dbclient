@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 /// Layers that must stay engine-neutral.
-const NEUTRAL_LAYERS: [&str; 4] = ["commands", "gateway", "ai", "mcp"];
+const NEUTRAL_LAYERS: [&str; 5] = ["commands", "gateway", "ai", "mcp", "compare"];
 /// Shared engine code these layers may use.
 const ALLOWED_ENGINE_MODULES: [&str; 1] = ["common"];
 
@@ -186,6 +186,7 @@ fn the_contract_depends_on_no_other_layer() {
                 "crate::commands",
                 "crate::gateway",
                 "crate::ai",
+                "crate::compare",
                 "crate::runtime",
                 "crate::server",
             ],
@@ -206,7 +207,7 @@ fn engines_do_not_reach_back_into_commands_gateway_or_the_assistant() {
         violations.extend(pattern_violations(
             &relative,
             &text,
-            &["crate::commands", "crate::gateway", "crate::ai"],
+            &["crate::commands", "crate::gateway", "crate::ai", "crate::compare"],
         ));
     }
     assert!(

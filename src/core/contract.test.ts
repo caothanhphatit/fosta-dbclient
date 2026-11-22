@@ -193,10 +193,28 @@ const capabilities = arr(
     "console",
     "serverOverview",
     "vector",
+    "schemaCompare",
   ),
 );
 const filterCond = obj<C.FilterCond>({ column: "string", op: "string", values: arr("string") });
 const rowChangeFields = { key: arr(field), original: arr(field), version: opt("value"), force: opt("boolean") };
+const risk = lit("none", "review", "dataLoss");
+const keyDef = obj<C.KeyDef>({ name: nul("string"), columns: arr("string"), systemNamed: "boolean" });
+const skippedObject = obj<C.SkippedObject>({ kind: "string", name: "string", reason: "string" });
+const compareOptions = obj<C.CompareOptions>({
+  ignoreColumnOrder: "boolean",
+  ignoreComments: "boolean",
+  ignoreCollation: "boolean",
+  ignoreDefaults: "boolean",
+  ignoreConstraintNames: "boolean",
+  ignoreIndexNames: "boolean",
+  caseInsensitiveNames: nul("boolean"),
+  includeKinds: arr("string"),
+  exclude: arr("string"),
+  transactional: nul("boolean"),
+  detectRenames: "boolean",
+});
+const scopeSummary = obj<C.ScopeSummary>({ engine: "string", serverVersion: "string", database: "string", schema: nul("string") });
 
 const SHAPES: Record<string, Shape> = {
   values: arr("value"),
@@ -391,6 +409,98 @@ const SHAPES: Record<string, Shape> = {
     ),
     ssh: nul("any"),
     auth: nul("string"),
+  }),
+  "schema-snapshot": obj<C.SchemaSnapshot>({
+    engine: "string",
+    serverVersion: "string",
+    scope: obj<C.SnapshotScope>({ database: "string", schema: nul("string") }),
+    caseInsensitiveNames: "boolean",
+    tables: arr(
+      obj<C.TableDef>({
+        name: "string",
+        columns: arr(
+          obj<C.ColumnDef>({
+            name: "string",
+            typeName: "string",
+            nullable: "boolean",
+            default: nul("string"),
+            defaultName: nul("string"),
+            identity: nul(obj<C.IdentityDef>({ kind: lit("always", "byDefault", "serial", "autoIncrement"), start: nul("number"), increment: nul("number") })),
+            generated: nul(obj<C.GeneratedDef>({ expression: "string", stored: "boolean" })),
+            collation: nul("string"),
+            comment: nul("string"),
+          }),
+        ),
+        primaryKey: nul(keyDef),
+        uniques: arr(keyDef),
+        checks: arr(obj<C.CheckDef>({ name: nul("string"), expression: "string", systemNamed: "boolean" })),
+        indexes: arr(
+          obj<C.IndexDef>({
+            name: "string",
+            parts: arr(obj<C.IndexPart>({ column: nul("string"), expression: nul("string"), descending: "boolean" })),
+            unique: "boolean",
+            method: nul("string"),
+            predicate: nul("string"),
+            include: arr("string"),
+            systemNamed: "boolean",
+          }),
+        ),
+        foreignKeys: arr(
+          obj<C.ForeignKeyDef>({
+            name: nul("string"),
+            columns: arr("string"),
+            refSchema: nul("string"),
+            refTable: "string",
+            refColumns: arr("string"),
+            onUpdate: nul("string"),
+            onDelete: nul("string"),
+            systemNamed: "boolean",
+          }),
+        ),
+        comment: nul("string"),
+        options: arr({ tuple: ["string", "string"] }),
+        nativeDdl: nul("string"),
+      }),
+    ),
+    views: arr(obj<C.ViewDef>({ name: "string", definition: "string", materialized: "boolean", dependsOn: arr("string"), comment: nul("string") })),
+    skipped: arr(skippedObject),
+    readAt: "string",
+  }),
+  "schema-diff": obj<C.SchemaDiff>({
+    source: scopeSummary,
+    target: scopeSummary,
+    options: compareOptions,
+    items: arr(
+      obj<C.DiffItem>({
+        id: "string",
+        kind: "string",
+        name: "string",
+        status: lit("onlyInSource", "onlyInTarget", "different", "identical"),
+        changes: arr(
+          obj<C.Change>({
+            part: "string",
+            name: "string",
+            what: lit("added", "removed", "modified"),
+            fields: arr(obj<C.FieldChange>({ field: "string", source: nul("string"), target: nul("string") })),
+            risk,
+            note: nul("string"),
+            possibleRename: nul("string"),
+          }),
+        ),
+        risk,
+        sourceDdl: nul("string"),
+        targetDdl: nul("string"),
+      }),
+    ),
+    skipped: arr(skippedObject),
+  }),
+  "compare-options": compareOptions,
+  "sync-script": obj<C.SyncScript>({
+    sql: "string",
+    warnings: arr(obj<C.ScriptWarning>({ itemId: "string", risk, message: "string" })),
+    statements: "number",
+    transactional: "boolean",
+    dialect: "string",
   }),
 };
 

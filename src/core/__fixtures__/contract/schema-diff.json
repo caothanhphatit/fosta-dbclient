@@ -1,0 +1,94 @@
+{
+  "source": {
+    "engine": "postgres",
+    "serverVersion": "17.2",
+    "database": "shop",
+    "schema": "compare_a"
+  },
+  "target": {
+    "engine": "postgres",
+    "serverVersion": "17.2",
+    "database": "shop",
+    "schema": "compare_b"
+  },
+  "options": {
+    "ignoreColumnOrder": true,
+    "ignoreComments": false,
+    "ignoreCollation": true,
+    "ignoreDefaults": false,
+    "ignoreConstraintNames": false,
+    "ignoreIndexNames": false,
+    "caseInsensitiveNames": null,
+    "includeKinds": [
+      "table",
+      "view"
+    ],
+    "exclude": [
+      "flyway_schema_history",
+      "__EFMigrationsHistory",
+      "schema_migrations",
+      "ar_internal_metadata",
+      "knex_migrations*",
+      "_prisma_migrations",
+      "alembic_version",
+      "django_migrations",
+      "goose_db_version"
+    ],
+    "transactional": null,
+    "detectRenames": true
+  },
+  "items": [
+    {
+      "id": "table:orders",
+      "kind": "table",
+      "name": "orders",
+      "status": "different",
+      "changes": [
+        {
+          "part": "column",
+          "name": "status",
+          "what": "modified",
+          "fields": [
+            {
+              "field": "type",
+              "source": "character varying(20)",
+              "target": "character varying(50)"
+            }
+          ],
+          "risk": "dataLoss",
+          "note": "The type change may lose data",
+          "possibleRename": null
+        },
+        {
+          "part": "column",
+          "name": "remark",
+          "what": "added",
+          "fields": [],
+          "risk": "review",
+          "note": "Possible rename of note to remark; the script drops and adds, so the data is lost",
+          "possibleRename": "note"
+        }
+      ],
+      "risk": "dataLoss",
+      "sourceDdl": "CREATE TABLE \"compare_b\".\"orders\" (…);",
+      "targetDdl": "CREATE TABLE \"compare_b\".\"orders\" (…);"
+    },
+    {
+      "id": "view:v_old",
+      "kind": "view",
+      "name": "v_old",
+      "status": "onlyInTarget",
+      "changes": [],
+      "risk": "none",
+      "sourceDdl": null,
+      "targetDdl": "CREATE VIEW \"compare_b\".\"v_old\" AS SELECT 1;"
+    }
+  ],
+  "skipped": [
+    {
+      "kind": "table",
+      "name": "flyway_schema_history",
+      "reason": "Excluded by the compare options"
+    }
+  ]
+}

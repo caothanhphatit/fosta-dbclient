@@ -908,6 +908,7 @@ const BUILTIN_ICONS: Record<BuiltinAction, IconName> = {
   import: "upload",
   export: "download",
   design: "design",
+  compareSchema: "columns",
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

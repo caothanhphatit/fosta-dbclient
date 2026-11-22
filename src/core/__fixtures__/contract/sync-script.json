@@ -1,0 +1,13 @@
+{
+  "sql": "BEGIN;\nALTER TABLE \"compare_b\".\"orders\" ADD COLUMN \"remark\" text;\nCOMMIT;\n",
+  "warnings": [
+    {
+      "itemId": "table:orders",
+      "risk": "review",
+      "message": "Possible rename of note to remark"
+    }
+  ],
+  "statements": 3,
+  "transactional": true,
+  "dialect": "postgres"
+}

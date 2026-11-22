@@ -1,0 +1,26 @@
+{
+  "ignoreColumnOrder": true,
+  "ignoreComments": false,
+  "ignoreCollation": true,
+  "ignoreDefaults": false,
+  "ignoreConstraintNames": false,
+  "ignoreIndexNames": false,
+  "caseInsensitiveNames": true,
+  "includeKinds": [
+    "table",
+    "view"
+  ],
+  "exclude": [
+    "flyway_schema_history",
+    "__EFMigrationsHistory",
+    "schema_migrations",
+    "ar_internal_metadata",
+    "knex_migrations*",
+    "_prisma_migrations",
+    "alembic_version",
+    "django_migrations",
+    "goose_db_version"
+  ],
+  "transactional": false,
+  "detectRenames": true
+}
