@@ -81,7 +81,32 @@ pub fn fixture() -> Fixture {
     }
 }
 
-crate::contract_tests!(contract_postgres, fixture());
+fn compare_fixture() -> CompareFixture {
+    use crate::contract::{DiffStatus::*, SnapshotScope};
+    CompareFixture {
+        seed: include_str!("../../../../dev/seed/postgres/compare.sql")
+            .replace("\r\n", "\n")
+            .split("\nGO\n")
+            .map(|chunk| chunk.trim().to_owned())
+            .filter(|chunk| !chunk.is_empty())
+            .collect(),
+        a: SnapshotScope::new("shop", Some("compare_a")),
+        b: SnapshotScope::new("shop", Some("compare_b")),
+        expected: &[
+            ("table:a_only", OnlyInSource),
+            ("table:b_only", OnlyInTarget),
+            ("table:customers", Different),
+            ("table:items", Different),
+            ("table:orders", Different),
+            ("table:tags", Identical),
+            ("view:mv_totals", Identical),
+            ("view:v_big_orders", Identical),
+            ("view:v_customer_orders", Different),
+        ],
+    }
+}
+
+crate::contract_tests!(contract_postgres, fixture(), compare: compare_fixture());
 
 // --- PostgreSQL-specific checks -----------------------------------------------------------------------------------------
 

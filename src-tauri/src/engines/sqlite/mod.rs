@@ -13,6 +13,10 @@ mod explain;
 mod graph;
 mod nodes;
 mod run;
+mod schema_snapshot;
+pub mod schema_sync;
+#[cfg(test)]
+mod schema_sync_tests;
 pub mod session;
 mod tabular;
 #[cfg(test)]

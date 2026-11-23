@@ -16,7 +16,8 @@ use crate::{
     contract::{
         classify_common, CallContext, Canceller, CapabilitySet, Category, Classification, ClassifyInput, ConnectRequest, Connection,
         ConnectionSpec, DatabaseAdmin, Engine, EngineDescriptor, NodeKind, ObjectDescription, ObjectRef, OpenedSession, ParsedConnection,
-        SchemaGraph, SchemaGraphSource, ServerInfo, SessionOptions, SqlDialectId, StatementInfo, TabularData, TreeChildren, TreeRequest,
+        SchemaDialect, SchemaGraph, SchemaGraphSource, SchemaSnapshot, SchemaSnapshotSource, ServerInfo, SessionOptions, SnapshotScope,
+        SqlDialectId, StatementInfo, TabularData, TreeChildren, TreeRequest,
     },
     engines::common::sqlclassify::classify_sql,
     error::{AppError, AppResult},
@@ -47,6 +48,10 @@ impl Engine for MssqlAdapter {
             ClassifyInput::Capability { name, .. } => Classification::single(StatementInfo::refused(name, name, "unknown operation")),
             _ => Classification::default(),
         }
+    }
+
+    fn schema_dialect(&self) -> Option<&'static dyn SchemaDialect> {
+        Some(&super::schema_sync::MSSQL_SCHEMA_DIALECT)
     }
 
     fn parse_connection_string(&self, text: &str) -> AppResult<ParsedConnection> {
@@ -187,6 +192,10 @@ impl Connection for MssqlConnection {
         Some(self)
     }
 
+    fn schema_snapshot(&self) -> Option<&dyn SchemaSnapshotSource> {
+        Some(self)
+    }
+
     fn admin(&self) -> Option<&dyn DatabaseAdmin> {
         Some(self)
     }
@@ -210,6 +219,16 @@ impl SchemaGraphSource for MssqlConnection {
         let graph = catalog::schema_graph(&mut client, database).await;
         self.pool.release(client, &graph);
         graph
+    }
+}
+
+#[async_trait]
+impl SchemaSnapshotSource for MssqlConnection {
+    async fn snapshot(&self, scope: &SnapshotScope, _ctx: &CallContext) -> AppResult<SchemaSnapshot> {
+        let mut client = self.pool.take().await?;
+        let snapshot = super::schema_snapshot::snapshot(&mut client, scope).await;
+        self.pool.release(client, &snapshot);
+        snapshot
     }
 }
 

@@ -123,7 +123,13 @@ export class FieldEditor {
       parent,
       doc: options.doc,
       extensions: [
-        Prec.highest(keymap.of([{ key: "Mod-Enter", run }])),
+        Prec.highest(
+          keymap.of([
+            { key: "Mod-Enter", run },
+            { key: "F5", run },
+            { key: "F9", run },
+          ]),
+        ),
         autocompletion({ override: [options.completion], activateOnTyping: true, icons: false }),
         // Below the completion keymap, so Enter picks the highlighted completion first.
         Prec.high(
@@ -213,13 +219,13 @@ export class StageEditor {
       extensions: [
         Prec.highest(
           keymap.of([
-            {
-              key: "Mod-Enter",
+            ...["Mod-Enter", "F5", "F9"].map((key) => ({
+              key,
               run: () => {
                 options.run();
                 return true;
               },
-            },
+            })),
           ]),
         ),
         autocompletion({ override: [options.completion], activateOnTyping: true, icons: false }),

@@ -69,6 +69,10 @@ pub struct StatementInfo {
     /// A hard block whatever the workspace's preset (Redis `SUBSCRIBE` in a console, an unknown capability).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+    /// How many times the statement runs when that is more than once (a SQL Server batch under `GO 30`). The gateway asks
+    /// at least for a confirmation before it repeats anything but a read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<u32>,
 }
 
 impl StatementInfo {
@@ -80,6 +84,7 @@ impl StatementInfo {
             excerpt: excerpt_of(excerpt),
             reason: None,
             refused: None,
+            repeat: None,
         }
     }
 

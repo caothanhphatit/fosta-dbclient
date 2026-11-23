@@ -40,9 +40,9 @@ const editorTheme = EditorView.theme({
 });
 
 export interface EditorCommands {
-  /** Ctrl+Enter / F9: the selection, or everything. */
+  /** Ctrl+Enter / F5 / F9: the selection, or everything. */
   run(): void;
-  /** Ctrl+Shift+Enter: the selection, or the statement under the cursor. */
+  /** Ctrl+Shift+Enter / Shift+F5 / Shift+F9: the selection, or the statement under the cursor. */
   runStatement(): void;
   /** Shift+Alt+F. */
   format(): void;
@@ -63,7 +63,10 @@ export function createSqlEditor(parent: HTMLElement, doc: string, commands: Edit
         keymap.of([
           { key: "Mod-Shift-Enter", run: command(commands.runStatement) },
           { key: "Mod-Enter", run: command(commands.run) },
+          { key: "F5", run: command(commands.run) },
           { key: "F9", run: command(commands.run) },
+          { key: "Shift-F5", run: command(commands.runStatement) },
+          { key: "Shift-F9", run: command(commands.runStatement) },
           { key: "Shift-Alt-f", run: command(commands.format) },
         ]),
       ),

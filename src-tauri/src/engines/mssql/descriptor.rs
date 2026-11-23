@@ -28,6 +28,7 @@ pub const CAPABILITIES: CapabilitySet = CapabilitySet::of(&[
     Capability::SchemaGraph,
     Capability::CreateDatabase,
     Capability::Explain,
+    Capability::SchemaCompare,
 ]);
 
 pub fn descriptor() -> EngineDescriptor {
@@ -69,7 +70,9 @@ pub fn descriptor() -> EngineDescriptor {
             editor: "sql".into(),
             dialect: Some(SqlDialectId::MsSql),
             default: true,
-            hint: "Ctrl+Enter runs the batch. Tables are addressed as schema.table; the default schema is dbo.".into(),
+            hint: "Ctrl+Enter runs the batch; lines that read GO split it into batches. Tables are addressed as schema.table; \
+                   the default schema is dbo."
+                .into(),
             fences: LanguageSpec::fence_tags(&["sql", "tsql", "mssql"]),
         }],
         filter: FilterSupport {

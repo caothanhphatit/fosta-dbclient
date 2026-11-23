@@ -33,6 +33,7 @@ pub fn descriptor() -> EngineDescriptor {
             Capability::StreamingResults,
             Capability::SchemaGraph,
             Capability::Explain,
+            Capability::SchemaCompare,
         ]),
         objects_label: "tables".into(),
         connection: ConnectionForm {

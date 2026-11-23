@@ -26,6 +26,7 @@ const ICONS = {
   first: '<path d="M11 4L7 8l4 4M4.5 4v8"/>',
   last: '<path d="M5 4l4 4-4 4M11.5 4v8"/>',
   design: '<path d="M2 3.5h12M2 6.5h12M2 9.5h12M2 12.5h7"/>',
+  compare: '<path d="M2.5 5h10M10 2.5L12.5 5 10 7.5M13.5 11h-10M6 8.5L3.5 11 6 13.5"/>',
   diagram: '<rect x="1.5" y="2" width="5" height="4.5" rx="0.8"/><rect x="9.5" y="9.5" width="5" height="4.5" rx="0.8"/><path d="M6.5 4.25h2.5v7.5h0.5"/>',
   fit: '<path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5"/>',
   download: '<path d="M8 2v8.5M4.5 7L8 10.5 11.5 7M2.5 13.5h11"/>',

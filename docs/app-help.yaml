@@ -215,7 +215,7 @@
   action: open_view:new_query
   body: |
     Ctrl+T, the toolbar "Query" button, or right-click a connection or database → "New query".
-    - "Run" (Ctrl+Enter) runs the selection or everything; "Run statement" (Ctrl+Shift+Enter) runs the statement under the cursor.
+    - "Run" (Ctrl+Enter, F5 or F9) runs the selection or everything; "Run statement" (Ctrl+Shift+Enter, Shift+F5 or Shift+F9) runs the statement under the cursor.
     - The language picker switches the tab's query language where the engine has several (MongoDB "Database command" / "Aggregation pipeline", Elasticsearch "Console" / "ES|QL" / "SQL").
     - "Refresh names" reloads the names used for completion.
     Each tab has its own session, results stream in, and errors keep their code, position and statement in an error panel. Several statements per run need the workspace's rules to allow them (Custom).
@@ -262,6 +262,17 @@
   keywords: [er diagram, diagram, erd, relationships, foreign keys, schema graph, png, svg]
   body: |
     Select a database and press the toolbar "Diagram" button, or right-click the database → "ER diagram". The diagram has "Find table…", "Reload", "Auto layout", "Fit", "Zoom out" / "Zoom in", "Types", "Keys only", "Inferred links" and saves as "SVG" or "PNG". The assistant can open it for you, centred on a table.
+
+- id: schema-compare
+  group: Schema tools
+  title: Schema compare and sync scripts
+  keywords: [schema compare, compare schema, diff, sync, migration script, migrate, dev staging, drift, alter script, rebuild]
+  body: |
+    Supported on PostgreSQL, MySQL, MariaDB (MySQL with MariaDB too), SQL Server and SQLite; both sides use the same engine. Right-click a database or schema → "Compare schema with…", or press the toolbar "Compare", then pick the source and target (any connection of any workspace) and "Compare".
+    - The tab groups tables and views as different, only in the source (created), only in the target (dropped) and identical, with each object's changes and a side-by-side DDL diff. "Options" (column order, comments, defaults, collations, constraint and index names, excluded tables) re-diff without reading again.
+    - "Generate script" writes the SQL that makes the target match the source, with data-loss and review warnings. Objects only in the target start unchecked, so nothing is dropped unless you check it. What the engine cannot do becomes a commented "MANUAL STEP".
+    - Nothing runs by itself: "Open in query tab" opens it on the target, where its workspace rules apply (DDL confirmations, typed confirmation for DROP, Production and Read-only block it); or copy it or save it as .sql.
+    - MySQL/MariaDB DDL is not atomic (no transaction). SQL Server scripts use one transaction and GO batches. SQLite rebuilds a table for any change beyond adding or dropping a column, with PRAGMA foreign_keys switched off around it (an administrative statement) and a foreign key check before COMMIT.
 
 - id: vector-search
   group: Vector search
@@ -537,7 +548,7 @@
   title: Keyboard shortcuts
   keywords: [keyboard, shortcuts, hotkeys, keys, ctrl, key bindings]
   body: |
-    Ctrl+N new connection · Ctrl+T new query · Ctrl+Shift+A assistant panel · Ctrl+B show or hide the sidebar · Ctrl+Shift+B show or hide the workspaces · Ctrl+1 … 9 switch workspace · Ctrl+Enter run (selection or all) · Ctrl+Shift+Enter run the statement under the cursor · Shift+Alt+F format · Enter / F2 edit the selected cell · Shift+Enter cell editor · Ctrl+S save grid changes · F5 reload table. In MongoDB, Ctrl+Enter runs the query bar or previews a stage.
+    Ctrl+N new connection · Ctrl+T new query · Ctrl+Shift+A assistant panel · Ctrl+B show or hide the sidebar · Ctrl+Shift+B show or hide the workspaces · Ctrl+1 … 9 switch workspace · Ctrl+Enter / F5 / F9 run (selection or all) · Ctrl+Shift+Enter / Shift+F5 / Shift+F9 run the statement under the cursor · Shift+Alt+F format · Enter / F2 edit the selected cell · Shift+Enter cell editor · Ctrl+S save grid changes · F5 reload table (in a table tab). In MongoDB, Ctrl+Enter, F5 or F9 runs the query bar or previews a stage.
 
 - id: privacy
   group: App

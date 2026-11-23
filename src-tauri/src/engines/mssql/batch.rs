@@ -337,6 +337,11 @@ pub fn result_labels(sql: &str) -> Vec<String> {
     labels
 }
 
+/// How many top-level statements a batch holds.
+pub fn statement_count(sql: &str) -> usize {
+    top_level_statements(sql).len()
+}
+
 fn line_of(sql: &str, offset: usize) -> u32 {
     sql[..offset].bytes().filter(|b| *b == b'\n').count() as u32 + 1
 }
@@ -450,6 +455,8 @@ mod tests {
         assert_eq!(statement_at_line(sql, 4), Some((2, "SELECT 3".to_owned())));
         assert_eq!(statement_at_line("SELECT 1; SELEC 2", 1).map(|(index, _)| index), Some(0));
         assert_eq!(statement_at_line("", 1), None);
+        assert_eq!(statement_count("SELECT 1; IF 1 = 1 BEGIN SELECT 2; END; SELECT 3"), 3);
+        assert_eq!(statement_count("  -- only a comment\n"), 0);
         // The added row-count queries keep the user's line numbers.
         assert_eq!(with_row_counts("DELETE FROM t\nWHERE id = 1").lines().count(), 2);
     }

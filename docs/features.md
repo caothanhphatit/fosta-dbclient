@@ -7,8 +7,8 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
   tunnel and TLS settings except SQLite (a file). Per-engine notes are in [docs/engines](engines).
   - **MariaDB and MySQL** (`mysql_async`): typed grid, design view, ER diagrams, Stop with `KILL QUERY`, transactions across runs;
     vector tools on MariaDB 11.7+.
-  - **SQL Server** (`tiberius`, TLS on by default): `schema.table` names (`dbo` is hidden), `OFFSET/FETCH` paging, batches that
-    return every result set.
+  - **SQL Server** (`tiberius`, TLS on by default): `schema.table` names (`dbo` is hidden), `OFFSET/FETCH` paging, scripts split
+    into batches at `GO` lines (`GO 3` repeats one), batches that return every result set.
   - **MongoDB** (`mongodb`): double-click a collection to open its workspace (Documents, Aggregations, Schema, Indexes, Explain,
     Validation; views too), with a query bar in mongosh syntax and List, JSON and read-only Table views of BSON-typed documents.
     Edits stay pending until Save (nested edits by dotted path, with a conflict check), plus bulk update and delete previews, saved
@@ -67,6 +67,25 @@ The full feature list of Fosta Studio. The [README](../README.md) has the short 
     search; Insert or open an entry in a new tab. History stays on this machine, in `fosta-studio-history.jsonl` next to the `.exe` (newest
     5,000 runs), and can be turned off or cleared under Settings.
 - **Design view** (columns + DDL) and an interactive **ER diagram** per database.
+- **Schema compare** (PostgreSQL, MySQL, MariaDB, SQL Server, SQLite): compare a schema (a database on MySQL and MariaDB, which
+  may be compared with each other, and an attached database on SQLite) with another one of the same engine on any connection of
+  any workspace ("Compare schema with…" on a database or schema in the tree, or Compare in the toolbar). Tables and views
+  (columns, primary keys, unique and check constraints, indexes with expressions, DESC keys and filters, foreign keys,
+  comments) are grouped as different, only in the source, only in the target and identical, with the changes of each object
+  and a side-by-side DDL diff. Options (column order, comments, defaults, collations, constraint and index names, excluded
+  tables; migration-tool tables such as `flyway_schema_history` are excluded by default) re-diff without reading the
+  databases again. Triggers, routines, sequences and other objects are listed as not compared. Generate script writes the SQL
+  that makes the target match the source:
+  - **Never runs by itself.** Open the script in a query tab on the target, where its workspace rules apply (DDL asks for a
+    confirmation, DROP for a typed one, Read-only and Production workspaces block it), copy it, or save it as a `.sql` file.
+  - **Drops are opt-in**: objects only in the target start unchecked. Data-loss changes (drops, narrowing types) and changes
+    that may fail on existing data carry `-- WARNING` lines and red or amber badges; what the engine cannot express becomes a
+    commented `MANUAL STEP`, never a silent omission.
+  - **Per engine**: PostgreSQL and SQL Server scripts run in one transaction (SQL Server with `SET XACT_ABORT ON` and `GO`
+    batches, which its query tabs run one after the other). MySQL and MariaDB commit every DDL statement, so their scripts are
+    not atomic and say so. SQLite rebuilds a table for anything beyond adding or dropping a column or changing an index (new
+    table, copy, drop, rename, then its indexes and triggers), inside a transaction with `PRAGMA foreign_keys` switched off
+    around it (an administrative statement for the safety rules) and a foreign key check that stops the script before `COMMIT`.
 - **Vector tools** (MariaDB 11.7+, PostgreSQL with pgvector, Oracle 23ai, Elasticsearch 8+, OpenSearch with the k-NN plugin,
   ClickHouse, Redis 8): embedding search, column/index health checks, ANN recall versus exact search (seeded, so a run can be
   repeated).

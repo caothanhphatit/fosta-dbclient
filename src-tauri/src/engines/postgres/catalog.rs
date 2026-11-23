@@ -354,7 +354,7 @@ fn kind_for(name: &str, typtype: &str, category: &str) -> ValueKind {
     }
 }
 
-fn fk_action(code: &str) -> Option<String> {
+pub(super) fn fk_action(code: &str) -> Option<String> {
     Some(
         match code {
             "a" => "NO ACTION",

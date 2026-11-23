@@ -2,6 +2,7 @@ import type { CompletionSchema, FormatOptions } from "../lang/types";
 import type {
   ApplyResult,
   BrowseRequest as ObjectBrowseRequest,
+  CompareOptions,
   ConnectInfo,
   ConnectionSpec,
   EngineDescriptor,
@@ -11,11 +12,15 @@ import type {
   RowChangeSet,
   RunRequest,
   RunSummary,
+  SchemaDiff,
+  SchemaSnapshot,
   SecretSlot,
   SessionInfo,
   SessionOptions,
+  SnapshotScope,
   SqlDialectId,
   StreamEvent,
+  SyncScript,
   TransactionOp,
   TransactionState,
   TreeChildren,
@@ -192,6 +197,14 @@ export const api = {
   formatSql: (dialect: SqlDialectId | null, text: string, options: FormatOptions | null = null) => invoke<string>("format_sql", { dialect, text, options }),
 
   schemaGraph: (connectionId: string, database: string) => invoke<SchemaGraph>("schema_graph", { connectionId, database }),
+  /** Schema compare: what one side has (a metadata read). With `requestId`, `cancelRequest(requestId)` stops it. */
+  schemaSnapshot: (connectionId: string, scope: SnapshotScope, requestId: string | null = null) =>
+    invoke<SchemaSnapshot>("schema_snapshot", { connectionId, scope, requestId }),
+  /** What would make `target` match `source` (pure: nothing is read again). */
+  schemaDiff: (source: SchemaSnapshot, target: SchemaSnapshot, options: CompareOptions) => invoke<SchemaDiff>("schema_diff", { source, target, options }),
+  /** The sync script for the diff items `include` (ids), in the target dialect. Text only: nothing runs. */
+  schemaSyncScript: (source: SchemaSnapshot, target: SchemaSnapshot, options: CompareOptions, include: string[]) =>
+    invoke<SyncScript>("schema_sync_script", { source, target, options, include }),
   createDatabase: (connectionId: string, name: string, firstCollection: string | null, confirmation: Confirmation | null = null) =>
     invoke<void>("create_database", { connectionId, name, firstCollection, confirmation }),
   taskStatuses: () => invoke<TaskStatus[]>("task_statuses"),

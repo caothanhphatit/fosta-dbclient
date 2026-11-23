@@ -26,7 +26,10 @@ const MAX_PAGE_SIZE: u64 = 5000;
 
 impl SqliteEngine {
     /// Runs blocking work on the engine's connection (the contract's errors are `AppError`s).
-    async fn on_connection<T: Send + 'static>(&self, work: impl FnOnce(&mut Connection) -> AppResult<T> + Send + 'static) -> AppResult<T> {
+    pub(super) async fn on_connection<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&mut Connection) -> AppResult<T> + Send + 'static,
+    ) -> AppResult<T> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || work(&mut lock(&conn)))
             .await
@@ -63,6 +66,13 @@ impl SqliteEngine {
             Ok(description)
         })
         .await
+    }
+
+    pub(super) async fn schema_snapshot(&self, scope: &crate::contract::SnapshotScope) -> AppResult<crate::contract::SchemaSnapshot> {
+        let scope = scope.clone();
+        let version = self.server_version().to_owned();
+        self.on_connection(move |c| Ok(super::schema_snapshot::snapshot(c, &scope, &version)?))
+            .await
     }
 
     pub(super) async fn graph(&self, database: &str) -> AppResult<crate::contract::SchemaGraph> {

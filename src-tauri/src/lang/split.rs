@@ -216,6 +216,51 @@ pub fn split_ranges(dialect: Dialect, src: &str) -> Vec<(usize, usize)> {
     out
 }
 
+/// One SQL Server batch: the text between two `GO` lines (byte range, `GO` lines excluded) and how many times the
+/// `GO` line after it asks for it to run (`GO 3`; 1 without a count).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Batch {
+    pub start: usize,
+    pub end: usize,
+    pub repeat: u32,
+}
+
+/// The batches of a T-SQL script, split at lines holding only `GO` or `GO <count>` (any case, outside strings and
+/// comments). Batches holding only whitespace and comments are dropped; a script without `GO` is one batch covering
+/// the whole text.
+pub fn batches(src: &str) -> Vec<Batch> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut has_code = false;
+    for token in tokenize(Dialect::MsSql, src) {
+        match token.kind {
+            TokenKind::BatchSeparator => {
+                let count = token.text(src)[2..].trim();
+                let repeat = if count.is_empty() { 1 } else { count.parse().unwrap_or(u32::MAX) };
+                if has_code {
+                    out.push(Batch {
+                        start,
+                        end: token.start,
+                        repeat,
+                    });
+                }
+                start = token.end;
+                has_code = false;
+            }
+            _ if !token.is_trivia() => has_code = true,
+            _ => {}
+        }
+    }
+    if has_code {
+        out.push(Batch {
+            start,
+            end: src.len(),
+            repeat: 1,
+        });
+    }
+    out
+}
+
 const MSSQL_BEGIN_WITHOUT_END: [&str; 5] = ["TRAN", "TRANSACTION", "DISTRIBUTED", "DIALOG", "CONVERSATION"];
 
 /// How a word changes the BEGIN/END depth of a counted body.
@@ -320,6 +365,40 @@ mod tests {
 
     fn texts(d: Dialect, s: &str) -> Vec<String> {
         split(d, s).into_iter().map(|s| s.text).collect()
+    }
+
+    fn batch_texts(s: &str) -> Vec<(String, u32)> {
+        batches(s)
+            .into_iter()
+            .map(|b| (s[b.start..b.end].trim().to_owned(), b.repeat))
+            .collect()
+    }
+
+    #[test]
+    fn tsql_batches_split_at_go_lines_only() {
+        let s = "CREATE TABLE t (id int)\nGO\nCREATE VIEW v AS SELECT id FROM t;\n  go  \nINSERT INTO t VALUES (1)\nGO 3\n";
+        assert_eq!(
+            batch_texts(s),
+            vec![
+                ("CREATE TABLE t (id int)".to_owned(), 1),
+                ("CREATE VIEW v AS SELECT id FROM t;".to_owned(), 1),
+                ("INSERT INTO t VALUES (1)".to_owned(), 3),
+            ]
+        );
+        // GO inside strings, comments, names or words is not a separator.
+        let quoted = "SELECT 'a\nGO\nb' AS x /* \nGO\n */, [x\nGO\n] -- GO\nFROM t WHERE go = 1\nGOTO done\nGO";
+        assert_eq!(batch_texts(quoted), vec![(quoted[..quoted.len() - 3].to_owned(), 1)]);
+        // Empty batches are dropped; a script without GO is one batch over the whole text.
+        assert_eq!(batch_texts("GO\n-- nothing\nGO\nSELECT 1"), vec![("SELECT 1".to_owned(), 1)]);
+        assert_eq!(
+            batches("SELECT 1"),
+            vec![Batch {
+                start: 0,
+                end: 8,
+                repeat: 1
+            }]
+        );
+        assert!(batches("  \nGO\n").is_empty());
     }
 
     #[test]

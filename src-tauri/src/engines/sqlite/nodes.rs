@@ -53,6 +53,7 @@ fn actions(node: &CatalogNode) -> Vec<NodeAction> {
         CoreKind::Database => vec![
             NodeAction::builtin("newQuery", "New query", BuiltinAction::NewQuery),
             NodeAction::builtin("diagram", "ER diagram", BuiltinAction::Diagram),
+            NodeAction::builtin("compareSchema", "Compare schema with…", BuiltinAction::CompareSchema),
             copy,
             NodeAction::builtin("refresh", "Refresh", BuiltinAction::Refresh).separated(),
         ],

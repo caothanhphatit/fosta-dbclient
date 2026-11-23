@@ -16,10 +16,12 @@ use super::{
     descriptor::{EngineDescriptor, LanguageSpec},
     errors::unsupported_capability,
     limits::CallContext,
+    migration::SchemaDialect,
     object::{NodeAction, ObjectRef, TreeChildren, TreeRequest},
     profile::ProfileExtras,
     schema::SchemaGraph,
     session::{OpenedSession, SessionOptions},
+    snapshot::{SchemaSnapshot, SnapshotScope},
     spec::{ConnectRequest, ConnectionSpec, ServerInfo},
     tabular::{ApplyResult, BrowseRequest, Filter, Page, RowChangeSet},
 };
@@ -71,6 +73,12 @@ pub trait Engine: Send + Sync + 'static {
     fn distinct_values_statement(&self, _object: &ObjectRef, _column: &ColumnInfo, _sample: u64, _limit: u64) -> Option<String> {
         None
     }
+
+    /// Pure (no connection): how the engine normalizes catalog text and renders schema sync steps. `None` when the
+    /// engine has no schema compare.
+    fn schema_dialect(&self) -> Option<&'static dyn SchemaDialect> {
+        None
+    }
 }
 
 #[async_trait]
@@ -101,6 +109,10 @@ pub trait Connection: Send + Sync + 'static {
     fn schema_graph(&self) -> Option<&dyn SchemaGraphSource> {
         None
     }
+    /// Bulk catalog reads for schema compare (`Capability::SchemaCompare`).
+    fn schema_snapshot(&self) -> Option<&dyn SchemaSnapshotSource> {
+        None
+    }
     fn admin(&self) -> Option<&dyn DatabaseAdmin> {
         None
     }
@@ -128,6 +140,13 @@ pub trait TabularData: Send + Sync {
 #[async_trait]
 pub trait SchemaGraphSource: Send + Sync {
     async fn schema_graph(&self, database: &str, ctx: &CallContext) -> AppResult<SchemaGraph>;
+}
+
+#[async_trait]
+pub trait SchemaSnapshotSource: Send + Sync {
+    /// Everything schema compare reads about one scope, in a few bulk catalog queries (no per-table round trips on
+    /// server engines).
+    async fn snapshot(&self, scope: &SnapshotScope, ctx: &CallContext) -> AppResult<SchemaSnapshot>;
 }
 
 #[async_trait]

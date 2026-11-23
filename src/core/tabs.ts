@@ -170,8 +170,8 @@ export class TabManager {
     return this.tabs.find((tab) => tab.key === key)?.titleLabel.textContent ?? "";
   }
 
-  /** Changes a tab's title and description (a query tab switched to another database). */
-  describe(key: string, change: Pick<TabSpec, "subtitle" | "database">): void {
+  /** Changes a tab's title and description (a query tab switched to another database, a compare swapped). */
+  describe(key: string, change: Partial<Pick<TabSpec, "title" | "subtitle" | "database">>): void {
     const tab = this.tabs.find((item) => item.key === key);
     if (!tab) return;
     tab.spec = { ...tab.spec, ...change };

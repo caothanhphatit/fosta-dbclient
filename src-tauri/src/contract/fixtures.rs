@@ -134,6 +134,159 @@ fn descriptor() -> EngineDescriptor {
     }
 }
 
+fn schema_snapshot() -> SchemaSnapshot {
+    let mut id = ColumnDef::new("id", "integer", false);
+    id.identity = Some(IdentityDef {
+        kind: IdentityKind::ByDefault,
+        start: Some(1),
+        increment: Some(1),
+    });
+    let mut status = ColumnDef::new("status", "character varying(20)", true);
+    status.default = Some("'NEW'::character varying".into());
+    status.default_name = Some("DF_orders_status".into());
+    status.collation = Some("C".into());
+    status.comment = Some("Order state".into());
+    let mut total = ColumnDef::new("total_cents", "bigint", true);
+    total.generated = Some(GeneratedDef {
+        expression: "(total * 100)".into(),
+        stored: true,
+    });
+    let orders = TableDef {
+        name: "orders".into(),
+        columns: vec![id, ColumnDef::new("customer_id", "integer", false), status, total],
+        primary_key: Some(KeyDef {
+            name: Some("orders_pkey".into()),
+            columns: vec!["id".into()],
+            system_named: false,
+        }),
+        uniques: vec![KeyDef {
+            name: Some("UQ__orders__3213E83F".into()),
+            columns: vec!["status".into(), "customer_id".into()],
+            system_named: true,
+        }],
+        checks: vec![CheckDef {
+            name: Some("ck_status".into()),
+            expression: "(status IN ('NEW', 'PAID'))".into(),
+            system_named: false,
+        }],
+        indexes: vec![IndexDef {
+            name: "ix_orders_open".into(),
+            parts: vec![
+                IndexPart::column("customer_id"),
+                IndexPart {
+                    column: None,
+                    expression: Some("lower(status)".into()),
+                    descending: true,
+                },
+            ],
+            unique: false,
+            method: Some("btree".into()),
+            predicate: Some("(status <> 'DONE')".into()),
+            include: vec!["total_cents".into()],
+            system_named: false,
+        }],
+        foreign_keys: vec![ForeignKeyDef {
+            name: Some("fk_customer".into()),
+            columns: vec!["customer_id".into()],
+            ref_schema: Some("compare_a".into()),
+            ref_table: "customers".into(),
+            ref_columns: vec!["id".into()],
+            on_update: None,
+            on_delete: Some("CASCADE".into()),
+            system_named: false,
+        }],
+        comment: Some("Customer orders".into()),
+        options: vec![("fillfactor".into(), "90".into())],
+        native_ddl: None,
+    };
+    SchemaSnapshot {
+        engine: "postgres".into(),
+        server_version: "17.2".into(),
+        scope: SnapshotScope::new("shop", Some("compare_a")),
+        case_insensitive_names: false,
+        tables: vec![orders],
+        views: vec![ViewDef {
+            name: "v_totals".into(),
+            definition: "SELECT customer_id, count(*) AS n FROM compare_a.orders GROUP BY customer_id".into(),
+            materialized: false,
+            depends_on: vec!["orders".into()],
+            comment: None,
+            options: vec![("security_barrier".into(), "true".into())],
+            unreadable: false,
+        }],
+        skipped: vec![SkippedObject {
+            kind: "trigger".into(),
+            name: "orders_audit".into(),
+            reason: "Triggers are not compared in this version".into(),
+        }],
+        read_at: "2026-11-22T10:00:00Z".into(),
+    }
+}
+
+fn schema_diff() -> SchemaDiff {
+    let scope = |schema: &str| ScopeSummary {
+        engine: "postgres".into(),
+        server_version: "17.2".into(),
+        database: "shop".into(),
+        schema: Some(schema.into()),
+    };
+    SchemaDiff {
+        source: scope("compare_a"),
+        target: scope("compare_b"),
+        options: CompareOptions::default(),
+        items: vec![
+            DiffItem {
+                id: "table:orders".into(),
+                kind: "table".into(),
+                name: "orders".into(),
+                status: DiffStatus::Different,
+                changes: vec![
+                    Change {
+                        part: "column".into(),
+                        name: "status".into(),
+                        what: ChangeKind::Modified,
+                        fields: vec![FieldChange {
+                            field: "type".into(),
+                            source: Some("character varying(20)".into()),
+                            target: Some("character varying(50)".into()),
+                        }],
+                        risk: Risk::DataLoss,
+                        note: Some("The type change may lose data".into()),
+                        possible_rename: None,
+                    },
+                    Change {
+                        part: "column".into(),
+                        name: "remark".into(),
+                        what: ChangeKind::Added,
+                        fields: Vec::new(),
+                        risk: Risk::Review,
+                        note: Some("Possible rename of note to remark; the script drops and adds, so the data is lost".into()),
+                        possible_rename: Some("note".into()),
+                    },
+                ],
+                risk: Risk::DataLoss,
+                source_ddl: Some("CREATE TABLE \"compare_b\".\"orders\" (…);".into()),
+                target_ddl: Some("CREATE TABLE \"compare_b\".\"orders\" (…);".into()),
+            },
+            DiffItem {
+                id: "view:v_old".into(),
+                kind: "view".into(),
+                name: "v_old".into(),
+                status: DiffStatus::OnlyInTarget,
+                changes: Vec::new(),
+                risk: Risk::None,
+                source_ddl: None,
+                target_ddl: Some("CREATE VIEW \"compare_b\".\"v_old\" AS SELECT 1;".into()),
+            },
+        ],
+        skipped: vec![SkippedObject {
+            kind: "table".into(),
+            name: "flyway_schema_history".into(),
+            reason: "Excluded by the compare options".into(),
+        }],
+    }
+}
+
 fn fixtures() -> Vec<(&'static str, serde_json::Value)> {
     fn v(value: impl Serialize) -> serde_json::Value {
         serde_json::to_value(value).unwrap()
@@ -390,6 +543,30 @@ fn fixtures() -> Vec<(&'static str, serde_json::Value)> {
                 ..ConnectionSpec::default()
             }),
         ),
+        ("schema-snapshot", v(schema_snapshot())),
+        ("schema-diff", v(schema_diff())),
+        (
+            "compare-options",
+            v(CompareOptions {
+                case_insensitive_names: Some(true),
+                transactional: Some(false),
+                ..CompareOptions::default()
+            }),
+        ),
+        (
+            "sync-script",
+            v(SyncScript {
+                sql: "BEGIN;\nALTER TABLE \"compare_b\".\"orders\" ADD COLUMN \"remark\" text;\nCOMMIT;\n".into(),
+                warnings: vec![ScriptWarning {
+                    item_id: "table:orders".into(),
+                    risk: Risk::Review,
+                    message: "Possible rename of note to remark".into(),
+                }],
+                statements: 3,
+                transactional: true,
+                dialect: "postgres".into(),
+            }),
+        ),
     ]
 }
 
@@ -428,4 +605,11 @@ fn fixtures_deserialize_back_into_the_contract_types() {
     let _: EngineDescriptor = serde_json::from_value(get("engine-descriptor")).unwrap();
     let _: ConnectInfo = serde_json::from_value(get("connect-info")).unwrap();
     let _: ConnectionSpec = serde_json::from_value(get("connection-spec")).unwrap();
+    assert_eq!(
+        serde_json::from_value::<SchemaSnapshot>(get("schema-snapshot")).unwrap(),
+        schema_snapshot()
+    );
+    assert_eq!(serde_json::from_value::<SchemaDiff>(get("schema-diff")).unwrap(), schema_diff());
+    let _: CompareOptions = serde_json::from_value(get("compare-options")).unwrap();
+    let _: SyncScript = serde_json::from_value(get("sync-script")).unwrap();
 }

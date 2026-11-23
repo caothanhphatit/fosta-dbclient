@@ -111,7 +111,33 @@ pub fn fixture() -> Fixture {
     }
 }
 
-crate::contract_tests!(contract_mariadb, fixture());
+/// The schema compare round trip on databases `compare_a` and `compare_b` (`dev/seed/<flavour>/compare.sql`). Both
+/// flavours seed the same differences; MySQL adds a functional index to `customers`.
+pub(super) fn compare_fixture(seed: &str) -> CompareFixture {
+    use crate::contract::{DiffStatus::*, SnapshotScope};
+    CompareFixture {
+        seed: seed
+            .replace("\r\n", "\n")
+            .split("\nGO\n")
+            .map(|chunk| chunk.trim().to_owned())
+            .filter(|chunk| !chunk.is_empty())
+            .collect(),
+        a: SnapshotScope::new("compare_a", None),
+        b: SnapshotScope::new("compare_b", None),
+        expected: &[
+            ("table:a_only", OnlyInSource),
+            ("table:b_only", OnlyInTarget),
+            ("table:customers", Different),
+            ("table:items", Different),
+            ("table:orders", Different),
+            ("table:tags", Identical),
+            ("view:v_big_orders", Identical),
+            ("view:v_customer_orders", Different),
+        ],
+    }
+}
+
+crate::contract_tests!(contract_mariadb, fixture(), compare: compare_fixture(include_str!("../../../../dev/seed/mariadb/compare.sql")));
 
 // --- MariaDB-specific checks (ported from live_tests.rs) ----------------------------------------------------------------
 

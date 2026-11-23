@@ -33,6 +33,7 @@ export interface LayoutParts {
   newConnection(): void;
   newQuery(): void;
   newDiagram(): void;
+  newCompare(): void;
   configureEmbedding(): void;
   toggleAssistant(): void;
   toggleSidebar(): void;
@@ -75,6 +76,7 @@ export function buildLayout(parts: LayoutParts): HTMLElement {
     bigButton("plug", "Connection", parts.newConnection, "New connection (Ctrl+N)"),
     bigButton("query", "Query", parts.newQuery, "New query (Ctrl+T)"),
     bigButton("diagram", "Diagram", parts.newDiagram, "ER diagram of the selected database"),
+    bigButton("compare", "Compare", parts.newCompare, "Compare the selected schema with another"),
     bigButton("refresh", "Refresh", () => tree.refreshSelected(), "Reload the selected database"),
     separator(),
     withRequirement(commands, "tasks"),

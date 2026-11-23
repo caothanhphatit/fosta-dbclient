@@ -37,6 +37,7 @@ pub fn descriptor() -> EngineDescriptor {
             Capability::SchemaGraph,
             Capability::CreateDatabase,
             Capability::Explain,
+            Capability::SchemaCompare,
             // Only with the pgvector extension in the profile's database (checked on connect).
             Capability::Vector,
         ]),

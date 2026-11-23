@@ -32,14 +32,17 @@ import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type {
   BrowseRequest,
+  CompareOptions,
   ConnectInfo,
   ObjectRef,
   RowChangeSet,
   RunRequest,
   RunSummary,
+  SchemaSnapshot,
   SecretSlot,
   SessionInfo,
   SessionOptions,
+  SnapshotScope,
   StreamEvent,
   TransactionOp,
   TransactionState,
@@ -47,6 +50,7 @@ import type {
   TreeRequest,
 } from "../../core/contract";
 import { errorCode, errorText } from "../../core/errors";
+import { compareDiff, compareScript, compareSnapshot } from "./compare";
 import { splitStatements } from "../../core/language";
 import type {
   AiConnection,
@@ -754,6 +758,16 @@ function handle(command: string, payload: Record<string, unknown> = {}): unknown
       const { engine } = connection(str("connectionId"));
       return need(engine, "schemaGraph", "a schema diagram")(str("database"));
     }
+    case "schema_snapshot": {
+      const { engine } = connection(str("connectionId"));
+      if (!engine.descriptor.capabilities.includes("schemaCompare"))
+        throw mockError("UNSUPPORTED_CAPABILITY", `${engine.descriptor.label} does not offer schema compare.`, { engine: engine.descriptor.id });
+      return compareSnapshot(str("connectionId"), payload.scope as SnapshotScope, engine.descriptor.id);
+    }
+    case "schema_diff":
+      return compareDiff(payload.source as SchemaSnapshot, payload.target as SchemaSnapshot, payload.options as CompareOptions);
+    case "schema_sync_script":
+      return compareScript(payload.source as SchemaSnapshot, payload.target as SchemaSnapshot, payload.options as CompareOptions, payload.include as string[]);
     case "completion_schema": {
       const { engine } = connection(str("connectionId"));
       const database = (payload.database as string | null) ?? null;

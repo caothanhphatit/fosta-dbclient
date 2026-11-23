@@ -21,8 +21,9 @@ use crate::{
     contract::{
         classify_common, require, tabular::ApplyResult, vector::OPERATIONS as VECTOR_OPERATIONS, BrowseRequest, CallContext, Canceller,
         Capability, CapabilitySet, Category, Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, DatabaseAdmin,
-        Engine, EngineDescriptor, NodeKind, ObjectDescription, ObjectRef, OpenedSession, Page, ParsedConnection, RowChangeSet, SchemaGraph,
-        SchemaGraphSource, ServerInfo, SessionOptions, StatementInfo, TabularData, TlsMode, TreeChildren, TreeRequest,
+        Engine, EngineDescriptor, NodeKind, ObjectDescription, ObjectRef, OpenedSession, Page, ParsedConnection, RowChangeSet,
+        SchemaDialect, SchemaGraph, SchemaGraphSource, SchemaSnapshot, SchemaSnapshotSource, ServerInfo, SessionOptions, SnapshotScope,
+        StatementInfo, TabularData, TlsMode, TreeChildren, TreeRequest,
     },
     engines::common::{adapt::tls_to_contract, classify, split::Dialect},
     error::{AppError, AppResult},
@@ -130,6 +131,10 @@ impl Engine for PostgresAdapter {
             url.push_str(&query.join("&"));
         }
         Some(url)
+    }
+
+    fn schema_dialect(&self) -> Option<&'static dyn SchemaDialect> {
+        Some(&super::schema_sync::PG_SCHEMA_DIALECT)
     }
 
     fn distinct_values_statement(
@@ -290,6 +295,10 @@ impl Connection for PostgresConnection {
         Some(self)
     }
 
+    fn schema_snapshot(&self) -> Option<&dyn SchemaSnapshotSource> {
+        Some(self)
+    }
+
     fn admin(&self) -> Option<&dyn DatabaseAdmin> {
         Some(self)
     }
@@ -325,6 +334,13 @@ impl TabularData for PostgresConnection {
 impl SchemaGraphSource for PostgresConnection {
     async fn schema_graph(&self, database: &str, _ctx: &CallContext) -> AppResult<SchemaGraph> {
         self.engine(Some(database)).await?.graph().await
+    }
+}
+
+#[async_trait]
+impl SchemaSnapshotSource for PostgresConnection {
+    async fn snapshot(&self, scope: &SnapshotScope, _ctx: &CallContext) -> AppResult<SchemaSnapshot> {
+        self.engine(Some(&scope.database)).await?.schema_snapshot(scope).await
     }
 }
 

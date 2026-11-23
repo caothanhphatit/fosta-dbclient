@@ -24,6 +24,7 @@ OpenSearch, ClickHouse and Oracle. A desktop app for Windows, or a web edition i
 - **Safe by default**: every statement is checked against the workspace's rules (Open, Guarded, Read-only or Custom). Production
   workspaces start read-only, enforced by the database too, and a save never overwrites a row someone else changed.
 - **Query editor** with column-aware completion, a formatter, streaming results with a real Stop, transactions and per-tab history.
+- **Schema compare** (PostgreSQL, MySQL, MariaDB, SQL Server, SQLite): diff two schemas and get a reviewed sync script that never runs by itself.
 - **Import and export**: CSV, TSV and JSON in; CSV, CSV for Excel, JSON, SQL `INSERT` and Markdown out.
 - **AI agent** (`Ctrl+Shift+A`) with your own provider and key (OpenAI, Claude, Gemini, Fosta, Ollama…). It knows your schema,
   writes and fixes queries, and reads sample rows only if you allow it.

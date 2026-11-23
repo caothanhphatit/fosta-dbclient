@@ -154,6 +154,8 @@ pub enum BuiltinAction {
     Import,
     Export,
     Design,
+    /// Opens the schema compare picker with the node's database (and schema) as the source.
+    CompareSchema,
 }
 
 /// What a node action does when picked.

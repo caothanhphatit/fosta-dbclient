@@ -8,6 +8,7 @@
     "src-tauri/src/engines/postgres/**",
     "src-tauri/src/engines/common/**",
     "src-tauri/src/contract/**",
+    "src-tauri/src/compare/**",
     "src-tauri/src/runtime/**",
     "src-tauri/src/gateway/**",
     "src-tauri/src/net/tls.rs",

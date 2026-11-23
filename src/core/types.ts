@@ -83,6 +83,8 @@ export interface StatementInfo {
   tables: string[];
   excerpt: string;
   reason: string | null;
+  /** How many times it runs when more than once (a SQL Server batch under `GO 30`). */
+  repeat?: number;
 }
 
 /** Payload of a `CONFIRMATION_REQUIRED` or `BLOCKED` error from the gateway. */

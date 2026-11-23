@@ -20,8 +20,8 @@ use crate::{
     contract::{
         classify_common, require, tabular::ApplyResult, BrowseRequest, CallContext, Canceller, Capability, CapabilitySet, Category,
         Classification, ClassifyInput, ConnectRequest, Connection, ConnectionSpec, Engine, EngineDescriptor, ObjectDescription, ObjectRef,
-        OpenedSession, Page, ParsedConnection, RowChangeSet, SchemaGraph, SchemaGraphSource, ServerInfo, SessionOptions, StatementInfo,
-        TabularData, TreeChildren, TreeRequest,
+        OpenedSession, Page, ParsedConnection, RowChangeSet, SchemaDialect, SchemaGraph, SchemaGraphSource, SchemaSnapshot,
+        SchemaSnapshotSource, ServerInfo, SessionOptions, SnapshotScope, StatementInfo, TabularData, TreeChildren, TreeRequest,
     },
     engines::common::{classify, split::Dialect},
     error::{AppError, AppResult},
@@ -129,6 +129,10 @@ impl Engine for SqliteAdapter {
         ))
     }
 
+    fn schema_dialect(&self) -> Option<&'static dyn SchemaDialect> {
+        Some(&super::schema_sync::SQLITE_SCHEMA_DIALECT)
+    }
+
     async fn connect(&self, request: ConnectRequest) -> AppResult<Arc<dyn Connection>> {
         let options = connect::build_options(&request)?;
         let read_only = options.read_only;
@@ -203,6 +207,10 @@ impl Connection for SqliteConnection {
         Some(self)
     }
 
+    fn schema_snapshot(&self) -> Option<&dyn SchemaSnapshotSource> {
+        Some(self)
+    }
+
     async fn ping(&self) -> AppResult<()> {
         self.engine.ping().await
     }
@@ -229,6 +237,13 @@ impl TabularData for SqliteConnection {
 impl SchemaGraphSource for SqliteConnection {
     async fn schema_graph(&self, database: &str, _ctx: &CallContext) -> AppResult<SchemaGraph> {
         self.engine.graph(database).await
+    }
+}
+
+#[async_trait]
+impl SchemaSnapshotSource for SqliteConnection {
+    async fn snapshot(&self, scope: &SnapshotScope, _ctx: &CallContext) -> AppResult<SchemaSnapshot> {
+        self.engine.schema_snapshot(scope).await
     }
 }
 

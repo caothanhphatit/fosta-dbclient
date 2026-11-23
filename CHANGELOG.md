@@ -9,6 +9,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Query tabs: F5 runs the selection or everything, like F9 and Ctrl+Enter (SSMS and SQL Developer habits); Shift+F5 and
+  Shift+F9 run the statement under the cursor. The MongoDB query bar and stage editors also run on F5 and F9.
+- Schema compare for PostgreSQL, MySQL, MariaDB, SQL Server and SQLite: "Compare schema with…" on a database or schema (and
+  Compare in the toolbar) picks a target of the same engine (MySQL with MariaDB too) on any connection of any workspace, lists
+  the tables and views that differ, exist on one side only or are identical, shows each object's changes and a side-by-side
+  DDL diff, and generates a sync script with data-loss and review warnings. Drops start unchecked, options re-diff without
+  reading again, and what an engine cannot express is a commented manual step. The compare never runs the script: open it in
+  a query tab on the target (its safety rules apply), copy it or save it as `.sql`. Compare tabs come back after a restart and
+  read nothing until Compare again. Per engine: PostgreSQL and SQL Server scripts run in one transaction (SQL Server with
+  `SET XACT_ABORT ON`, `GO` batches and server-named keys matched by definition); MySQL and MariaDB DDL commits implicitly, so
+  their scripts are not wrapped in a transaction and say they are not atomic; SQLite rebuilds a table for changes ALTER TABLE
+  cannot make (copying the rows and recreating indexes and triggers), with foreign keys switched off around the rebuild and
+  checked before `COMMIT`.
+- SQL Server query tabs run scripts with `GO` lines as separate batches on the tab's connection (`GO 3` repeats a batch, and
+  a repeated batch that changes anything asks for a confirmation that says how often it runs), stop at the first failing
+  batch and name the failing statement and line of the whole script. The safety rules classify each batch on its own, and
+  recognize `ALTER COLUMN`, `ADD … DEFAULT … FOR` and clustered indexes as DDL.
 - Redis Cluster and Redis Sentinel connections (Redis 7.4+, Valkey 8.1). The connection form has a Topology choice and shows
   only that topology's fields: more seed nodes or sentinels, the master name, the sentinels' own user and password (kept in
   the credential store), read from replicas and an address map. `redis+cluster://`, `redis+sentinel://` (and the `rediss`,
@@ -29,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - Redis: a password the server rejects is reported as a connection error, not an engine error.
+- Safety rules: SQL after an `END` that follows a statement (`SELECT 1 END CONVERSATION @h DROP TABLE t`) is no longer
+  ignored by the classifier, so it gets the confirmation its statements need.
 
 ## [0.3.2] - 2026-11-17
 

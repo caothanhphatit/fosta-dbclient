@@ -169,6 +169,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
       "schemaGraph",
       "createDatabase",
       "explain",
+      "schemaCompare",
     ],
     objectsLabel: "tables",
     connection: {
@@ -200,7 +201,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
         editor: "sql",
         dialect: "msSql",
         default: true,
-        hint: "Ctrl+Enter runs the batch. Tables are addressed as schema.table; the default schema is dbo.",
+        hint: "Ctrl+Enter runs the batch; lines that read GO split it into batches. Tables are addressed as schema.table; the default schema is dbo.",
         fences: ["sql", "tsql", "mssql"],
       },
     ],
@@ -309,6 +310,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
       "createDatabase",
       "explain",
       "vector",
+      "schemaCompare",
     ],
     objectsLabel: "tables",
     connection: {
@@ -399,6 +401,7 @@ export const DESCRIPTORS: Record<string, EngineDescriptor> = {
       "streamingResults",
       "schemaGraph",
       "explain",
+      "schemaCompare",
     ],
     objectsLabel: "tables",
     connection: {

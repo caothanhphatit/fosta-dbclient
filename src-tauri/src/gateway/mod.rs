@@ -271,6 +271,11 @@ impl Gateway {
                 .max()
                 .unwrap_or(Action::Allow),
         };
+        // `GO 30` repeats a batch after one decision: anything but a read that runs more than once is confirmed first.
+        let repeats_changes = statements.iter().any(|statement| {
+            statement.repeat.is_some_and(|times| times != 1) && !matches!(statement.category, Category::Read | Category::Transaction)
+        });
+        let action = if repeats_changes { action.max(Action::Confirm) } else { action };
         match action {
             Action::Allow => Ok(()),
             Action::Block => {
@@ -386,7 +391,7 @@ impl Gateway {
             );
         }
         let worst = worst_category(request.classification).map(Category::label).unwrap_or("These");
-        let message = match &expected {
+        let mut message = match &expected {
             Some(name) => format!(
                 "{worst} statements need a typed confirmation in workspace {}: type \"{name}\" to run them.",
                 request.context.workspace_name
@@ -396,6 +401,9 @@ impl Gateway {
                 request.context.workspace_name
             ),
         };
+        if let Some(times) = request.classification.statements.iter().filter_map(|s| s.repeat).max() {
+            message.push_str(&format!(" A batch runs {times} times (GO {times})."));
+        }
         Err(AppError::structured(
             message,
             Problem {
@@ -947,6 +955,41 @@ mod tests {
         assert_eq!(audit[0].caller, "queryTab");
         assert_eq!(audit[0].workspace, "Production");
         assert!(audit[0].statement.starts_with("INSERT INTO t"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_batch_repeated_by_go_n_is_confirmed_unless_it_only_reads() {
+        let (gateway, path) = gateway();
+        let open = context(Preset::Open);
+        let ask_tsql = |sql: &str| {
+            let classification = classify::classify_sql(crate::contract::SqlDialectId::MsSql, sql);
+            gateway.authorize(&Request {
+                caller: Caller::QueryTab,
+                context: &open,
+                engine: "mssql",
+                scope: "session-1",
+                text: sql,
+                classification: &classification,
+                confirmation: None,
+                reusable: false,
+                client: None,
+            })
+        };
+        // Allowed outright once, but not 30 times after one decision.
+        assert!(ask_tsql("INSERT INTO t VALUES (1)\nGO").is_ok());
+        let error = ask_tsql("INSERT INTO t VALUES (1)\nGO 30").unwrap_err();
+        assert_eq!(error.code(), Some(CONFIRMATION_REQUIRED));
+        assert!(error.to_string().contains("runs 30 times"), "{error}");
+        let payload = error.payload().unwrap();
+        assert_eq!(payload["statements"][0]["repeat"], 30);
+        assert!(payload["statements"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("runs this batch 30 times"));
+        assert!(ask_tsql("SELECT 1\nGO 30").is_ok(), "a repeated read needs nothing");
+        let classification = classify::classify_sql(crate::contract::SqlDialectId::MsSql, "SELECT 1\nGO\nSELECT 2");
+        assert!(classification.statements.iter().all(|s| s.repeat.is_none()));
         let _ = std::fs::remove_file(path);
     }
 

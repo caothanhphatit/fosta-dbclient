@@ -1,6 +1,7 @@
 //! Contract suites for SQLite against a file in the temp folder (data from `dev/seed/sqlite/contract.sql`; no container
 //! is needed), plus SQLite-specific checks: typed values, attached databases, the read-only switch and EXPLAIN.
-//! Override the file with FOSTA_CONTRACT_SQLITE_FILE.
+//! Override the file with FOSTA_CONTRACT_SQLITE_FILE. Schema compare runs between two more files next to it, attached
+//! as `compare_a` and `compare_b` (`dev/seed/sqlite/compare.sql`).
 
 use std::sync::Arc;
 
@@ -18,13 +19,46 @@ fn path() -> String {
         .unwrap_or_else(|_| std::env::temp_dir().join("fosta-contract-sqlite.db").to_string_lossy().into_owned())
 }
 
-fn seed() -> Vec<String> {
-    include_str!("../../../../dev/seed/sqlite/contract.sql")
-        .replace("\r\n", "\n")
+fn chunks(text: &str) -> Vec<String> {
+    text.replace("\r\n", "\n")
         .split("\nGO\n")
         .map(|chunk| chunk.trim().to_owned())
         .filter(|chunk| !chunk.is_empty())
         .collect()
+}
+
+fn seed() -> Vec<String> {
+    chunks(include_str!("../../../../dev/seed/sqlite/contract.sql"))
+}
+
+/// `compare_a=<file>` and `compare_b=<file>` next to the contract database.
+fn compare_attach() -> String {
+    let main = std::path::PathBuf::from(path());
+    let file = |suffix: &str| {
+        let stem = main.file_stem().and_then(|s| s.to_str()).unwrap_or("fosta-contract-sqlite");
+        main.with_file_name(format!("{stem}-{suffix}.db")).to_string_lossy().into_owned()
+    };
+    format!("compare_a={}\ncompare_b={}", file("compare-a"), file("compare-b"))
+}
+
+fn compare_fixture() -> CompareFixture {
+    use crate::contract::{DiffStatus::*, SnapshotScope};
+    CompareFixture {
+        seed: chunks(include_str!("../../../../dev/seed/sqlite/compare.sql")),
+        a: SnapshotScope::new("compare_a", None),
+        b: SnapshotScope::new("compare_b", None),
+        expected: &[
+            ("table:audit_log", OnlyInSource),
+            ("table:customers", Identical),
+            ("table:legacy_stuff", OnlyInTarget),
+            ("table:order_items", Different),
+            ("table:orders", Different),
+            ("table:tags", Different),
+            ("view:v_only_b", OnlyInTarget),
+            ("view:v_open_orders", Different),
+            ("view:v_order_totals", Identical),
+        ],
+    }
 }
 
 fn key_filter(key: i64) -> Filter {
@@ -50,7 +84,7 @@ fn spec(options: &[(&str, &str)]) -> ConnectionSpec {
 pub fn fixture() -> Fixture {
     Fixture {
         engine: "sqlite",
-        spec: spec(&[]),
+        spec: spec(&[("attach", compare_attach().as_str())]),
         secrets: ConnectSecrets::default(),
         table: ObjectRef::new(Some("main"), None, "contract_items", NodeKind::TABLE),
         child: ObjectRef::new(Some("main"), None, "contract_children", NodeKind::TABLE),
@@ -81,7 +115,7 @@ pub fn fixture() -> Fixture {
     }
 }
 
-crate::contract_tests!(contract_sqlite, fixture());
+crate::contract_tests!(contract_sqlite, fixture(), compare: compare_fixture());
 
 // --- SQLite-specific checks ---------------------------------------------------------------------------------------------
 
@@ -282,5 +316,40 @@ async fn contract_sqlite_error_positions_and_auto_commit() {
         .await
         .expect("auto-commit on");
     assert!(!on.open && on.auto_commit);
+    tab.close().await;
+}
+
+/// A sync script that drops or rebuilds tables switches foreign keys off first; in a session whose transaction is
+/// already open (auto-commit off) that PRAGMA does nothing, so the guard after it must stop the script there.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "writes the contract database file; run with --ignored --test-threads=1"]
+async fn contract_sqlite_sync_script_stops_inside_an_open_transaction() {
+    use crate::contract::{RenderedStatement, SchemaDialect};
+    let f = fixture();
+    let (_manager, handle) = connect(&f).await;
+    let tab = session(&handle).await;
+    let wrapped = super::schema_sync::SQLITE_SCHEMA_DIALECT.wrap(vec![RenderedStatement::new("DROP TABLE \"main\".\"t\"")], true);
+    assert_eq!(wrapped[0].sql, "PRAGMA foreign_keys = OFF");
+    let prologue = format!("{};\n{};", wrapped[0].sql, wrapped[1].sql);
+
+    let options = RunOptions::default();
+    let off = tab
+        .transaction(TransactionOp::AutoCommitOff, &options)
+        .await
+        .expect("auto-commit off");
+    assert!(!off.auto_commit);
+    run(&handle, &tab, "SELECT count(*) FROM contract_items")
+        .await
+        .expect("a read opens the transaction");
+    let error = run(&handle, &tab, &prologue).await.expect_err("keys are still on");
+    assert!(error.to_string().contains("integer overflow"), "{error}");
+    tab.transaction(TransactionOp::Rollback, &options).await.expect("rollback");
+    tab.transaction(TransactionOp::AutoCommitOn, &options)
+        .await
+        .expect("auto-commit on");
+
+    // Outside a transaction the PRAGMA works and the guard lets the script go on.
+    run(&handle, &tab, &prologue).await.expect("keys are off");
+    run(&handle, &tab, "PRAGMA foreign_keys = ON").await.expect("keys back on");
     tab.close().await;
 }

@@ -33,8 +33,9 @@ backend and UI also ship as a web edition in a Docker image (see [Two front-ends
 - **Statement gateway** (`src-tauri/src/gateway/`). Every statement the app runs on a caller's behalf passes through it before it reaches
   an engine, in both editions; see [Statement gateway and safety rules](#statement-gateway-and-safety-rules). Its structured errors
   (`CONFIRMATION_REQUIRED`, `BLOCKED`, …) reach the UI as the same object over Tauri and over HTTP.
-- **Contract** (`src-tauri/src/contract/`). The engine ports (ADR 0001): `Engine` (descriptor, `classify`, `connect`), `Connection`
-  (tree `children`, `describe`, `open_session`, `invoke`, optional `TabularData`, `SchemaGraphSource`, `DatabaseAdmin`) and `Session`
+- **Contract** (`src-tauri/src/contract/`). The engine ports (ADR 0001): `Engine` (descriptor, `classify`, `connect`, optional
+  `schema_dialect`), `Connection` (tree `children`, `describe`, `open_session`, `invoke`, optional `TabularData`, `SchemaGraphSource`,
+  `SchemaSnapshotSource`, `DatabaseAdmin`) and `Session`
   (`run` streaming `StreamEvent`s, `transaction`), plus every DTO the UI sees: typed `Value`s (`{t, v}` on the wire), `ColumnInfo`,
   `ObjectRef`, `ObjectNode`, `Page`, `RowChangeSet`, structured `AppError`s. Nothing outside an engine sees engine-specific types.
 - **Runtime** (`src-tauri/src/runtime/`). `registry.rs` lists the engines of this build (one Cargo feature `engine-<id>` each);
@@ -203,6 +204,31 @@ categories, tables, statements, … }`; `BLOCKED` has the same shape without a t
 - **Relaxing rules**: the workspace dialog lists what becomes possible and an example of what could go wrong; relaxing a Production
   workspace needs its name typed (checked again by `save_workspace`). A workspace looser than its baseline shows a badge on the rail and
   in the status bar.
+
+## Schema compare
+
+Code: `src-tauri/src/compare/` (diff, planner, script), `src-tauri/src/commands/compare.rs`, `src/features/compare/` (picker,
+compare tab), and per engine `engines/<id>/schema_snapshot.rs` and `schema_sync.rs` (PostgreSQL, MySQL/MariaDB, SQL Server, SQLite).
+
+- **Ports** (`contract/snapshot.rs`, `contract/migration.rs`, gated by `Capability::SchemaCompare`):
+  `Connection::schema_snapshot() -> SchemaSnapshotSource` reads one scope (a schema, or a database on MySQL/MariaDB and SQLite) in
+  bulk catalog reads into an engine-neutral `SchemaSnapshot` that keeps the raw catalog text. `Engine::schema_dialect() ->
+SchemaDialect` is pure: it normalizes types, defaults and expressions, rates type changes, says what its DDL can do
+  (`DialectFeatures`: transactional DDL, batch separator, columns held by their dependents, foreign keys inside the table, ...),
+  decides when a table needs a rebuild, writes canonical DDL and renders `MigrationStep`s with their warnings.
+- **Commands** (stateless): `schema_snapshot` is a metadata read like `describe`; `schema_diff` and `schema_sync_script` are pure
+  functions of two snapshots and the options, so changing an option re-diffs without reading the databases again. Only the same
+  engine (or MySQL with MariaDB) can be compared.
+- **Core** (`compare/`, engine-neutral, reaches engines only through the contract): the diff matches tables and views by name
+  (case-folded where the server folds case) and system-named constraints by definition; the planner orders the steps (drop foreign
+  keys, views, constraints, tables; create tables; add, alter or rebuild, drop columns; create indexes and constraints, views in
+  dependency order, foreign keys; comments), pulls in what a selected item needs (views reading an altered table are dropped and
+  created again) and reports what it cannot satisfy as warnings; the script adds a header (source, target, options, warning
+  counts), `-- WARNING:` lines and the dialect's wrapper.
+- **Never auto-run**: there is no execution path for sync scripts. The UI opens a script in a query tab on the target connection,
+  so the gateway classifies every statement and applies the target workspace's rules (DDL and DROP confirmations, Read-only and
+  Production blocks, timeouts, audit, history). Dialect goldens feed every rendered statement to the engine's classifier, and
+  what a dialect cannot express is a commented manual step rather than an omission. Objects only in the target start unchecked.
 
 ## Audit log
 

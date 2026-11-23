@@ -96,6 +96,7 @@ pub fn classify_mongo(text: &str) -> Classification {
                 excerpt: excerpt(text),
                 reason: Some(format!("Not a JSON command ({error})")),
                 refused: None,
+                repeat: None,
             })
         }
     };
@@ -107,6 +108,7 @@ pub fn classify_mongo(text: &str) -> Classification {
             excerpt: excerpt(text),
             reason: Some("A MongoDB command is a JSON object whose first key is the command name".to_owned()),
             refused: None,
+            repeat: None,
         });
     };
     let tables = target.as_str().map(|collection| vec![collection.to_owned()]).unwrap_or_default();
@@ -118,6 +120,7 @@ pub fn classify_mongo(text: &str) -> Classification {
         excerpt: excerpt(text),
         reason,
         refused: None,
+        repeat: None,
     })
 }
 
