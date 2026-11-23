@@ -14,8 +14,9 @@
 //! transaction; the last batch is `SET NOEXEC OFF`. Defaults are named constraints: a script drops the target's by name
 //! and adds the source's as `DF_<table>_<column>` unless the source named it. `ALTER COLUMN` restates the type and
 //! nullability; keys, checks and indexes over the column are dropped and created again by the planner
-//! (`columns_held_by_dependents`), and a default constraint around a type change by the renderer. IDENTITY cannot be
-//! added or removed in place: that is a manual step.
+//! (`columns_held_by_dependents`, which also moves persisted computed columns out of the way of a table with an IDENTITY
+//! column, SQL Server error 11424), and a default constraint around a type or collation change by the renderer. IDENTITY
+//! cannot be added or removed in place: that is a manual step.
 
 use super::catalog::bracket as ident;
 use crate::{
@@ -741,8 +742,9 @@ impl MssqlSchemaDialect {
             return out;
         }
         let retype = changes.type_name || changes.collation || changes.nullability;
-        // The type of a column with a default constraint cannot change: the default goes and comes back around it.
-        let cycle = changes.type_name && from.default.is_some();
+        // The type or collation of a column with a default constraint cannot change: the default goes and comes back
+        // around it.
+        let cycle = (changes.type_name || changes.collation) && from.default.is_some();
         if from.default.is_some() && (changes.default || cycle) {
             drop_default(&mut out);
         }

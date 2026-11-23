@@ -109,7 +109,7 @@ EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Customers 
 GO
 -- orders: integer keys (the primary key and a foreign key from items hold the column), no foreign key, another comment
 -- on total, a wider note with its own index, a nullable placed_at, no shipped, another check, no filtered or covering
--- index. The computed column is the same.
+-- index. The persisted computed column is the same, and has to make way for the identity type change (error 11424).
 CREATE TABLE compare_b.orders (
   id INT IDENTITY(1,1) NOT NULL CONSTRAINT pk_orders PRIMARY KEY,
   customer_id INT NOT NULL,

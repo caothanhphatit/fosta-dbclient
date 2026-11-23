@@ -1405,3 +1405,89 @@ fn computed_columns_over_a_held_column_are_dropped_and_added_back() {
         "{steps:?}"
     );
 }
+
+#[test]
+fn persisted_computed_columns_make_way_for_rewrites_of_a_table_with_an_identity_column() {
+    let computed = |name: &str, expression: &str, stored: bool| {
+        let mut column = not_null(name, "");
+        column.generated = Some(crate::contract::GeneratedDef {
+            expression: expression.into(),
+            stored,
+        });
+        column
+    };
+    // Neither computed column reads the altered id; only the persisted one is in the way (SQL Server error 11424).
+    let with = |id_type: &str, identity: bool, added: bool| {
+        let mut table = orders();
+        table.columns[0].type_name = id_type.into();
+        if !identity {
+            table.columns[0].identity = None;
+        }
+        table.columns.push(computed("doubled", "([customer_id]*(2))", true));
+        table.columns.push(computed("label", "(upper([status]))", false));
+        table.indexes.push(IndexDef {
+            name: "ix_doubled".into(),
+            parts: vec![IndexPart::column("doubled")],
+            ..IndexDef::default()
+        });
+        if added {
+            table.columns.push(computed("tripled", "([customer_id]*(3))", true));
+            table.indexes.push(IndexDef {
+                name: "ix_tripled".into(),
+                parts: vec![IndexPart::column("tripled")],
+                ..IndexDef::default()
+            });
+        }
+        table
+    };
+    let held = FakeDialect {
+        restrict_equals_no_action: false,
+        held: true,
+        inline: false,
+    };
+    let source = snapshot("a", vec![with("bigint", true, true)], Vec::new());
+    let target = snapshot("b", vec![with("integer", true, false)], Vec::new());
+    let (steps, _) = planned_with(&held, &source, &target, None);
+    assert_eq!(
+        steps,
+        [
+            "drop constraint orders.orders_pkey",
+            "drop index ix_doubled",
+            "drop column orders.doubled",
+            "alter column orders.id",
+            // A persisted computed column the plan adds waits for the alter too, ahead of its index.
+            "add column orders.tripled",
+            "create index ix_tripled",
+            "add column orders.doubled",
+            "add pk orders",
+            "create index ix_doubled",
+        ]
+    );
+    // Without an IDENTITY column the persisted computed column stays.
+    let source = snapshot("a", vec![with("bigint", false, true)], Vec::new());
+    let target = snapshot("b", vec![with("integer", false, false)], Vec::new());
+    let (steps, _) = planned_with(&held, &source, &target, None);
+    assert_eq!(
+        steps,
+        [
+            "drop constraint orders.orders_pkey",
+            "add column orders.tripled",
+            "alter column orders.id",
+            "create index ix_tripled",
+            "add pk orders",
+        ]
+    );
+    // A persisted computed column the plan changes itself is a manual step.
+    let mut changed = with("bigint", true, false);
+    changed.columns[4].generated.as_mut().unwrap().expression = "([customer_id]*(4))".into();
+    let source = snapshot("a", vec![changed], Vec::new());
+    let target = snapshot("b", vec![with("integer", true, false)], Vec::new());
+    let (steps, _) = planned_with(&held, &source, &target, None);
+    assert!(steps.iter().any(|s| s.contains("Computed column orders.doubled")), "{steps:?}");
+    // Dropping a column alone rewrites nothing.
+    let mut dropped = with("integer", true, false);
+    dropped.columns.remove(3);
+    let source = snapshot("a", vec![dropped], Vec::new());
+    let (steps, _) = planned_with(&held, &source, &target, None);
+    assert_eq!(steps, ["drop column orders.note"]);
+}

@@ -871,3 +871,97 @@ fn views_keep_their_column_list_and_with_attributes() {
     );
     assert_ddl(&rendered[0].sql);
 }
+
+#[test]
+fn a_persisted_computed_column_makes_way_for_the_identity_column_change() {
+    // SQL Server error 11424: the identity column of a table with a persisted computed column cannot change type.
+    let orders = |id_type: &str, pk: &str| TableDef {
+        columns: vec![
+            ColumnDef {
+                identity: identity(),
+                ..column("id", id_type, false)
+            },
+            ColumnDef {
+                default: Some("((0))".into()),
+                default_name: Some("df_orders_total".into()),
+                ..column("total", "decimal(12,2)", false)
+            },
+            ColumnDef {
+                generated: Some(GeneratedDef {
+                    expression: "([total]*(2))".into(),
+                    stored: true,
+                }),
+                ..column("double_total", "decimal(13,2)", false)
+            },
+        ],
+        primary_key: Some(KeyDef {
+            name: Some(pk.into()),
+            columns: vec!["id".into()],
+            system_named: false,
+        }),
+        indexes: vec![IndexDef {
+            name: "ix_orders_double".into(),
+            parts: vec![IndexPart::column("double_total")],
+            ..IndexDef::default()
+        }],
+        ..TableDef::new("orders")
+    };
+    let source = snapshot("compare_a", vec![orders("bigint", "pk_orders")], Vec::new());
+    let target = snapshot("compare_b", vec![orders("int", "pk_orders")], Vec::new());
+    let options = CompareOptions::default();
+    let include = vec!["table:orders".to_owned()];
+    let script = crate::compare::sync_script(&source, &target, &options, &include, &MS, "2026-11-22 10:00 UTC");
+    let statements: Vec<&str> = script
+        .sql
+        .lines()
+        .filter(|line| line.starts_with("ALTER") || line.starts_with("CREATE") || line.starts_with("DROP"))
+        .collect();
+    assert_eq!(
+        statements,
+        [
+            "ALTER TABLE [compare_b].[orders] DROP CONSTRAINT [pk_orders];",
+            "DROP INDEX [ix_orders_double] ON [compare_b].[orders];",
+            "ALTER TABLE [compare_b].[orders] DROP COLUMN [double_total];",
+            "ALTER TABLE [compare_b].[orders] ALTER COLUMN [id] bigint NOT NULL;",
+            "ALTER TABLE [compare_b].[orders] ADD [double_total] AS ([total]*(2)) PERSISTED NOT NULL;",
+            "ALTER TABLE [compare_b].[orders] ADD CONSTRAINT [pk_orders] PRIMARY KEY ([id]);",
+            "CREATE INDEX [ix_orders_double] ON [compare_b].[orders] ([double_total]);",
+        ],
+        "{}",
+        script.sql
+    );
+    let whole = MSSQL.classify(&ClassifyInput::Statement {
+        language: "sql",
+        text: &script.sql,
+    });
+    assert!(whole.statements.iter().all(|s| s.category != Category::Unknown), "{whole:?}");
+}
+
+#[test]
+fn a_collation_change_cycles_the_default_too() {
+    let code = ColumnDef {
+        default: Some("('x')".into()),
+        default_name: Some("df_orders_code".into()),
+        ..orders().columns[5].clone()
+    };
+    let folded = ColumnDef {
+        collation: Some("Latin1_General_CI_AS".into()),
+        ..code.clone()
+    };
+    let rendered = alter(
+        code,
+        folded,
+        ColumnChanges {
+            collation: true,
+            ..ColumnChanges::default()
+        },
+    );
+    assert_eq!(
+        sqls(&rendered),
+        [
+            "ALTER TABLE [compare_b].[orders] DROP CONSTRAINT [df_orders_code]",
+            "ALTER TABLE [compare_b].[orders] ALTER COLUMN [code] varchar(10) COLLATE Latin1_General_CI_AS NULL",
+            "ALTER TABLE [compare_b].[orders] ADD CONSTRAINT [df_orders_code] DEFAULT ('x') FOR [code]",
+        ]
+    );
+}

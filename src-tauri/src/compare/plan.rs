@@ -810,9 +810,10 @@ impl<'a> Planner<'a> {
                 &id,
                 Risk::Review,
                 format!(
-                    "Objects WITH SCHEMABINDING outside the compared schema (views, functions) that use {name} block \
-                     changing its columns, and the compare does not see them; check sys.sql_expression_dependencies \
-                     before running"
+                    "Objects the compare does not see can block changing the columns of {name}: views and functions \
+                     WITH SCHEMABINDING outside the compared schema, statistics made with CREATE STATISTICS and \
+                     full-text indexes; check sys.sql_expression_dependencies, sys.stats (user_created = 1) and \
+                     sys.fulltext_index_columns before running"
                 ),
             );
             let fold_all = |planner: &Self, columns: &[String]| columns.iter().map(|c| planner.fold(c)).collect::<Vec<_>>();
@@ -911,6 +912,11 @@ impl<'a> Planner<'a> {
     /// Computed columns of `table` over a column the plan alters or drops hold it (SQL Server): one the plan leaves alone
     /// is dropped (the returned steps, after its indexes) and added again afterwards (at the end of the column order), and counts as altered so its own
     /// keys and indexes are held too; one the plan changes itself, or that reads a dropped column, is a manual step.
+    ///
+    /// SQL Server also refuses to rewrite the rows of a table with an IDENTITY column while it has a PERSISTED computed
+    /// column (error 11424, e.g. changing the type of the identity column): when the plan alters a column of such a
+    /// table, every persisted computed column is held the same way, and the ones the plan adds wait until after the
+    /// alters.
     fn held_computed_columns(
         &mut self,
         id: &str,
@@ -919,6 +925,16 @@ impl<'a> Planner<'a> {
         gone: &HashSet<String>,
     ) -> Vec<(MigrationStep, Option<String>)> {
         let name = table.name.clone();
+        let folded_table = self.fold(&name);
+        // Whether the plan rewrites rows of a table with an IDENTITY column (11424 with a persisted computed column).
+        let rewrites = table.columns.iter().any(|c| c.identity.is_some())
+            && table
+                .columns
+                .iter()
+                .any(|c| c.generated.is_none() && altered.contains(&self.fold(&c.name)) && !gone.contains(&self.fold(&c.name)));
+        if rewrites {
+            self.defer_added_persisted_columns(&folded_table);
+        }
         let mut found = Vec::new();
         let mut drops = Vec::new();
         for column in &table.columns {
@@ -929,7 +945,7 @@ impl<'a> Planner<'a> {
                 .map(|c| self.fold(&c))
                 .filter(|c| *c != folded && altered.contains(c))
                 .collect();
-            if !reads.is_empty() {
+            if !reads.is_empty() || (rewrites && generated.stored) {
                 found.push((column, folded, reads));
             }
         }
@@ -940,17 +956,23 @@ impl<'a> Planner<'a> {
                     Phase::DropConstraints,
                     id,
                     format!(
-                        "Computed column {name}.{} uses a column this script changes or drops; drop it before running the \
-                         script and add it again afterwards as the source defines it",
+                        "Computed column {name}.{} is in the way of a column change and this script changes it or drops a \
+                         column it uses; drop it before running the script and add it again afterwards as the source \
+                         defines it",
                         column.name
                     ),
                 );
                 continue;
             }
             altered.insert(folded);
-            let note = Some(format!(
-                "Dropped and added again because a column it uses changes ({name}); it moves to the end of the column order"
-            ));
+            let note = Some(if reads.is_empty() {
+                format!(
+                    "Dropped and added again because SQL Server cannot rewrite {name}, which has an IDENTITY column, while \
+                     it has a persisted computed column; it moves to the end of the column order"
+                )
+            } else {
+                format!("Dropped and added again because a column it uses changes ({name}); it moves to the end of the column order")
+            });
             let drop = MigrationStep::DropColumn {
                 table: name.clone(),
                 column: column.name.clone(),
@@ -963,6 +985,19 @@ impl<'a> Planner<'a> {
             self.push_noted(Phase::CreateConstraints, id, add, note);
         }
         drops
+    }
+
+    /// Moves the plan's additions of persisted computed columns to `table` (folded) from before the column alters to the
+    /// start of the re-creations, ahead of any index over them.
+    fn defer_added_persisted_columns(&mut self, table: &str) {
+        let added = std::mem::take(&mut self.phases[Phase::AddColumns as usize]);
+        let (deferred, kept): (Vec<_>, Vec<_>) = added.into_iter().partition(|planned| {
+            matches!(&planned.step, MigrationStep::AddColumn { table: t, column }
+                if self.fold(t) == table && column.generated.as_ref().is_some_and(|g| g.stored))
+        });
+        self.phases[Phase::AddColumns as usize] = kept;
+        let later = &mut self.phases[Phase::CreateConstraints as usize];
+        later.splice(0..0, deferred);
     }
 
     // --- Views --------------------------------------------------------------------------------------------------------
