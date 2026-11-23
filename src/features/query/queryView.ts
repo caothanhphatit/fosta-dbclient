@@ -184,9 +184,19 @@ export class QueryView implements TabContent {
       format: () => void this.format(),
       changed: () => this.onEdited?.(),
     });
-    this.runButton = toolButton("play", "Run", () => void this.run("selection"), "Run the selection, or everything when nothing is selected (Ctrl+Enter)");
+    this.runButton = toolButton(
+      "play",
+      "Run",
+      () => void this.run("selection"),
+      "Run the selection, or everything when nothing is selected (Ctrl+Enter, F5 or F9)",
+    );
     this.statementButton = secondaryTool(
-      toolButton("chevron", "Run statement", () => void this.run("statement"), "Run the selection, or the statement under the cursor (Ctrl+Shift+Enter)"),
+      toolButton(
+        "chevron",
+        "Run statement",
+        () => void this.run("statement"),
+        "Run the selection, or the statement under the cursor (Ctrl+Shift+Enter, Shift+F5 or Shift+F9)",
+      ),
     );
     this.stopButton = toolButton("stop", "Stop", () => void this.cancel(), "Cancel the running query");
     this.stopButton.disabled = true;

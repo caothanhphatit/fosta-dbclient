@@ -8,10 +8,10 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl+B", "Show or hide the sidebar"],
   ["Ctrl+Shift+B", "Show or hide the workspaces"],
   ["Ctrl+1 … 9", "Switch workspace"],
-  ["Ctrl+Enter", "Run SQL (selection or all)"],
+  ["Ctrl+Enter / F5 / F9", "Run SQL (selection or all)"],
   ["Enter / F2", "Edit the selected cell"],
   ["Ctrl+S", "Save grid changes"],
-  ["F5", "Reload table"],
+  ["F5", "Reload table (in a table tab)"],
 ];
 
 export interface WelcomeActions {

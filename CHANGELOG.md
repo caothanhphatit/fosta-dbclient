@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- Query tabs: F5 runs the selection or everything, like F9 and Ctrl+Enter (SSMS and SQL Developer habits); Shift+F5 and
+  Shift+F9 run the statement under the cursor. The MongoDB query bar and stage editors also run on F5 and F9.
 - Schema compare for PostgreSQL, MySQL, MariaDB, SQL Server and SQLite: "Compare schema with…" on a database or schema (and
   Compare in the toolbar) picks a target of the same engine (MySQL with MariaDB too) on any connection of any workspace, lists
   the tables and views that differ, exist on one side only or are identical, shows each object's changes and a side-by-side
